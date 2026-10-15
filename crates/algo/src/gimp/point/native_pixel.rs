@@ -22,6 +22,11 @@ impl PreparedPointOperation {
     /// for coverage-changing operations. This does not infer working transfer,
     /// native stock precision, schema, profile, outer state or source admission.
     pub fn validate_native_format(&self, format: PixelFormat) -> Result<(), RasterInputError> {
+        // Semi-Flatten requires the dedicated caller-owned transfer/literal
+        // adapter. This generic native writeback has no such qualification.
+        if matches!(self.operation, PointOperation::SemiFlatten { .. }) {
+            return Err(RasterInputError::UnsupportedConversion);
+        }
         if changes_alpha(self.operation) && !format.alpha {
             return Err(RasterInputError::UnsupportedConversion);
         }

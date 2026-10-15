@@ -124,7 +124,7 @@ fn exact_color_shape_and_spare_capacity_are_censused_and_copied_without_normaliz
                 components.pop();
             }
             1 => components[0] = ExactNumber::Float64Bits(0),
-            2 => encoding = SampleEncoding::Linear,
+            2 => encoding = SampleEncoding::Perceptual,
             _ => components.push(ExactNumber::Float32Bits(0)),
         }
         doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].arguments[0].value = FilterValue::Color { components, encoding, profile: None };
@@ -386,3 +386,6 @@ fn second_node_noop_at_max_revision_and_full_quota_keeps_exact_owner() {
     drop(blocker);
     assert_eq!(q.usage().unwrap(), before);
 }
+
+#[path = "accounted_point_readonly_literal_patch_tests.rs"]
+mod literal;

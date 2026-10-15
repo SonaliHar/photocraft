@@ -13,6 +13,9 @@ pub enum PointArgumentValue {
     /// Four literal words only. The existing NL/profile-None tags stay with
     /// the representation; a changed paid copy may shrink spare capacity.
     Color4F32([u32; 4]),
+    /// Explicit finite unit literal, including its independently retained tag.
+    /// This structural edit does not qualify an operation or rendering path.
+    LiteralColor4F32 { components: [u32; 4], encoding: crate::SampleEncoding },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PointArgumentPatch<'a> {
@@ -38,7 +41,32 @@ pub(in crate::accounted_document) struct Plan {
     replacements: [Option<(usize, PointArgumentValue)>; 10],
     enabled: Option<bool>,
 }
-fn original(value: &FilterValue, control: &ReadControl<'_>) -> Result<PointArgumentValue, BackingError> {
+fn original(value: &FilterValue, requested: PointArgumentValue, control: &ReadControl<'_>) -> Result<PointArgumentValue, BackingError> {
+    if let PointArgumentValue::LiteralColor4F32 { components: replacement, encoding: requested_encoding } = requested {
+        if !matches!(requested_encoding, crate::SampleEncoding::Linear | crate::SampleEncoding::NonlinearProfile)
+            || replacement.iter().any(|bits| {
+                let value = f32::from_bits(*bits);
+                !value.is_finite() || !(0.0..=1.0).contains(&value)
+            })
+        {
+            return refused();
+        }
+        let FilterValue::Color { components, encoding, profile: None } = value else { return refused() };
+        if components.len() != 4 || !matches!(encoding, crate::SampleEncoding::Linear | crate::SampleEncoding::NonlinearProfile) {
+            return refused();
+        }
+        control.check(4)?;
+        let mut words = [0; 4];
+        for (word, component) in words.iter_mut().zip(components) {
+            let ExactNumber::Float32Bits(bits) = component else { return refused() };
+            let sample = f32::from_bits(*bits);
+            if !sample.is_finite() || !(0.0..=1.0).contains(&sample) {
+                return refused();
+            }
+            *word = *bits;
+        }
+        return Ok(PointArgumentValue::LiteralColor4F32 { components: words, encoding: *encoding });
+    }
     match value {
         FilterValue::Number(ExactNumber::Float32Bits(bits)) => Ok(PointArgumentValue::Float32Bits(*bits)),
         FilterValue::Number(ExactNumber::Signed { width: 32, value }) => {
@@ -80,7 +108,8 @@ impl AccountedDocument {
     /// Replace at most ten uniquely named, existing arguments of the same raw
     /// type and/or the activation bit in one paid current-model copy. The enum
     /// domain, argument order, original source and all other metadata survive.
-    /// This accepts raw f32 words without a semantic numeric/range assertion.
+    /// Legacy words carry no numeric assertion; the explicit tagged literal
+    /// variant requires finite unit components in both representations.
     pub fn try_with_readonly_point_filter(&self, patch: PointFilterPatch<'_>, control: &ReadControl<'_>) -> Result<Self, BackingError> {
         self.with_point_filter_patch(patch, control, false)
     }
@@ -146,7 +175,7 @@ impl AccountedDocument {
                     if found.is_some() {
                         return Err(BackingError::Integrity);
                     }
-                    let before = original(&argument.value, control)?;
+                    let before = original(&argument.value, replacement.value, control)?;
                     if std::mem::discriminant(&before) != std::mem::discriminant(&replacement.value) {
                         return refused();
                     }
@@ -196,6 +225,18 @@ pub(super) fn apply(document: &mut Document, plan: Plan, control: &ReadControl<'
             (FilterValue::Number(ExactNumber::Signed { width: 32, value: before }), PointArgumentValue::Signed32(value)) => *before = i64::from(value),
             (FilterValue::Bool(before), PointArgumentValue::Bool(value)) => *before = value,
             (FilterValue::Enum { value: before, .. }, PointArgumentValue::Enum(value)) => *before = value,
+            (FilterValue::Color { components, encoding, profile: None }, PointArgumentValue::LiteralColor4F32 { components: words, encoding: requested })
+                if components.len() == 4
+                    && matches!(encoding, crate::SampleEncoding::Linear | crate::SampleEncoding::NonlinearProfile)
+                    && matches!(requested, crate::SampleEncoding::Linear | crate::SampleEncoding::NonlinearProfile) =>
+            {
+                for (component, word) in components.iter_mut().zip(words) {
+                    control.check(1)?;
+                    let ExactNumber::Float32Bits(bits) = component else { return Err(BackingError::Integrity) };
+                    *bits = word;
+                }
+                *encoding = requested;
+            }
             (FilterValue::Color { components, encoding: crate::SampleEncoding::NonlinearProfile, profile: None }, PointArgumentValue::Color4F32(words))
                 if components.len() == 4 =>
             {

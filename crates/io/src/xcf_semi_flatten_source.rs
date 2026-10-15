@@ -1,0 +1,183 @@
+//! Exact authored Semi-Flatten source intersection. This independently released
+//! unit Replace envelope retains present raw words as opaque provenance, never enums.
+use crate::{IoError, xcf_import::plane::ExactParsedPlane};
+use photocraft_doc::SampleEncoding;
+use photocraft_raster::Interrupt;
+use photocraft_xcf::{ArgumentValue, Effect, Encoding, Model, Sample, XcfFile};
+pub(crate) fn parameters<P>(effect: &Effect<P>) -> Option<([u32; 4], SampleEncoding)> {
+    if effect.operation != "gimp:semi-flatten" || effect.version.as_deref() != Some("0:0") || effect.arguments.len() != 1 {
+        return None;
+    }
+    let arg = effect.arguments.first()?;
+    if arg.name != "color" || arg.configuration.is_some() || arg.graph.is_some() {
+        return None;
+    }
+    let ArgumentValue::Color { encoding, samples, icc } = &arg.value else { return None };
+    let encoding = match encoding.as_str() {
+        "RGBA float" => SampleEncoding::Linear,
+        "R'G'B'A float" => SampleEncoding::NonlinearProfile,
+        _ => return None,
+    };
+    if samples.len() != 16 || !icc.is_empty() {
+        return None;
+    }
+    let mut words = [0; 4];
+    for (out, raw) in words.iter_mut().zip(samples.as_chunks::<4>().0) {
+        *out = u32::from_le_bytes(*raw);
+        let value = f32::from_bits(*out);
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return None;
+        }
+    }
+    Some((words, encoding))
+}
+pub(crate) fn envelope<P>(effect: &Effect<P>) -> bool {
+    let s = &effect.state;
+    if effect.properties.len() > 16 {
+        return false;
+    }
+    parameters(effect).is_some()
+        && s.enabled == Some(true)
+        && s.mode == Some(62)
+        && s.opacity_bits == Some(1f32.to_bits())
+        && s.opacity_u8.is_none()
+        && s.clipping == Some(0)
+        && s.region == Some(0)
+        && s.blend_space.is_some()
+        && s.composite_space.is_some()
+        && s.composite_mode.is_some()
+        && effect.properties.iter().all(|p| matches!(p.tag, 6 | 7 | 8 | 33 | 35 | 36 | 37 | 44 | 45 | 46))
+}
+fn work(i: &Interrupt<'_>, b: Option<&photocraft_xcf::Budget<'_>>, n: usize) -> Result<(), IoError> {
+    i.check().map_err(|_| IoError::Cancelled)?;
+    if let Some(b) = b {
+        b.consume_work(n as u64, "Semi-Flatten source proof")
+            .map_err(|e| if e.kind == photocraft_xcf::ErrorKind::Cancelled { IoError::Cancelled } else { IoError::Xcf(e) })?;
+    }
+    i.check().map_err(|_| IoError::Cancelled)
+}
+pub(crate) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b: Option<&photocraft_xcf::Budget<'_>>) -> Result<bool, IoError> {
+    work(i, b, 128)?;
+    if f.version != 22
+        || f.model != Model::Rgb
+        || f.encoding != Encoding::NonlinearProfile
+        || !matches!((f.sample, f.precision), (Sample::F32, 650) | (Sample::F64, 750))
+        || !f.icc.is_empty()
+        || (f.width, f.height) != (8, 6)
+        || f.layers.len() != 1
+        || !f.channels.is_empty()
+        || !f.paths.is_empty()
+        || !f.palette.is_empty()
+        || !f.item_sets.is_empty()
+    {
+        return Ok(false);
+    }
+    let Some(d) = f.layers.first() else { return Ok(false) };
+    if d.group
+        || d.model != Model::Rgb
+        || !d.alpha
+        || !d.visible
+        || d.opacity.to_bits() != 1f32.to_bits()
+        || (d.width, d.height, d.offset) != (8, 6, (0, 0))
+        || d.mode != 28
+        || (d.blend_space, d.composite_space, d.composite_mode) != (0, -1, -1)
+        || d.path.len() > 1
+        || d.mask.is_some()
+        || d.text.is_some()
+        || d.vector.is_some()
+        || d.link.is_some()
+        || d.transform.is_some()
+        || d.floating_attachment.is_some()
+        || d.effects.len() != 1
+        || d.group_flags != 0
+        || d.text_flags != 0
+    {
+        return Ok(false);
+    }
+    work(i, b, d.unsupported.len())?;
+    if d.unsupported.iter().any(|s| s != "GEGL layer effects") {
+        return Ok(false);
+    }
+    let Some(e) = d.effects.first() else { return Ok(false) };
+    if !envelope(e) {
+        return Ok(false);
+    }
+    let Some(p) = d.plane.as_ref() else { return Ok(false) };
+    if !native(p, f.sample, 4, false, i, b)? {
+        return Ok(false);
+    }
+    let Some(m) = e.mask.as_ref() else { return Ok(false) };
+    if m.group
+        || m.alpha
+        || m.model != Model::Gray
+        || !m.visible
+        || m.opacity.to_bits() != 0.5f32.to_bits()
+        || (m.width, m.height, m.offset) != (8, 6, (0, 0))
+        || !m.mask_enabled
+        || m.mask_shown
+        || m.mask_editing
+        || m.legacy_linked
+        || m.mode != 0
+        || (m.blend_space, m.composite_space, m.composite_mode) != (2, 2, 1)
+        || !m.path.is_empty()
+        || !m.effects.is_empty()
+        || m.mask.is_some()
+        || !m.unsupported.is_empty()
+        || m.text.is_some()
+        || m.text_flags != 0
+        || m.group_flags != 0
+        || m.vector.is_some()
+        || m.link.is_some()
+        || m.transform.is_some()
+        || m.floating_attachment.is_some()
+    {
+        return Ok(false);
+    }
+    let Some(p) = m.plane.as_ref() else { return Ok(false) };
+    native(p, f.sample, 1, true, i, b)
+}
+fn native<P: ExactParsedPlane>(
+    p: &P,
+    sample: Sample,
+    channels: usize,
+    zero: bool,
+    i: &Interrupt<'_>,
+    b: Option<&photocraft_xcf::Budget<'_>>,
+) -> Result<bool, IoError> {
+    let word = match sample {
+        Sample::F32 => 4,
+        Sample::F64 => 8,
+        _ => return Ok(false),
+    };
+    let expected =
+        48u64.checked_mul(channels as u64).and_then(|n| n.checked_mul(word as u64)).ok_or_else(|| IoError::Unsupported("Semi-Flatten source length".into()))?;
+    let d = p.descriptor();
+    if d.sample != sample || (d.width, d.height, d.channels) != (8, 6, channels) || p.native_byte_len() != Some(expected) {
+        return Ok(false);
+    }
+    let mut valid = true;
+    let mut seen = 0u64;
+    p.visit_native(i, &mut |chunk| {
+        work(i, b, chunk.len())?;
+        seen = seen.checked_add(chunk.len() as u64).ok_or_else(|| IoError::Unsupported("Semi-Flatten source count".into()))?;
+        if chunk.is_empty() || chunk.len() > 64 * channels * word || chunk.len() % (channels * word) != 0 || seen > expected {
+            valid = false;
+            return Ok(());
+        }
+        for raw in chunk.chunks_exact(word) {
+            let v = if word == 4 {
+                f64::from(f32::from_ne_bytes(raw.try_into().map_err(|_| IoError::Unsupported("Semi-Flatten F32 word".into()))?))
+            } else {
+                f64::from_ne_bytes(raw.try_into().map_err(|_| IoError::Unsupported("Semi-Flatten F64 word".into()))?)
+            };
+            valid &= v.is_finite() && if zero { v == 0.0 } else { (0.0..=1.0).contains(&v) }
+        }
+        Ok(())
+    })?;
+    work(i, b, 1)?;
+    Ok(valid && seen == expected)
+}
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "xcf_semi_flatten_source_tests.rs"]
+mod tests;

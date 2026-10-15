@@ -10,6 +10,7 @@ mod alpha_clip;
 mod alpha_clip_finite;
 mod assigned_box;
 mod observed_box;
+mod semi_flatten;
 mod channel_mixer;
 mod color_overlay;
 mod color_rotate;
@@ -345,6 +346,10 @@ pub(crate) fn filter_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, laye
             let caption: String = node.source_display_name.as_deref().filter(|name| !name.is_empty()).unwrap_or(&node.operation.name).chars().take(128).collect();
             if observed_box::scope(&document, node) {
                 observed_box::controls(app, ui, &document, revision, layer, node, unlocked, &caption);
+                return;
+            }
+            if semi_flatten::scope(&document, node) {
+                semi_flatten::controls(app, ui, &document, revision, layer, node, unlocked, &caption);
                 return;
             }
             ui.horizontal_wrapped(|ui| {

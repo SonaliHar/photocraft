@@ -29,6 +29,9 @@ mod native_pixel;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PointOperation {
+    /// Prepared background operand for the Linear Float Semi-Flatten policy.
+    /// The caller retains and interprets the serialized literal independently.
+    SemiFlatten { color: [f32; 4] },
     /// Explicit operation-working Float color. Caller retains and converts the
     /// original nonlinear literal separately, and selects working encoding.
     ColorOverlay {
@@ -384,6 +387,9 @@ impl PointOperation {
         if let Self::ColorOverlay { color } = self {
             return super::point_color_overlay::ColorOverlay { color }.try_eval_pixel(input, color_channels as u8, output);
         }
+        if let Self::SemiFlatten { color } = self {
+            return super::point_semi_flatten::SemiFlatten { color }.try_eval_pixel(input, color_channels as u8, output);
+        }
         if let Self::ComponentExtract { component, invert, linear } = self {
             return component_extract::eval(component, invert, linear, input, color_channels, output);
         }
@@ -563,6 +569,7 @@ impl PointOperation {
             | Self::ComponentExtract { .. }
             | Self::ColorToAlpha { .. }
             | Self::ColorOverlay { .. }
+            | Self::SemiFlatten { .. }
             | Self::ColorExchange { .. }
             | Self::Threshold { .. }
             | Self::ThresholdAlpha { .. }
@@ -616,6 +623,7 @@ impl PointOperation {
 
     pub fn validate(self) -> Result<(), RasterInputError> {
         match self {
+            Self::SemiFlatten { color } => super::point_semi_flatten::SemiFlatten { color }.validate(),
             Self::AlphaClipFinitePrecision { clip_low, low_limit, clip_high, high_limit } => {
                 super::alpha_clip_finite::AlphaClipFinite { clip_low, low_limit, clip_high, high_limit }.validate()
             }

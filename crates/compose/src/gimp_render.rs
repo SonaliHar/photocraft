@@ -526,6 +526,7 @@ fn prepare<'a>(
                     }
                     let generic_point = stack.nodes.iter().any(|node| {
                         node.operation.name == "gegl:unpremultiply"
+                            || crate::gimp_semi_flatten::claims(node)
                             || crate::gimp_video_degradation::claims_video(node)
                             || crate::gimp_red_eye::claims_geometry(node)
                             || node
@@ -1301,6 +1302,10 @@ pub(crate) fn qualify_point_family_context(
 )->Result<PointCurrentFamilies> {
     interrupt.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
     let item=state.items.iter().find(|item|item.item==ItemRef::Layer(layer.id));
+    if let Some(node) = stack.nodes.iter().find(|node| crate::gimp_semi_flatten::claims(node)) {
+        if stack.nodes.len() != 1 { return Err(CompositionError::Unsupported("Semi-Flatten current singleton")); }
+        crate::gimp_semi_flatten::qualify_context(doc, extent, node)?;
+    }
     let channel_mixer = stack.nodes.first().is_some_and(|node| {
         node.operation.name == "gegl:channel-mixer"
             && node.operation.schema_epoch == crate::gimp_filters::CHANNEL_MIXER_PRECISION_EPOCH

@@ -950,3 +950,31 @@ alpha, native source and merged captures remain exact. That observation changes
 no numerical tolerance or acceptance gate.
 Dense large/high-radius throughput, native_large and full-stock/visual/behavioral
 acceptance remain open.
+
+The separate `gimp:semi-flatten` route uses epoch
+`xcf22-gimp-semi-flatten-literal-v1`: implicit RGB nonlinear F32/650 or F64/750,
+an 8x6 canvas and native drawable at the origin, finite unit RGBA, and the exact
+v22 singleton Replace envelope. Original source admission requires a visible
+unit-opacity layer and enabled filter. Current validation also supports the
+existing readonly name/visibility/unit-opacity adapter (including combined
+supported fields), activation, literal colour edits, removal and singleton
+reorder. The direct compound metadata API and translation stay closed.
+
+Four finite unit F32 literal words retain their independent Linear or nonlinear
+tag and profile-None representation. The caller prepares the background operand
+separately from native-to-Linear input conversion. Enabled processing stages
+working RGBA to Float, fills partial alpha and retains the evaluator's output
+alpha through the inverse transfer; zero/full alpha still take that transfer
+round trip. Disabled filtering remains a separately validated native identity.
+The analytic literal preparation, working state, repeated sample conversions and
+full physical zero selection-mask scan have independent resource admission.
+Present raw filter policy words remain opaque provenance under this separate
+unit Replace policy; they are not enum aliases or borrowed Box rules.
+
+Removal has a narrow derived-current empty RGB nonlinear F32/F64 8x6 role,
+including native/default/unit/profile and actual current-owner proof. It grants
+no new empty original-XCF identity. Generic native point writeback and graph
+adapters do not acquire Semi-Flatten authority. Exact producer Babl conversion,
+F64 conversion placement and Float/FMA rounding remain unproven; public-GIMP
+research establishes observations only. Regression drafts, numerical comparison,
+native workflows and visual/performance acceptance remain deferred.

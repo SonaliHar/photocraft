@@ -100,6 +100,8 @@ pub mod gimp_configured_prepared_graph_candidate;
 pub mod gimp_configured_graph_execution;
 pub mod gimp_configured_graph_preparation;
 mod gimp_filters;
+pub use gimp_filters::SEMI_FLATTEN_EPOCH;
+mod gimp_semi_flatten;
 mod gimp_levels;
 pub mod gimp_link_items;
 pub mod gimp_link_cubic;

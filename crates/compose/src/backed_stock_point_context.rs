@@ -192,6 +192,7 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
             "gegl:absolute" => node.operation.schema_epoch == gimp_filters::ABSOLUTE_LINEAR_PRECISION_EPOCH,
             "gegl:color-exchange" => node.operation.schema_epoch == gimp_filters::COLOR_EXCHANGE_PRECISION_EPOCH,
             "gegl:color-overlay" => node.operation.schema_epoch == gimp_filters::COLOR_OVERLAY_PRECISION_EPOCH,
+            "gimp:semi-flatten" => node.operation.schema_epoch == gimp_filters::SEMI_FLATTEN_EPOCH,
             "gegl:channel-mixer" => node.operation.schema_epoch == gimp_filters::CHANNEL_MIXER_PRECISION_EPOCH,
             "gegl:mono-mixer" => matches!(
                 node.operation.schema_epoch.as_str(),
@@ -228,6 +229,7 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
         | gimp_filters::RGB_CLIP_HDR_EPOCH
         | gimp_filters::MONO_MIXER_EDITS_EPOCH
         | crate::gimp_unpremultiply::UNPREMULTIPLY_EPOCH => node.operation.schema_epoch.as_str(),
+        gimp_filters::SEMI_FLATTEN_EPOCH => gimp_filters::SEMI_FLATTEN_EPOCH,
         gimp_filters::STACK_EDITS_EPOCH => gimp_filters::STACK_EDITS_EPOCH,
         crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH => crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH,
         crate::gimp_video_degradation::VIDEO_DEGRADATION_OPTIONS_EPOCH => crate::gimp_video_degradation::VIDEO_DEGRADATION_OPTIONS_EPOCH,
@@ -259,6 +261,13 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
             FilterValue::Enum { domain, .. } if domain.len() <= 4096 => work(budget, interrupt, domain.len() as u64)?,
             FilterValue::Color { components, encoding: SampleEncoding::NonlinearProfile, profile: None }
                 if components.len() == 4 && components.iter().all(|v| matches!(v, photocraft_doc::xcf_filters::ExactNumber::Float32Bits(_))) =>
+            {
+                work(budget, interrupt, 4)?
+            }
+            FilterValue::Color { components, encoding: SampleEncoding::Linear, profile: None }
+                if crate::gimp_semi_flatten::claims(node)
+                    && components.len() == 4
+                    && components.iter().all(|v| matches!(v, photocraft_doc::xcf_filters::ExactNumber::Float32Bits(_))) =>
             {
                 work(budget, interrupt, 4)?
             }
@@ -512,6 +521,7 @@ struct StockPointPlan {
     format: PixelFormat,
     opaque_input: bool,
     half_input: bool,
+    unit_input: bool,
 }
 pub struct PreparedStockPointPipeline {
     plan: StockPointPlan,
@@ -613,6 +623,12 @@ fn prepare_plan<B: PlanBudget>(
     // Price bounded repeated string/registry comparisons and the admitted
     // fixed analytic profile preparation before PointStack allocates.
     work(budget, interrupt, envelope.checked_mul(64).ok_or_else(length)?)?;
+    if crate::gimp_semi_flatten::claims(node) {
+        // Analytic literal conversion is independent of source/profile
+        // qualification and is charged before its constructor evaluates it.
+        work(budget, interrupt, crate::gimp_semi_flatten::LITERAL_PREPARATION_WORK)?;
+        crate::gimp_semi_flatten::qualify_context(doc, extent, node).map_err(BackedNormalError::Color)?;
+    }
     if witnessed {
         qualify_witnessed_metadata(doc, layer, state, filters, extent, stored, format, default)?;
     } else if remaining_optional_mask(node) {
@@ -654,7 +670,11 @@ fn prepare_plan<B: PlanBudget>(
     }
     work(budget, interrupt, mask_work)?;
     for node in &filters.nodes {
-        let valid_mask = crate::gimp_neighborhood::qualify_selection_mask_with_interrupt(state, node, layer.id, doc.bounds(), interrupt);
+        let valid_mask = if crate::gimp_semi_flatten::claims(node) {
+            crate::gimp_semi_flatten::qualify_mask(state, node, layer.id, doc.depth, interrupt)
+        } else {
+            crate::gimp_neighborhood::qualify_selection_mask_with_interrupt(state, node, layer.id, doc.bounds(), interrupt)
+        };
         work(budget, interrupt, 0)?;
         valid_mask.map_err(BackedNormalError::Color)?;
     }
@@ -680,6 +700,7 @@ fn prepare_plan<B: PlanBudget>(
         opaque_input: legacy_opaque(node) || node.operation.name == "gegl:rgb-clip",
         half_input: matches!(configured_kind(node), Some(ConfiguredKind::Balance))
             && doc.source_color_context.as_ref().is_some_and(|s| matches!(s.source_precision, 500 | 550 | 575)),
+        unit_input: crate::gimp_semi_flatten::claims(node),
     };
     work(budget, interrupt, 0)?;
     Ok((plan, lease))
@@ -751,6 +772,9 @@ impl PreparedStockPointPipeline {
         let read = |channel| try_read_sample_f64(raw, format.sample, channel).map_err(|_| length());
         let rgb = if format.mode == ColorMode::Grayscale { [read(0)?; 3] } else { [read(0)?, read(1)?, read(2)?] };
         let input = [rgb[0], rgb[1], rgb[2], read(format.mode.color_channels())?];
+        if self.plan.unit_input && input.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
+            return Err(BackedNormalError::Unsupported("unit CURRENT stock Point native samples"));
+        }
         if self.plan.half_input
             && input.iter().any(|value| {
                 !photocraft_color::try_round_f32_to_f16_bits(*value as f32)
@@ -940,6 +964,10 @@ impl<'a> PreparedBackedStockPointContext<'a> {
 #[cfg(test)]
 #[path = "backed_stock_point_context_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "backed_semi_flatten_tests.rs"]
+mod semi_flatten_tests;
 
 #[cfg(test)]
 #[path = "backed_stock_point_general_tests.rs"]

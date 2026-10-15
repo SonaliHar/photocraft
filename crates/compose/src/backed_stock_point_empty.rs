@@ -37,17 +37,47 @@ pub(super) fn prepare<B: PlanBudget>(
     };
     // Shared fixed owner geometry/precision checks, entered explicitly as Empty;
     // no all(nodes) expression is used as proof of a witnessed operation epoch.
-    qualify_witnessed_metadata(doc, layer, state, filters, extent, stored, format, default)?;
+    // A removed operation carries no recoverable operation identity. This is
+    // a separate narrow generic derived CURRENT empty role, never an original
+    // XCF source selector or an inferred Semi-Flatten provenance grant.
+    let float_current =
+        matches!((doc.depth, doc.source_color_context.as_ref().map(|s| s.source_precision)), (SampleType::F32, Some(650)) | (SampleType::F64, Some(750)));
+    if float_current {
+        if doc.size != photocraft_doc::Size::new(8, 6)
+            || extent != Rect::new(0, 0, 8, 6)
+            || doc.mode != ColorMode::Rgb
+            || stored != SampleEncoding::NonlinearProfile
+            || format != doc.pixel_format()
+            || !format.alpha
+            || default.iter().any(|v| *v != 0)
+            || !layer.opacity.is_finite()
+            || !(0.0..=1.0).contains(&layer.opacity)
+            || layer.mask.is_some()
+            || doc.source_color_context.as_ref().is_none_or(|s| s.original_icc.is_some())
+            || state.items.first().is_none_or(|item| {
+                item.item != ItemRef::Layer(layer.id)
+                    || item.visible != layer.visible
+                    || item.raster_bounds != Some(extent)
+                    || item.composition.as_ref().is_none_or(|p| {
+                        p.source_mode != 28 || p.legacy || p.pass_through || (p.stored_blend_space, p.stored_composite_space, p.stored_operator) != (0, -1, -1)
+                    })
+            })
+        {
+            return Err(scope());
+        }
+    } else {
+        qualify_witnessed_metadata(doc, layer, state, filters, extent, stored, format, default)?;
+    }
     let item = state.items.first().ok_or_else(scope)?;
     let resolved = item.composition.as_ref().ok_or_else(scope)?.checked_resolved().map_err(|_| scope())?;
     let physical = layer.import_compositing.as_ref().ok_or_else(scope)?;
     if item.item != ItemRef::Layer(layer.id)
         || resolved.operator != GimpOperator::Union
-        || resolved.blend_space != GimpSpace::ProfileRgb
-        || resolved.composite_space != GimpSpace::ProfileRgb
+        || resolved.blend_space != if float_current { GimpSpace::LinearRgb } else { GimpSpace::ProfileRgb }
+        || resolved.composite_space != if float_current { GimpSpace::LinearRgb } else { GimpSpace::ProfileRgb }
         || physical.pass_through
-        || physical.blend_encoding != SampleEncoding::NonlinearProfile
-        || physical.composite_encoding != SampleEncoding::NonlinearProfile
+        || physical.blend_encoding != if float_current { SampleEncoding::Linear } else { SampleEncoding::NonlinearProfile }
+        || physical.composite_encoding != if float_current { SampleEncoding::Linear } else { SampleEncoding::NonlinearProfile }
         || layer.blend != photocraft_color::blend::BlendMode::Normal
         || layer.fill_opacity.to_bits() != 1f32.to_bits()
         || layer.clipped
@@ -71,5 +101,16 @@ pub(super) fn prepare<B: PlanBudget>(
         return Err(BackedNormalError::Allocation);
     }
     work(budget, interrupt, 0)?;
-    Ok((StockPointPlan { recipe: Recipe::Empty, stack, _current_profile: current_profile, format, opaque_input: false, half_input: false }, lease))
+    Ok((
+        StockPointPlan {
+            recipe: Recipe::Empty,
+            stack,
+            _current_profile: current_profile,
+            format,
+            opaque_input: false,
+            half_input: false,
+            unit_input: float_current,
+        },
+        lease,
+    ))
 }

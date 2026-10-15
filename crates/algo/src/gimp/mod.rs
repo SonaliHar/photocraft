@@ -80,6 +80,7 @@ pub mod point_absolute;
 pub mod point_unpremultiply;
 pub mod point_channel_mixer;
 pub mod point_color_overlay;
+pub mod point_semi_flatten;
 pub mod point_color_rotate;
 pub mod point_component_polar;
 pub mod point_mono_mixer;

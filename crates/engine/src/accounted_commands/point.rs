@@ -27,6 +27,9 @@ struct Fields<'a> {
 }
 
 fn flat_value(v: &serde_json::Map<String, Value>) -> Option<(PointArgumentValue, Option<&str>)> {
+    flat_value_with_literal(v,false)
+}
+fn flat_value_with_literal(v: &serde_json::Map<String,Value>,literal:bool)->Option<(PointArgumentValue,Option<&str>)>{
     if v.len() != 1 {
         return None;
     }
@@ -50,7 +53,12 @@ fn flat_value(v: &serde_json::Map<String, Value>) -> Option<(PointArgumentValue,
         }
     } else if let Some(color) = v.get("Color") {
         let color = color.as_object()?;
-        if color.len() != 3 || color.get("encoding")?.as_str()? != "nonlinear_profile" || !color.get("profile")?.is_null() {
+        let encoding=match color.get("encoding")?.as_str()?{
+            "nonlinear_profile"=>photocraft_doc::SampleEncoding::NonlinearProfile,
+            "linear" if literal=>photocraft_doc::SampleEncoding::Linear,
+            _=>return None,
+        };
+        if color.len() != 3 || !color.get("profile")?.is_null() {
             return None;
         }
         let components = color.get("components")?.as_array()?;
@@ -70,7 +78,7 @@ fn flat_value(v: &serde_json::Map<String, Value>) -> Option<(PointArgumentValue,
             }
             *word = bits;
         }
-        (PointArgumentValue::Color4F32(words), None)
+        (if literal{PointArgumentValue::LiteralColor4F32{components:words,encoding}}else{PointArgumentValue::Color4F32(words)}, None)
     } else if let Some(v) = v.get("Bool") {
         (PointArgumentValue::Bool(v.as_bool()?), None)
     } else {
@@ -89,6 +97,9 @@ fn flat_value(v: &serde_json::Map<String, Value>) -> Option<(PointArgumentValue,
 
 // This is a bounded borrowed wire check, not operation or source eligibility.
 fn wire<'a>(id: &str, params: &'a Value) -> Option<Fields<'a>> {
+    wire_with_literal(id,params,false)
+}
+fn wire_with_literal<'a>(id:&str,params:&'a Value,literal:bool)->Option<Fields<'a>>{
     let enable = match id {
         "xcf.filter.set" => false,
         "xcf.filter.enable" => true,
@@ -127,7 +138,7 @@ fn wire<'a>(id: &str, params: &'a Value) -> Option<Fields<'a>> {
             if name.is_empty() || name.len() > 128 || name.as_bytes().contains(&0) || arguments.iter().flatten().any(|v: &Argument<'_>| v.name == name) {
                 return None;
             }
-            let (value, domain) = flat_value(a.get("value")?.as_object()?)?;
+            let (value, domain) = flat_value_with_literal(a.get("value")?.as_object()?,literal)?;
             *arguments.get_mut(count)? = Some(Argument { name, value, domain });
             count += 1;
         }
@@ -141,14 +152,14 @@ pub(super) fn flat_journal_depth(id: &str, params: &Value) -> usize {
     if id != "xcf.filter.set" {
         return 4;
     }
-    let Some(fields) = wire(id, params) else {
+    let Some(fields) = wire_with_literal(id, params, true) else {
         return 4;
     };
     // root0 -> arguments1 -> entry2 -> value3 -> Color4 -> components5
     // -> component object6 -> Float32Bits scalar7. Only this exact closed
     // literal wire gains depth7. Signed32 adds Number4 -> Signed5 ->
     // width/value6; old flat set shapes remain depth5.
-    if fields.arguments.iter().flatten().any(|a| matches!(a.value, PointArgumentValue::Color4F32(_))) {
+    if fields.arguments.iter().flatten().any(|a| matches!(a.value, PointArgumentValue::Color4F32(_) | PointArgumentValue::LiteralColor4F32{..})) {
         7
     } else if fields.arguments.iter().flatten().any(|a| matches!(a.value, PointArgumentValue::Signed32(_))) {
         6
@@ -210,6 +221,7 @@ enum EditStorage {
     ObservedBox,
 }
 /// Cheap CURRENT routing hint only; complete recipe proof remains mandatory.
+fn semi_flatten_edit_candidate(owner:&AccountedDocument)->bool{crate::xcf_filter_cmds::semi_flatten_literal_owner(owner)}
 pub(super) fn observed_box_edit_candidate(owner: &AccountedDocument) -> bool {
     (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
         && owner.document().xcf_state.as_ref().is_some_and(|state| {
@@ -323,12 +335,13 @@ impl<'a> Request<'a> {
             "xcf.filter.remove" => "xcf.filter.remove",
             _ => return Err(BackingError::Unsupported.into()),
         };
+        let literal=session.active().and_then(|state|state.doc.accounted()).is_some_and(semi_flatten_edit_candidate);
         let (fields, structured, move_to) = if id == "xcf.filter.move" {
             let (fields, index) = move_wire(params).ok_or_else(|| bad(id, "canonical filterId and bounded owner-local index required"))?;
             (fields, None, Some(index))
         } else if id == "xcf.filter.remove" {
             (remove_wire(params).ok_or_else(|| bad(id, "canonical filterId required"))?, None, None)
-        } else if let Some(fields) = wire(id, params) {
+        } else if let Some(fields) = wire_with_literal(id, params, literal) {
             (fields, None, None)
         } else {
             let plan = structured::preflight(id, params, ctl)?.ok_or_else(|| bad(id, "unsupported bounded Point patch wire"))?;
@@ -362,7 +375,7 @@ impl<'a> Request<'a> {
                 ctl.check(1)?;
                 if !state.history.current()?.shares_state(&state.doc) { return Err(BackingError::Integrity.into()); }
             }
-            EditStorage::ImplicitPoint => owner.validate_readonly_point_storage(ctl)?,
+            EditStorage::ImplicitPoint => {owner.validate_readonly_point_storage(ctl)?;if semi_flatten_edit_candidate(owner) && !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into());}},
             EditStorage::AssignedBox => {
                 owner.validate_readonly_assigned_point_storage(ctl)?;
                 ctl.check(1)?;
@@ -397,8 +410,8 @@ impl<'a> Request<'a> {
             }
             for candidate in &stack.nodes {
                 ctl.check(8192)?;
-                if candidate.operation.schema_epoch != STACK_EDITS_EPOCH
-                    || candidate.composition.as_ref().is_none_or(|p| p.compatibility_epoch != STACK_EDITS_EPOCH)
+                if !semi_flatten_edit_candidate(owner) && (candidate.operation.schema_epoch != STACK_EDITS_EPOCH
+                    || candidate.composition.as_ref().is_none_or(|p| p.compatibility_epoch != STACK_EDITS_EPOCH))
                 {
                     return Err(BackingError::Unsupported.into());
                 }
@@ -515,6 +528,8 @@ impl<'a> Request<'a> {
                         PointArgumentValue::Color4F32(_),
                         None,
                     ) if components.len() == 4 && components.iter().all(|c| matches!(c, ExactNumber::Float32Bits(_))) => {}
+                    (FilterValue::Color{components,encoding,profile:None},PointArgumentValue::LiteralColor4F32{encoding:requested,..},None)
+                        if semi_flatten_edit_candidate(owner) && matches!(encoding,photocraft_doc::SampleEncoding::Linear|photocraft_doc::SampleEncoding::NonlinearProfile) && matches!(requested,photocraft_doc::SampleEncoding::Linear|photocraft_doc::SampleEncoding::NonlinearProfile) && components.len()==4 && components.iter().all(|v|matches!(v,ExactNumber::Float32Bits(_)))=>{}
                     _ => return Err(BackingError::Unsupported.into()),
                 }
                 *patches.get_mut(index).ok_or(BackingError::Integrity)? = PointArgumentPatch { name: argument.name, value: argument.value };
@@ -741,3 +756,7 @@ mod assigned_enabled_tests;
 #[cfg(all(test, feature="corpus", not(target_arch="wasm32")))]
 #[path="point_observed_edit_tests.rs"]
 mod observed_edit_tests;
+
+#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
+#[path="point_semi_flatten_tests.rs"]
+mod semi_flatten_tests;

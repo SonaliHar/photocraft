@@ -48,6 +48,7 @@ pub fn is_current_point_candidate(document: &photocraft_doc::Document, control: 
             control.check(1)?;
             for node in &stack.nodes {
                 control.check(1)?;
+                if node.operation.schema_epoch==photocraft_compose::SEMI_FLATTEN_EPOCH || node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::SEMI_FLATTEN_EPOCH){return Ok(true);}
                 if matches!(
                     node.operation.name.as_str(),
                     "gegl:brightness-contrast"
@@ -61,6 +62,7 @@ pub fn is_current_point_candidate(document: &photocraft_doc::Document, control: 
                         | "gegl:absolute"
                         | "gegl:color-exchange"
                         | "gegl:color-overlay"
+                        | "gimp:semi-flatten"
                         | "gegl:channel-mixer"
                         | "gegl:mono-mixer"
                         | "gegl:red-eye-removal"

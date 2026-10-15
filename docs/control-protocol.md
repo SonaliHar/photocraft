@@ -2112,3 +2112,31 @@ Source and alpha remain exact; the other three roles are capture-stable.
 Effective Gray ICC date bytes, distinct Babl RGB-space profiles and each actual
 opaque raw triple remain provenance. No tolerance, profile normalization or
 PhotoCraft numerical acceptance is inferred; regression groups remain UNRUN.
+
+Owned Semi-Flatten continuation uses the existing `xcf.filter.set`,
+`xcf.filter.enable`, `xcf.filter.remove` and singleton reorder transactions.
+The new role is exact v22 `gimp:semi-flatten` / `0:0`, implicit RGB nonlinear
+F32/650 or F64/750, 8x6 native/canvas bounds at the origin, finite unit RGBA,
+and its separate `xcf22-gimp-semi-flatten-literal-v1` epoch. Source import
+requires the authored visible/unit-opacity layer, enabled filter and declared
+zero selection mask. Complete current/staged proof and the existing paid
+history, view, source, channel, journal and reply fences remain mandatory.
+
+The sole `color` argument uses the existing tagged `Color` wire value: exactly
+four `Float32Bits` components, `profile: null`, and `encoding` either `linear`
+or `nonlinear_profile`. Both tags retain their own meaning and all four raw
+words; the literal alpha is validated and retained even though it does not
+affect the Semi-Flatten equation. Switching only the encoding is an edit;
+exact words plus tag are a no-op. Linear colour requests are allowed only for
+an actual owned Semi-Flatten node under the exact epoch. Existing generic
+colour edits keep their nonlinear contract. UI RGB edits preserve the tag and
+alpha words, and simultaneous colour/activation edits use one transaction.
+
+The existing readonly `layer.setProps` adapter for layer name, visibility and
+finite unit opacity also applies after complete proof, including simultaneous
+supported fields. The direct compound metadata API and Move remain closed.
+Removal uses a separate narrow derived-current empty RGB F32/F64 8x6 role;
+it does not enroll new empty original-XCF sources. Save/reopen here means the
+native `.pcraft` continuation. Exact GIMP conversion/rounding, PhotoCraft
+numerical results and all regression/native/visual/performance checks remain
+deferred; the GIMP research captures do not complete those gates.

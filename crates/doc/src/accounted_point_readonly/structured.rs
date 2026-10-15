@@ -57,7 +57,7 @@ fn walk_value(value: &FilterValue, depth: usize, shape: &mut PointArgumentShape,
         FilterValue::Number(ExactNumber::Float64Bits(_)) => words(shape, 1)?,
         FilterValue::Number(ExactNumber::Signed { width: 32, value }) if i32::try_from(*value).is_ok() => {}
         FilterValue::Enum { domain, .. } => text(domain, shape, check)?,
-        FilterValue::Color { components, encoding: SampleEncoding::NonlinearProfile, profile: None } if components.len() == 4 => {
+        FilterValue::Color { components, encoding: SampleEncoding::NonlinearProfile | SampleEncoding::Linear, profile: None } if components.len() == 4 => {
             allocation::<ExactNumber>(shape, components.len(), components.capacity())?;
             for component in components {
                 check(1)?;

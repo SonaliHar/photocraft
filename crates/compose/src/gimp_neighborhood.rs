@@ -158,6 +158,7 @@ impl OrderedStack {
             .nodes
             .iter()
             .any(|node| node.operation.name == "gegl:unpremultiply"
+                || crate::gimp_semi_flatten::claims(node)
                 || crate::gimp_video_degradation::claims_video(node)
                 || crate::gimp_red_eye::claims_geometry(node)
                 || node.composition.as_ref().is_some_and(|policy| policy.compatibility_epoch == crate::gimp_filters::POINT_REPLACE_COMPATIBILITY_EPOCH))
@@ -667,6 +668,13 @@ pub(crate) fn qualify_selection_mask_with_interrupt(state: &photocraft_doc::XcfS
     mask_controlled::prepare(control, |control| qualify_selection_mask_controlled(state, node, owner, extent, control))
 }
 fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, extent: Rect, control: &Interrupt<'_>) -> Result<()> {
+    if crate::gimp_semi_flatten::claims(node) {
+        let [mask] = state.filter_masks.as_slice() else { return Err(CompositionError::Unsupported("Semi-Flatten singleton selection mask")); };
+        if extent != Rect::new(0, 0, 8, 6) || !matches!(mask.surface.format().sample, photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64) {
+            return Err(CompositionError::Unsupported("Semi-Flatten exact selection mask precision"));
+        }
+        return crate::gimp_semi_flatten::qualify_mask(state, node, owner, mask.surface.format().sample, control);
+    }
     if crate::gimp_red_eye::claims_geometry(node) {
         let mask = node.mask.and_then(|reference| match reference {
             photocraft_doc::item_identity::ItemRef::Mask(id) => mask_controlled::iter(&state.filter_masks, control).find(|mask| mask.id == id),

@@ -135,7 +135,7 @@ fn point_metadata(node: &FilterNode, control: &ReadControl<'_>) -> Result<usize>
             FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Float32Bits(_)) | FilterValue::Bool(_) => {}
             FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Signed { width: 32, value }) if i32::try_from(*value).is_ok() => {}
             FilterValue::Enum { domain, .. } => text(&mut total, domain, 256, control)?,
-            FilterValue::Color { components, encoding: photocraft_doc::SampleEncoding::NonlinearProfile, profile: None } if components.len() == 4 => {
+            FilterValue::Color {components,encoding,profile:None} if components.len()==4 && (*encoding==photocraft_doc::SampleEncoding::NonlinearProfile || *encoding==photocraft_doc::SampleEncoding::Linear && crate::xcf_filter_cmds::semi_flatten_literal_node(node)) => {
                 // Exact bounded storage metadata only. Preserve raw words,
                 // including nonfinite values; this grants no evaluation/edit.
                 control.check(4)?;

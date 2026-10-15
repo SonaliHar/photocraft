@@ -225,6 +225,8 @@ fn build_inspect_reply_with_point_colors(
                 FilterValue::StoredColor(storage) => json!({"value":crate::inspect_xcf_typed::stored_color_inspection(&storage.layout,&storage.samples,&storage.opaque_tail,&Interrupt::NONE)?,"editable":false}),
                 FilterValue::Number(ExactNumber::Float64Bits(bits)) if point_colors => json!({"value":{"Number":{"Float64Bits":format!("0x{bits:016x}")}}}),
                 FilterValue::Number(_) | FilterValue::Bool(_) => json!({"value":argument.value}),
+                FilterValue::Color { components, encoding, profile: None }
+                    if semi_flatten_literal_node(node) && matches!(encoding,photocraft_doc::SampleEncoding::Linear|photocraft_doc::SampleEncoding::NonlinearProfile) && components.len()==4 && components.iter().all(|v|matches!(v,ExactNumber::Float32Bits(_))) => json!({"value":argument.value}),
                 FilterValue::Color { components, encoding: photocraft_doc::SampleEncoding::NonlinearProfile, profile: None }
                     if point_colors && components.len() == 4
                         && components.iter().all(|component| matches!(component, ExactNumber::Float32Bits(_))) => json!({"value":argument.value}),
@@ -648,7 +650,13 @@ fn set_wire(value:&Value,depth:usize,nodes:&mut usize,bytes:&mut usize)->Result<
     }
     Ok(())
 }
-fn borrowed_value(input:&Value,structured:bool)->Result<()> {
+pub(crate) fn semi_flatten_literal_node(node:&photocraft_doc::xcf_filters::FilterNode)->bool{
+    node.operation.name=="gimp:semi-flatten" && node.operation.stored_version=="0:0" && node.operation.schema_epoch==photocraft_compose::SEMI_FLATTEN_EPOCH && node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::SEMI_FLATTEN_EPOCH)
+}
+pub(crate) fn semi_flatten_literal_owner(owner:&photocraft_doc::accounted_document::AccountedDocument)->bool{
+    owner.is_readonly_point_storage() && owner.document().xcf_state.as_ref().is_some_and(|state|matches!(state.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[node] if semi_flatten_literal_node(node))))
+}
+fn borrowed_value(input:&Value,structured:bool,literal:bool)->Result<()> {
     let outer=object(SET,input,&["Number","Bool","Enum","Color","Config","Curve"])?;
     if outer.len()!=1 {return Err(bad(SET,"one exact typed value required"));}
     if let Some(config)=outer.get("Config") {
@@ -659,7 +667,7 @@ fn borrowed_value(input:&Value,structured:bool)->Result<()> {
             if fields.len()!=2 {return Err(bad(SET,"configuration entry requires name/value"));}
             let name=fields.get("name").and_then(Value::as_str).filter(|name|!name.is_empty() && name.len()<=128 && !name.contains('\0')).ok_or_else(||bad(SET,"bounded configuration name required"))?;
             if entries.iter().take(index).any(|entry|entry.get("name").and_then(Value::as_str)==Some(name)) {return Err(bad(SET,"duplicate configuration name"));}
-            borrowed_value(fields.get("value").ok_or_else(||bad(SET,"configuration value missing"))?,true)?;
+            borrowed_value(fields.get("value").ok_or_else(||bad(SET,"configuration value missing"))?,true,false)?;
         }
         return Ok(());
     }
@@ -694,7 +702,7 @@ fn borrowed_value(input:&Value,structured:bool)->Result<()> {
         return Ok(());
     }
     let color=object(SET,outer.get("Color").ok_or_else(||bad(SET,"typed scalar required"))?,&["components","encoding","profile"])?;
-    if color.len()!=3 || color.get("encoding").and_then(Value::as_str)!=Some("nonlinear_profile") || !color.get("profile").is_some_and(Value::is_null) {return Err(bad(SET,"literal Color encoding/profile"));}
+    if color.len()!=3 || (!matches!(color.get("encoding").and_then(Value::as_str),Some("nonlinear_profile")) && !(literal && color.get("encoding").and_then(Value::as_str)==Some("linear"))) || !color.get("profile").is_some_and(Value::is_null) {return Err(bad(SET,"literal Color encoding/profile"));}
     let components=color.get("components").and_then(Value::as_array).filter(|values|values.len()==4).ok_or_else(||bad(SET,"four Color components required"))?;
     for value in components {
         let fields=object(SET,value,&["Float32Bits"])?;
@@ -722,7 +730,7 @@ pub(crate) fn pre_dispatch_set_change(session:&Session,cmd:&str,params:&Value,ba
             let fields=object(cmd,argument,&["name","value"])?;
             let name=fields.get("name").and_then(Value::as_str).filter(|text|!text.is_empty() && text.len()<=128 && !text.contains('\0')).ok_or_else(||bad(cmd,"bounded argument name required"))?;
             if fields.len()!=2 || arguments.iter().take(index).any(|argument|argument.get("name").and_then(Value::as_str)==Some(name)) {return Err(bad(cmd,"duplicate/invalid patch"));}
-            borrowed_value(fields.get("value").ok_or_else(||bad(cmd,"argument value required"))?,name=="config")?;
+            borrowed_value(fields.get("value").ok_or_else(||bad(cmd,"argument value required"))?,name=="config",name=="color" && active.doc.accounted().is_some_and(semi_flatten_literal_owner))?;
         }
     }
     if cmd==SET && params.get("enabled").is_none() && params.get("opacityF64Bits").is_none()

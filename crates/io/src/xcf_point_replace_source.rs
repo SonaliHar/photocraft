@@ -32,6 +32,9 @@ pub(crate) mod red_eye_source;
 #[path = "xcf_video_degradation_source.rs"]
 pub(crate) mod video_degradation_source;
 
+#[path="xcf_semi_flatten_source.rs"]
+pub(crate) mod semi_flatten_source;
+
 /// Exact source argument validation without allocating a mapped filter stack.
 fn finite_alpha_operation<P>(effect: &photocraft_xcf::Effect<P>) -> Option<photocraft_algo::gimp::alpha_clip_finite::AlphaClipFinite> {
     if effect.version.as_deref() != Some("0:0") || effect.arguments.len() != 4 {
@@ -85,6 +88,7 @@ pub(crate) fn classify_family_hint<P>(file: &XcfFile<P>) -> Option<PointReplaceF
         "gegl:absolute" if absolute_source::observed_envelope(effect) && file.encoding == Encoding::Linear => PointReplaceFamily::AbsoluteLinear,
         "gegl:invert-linear" => PointReplaceFamily::InvertLinear,
         "gegl:invert-gamma" => PointReplaceFamily::InvertGamma,
+        "gimp:semi-flatten" => PointReplaceFamily::SemiFlatten,
         "gegl:color-exchange" => PointReplaceFamily::ColorExchange,
         "gegl:channel-mixer" if channel_mixer_source::observed_envelope(effect) => PointReplaceFamily::ChannelMixer,
         "gegl:mono-mixer" if mono_mixer_source::observed_envelope(effect) => PointReplaceFamily::MonoMixerSigned,
@@ -139,6 +143,7 @@ pub(crate) fn classify<P: ExactParsedPlane>(
     let Some(owner) = file.layers.first() else { return Ok(None) };
     let Some(effect) = owner.effects.first() else { return Ok(None) };
     let Some(family) = classify_family_hint(file) else { return Ok(None) };
+    if family==PointReplaceFamily::SemiFlatten { return Ok(semi_flatten_source::qualify(file,control,shared)?.then_some(NeighborhoodDomain::PointReplace(family))); }
     if matches!(family, PointReplaceFamily::ComponentExtractCmyk | PointReplaceFamily::ComponentExtractYcbcr)
         && (effect.state.blend_space, effect.state.composite_space, effect.state.composite_mode) != (Some(-305954223), Some(-305954223), Some(-305954223))
     {

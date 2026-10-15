@@ -21,6 +21,7 @@ pub(crate) enum PointReplaceFamily {
     InvertGamma,
     ColorExchange,
     ColorOverlay,
+    SemiFlatten,
     ChannelMixer,
     MonoMixerSigned,
     RedEye,
@@ -49,6 +50,7 @@ impl PointReplaceFamily {
             Self::InvertGamma => NeighborhoodDomain::InvertGammaPrecision,
             Self::ColorExchange => NeighborhoodDomain::ColorExchangePrecision,
             Self::ColorOverlay => NeighborhoodDomain::ColorOverlayPrecision,
+            Self::SemiFlatten => NeighborhoodDomain::SemiFlatten,
             Self::ChannelMixer => NeighborhoodDomain::ChannelMixerPrecision,
             Self::MonoMixerSigned => NeighborhoodDomain::MonoMixerSignedPrecision,
             Self::RedEye => NeighborhoodDomain::RedEyePrecision,
@@ -73,6 +75,7 @@ pub(crate) enum NeighborhoodDomain {
     InvertGammaPrecision,
     ColorExchangePrecision,
     ColorOverlayPrecision,
+    SemiFlatten,
     ChannelMixerPrecision,
     MonoMixerSignedPrecision,
     RedEyePrecision,
@@ -601,6 +604,8 @@ fn qualified_stack_with_activation<P>(
         let invert_gamma = domain == NeighborhoodDomain::InvertGammaPrecision;
         let color_exchange = domain == NeighborhoodDomain::ColorExchangePrecision;
         let color_overlay = domain == NeighborhoodDomain::ColorOverlayPrecision;
+        let semi_flatten=domain==NeighborhoodDomain::SemiFlatten;
+        if effect.operation=="gimp:semi-flatten" && (!semi_flatten || !generic_replace || effects.len()!=1 || !crate::xcf_point_replace_source::semi_flatten_source::envelope(effect)) { return Err(unsupported(effect,"unqualified Semi-Flatten envelope")); }
         if effect.operation == "gegl:color-overlay"
             && (!color_overlay
                 || !generic_replace
@@ -967,7 +972,13 @@ fn qualified_stack_with_activation<P>(
         if color_to_alpha {
             arguments = color_to_alpha_arguments(effect)?;
         }
-        if color_exchange {
+        if semi_flatten {
+            let (words,encoding)=crate::xcf_point_replace_source::semi_flatten_source::parameters(effect).ok_or_else(||unsupported(effect,"Semi-Flatten literal"))?;
+            let mut components=Vec::new();components.try_reserve_exact(4).map_err(|_|unsupported(effect,"Semi-Flatten color allocation"))?;
+            if components.capacity()>8 || arguments.capacity()>2 { return Err(unsupported(effect,"Semi-Flatten literal capacity")); }
+            components.extend(words.into_iter().map(ExactNumber::Float32Bits));
+            arguments.push(FilterArgument{name:"color".into(),value:FilterValue::Color{components,encoding,profile:None}});
+        } else if color_exchange {
             arguments = color_exchange_arguments(effect)?;
         } else if color_overlay {
             arguments = color_overlay_arguments(effect)?;
@@ -979,7 +990,7 @@ fn qualified_stack_with_activation<P>(
         for argument in effect
             .arguments
             .iter()
-            .filter(|_| !levels && !color_balance && !color_exchange && !color_overlay && !color_to_alpha && !component_extract && !alpha_clip)
+            .filter(|_| !levels && !color_balance && !semi_flatten && !color_exchange && !color_overlay && !color_to_alpha && !component_extract && !alpha_clip)
         {
             if alien_map {
                 let (value, scalar) = match (&*argument.name, &argument.value) {
@@ -1323,7 +1334,7 @@ fn qualified_stack_with_activation<P>(
             .map_err(|_| unsupported(effect, "Red Eye typed parameters"))?;
         } else if video {
             photocraft_compose::gimp_video_degradation::typed_arguments(&arguments).map_err(|_| unsupported(effect, "Video Degradation typed schema"))?;
-        } else if color_rotate || channel_mixer || mono_signed || color_exchange || color_overlay || color_to_alpha || component_extract || alpha_clip {
+        } else if semi_flatten || color_rotate || channel_mixer || mono_signed || color_exchange || color_overlay || color_to_alpha || component_extract || alpha_clip {
             // The dedicated typed constructor already validated every name.
         } else if pixelize {
             if arguments.len() != 8 {
@@ -1415,6 +1426,8 @@ fn qualified_stack_with_activation<P>(
                     "xcf-22-stock-color-to-alpha-precision-v1"
                 } else if color_exchange {
                     "xcf-22-stock-color-exchange-precision-v1"
+                } else if semi_flatten {
+                    photocraft_compose::SEMI_FLATTEN_EPOCH
                 } else if color_overlay {
                     "xcf-22-stock-color-overlay-six-precision-v1"
                 } else if invert_gamma {
@@ -1508,6 +1521,8 @@ fn qualified_stack_with_activation<P>(
                     photocraft_compose::gimp_video_degradation::VIDEO_DEGRADATION_OPTIONS_EPOCH
                 } else if red_eye_epoch == Some(photocraft_compose::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH) {
                     photocraft_compose::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH
+                } else if semi_flatten {
+                    photocraft_compose::SEMI_FLATTEN_EPOCH
                 } else if generic_replace {
                     "xcf-22-stock-point-replace-fields-v1"
                 } else if alien_map {

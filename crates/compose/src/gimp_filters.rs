@@ -73,6 +73,7 @@ pub const CHANNEL_MIXER_PRECISION_EPOCH: &str = "xcf-22-stock-channel-mixer-prec
 pub const RED_EYE_PRECISION_EPOCH: &str = "xcf-22-stock-red-eye-removal-precision-v1";
 pub const MONO_MIXER_SIGNED_PRECISION_EPOCH: &str = "xcf-22-stock-mono-mixer-signed-precision-v1";
 pub const COLOR_OVERLAY_PRECISION_EPOCH: &str = "xcf-22-stock-color-overlay-six-precision-v1";
+pub const SEMI_FLATTEN_EPOCH: &str = crate::gimp_semi_flatten::EPOCH;
 pub const COLOR_TO_ALPHA_PRECISION_EPOCH: &str = "xcf-22-stock-color-to-alpha-precision-v1";
 pub const ALPHA_CLIP_FINITE_PRECISION_EPOCH: &str = "xcf22-stock-alpha-clip-finite-precision-v1";
 pub const ALPHA_CLIP_PRECISION_EPOCH: &str = "xcf22-stock-alpha-clip-precision-v1";
@@ -164,6 +165,7 @@ pub const INVERT_GAMMA_PRECISION_EPOCH: &str = "xcf-22-stock-invert-gamma-precis
 pub const STACK_EDITS_EPOCH: &str = "xcf-22-stock-point-stack-edits-v1";
 
 pub(crate) struct PointStack {
+    semi_flatten: Option<(crate::gimp_semi_flatten::PreparedSemiFlatten, bool)>,
     unpremultiply: Option<(crate::gimp_unpremultiply::UnpremultiplyCandidate, bool)>,
     video: Option<(crate::gimp_video_degradation::VideoDegradationCandidate, bool)>,
     nodes: Vec<PointNode>,
@@ -206,6 +208,11 @@ impl PointStack {
         controlled::preparation(control,|control|Self::prepare_nodes_at(source,profile,stored,version,owner,control,true))
     }
     fn prepare_nodes_at(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, owner: photocraft_geom::Rect, control: &photocraft_raster::Interrupt<'_>, stock:bool) -> Result<Self> {
+        if controlled::iter(source, control).any(crate::gimp_semi_flatten::claims) {
+            let [node] = source else { return Err(CompositionError::Unsupported("Semi-Flatten singleton")); };
+            let candidate = crate::gimp_semi_flatten::PreparedSemiFlatten::new(node, profile, stored, version, owner, control)?;
+            return Ok(Self { semi_flatten: Some((candidate, node.enabled)), unpremultiply: None, video: None, current_sample: None, nodes: Vec::new(), channels: 3, integer_gray_temperature_clamp: false });
+        }
         if controlled::iter(source, control).any(crate::gimp_red_eye::claims_geometry) {
             let [node] = source else { return Err(CompositionError::Unsupported("Red Eye owner geometry singleton")); };
             crate::gimp_red_eye::canonical_geometry(node, profile, stored, version)?;
@@ -216,7 +223,7 @@ impl PointStack {
         if controlled::iter(source, control).any(|node| node.operation.name == "gegl:unpremultiply") {
             let [node] = source else { return Err(CompositionError::Unsupported("Unpremultiply singleton")); };
             let candidate = crate::gimp_unpremultiply::canonical_candidate(node, profile, stored, owner, version)?;
-            return Ok(Self { unpremultiply: Some((candidate, node.enabled)), video: None, current_sample: None, nodes: Vec::new(), channels: 3, integer_gray_temperature_clamp: false });
+            return Ok(Self { semi_flatten: None, unpremultiply: Some((candidate, node.enabled)), video: None, current_sample: None, nodes: Vec::new(), channels: 3, integer_gray_temperature_clamp: false });
         }
         if controlled::iter(source, control).any(crate::gimp_video_degradation::claims_video) {
             let [node] = source else {
@@ -224,6 +231,7 @@ impl PointStack {
             };
             let video = crate::gimp_video_degradation::canonical_candidate(node, profile, stored, owner, version)?;
             return Ok(Self {
+                semi_flatten: None,
                 unpremultiply: None,
                 video: Some((video, node.enabled)),
                 current_sample: None,
@@ -263,6 +271,9 @@ impl PointStack {
         controlled::preparation(control, |control| Self::prepare_nodes(source, profile, stored, version, control, false))
     }
     fn prepare_nodes(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, control: &photocraft_raster::Interrupt<'_>, stock:bool) -> Result<Self> {
+        if controlled::iter(source, control).any(crate::gimp_semi_flatten::claims) {
+            return Err(CompositionError::Unsupported("Semi-Flatten requires exact owner extent"));
+        }
         if controlled::iter(source, control).any(crate::gimp_red_eye::claims_geometry) {
             let [node] = source else { return Err(CompositionError::Unsupported("Red Eye owner geometry singleton")); };
             crate::gimp_red_eye::canonical_geometry(node, profile, stored, version)?;
@@ -943,6 +954,7 @@ impl PointStack {
             nodes.reverse();
         }
         Ok(Self {
+            semi_flatten: None,
             unpremultiply: None,
             video: None,
             current_sample: None,
@@ -962,6 +974,7 @@ impl PointStack {
         self.unpremultiply.is_some() || self.nodes.iter().filter(|node|node.enabled).any(|node| node.mono_mixer_signed.is_some() || node.channel_mixer.is_some() || node.absolute.is_some())
     }
     pub(crate) fn changes_alpha(&self) -> bool {
+        if let Some((_, enabled)) = &self.semi_flatten { return *enabled; }
         self.nodes.iter().filter(|node|node.enabled).any(|node| {
             matches!(
                 node.operation,
@@ -983,6 +996,10 @@ impl PointStack {
     pub(crate) fn validate_stock_input(&self,position:(i32,i32),pixel:[f64;4],control:&photocraft_raster::Interrupt<'_>,poll:&mut impl FnMut(WideWork)->Result<()>)->Result<()> {
         poll(WideWork::SampleUnits(128))?;
         if pixel.iter().any(|v|!v.is_finite()) || !(0.0..=1.0).contains(&pixel[3]) { return Err(CompositionError::Unsupported("stock Point finite native colors/unit alpha")); }
+        if let Some((candidate, _)) = &self.semi_flatten {
+            poll(WideWork::SampleUnits(3 * 128 + 4))?;
+            return candidate.validate_input(pixel);
+        }
         if let Some((video,_))=&self.video {
             return video.try_eval_at(position,&pixel,&mut[0.;4],false,control);
         }
@@ -1025,6 +1042,15 @@ impl PointStack {
         self.apply_current(pixel, integer_gray_temperature, poll)
     }
     pub(crate) fn apply_current(&self, mut pixel: [f64; 4], integer_gray_temperature: bool, poll: &mut impl FnMut(WideWork) -> Result<()>) -> Result<[f64; 4]> {
+        if let Some((candidate, enabled)) = &self.semi_flatten {
+            if !matches!(self.current_sample, Some(photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64)) {
+                return Err(CompositionError::Unsupported("Semi-Flatten current Float/Double storage"));
+            }
+            // Input proof and the full enabled forward/evaluate/inverse path
+            // are independently prepaid; no alpha-zero/native bypass.
+            poll(WideWork::SampleUnits(if *enabled { 9 * 128 + 128 } else { 3 * 128 + 4 }))?;
+            return controlled::finish_pixel(candidate.apply(pixel, *enabled)?, poll);
+        }
         if let Some((candidate, enabled)) = &self.unpremultiply {
             if self.current_sample != Some(photocraft_color::SampleType::F32) { return Err(CompositionError::Unsupported("Unpremultiply current native Float storage")); }
             poll(WideWork::SampleUnits(128))?;

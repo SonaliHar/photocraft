@@ -369,6 +369,22 @@ pub fn mono_mixer_signed_member(
     ))
 }
 
+/// Code availability only; the caller separately qualifies source, literal and CMS.
+pub fn semi_flatten_member(version: Option<&str>, working_color: [f32; 4]) -> Result<(PointMember, PointOperation), RasterInputError> {
+    if version != Some("0:0") {
+        return Err(RasterInputError::UnsupportedConversion);
+    }
+    let operation = PointOperation::SemiFlatten { color: working_color };
+    operation.validate()?;
+    Ok((PointMember {
+        operation: "gimp:semi-flatten",
+        version: "0:0",
+        encoding: WorkingEncoding::Linear,
+        parameters: &["color"],
+        domains: &[],
+    }, operation))
+}
+
 pub fn color_overlay_member(version: Option<&str>, working_color: [f32; 4], srgb: bool) -> Result<(PointMember, PointOperation), RasterInputError> {
     if version != Some("0:0") {
         return Err(RasterInputError::UnsupportedConversion);
