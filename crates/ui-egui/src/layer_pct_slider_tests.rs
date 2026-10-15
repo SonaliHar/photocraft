@@ -163,3 +163,22 @@ fn dragging_opacity_and_fill_labels_scrubs_percentages_in_one_history_step() {
         assert!((value(&layer(&h)) - 1.0).abs() < 1e-6, "{name}: undo restores the original value");
     }
 }
+
+#[test]
+fn the_layers_header_is_present_and_disabled_with_no_active_layer() {
+    let mut h = harness();
+    h.state_mut().run("select.deselectLayers", json!({})).unwrap();
+    h.run_steps(8);
+    assert!(h.state().session.active().unwrap().active_layer.is_none());
+
+    // The Opacity and Fill popup arrows are present in the header row
+    let opacity_arrow = by_role(&h, "Opacity", Role::Button).expect("Opacity button is present with no active layer");
+    let fill_arrow = by_role(&h, "Fill", Role::Button).expect("Fill button is present with no active layer");
+
+    // Clicking them does not open popups because the controls are disabled
+    click(&mut h, opacity_arrow.center());
+    assert!(by_role(&h, "Opacity", Role::Slider).is_none(), "Opacity popup does not open when no layer is active");
+
+    click(&mut h, fill_arrow.center());
+    assert!(by_role(&h, "Fill", Role::Slider).is_none(), "Fill popup does not open when no layer is active");
+}

@@ -52,12 +52,15 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
             let b = LayerBox { end: [x, y], ..*b };
             app.layer_box = None;
             let (w, h) = (b.end[0] - b.start[0], b.end[1] - b.start[1]);
-            if w == 0.0 || h == 0.0 {
+            if w == 0.0 && h == 0.0 {
                 // In Photoshop: clicking an empty spot or outside the canvas with Auto-Select
                 // deselects layers (unless ⇧ was held to add, or it hit a locked layer).
                 if !b.locked_hit && !b.add {
                     let _ = app.run("select.deselectLayers", json!({}));
                 }
+                return true;
+            }
+            if w == 0.0 || h == 0.0 {
                 return true;
             }
             let target = app.ui.tool_options.move_target.clone();
@@ -178,5 +181,18 @@ mod tests {
         tool_event(&mut app, ToolEvent::Down { x: 32.0, y: 32.0, pressure: 1.0 }, egui::Modifiers::NONE);
         tool_event(&mut app, ToolEvent::Up { x: 32.0, y: 32.0 }, egui::Modifiers::NONE);
         assert!(app.session.active().unwrap().selected_layers().is_empty(), "click on transparent canvas spot deselects layers");
+
+        // Re-select layer
+        app.run("layer.select", json!({"layer": id.0, "mode": "replace"})).unwrap();
+        assert_eq!(app.session.active().unwrap().selected_layers(), vec![id]);
+
+        // A pure horizontal or vertical drag with zero area does not deselect layers
+        tool_event(&mut app, ToolEvent::Down { x: -10.0, y: -10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: -5.0, y: -10.0 }, egui::Modifiers::NONE);
+        assert_eq!(app.session.active().unwrap().selected_layers(), vec![id], "horizontal drag with zero height does not deselect");
+
+        tool_event(&mut app, ToolEvent::Down { x: -10.0, y: -10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: -10.0, y: -5.0 }, egui::Modifiers::NONE);
+        assert_eq!(app.session.active().unwrap().selected_layers(), vec![id], "vertical drag with zero width does not deselect");
     }
 }
