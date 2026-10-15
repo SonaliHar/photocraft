@@ -375,7 +375,7 @@ impl<'a> Request<'a> {
                 ctl.check(1)?;
                 if !state.history.current()?.shares_state(&state.doc) { return Err(BackingError::Integrity.into()); }
             }
-            EditStorage::ImplicitPoint => {owner.validate_readonly_point_storage(ctl)?;if semi_flatten_edit_candidate(owner) && !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into());}},
+            EditStorage::ImplicitPoint => {owner.validate_readonly_point_storage(ctl)?;if (semi_flatten_edit_candidate(owner) || crate::xcf_filter_cmds::hue_chroma_owner(owner)) && !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into());}},
             EditStorage::AssignedBox => {
                 owner.validate_readonly_assigned_point_storage(ctl)?;
                 ctl.check(1)?;
@@ -410,7 +410,7 @@ impl<'a> Request<'a> {
             }
             for candidate in &stack.nodes {
                 ctl.check(8192)?;
-                if !semi_flatten_edit_candidate(owner) && (candidate.operation.schema_epoch != STACK_EDITS_EPOCH
+                if !(semi_flatten_edit_candidate(owner) || crate::xcf_filter_cmds::hue_chroma_owner(owner)) && (candidate.operation.schema_epoch != STACK_EDITS_EPOCH
                     || candidate.composition.as_ref().is_none_or(|p| p.compatibility_epoch != STACK_EDITS_EPOCH))
                 {
                     return Err(BackingError::Unsupported.into());
@@ -760,3 +760,7 @@ mod observed_edit_tests;
 #[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
 #[path="point_semi_flatten_tests.rs"]
 mod semi_flatten_tests;
+
+#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
+#[path="point_hue_chroma_tests.rs"]
+mod hue_chroma_tests;

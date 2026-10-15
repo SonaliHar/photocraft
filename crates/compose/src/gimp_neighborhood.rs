@@ -123,6 +123,18 @@ impl OrderedStack {
         control.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
         result
     }
+    /// Prepared-only owned Point route. The caller holds the actual combined
+    /// Parts/profile/holder peak; generic resident constructors cannot enter.
+    pub(crate) fn from_prepared_stock_point(point: PointStack, extent: Rect, control: &Interrupt<'_>) -> Result<Self> {
+        control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
+        let mut stages = Vec::new();
+        stages.try_reserve_exact(1).map_err(|_| photocraft_raster::RasterInputError::AllocationFailed)?;
+        if stages.capacity() > 2 { return Err(photocraft_raster::RasterInputError::AllocationFailed.into()); }
+        stages.push(Stage::Point(point));
+        control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
+        Ok(Self { stages, extent, output_extent: extent, spaces: Vec::new(), integer_point_storage: None, current_point_sample: None,
+            filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical, stock_disabled: false })
+    }
     fn prepare_with_interrupt(source: &FilterStack, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, qualified: [bool; 3], control: &Interrupt<'_>, stock:bool, owned:bool) -> Result<Self> {
         if source.nodes.len() > 256 {
             return Err(CompositionError::Invalid("ordered filter stack limit"));

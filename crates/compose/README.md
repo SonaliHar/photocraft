@@ -978,3 +978,39 @@ adapters do not acquire Semi-Flatten authority. Exact producer Babl conversion,
 F64 conversion placement and Float/FMA rounding remain unproven; public-GIMP
 research establishes observations only. Regression drafts, numerical comparison,
 native workflows and visual/performance acceptance remain deferred.
+
+
+Owned `gegl:hue-chroma` uses the separate
+`xcf22-gegl-hue-chroma-lch-float-v1` epoch for implicit RGB nonlinear F32/650
+and F64/750, an 8x6 native drawable/canvas at the origin, and finite unit native
+RGBA. Source admission requires the observed enabled singleton Replace62/unit
+envelope, visible unit-opacity layer, three present opaque raw policy words,
+and a declared same-depth numeric-zero selection mask. The stored parameters
+are exactly three F32 words: hue in [-180,180], chroma/lightness in [-100,100].
+The public gdouble configuration does not turn those words into F64 arguments.
+
+The declared compatibility recipe sends wide native RGB through an owned
+physical D50 Lab pipeline, polar conversion and LChA Float staging, the existing
+LCh calculation, inverse polar/Lab conversion and an explicit final RGB Float
+boundary. Generated Float alpha survives, including F64 near-one rounding;
+finite signed/HDR RGB is retained without clamping. Enabled neutral/zero/full
+alpha takes the complete conversion path. Disabled identity still requires
+complete input, default, profile and mask proof.
+
+This route reserves actual constructor/profile/pipeline/header/holder peaks
+before construction and separately charges pipeline-derived conversion work,
+polar arithmetic and per-pixel scratch on the same caller control. It retains
+the complete phase lease and actual nested owners. Generic resident constructors
+without paid Parts refuse this operation. Existing set/enable, readonly metadata
+(including combined supported fields), singleton reorder/remove and native
+continuation retain full staged validation and publication fences. Direct
+compound metadata and Move remain closed. The existing narrow derived-current
+empty role serves removal without inventing original-XCF provenance.
+
+This stable declared ICC/Float recipe is not an exact Babl conversion claim.
+Independent GIMP F32 author/fresh projection and merged outputs differ visibly,
+about 0.5086223 in the extreme control, while fresh/repeat primary captures match.
+F64 primary captures are stable; separate default-space graph diagnostics can
+still vary. ICC date bytes, profile roles, physical padding/default identity and
+internal rounding positions remain explicit evidence limits. Regression drafts
+and all numerical, native workflow, visual and performance acceptance are deferred.

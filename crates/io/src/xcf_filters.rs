@@ -22,6 +22,7 @@ pub(crate) enum PointReplaceFamily {
     ColorExchange,
     ColorOverlay,
     SemiFlatten,
+    HueChroma,
     ChannelMixer,
     MonoMixerSigned,
     RedEye,
@@ -51,6 +52,7 @@ impl PointReplaceFamily {
             Self::ColorExchange => NeighborhoodDomain::ColorExchangePrecision,
             Self::ColorOverlay => NeighborhoodDomain::ColorOverlayPrecision,
             Self::SemiFlatten => NeighborhoodDomain::SemiFlatten,
+            Self::HueChroma => NeighborhoodDomain::HueChroma,
             Self::ChannelMixer => NeighborhoodDomain::ChannelMixerPrecision,
             Self::MonoMixerSigned => NeighborhoodDomain::MonoMixerSignedPrecision,
             Self::RedEye => NeighborhoodDomain::RedEyePrecision,
@@ -76,6 +78,7 @@ pub(crate) enum NeighborhoodDomain {
     ColorExchangePrecision,
     ColorOverlayPrecision,
     SemiFlatten,
+    HueChroma,
     ChannelMixerPrecision,
     MonoMixerSignedPrecision,
     RedEyePrecision,
@@ -605,6 +608,8 @@ fn qualified_stack_with_activation<P>(
         let color_exchange = domain == NeighborhoodDomain::ColorExchangePrecision;
         let color_overlay = domain == NeighborhoodDomain::ColorOverlayPrecision;
         let semi_flatten=domain==NeighborhoodDomain::SemiFlatten;
+        let hue_chroma=domain==NeighborhoodDomain::HueChroma;
+        if effect.operation=="gegl:hue-chroma" && (!hue_chroma || !generic_replace || effects.len()!=1 || !crate::xcf_point_replace_source::hue_chroma_source::envelope(effect)){return Err(unsupported(effect,"unqualified Hue-Chroma envelope"));}
         if effect.operation=="gimp:semi-flatten" && (!semi_flatten || !generic_replace || effects.len()!=1 || !crate::xcf_point_replace_source::semi_flatten_source::envelope(effect)) { return Err(unsupported(effect,"unqualified Semi-Flatten envelope")); }
         if effect.operation == "gegl:color-overlay"
             && (!color_overlay
@@ -972,7 +977,14 @@ fn qualified_stack_with_activation<P>(
         if color_to_alpha {
             arguments = color_to_alpha_arguments(effect)?;
         }
-        if semi_flatten {
+        if hue_chroma {
+            crate::xcf_point_replace_source::hue_chroma_source::parameters(effect).ok_or_else(||unsupported(effect,"Hue-Chroma parameters"))?;
+            if arguments.capacity()>6 {return Err(unsupported(effect,"Hue-Chroma argument capacity"));}
+            for argument in &effect.arguments {
+                let ArgumentValue::Float32Bits(bits)=&argument.value else{return Err(unsupported(effect,"Hue-Chroma F32 storage"))};
+                arguments.push(FilterArgument{name:argument.name.clone(),value:FilterValue::Number(ExactNumber::Float32Bits(*bits))});
+            }
+        } else if semi_flatten {
             let (words,encoding)=crate::xcf_point_replace_source::semi_flatten_source::parameters(effect).ok_or_else(||unsupported(effect,"Semi-Flatten literal"))?;
             let mut components=Vec::new();components.try_reserve_exact(4).map_err(|_|unsupported(effect,"Semi-Flatten color allocation"))?;
             if components.capacity()>8 || arguments.capacity()>2 { return Err(unsupported(effect,"Semi-Flatten literal capacity")); }
@@ -990,7 +1002,7 @@ fn qualified_stack_with_activation<P>(
         for argument in effect
             .arguments
             .iter()
-            .filter(|_| !levels && !color_balance && !semi_flatten && !color_exchange && !color_overlay && !color_to_alpha && !component_extract && !alpha_clip)
+            .filter(|_| !levels && !color_balance && !hue_chroma && !semi_flatten && !color_exchange && !color_overlay && !color_to_alpha && !component_extract && !alpha_clip)
         {
             if alien_map {
                 let (value, scalar) = match (&*argument.name, &argument.value) {
@@ -1334,7 +1346,7 @@ fn qualified_stack_with_activation<P>(
             .map_err(|_| unsupported(effect, "Red Eye typed parameters"))?;
         } else if video {
             photocraft_compose::gimp_video_degradation::typed_arguments(&arguments).map_err(|_| unsupported(effect, "Video Degradation typed schema"))?;
-        } else if semi_flatten || color_rotate || channel_mixer || mono_signed || color_exchange || color_overlay || color_to_alpha || component_extract || alpha_clip {
+        } else if hue_chroma || semi_flatten || color_rotate || channel_mixer || mono_signed || color_exchange || color_overlay || color_to_alpha || component_extract || alpha_clip {
             // The dedicated typed constructor already validated every name.
         } else if pixelize {
             if arguments.len() != 8 {
@@ -1426,6 +1438,8 @@ fn qualified_stack_with_activation<P>(
                     "xcf-22-stock-color-to-alpha-precision-v1"
                 } else if color_exchange {
                     "xcf-22-stock-color-exchange-precision-v1"
+                } else if hue_chroma {
+                    photocraft_compose::HUE_CHROMA_EPOCH
                 } else if semi_flatten {
                     photocraft_compose::SEMI_FLATTEN_EPOCH
                 } else if color_overlay {
@@ -1521,6 +1535,8 @@ fn qualified_stack_with_activation<P>(
                     photocraft_compose::gimp_video_degradation::VIDEO_DEGRADATION_OPTIONS_EPOCH
                 } else if red_eye_epoch == Some(photocraft_compose::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH) {
                     photocraft_compose::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH
+                } else if hue_chroma {
+                    photocraft_compose::HUE_CHROMA_EPOCH
                 } else if semi_flatten {
                     photocraft_compose::SEMI_FLATTEN_EPOCH
                 } else if generic_replace {

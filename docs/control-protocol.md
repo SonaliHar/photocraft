@@ -2140,3 +2140,28 @@ it does not enroll new empty original-XCF sources. Save/reopen here means the
 native `.pcraft` continuation. Exact GIMP conversion/rounding, PhotoCraft
 numerical results and all regression/native/visual/performance checks remain
 deferred; the GIMP research captures do not complete those gates.
+
+
+Owned Hue-Chroma continuation uses the existing filter transactions under
+`xcf22-gegl-hue-chroma-lch-float-v1`. The first role is exact v22
+`gegl:hue-chroma` / `0:0`, implicit RGB nonlinear F32/650 or F64/750, native and
+canvas 8x6 bounds at the origin, finite unit native RGBA and the separate
+singleton Replace source/current policy. Exactly three unique stored arguments
+use `Number.Float32Bits`: `hue` [-180,180], `chroma` [-100,100] and `lightness`
+[-100,100]. Preserve raw words and stored order; no gdouble/F64 wire alias or
+hue normalization is inferred. UI changes use bounded controls and one atomic
+argument/activation transaction. Exact raw no-ops preserve existing history rules.
+
+Existing set/enable, readonly name/visibility/unit-opacity metadata (including
+combined supported fields), singleton reorder/remove, paid inspection and native
+`.pcraft` save/reopen keep complete current/staged validation and existing fences.
+The direct compound metadata API and Move remain closed; empty-after-remove is
+the separate derived-current role, not a new original-XCF source identity.
+
+The paid renderer uses an explicitly declared physical Lab/LCh Float recipe,
+retaining generated Float alpha and finite HDR/negative RGB. Neutral enabled
+filters still convert; disabled identity still receives full input/metadata proof.
+GIMP F32 author/fresh projection/merged differences about 0.5086223 and separate
+profile/rounding/default-space graph limits remain HOLD. No numerical acceptance
+or tolerance waiver follows from source transport or a matching standalone graph.
+All new regression and native/widget workflows remain UNRUN and uncompiled.

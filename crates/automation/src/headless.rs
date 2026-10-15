@@ -1061,3 +1061,7 @@ mod owned_gray_transfer_box_tests;
 #[cfg(all(test, not(target_arch="wasm32")))]
 #[path="headless/owned_semi_flatten_tests.rs"]
 mod owned_semi_flatten_tests;
+
+#[cfg(all(test, not(target_arch="wasm32")))]
+#[path="headless/owned_hue_chroma_tests.rs"]
+mod owned_hue_chroma_tests;

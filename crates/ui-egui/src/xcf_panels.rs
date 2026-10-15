@@ -11,6 +11,7 @@ mod alpha_clip_finite;
 mod assigned_box;
 mod observed_box;
 mod semi_flatten;
+mod hue_chroma;
 mod channel_mixer;
 mod color_overlay;
 mod color_rotate;
@@ -350,6 +351,10 @@ pub(crate) fn filter_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, laye
             }
             if semi_flatten::scope(&document, node) {
                 semi_flatten::controls(app, ui, &document, revision, layer, node, unlocked, &caption);
+                return;
+            }
+            if hue_chroma::scope(&document, node) {
+                hue_chroma::controls(app, ui, &document, revision, layer, node, unlocked, &caption);
                 return;
             }
             ui.horizontal_wrapped(|ui| {

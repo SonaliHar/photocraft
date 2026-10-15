@@ -165,6 +165,7 @@ pub const INVERT_GAMMA_PRECISION_EPOCH: &str = "xcf-22-stock-invert-gamma-precis
 pub const STACK_EDITS_EPOCH: &str = "xcf-22-stock-point-stack-edits-v1";
 
 pub(crate) struct PointStack {
+    hue_chroma: Vec<(crate::gimp_hue_chroma::OwnedHueChroma, bool)>,
     semi_flatten: Option<(crate::gimp_semi_flatten::PreparedSemiFlatten, bool)>,
     unpremultiply: Option<(crate::gimp_unpremultiply::UnpremultiplyCandidate, bool)>,
     video: Option<(crate::gimp_video_degradation::VideoDegradationCandidate, bool)>,
@@ -172,6 +173,19 @@ pub(crate) struct PointStack {
     channels: usize,
     integer_gray_temperature_clamp: bool,
     current_sample: Option<photocraft_color::SampleType>,
+}
+fn hue_pixel<T>(
+    poll: &mut impl FnMut(WideWork) -> Result<()>,
+    units: u64,
+    evaluate: impl FnOnce(&photocraft_raster::Interrupt<'_>, &dyn Fn(u64) -> std::result::Result<(), photocraft_raster::RasterInputError>) -> Result<T>,
+) -> Result<T> {
+    poll(WideWork::SampleUnits(units))?;
+    poll(WideWork::ReserveBytes(crate::gimp_hue_chroma::PIXEL_SCRATCH_BYTES))?;
+    let result = controlled::run(poll, evaluate);
+    let released = poll(WideWork::ReleaseBytes(crate::gimp_hue_chroma::PIXEL_SCRATCH_BYTES));
+    let output = result?;
+    released?;
+    Ok(output)
 }
 /// Heap ownership of scalar point nodes and maximum argument scratch, excluding
 /// each WorkingSpace's separately charged analytic profile envelope.
@@ -197,6 +211,18 @@ pub(crate) fn current_point_storage_result(mut pixel:[f64;4], integer_storage:Op
         pixel
 }
 impl PointStack {
+    /// Only the real-budget stock compiler may supply this independently owned
+    /// Parts holder. A name/schema match cannot manufacture an unpaid owner.
+    pub(crate) fn from_prepared_hue_chroma(candidate: crate::gimp_hue_chroma::OwnedHueChroma, enabled: bool, sample: photocraft_color::SampleType, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+        controlled::checkpoint(control)?;
+        if !matches!(sample, photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64) { return Err(CompositionError::Unsupported("owned Hue current sample")); }
+        let mut hue_chroma = Vec::new();
+        hue_chroma.try_reserve_exact(1).map_err(|_| photocraft_raster::RasterInputError::AllocationFailed)?;
+        if hue_chroma.capacity() > 2 { return Err(photocraft_raster::RasterInputError::AllocationFailed.into()); }
+        hue_chroma.push((candidate, enabled));
+        controlled::checkpoint(control)?;
+        Ok(Self { hue_chroma, semi_flatten: None, unpremultiply: None, video: None, nodes: Vec::new(), channels: 3, integer_gray_temperature_clamp: false, current_sample: Some(sample) })
+    }
     #[cfg(test)]
     pub(crate) fn from_nodes_at(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, owner: photocraft_geom::Rect) -> Result<Self> {
         Self::from_nodes_at_with_interrupt(source, profile, stored, version, owner, &photocraft_raster::Interrupt::NONE)
@@ -208,10 +234,13 @@ impl PointStack {
         controlled::preparation(control,|control|Self::prepare_nodes_at(source,profile,stored,version,owner,control,true))
     }
     fn prepare_nodes_at(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, owner: photocraft_geom::Rect, control: &photocraft_raster::Interrupt<'_>, stock:bool) -> Result<Self> {
+        if controlled::iter(source, control).any(crate::gimp_hue_chroma::claims) {
+            return Err(CompositionError::Unsupported("Hue-Chroma requires the paid prepared Parts entry"));
+        }
         if controlled::iter(source, control).any(crate::gimp_semi_flatten::claims) {
             let [node] = source else { return Err(CompositionError::Unsupported("Semi-Flatten singleton")); };
             let candidate = crate::gimp_semi_flatten::PreparedSemiFlatten::new(node, profile, stored, version, owner, control)?;
-            return Ok(Self { semi_flatten: Some((candidate, node.enabled)), unpremultiply: None, video: None, current_sample: None, nodes: Vec::new(), channels: 3, integer_gray_temperature_clamp: false });
+            return Ok(Self { hue_chroma: Vec::new(), semi_flatten: Some((candidate, node.enabled)), unpremultiply: None, video: None, current_sample: None, nodes: Vec::new(), channels: 3, integer_gray_temperature_clamp: false });
         }
         if controlled::iter(source, control).any(crate::gimp_red_eye::claims_geometry) {
             let [node] = source else { return Err(CompositionError::Unsupported("Red Eye owner geometry singleton")); };
@@ -223,7 +252,7 @@ impl PointStack {
         if controlled::iter(source, control).any(|node| node.operation.name == "gegl:unpremultiply") {
             let [node] = source else { return Err(CompositionError::Unsupported("Unpremultiply singleton")); };
             let candidate = crate::gimp_unpremultiply::canonical_candidate(node, profile, stored, owner, version)?;
-            return Ok(Self { semi_flatten: None, unpremultiply: Some((candidate, node.enabled)), video: None, current_sample: None, nodes: Vec::new(), channels: 3, integer_gray_temperature_clamp: false });
+            return Ok(Self { hue_chroma: Vec::new(), semi_flatten: None, unpremultiply: Some((candidate, node.enabled)), video: None, current_sample: None, nodes: Vec::new(), channels: 3, integer_gray_temperature_clamp: false });
         }
         if controlled::iter(source, control).any(crate::gimp_video_degradation::claims_video) {
             let [node] = source else {
@@ -231,6 +260,7 @@ impl PointStack {
             };
             let video = crate::gimp_video_degradation::canonical_candidate(node, profile, stored, owner, version)?;
             return Ok(Self {
+                hue_chroma: Vec::new(),
                 semi_flatten: None,
                 unpremultiply: None,
                 video: Some((video, node.enabled)),
@@ -246,6 +276,8 @@ impl PointStack {
     /// Actual retained node capacity plus fixed analytic profile envelopes,
     /// including Color Overlay's bounded nested profile/transform preparation.
     pub(crate) fn scalar_retained_bytes(&self) -> Result<u64> {
+        let mut hue_bytes = (self.hue_chroma.capacity() as u64).checked_mul(std::mem::size_of::<(crate::gimp_hue_chroma::OwnedHueChroma, bool)>() as u64).ok_or(CompositionError::Invalid("owned Hue holder capacity"))?;
+        for (hue, _) in &self.hue_chroma { hue_bytes = hue_bytes.checked_add(hue.nested_bytes()).ok_or(CompositionError::Invalid("owned Hue nested capacity"))?; }
         let slots = u64::try_from(self.nodes.capacity()).map_err(|_| CompositionError::Invalid("point capacity overflow"))?;
         let overlays = u64::try_from(self.nodes.iter().filter(|node| node.color_overlay.is_some() || node.color_rotate.is_some()).count())
             .map_err(|_| CompositionError::Invalid("point capacity overflow"))?;
@@ -253,6 +285,7 @@ impl PointStack {
             .checked_mul(std::mem::size_of::<PointNode>() as u64)
             .and_then(|n| n.checked_add((self.nodes.len() as u64).checked_mul(65536)?))
             .and_then(|n| n.checked_add(overlays.checked_mul(4 * 65536)?))
+            .and_then(|n| n.checked_add(hue_bytes))
             .ok_or(CompositionError::Invalid("point capacity overflow"))
     }
     pub(crate) fn stock_retained_bytes(&self)->Result<u64> {
@@ -271,6 +304,9 @@ impl PointStack {
         controlled::preparation(control, |control| Self::prepare_nodes(source, profile, stored, version, control, false))
     }
     fn prepare_nodes(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, control: &photocraft_raster::Interrupt<'_>, stock:bool) -> Result<Self> {
+        if controlled::iter(source, control).any(crate::gimp_hue_chroma::claims) {
+            return Err(CompositionError::Unsupported("Hue-Chroma requires the paid prepared Parts entry"));
+        }
         if controlled::iter(source, control).any(crate::gimp_semi_flatten::claims) {
             return Err(CompositionError::Unsupported("Semi-Flatten requires exact owner extent"));
         }
@@ -954,6 +990,7 @@ impl PointStack {
             nodes.reverse();
         }
         Ok(Self {
+            hue_chroma: Vec::new(),
             semi_flatten: None,
             unpremultiply: None,
             video: None,
@@ -974,6 +1011,7 @@ impl PointStack {
         self.unpremultiply.is_some() || self.nodes.iter().filter(|node|node.enabled).any(|node| node.mono_mixer_signed.is_some() || node.channel_mixer.is_some() || node.absolute.is_some())
     }
     pub(crate) fn changes_alpha(&self) -> bool {
+        if let Some((_, enabled)) = self.hue_chroma.first() { return *enabled; }
         if let Some((_, enabled)) = &self.semi_flatten { return *enabled; }
         self.nodes.iter().filter(|node|node.enabled).any(|node| {
             matches!(
@@ -996,6 +1034,9 @@ impl PointStack {
     pub(crate) fn validate_stock_input(&self,position:(i32,i32),pixel:[f64;4],control:&photocraft_raster::Interrupt<'_>,poll:&mut impl FnMut(WideWork)->Result<()>)->Result<()> {
         poll(WideWork::SampleUnits(128))?;
         if pixel.iter().any(|v|!v.is_finite()) || !(0.0..=1.0).contains(&pixel[3]) { return Err(CompositionError::Unsupported("stock Point finite native colors/unit alpha")); }
+        if let Some((hue, _)) = self.hue_chroma.first() {
+            return hue_pixel(poll, hue.validation_work(), |control, work| hue.validate_input(pixel, control, work));
+        }
         if let Some((candidate, _)) = &self.semi_flatten {
             poll(WideWork::SampleUnits(3 * 128 + 4))?;
             return candidate.validate_input(pixel);
@@ -1042,6 +1083,9 @@ impl PointStack {
         self.apply_current(pixel, integer_gray_temperature, poll)
     }
     pub(crate) fn apply_current(&self, mut pixel: [f64; 4], integer_gray_temperature: bool, poll: &mut impl FnMut(WideWork) -> Result<()>) -> Result<[f64; 4]> {
+        if let Some((hue, enabled)) = self.hue_chroma.first() {
+            return hue_pixel(poll, hue.evaluation_work(*enabled), |control, work| hue.apply(pixel, *enabled, control, work));
+        }
         if let Some((candidate, enabled)) = &self.semi_flatten {
             if !matches!(self.current_sample, Some(photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64)) {
                 return Err(CompositionError::Unsupported("Semi-Flatten current Float/Double storage"));
