@@ -429,7 +429,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn requires_budgeted_neighborhood_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn effective_profile(file: &XcfFile<Self>, space: photocraft_cms::ColorSpace, ce: photocraft_cms::xcf_color::Encoding, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<photocraft_cms::Profile, IoError> {
         if P::family(file)==SelectedStagedFamily::AnalyticGeometry {
-            analytic_geometry::effective(file,space,ctl,shared.ok_or_else(||IoError::Unsupported("geometry profile needs accounting".into()))?)
+            analytic_geometry::effective(file,space,ce,ctl,shared.ok_or_else(||IoError::Unsupported("geometry profile needs accounting".into()))?)
         }else{
             photocraft_cms::xcf_color::effective_profile(if file.icc.is_empty(){None}else{Some(&file.icc)},space,ce).map_err(|e|IoError::Unsupported(format!("XCF source profile/encoding: {e}")))
         }
@@ -438,7 +438,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         let family = P::family(file);
         let geometry = family == SelectedStagedFamily::AnalyticGeometry;
         if geometry && !analytic_geometry::qualify(file, ctl, shared.ok_or_else(|| IoError::Unsupported("geometry requires persistent source accounting".into()))?)? {
-            return Err(IoError::Unsupported("staged geometry is outside exact original nonlinear Union predicate".into()));
+            return Err(IoError::Unsupported("staged geometry is outside exact original Union predicate".into()));
         }
         let histogram = family == SelectedStagedFamily::Threshold;
         let threshold = family == SelectedStagedFamily::ThresholdAlpha || histogram;

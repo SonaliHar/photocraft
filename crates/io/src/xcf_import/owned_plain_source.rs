@@ -415,7 +415,7 @@ fn promote_source_inner<'b, 'a, S: PromotionSource<'b, 'a>>(
     let ImportResult { document, warnings, origin, assessment, source_read_only, preview_only } = result;
     phase_poll().map_err(backing)?;
     let document = AccountedDocument::from_owned(document, retention.clone(), quota, &read).map_err(backing)?;
-    if geometry { document.validate_masked_analytic_normal_storage(&read).map_err(backing)?; }
+    if geometry { document.validate_assigned_analytic_geometry_storage(&read).map_err(backing)?; }
     phase_poll().map_err(backing)?;
     control.check().map_err(|_| IoError::Cancelled)?;
     Ok(OwnedPlainXcfImport { document, warnings, origin, assessment, source_read_only, preview_only, _retention: retention })

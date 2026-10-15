@@ -23,20 +23,32 @@ impl NativePlaneStore for Store {
     }
 }
 fn fixture(sample: SampleType) -> AccountedDocument {
+    fixture_encoding(sample, SampleEncoding::NonlinearProfile)
+}
+fn fixture_encoding(sample: SampleType, encoding: SampleEncoding) -> AccountedDocument {
     let q = BackingQuota::new(QuotaLimits { resident: 64 << 20, index: 16 << 20, scratch: 0 });
     // Genuine prospective fee before fixture DTO/maps/profile allocation. All
     // native stores also retain their actual backing allocations on this q.
     let fee = q.reserve(QuotaKind::Index, 8 << 20).unwrap();
     let native_fee = q.reserve(QuotaKind::Resident, 8 << 20).unwrap();
     let mut doc = Document::new("masked.pcraft", Size::new(29, 21), ColorMode::Rgb, sample);
-    doc.sample_encoding = Some(SampleEncoding::NonlinearProfile);
+    doc.sample_encoding = Some(encoding);
     let profile = Arc::new(vec![0x91; 132]);
-    doc.icc_profile = Some(profile.clone());
+    doc.icc_profile = Some(if encoding == SampleEncoding::NonlinearProfile {
+        profile.clone()
+    } else {
+        // Structural-only independent current bytes, not a CMS witness.
+        Arc::new(vec![0x92; 133])
+    });
     doc.source_color_context = Some(crate::SourceColorContext {
-        source_precision: match sample {
-            SampleType::U16 => 250,
-            SampleType::U32 => 350,
-            SampleType::F32 => 650,
+        source_precision: match (sample, encoding) {
+            (SampleType::U16, _) => 250,
+            (SampleType::U32, _) => 350,
+            (SampleType::F32, SampleEncoding::Linear) => 600,
+            (SampleType::F64, SampleEncoding::Linear) => 700,
+            (SampleType::F32, SampleEncoding::Perceptual) => 675,
+            (SampleType::F64, SampleEncoding::Perceptual) => 775,
+            (SampleType::F32, _) => 650,
             _ => 750,
         },
         original_icc: Some(profile),
@@ -45,10 +57,11 @@ fn fixture(sample: SampleType) -> AccountedDocument {
     let mut state = XcfState::default();
     state.provenance.format = "xcf".into();
     state.provenance.format_version = 12;
-    let epoch = if matches!(sample, SampleType::U16 | SampleType::U32) {
-        XCF12_ANALYTIC_INTEGER_NORMAL_MASK_GEOMETRY_EPOCH
-    } else {
-        XCF12_ANALYTIC_NORMAL_MASK_GEOMETRY_EPOCH
+    let epoch = match encoding {
+        SampleEncoding::Linear => XCF12_ANALYTIC_LINEAR_NORMAL_MASK_GEOMETRY_EPOCH,
+        SampleEncoding::Perceptual => XCF12_ANALYTIC_PERCEPTUAL_NORMAL_MASK_GEOMETRY_EPOCH,
+        _ if matches!(sample, SampleType::U16 | SampleType::U32) => XCF12_ANALYTIC_INTEGER_NORMAL_MASK_GEOMETRY_EPOCH,
+        _ => XCF12_ANALYTIC_NORMAL_MASK_GEOMETRY_EPOCH,
     };
     for (i, extent) in [doc.bounds(), Rect::new(-3, -4, 4, 9)].into_iter().enumerate() {
         let format = PixelFormat::new(doc.mode, sample, true);
@@ -180,4 +193,75 @@ fn contradictory_profiles_epochs_mask_geometry_or_operator_refuse_before_title_c
         assert!(malformed.try_with_document_name("refused", &ctl()).is_err());
         assert_eq!(q.usage().unwrap(), baseline);
     }
+}
+
+#[test]
+fn assigned_transfer_storage_preserves_independent_profiles_and_shared_payloads() {
+    for encoding in [SampleEncoding::Linear, SampleEncoding::Perceptual] {
+        for sample in [SampleType::F32, SampleType::F64] {
+            let source = fixture_encoding(sample, encoding);
+            source.validate_assigned_analytic_geometry_storage(&ctl()).unwrap();
+            assert!(source.validate_masked_analytic_normal_storage(&ctl()).is_err());
+            let original = source.document().source_color_context.as_ref().unwrap().original_icc.as_ref().unwrap();
+            let current = source.document().icc_profile.as_ref().unwrap();
+            assert_ne!(original.as_slice(), current.as_slice());
+            let copy = source.try_with_document_name("transfer-continued.pcraft", &ctl()).unwrap();
+            copy.validate_assigned_analytic_geometry_storage(&ctl()).unwrap();
+            assert_eq!(copy.document().sample_encoding, Some(encoding));
+            assert_eq!(copy.document().depth, sample);
+            assert!(Arc::ptr_eq(original, copy.document().source_color_context.as_ref().unwrap().original_icc.as_ref().unwrap()));
+            assert!(Arc::ptr_eq(current, copy.document().icc_profile.as_ref().unwrap()));
+            assert!(Arc::ptr_eq(&source.document().layers[1].mask.as_ref().unwrap().surface, &copy.document().layers[1].mask.as_ref().unwrap().surface));
+            assert!(Arc::ptr_eq(&source.owner.retention, &copy.owner.retention));
+            assert!(source.quota().shares_ledger(copy.quota()));
+            let mut expected = source.document().clone(); // external structural oracle
+            expected.name = "transfer-continued.pcraft".into();
+            assert_eq!(copy.document(), &expected);
+            assert!(copy.try_replace_selection(None, &ctl()).is_err());
+            assert!(copy.try_edit(AccountedEdit::LayerName { layer: copy.document().layers[0].id, name: "generic" }, &ctl()).is_err());
+        }
+    }
+}
+
+#[test]
+fn assigned_transfer_wrong_precision_epoch_or_independent_buffer_bounds_refuse() {
+    for case in 0..6 {
+        let source = fixture_encoding(SampleType::F32, SampleEncoding::Linear);
+        let q = source.quota().clone();
+        let fee = q.reserve(QuotaKind::Index, 2 << 20).unwrap();
+        let mut doc = source.document().clone();
+        match case {
+            0 => doc.source_color_context.as_mut().unwrap().source_precision = 675,
+            1 => doc.sample_encoding = Some(SampleEncoding::Perceptual),
+            2 => {
+                doc.xcf_state.as_mut().unwrap().items.iter_mut().find_map(|i| i.composition.as_mut()).unwrap().compatibility_epoch =
+                    XCF12_ANALYTIC_NORMAL_MASK_GEOMETRY_EPOCH.into()
+            }
+            3 => doc.icc_profile = Some(Arc::new(vec![0; 131])),
+            4 => doc.source_color_context.as_mut().unwrap().original_icc = Some(Arc::new(vec![0; 65537])),
+            _ => doc.icc_profile = Some(Arc::new(vec![0; 65537])),
+        }
+        let invalid = AccountedDocument::from_owned(doc, Arc::new((source, fee)), q.clone(), &ctl()).unwrap();
+        let baseline = q.usage().unwrap();
+        assert!(invalid.validate_assigned_analytic_geometry_storage(&ctl()).is_err());
+        assert!(invalid.try_with_document_name("refused", &ctl()).is_err());
+        assert_eq!(q.usage().unwrap(), baseline);
+    }
+}
+
+#[test]
+fn assigned_transfer_title_failures_and_full_quota_noop_keep_exact_owners() {
+    let source = fixture_encoding(SampleType::F64, SampleEncoding::Perceptual);
+    let q = source.quota();
+    let baseline = q.usage().unwrap();
+    let blocker = q.reserve(QuotaKind::Index, (16 << 20) - baseline.index).unwrap();
+    assert!(source.try_with_document_name(&source.document().name, &ctl()).unwrap().shares_model(&source));
+    assert!(source.try_with_document_name("changed", &ctl()).is_err());
+    drop(blocker);
+    let deny = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(BackingError::Work) };
+    assert!(source.validate_assigned_analytic_geometry_storage(&deny).is_err());
+    let stop = || q.usage().unwrap().index > baseline.index;
+    let interrupt = Interrupt::cancel_only(&stop);
+    assert!(source.try_with_document_name("changed", &ReadControl { interrupt: &interrupt, work: &|_| Ok(()) }).is_err());
+    assert_eq!(q.usage().unwrap(), baseline);
 }

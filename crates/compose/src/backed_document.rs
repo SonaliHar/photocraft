@@ -69,7 +69,7 @@ impl<'a> PreparedBackedDocument<'a> {
     /// Profile/encoding are explicit current interpretation. The profile ICC
     /// bytes must match the current document, never immutable import provenance.
     pub fn new(doc: &'a Document, profile: &Profile, limits: NormalBandLimits, control: &ReadControl<'_>) -> Result<Self, BackedNormalError> {
-        Self::new_internal(doc, profile, limits, control, None)
+        Self::new_internal(doc, profile, limits, control, None, None)
     }
     /// Qualified resident masks and closed imports require the actual paid
     /// model/source guard. Point storage takes an explicit nonlinear builtin
@@ -121,7 +121,25 @@ impl<'a> PreparedBackedDocument<'a> {
                 _index: index,
             });
         }
-        Self::new_internal(owner.document(), profile, limits, control, Some(owner))
+        Self::new_internal(owner.document(), profile, limits, control, Some(owner), None)
+    }
+    /// Retain the exact assigned-original to effective-current relationship while
+    /// preparing the existing Normal compositor. The generated profile retains
+    /// analytical transfer constants that encoded ICC readback may round.
+    pub fn new_accounted_with_assigned_profile(
+        owner: &'a photocraft_doc::accounted_document::AccountedDocument,
+        profile: &crate::backed_assigned_current_profile::PreparedAssignedCurrentProfile,
+        limits: NormalBandLimits,
+        control: &ReadControl<'_>,
+    ) -> Result<Self, BackedNormalError> {
+        control.check(1).map_err(BackedNormalError::Backing)?;
+        let encoding = owner.document().sample_encoding.ok_or(BackedNormalError::Unsupported("assigned geometry encoding missing"))?;
+        if !profile.matches(owner, encoding)
+            || !crate::backed_analytic_geometry::is_candidate(owner.document(), control).map_err(BackedNormalError::Backing)?
+        {
+            return Err(BackedNormalError::Unsupported("assigned profile requires exact current geometry owner"));
+        }
+        Self::new_internal(owner.document(), profile.profile(), limits, control, Some(owner), Some(profile))
     }
     fn new_internal(
         doc: &'a Document,
@@ -129,6 +147,7 @@ impl<'a> PreparedBackedDocument<'a> {
         limits: NormalBandLimits,
         control: &ReadControl<'_>,
         retained_source: Option<&'a photocraft_doc::accounted_document::AccountedDocument>,
+        assigned_profile: Option<&crate::backed_assigned_current_profile::PreparedAssignedCurrentProfile>,
     ) -> Result<Self, BackedNormalError> {
         if doc.xcf_state.is_some() && retained_source.is_none() {
             return Err(BackedNormalError::Unsupported("ordinary backed masks require accounted source ownership"));
@@ -153,11 +172,12 @@ impl<'a> PreparedBackedDocument<'a> {
             return Err(BackedNormalError::Unsupported("initial backed Document explicit ICC RGB/Gray slice"));
         }
         let analytic_geometry = if crate::backed_analytic_geometry::is_candidate(doc, control).map_err(BackedNormalError::Backing)? {
-            Some(crate::backed_analytic_geometry::qualify(
-                retained_source.ok_or(BackedNormalError::Unsupported("analytic geometry requires accounted source ownership"))?,
-                profile,
-                control,
-            )?)
+            let owner = retained_source.ok_or(BackedNormalError::Unsupported("analytic geometry requires accounted source ownership"))?;
+            Some(if let Some(binding) = assigned_profile {
+                crate::backed_analytic_geometry::qualify_assigned(owner, binding, control)?
+            } else {
+                crate::backed_analytic_geometry::qualify(owner, profile, control)?
+            })
         } else {
             None
         };

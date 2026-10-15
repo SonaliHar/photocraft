@@ -183,7 +183,7 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     if crate::accounted_native_open::is_current_analytic_geometry_candidate(owner.document(), control)? {
         // This metadata-only branch requires the actual paid storage gate. A
         // malformed matching geometry never retries the broader plain gate.
-        owner.validate_masked_analytic_normal_storage(control)?;
+        owner.validate_assigned_analytic_geometry_storage(control)?;
     } else {
         owner.validate_plain_xcf_inspection(control)?;
     }

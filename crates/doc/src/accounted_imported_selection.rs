@@ -5,11 +5,11 @@ use super::*;
 use crate::{xcf_editing::*, xcf_provenance::*, xcf_resources::*, xcf_state::*};
 #[path = "accounted_imported_masked_normal.rs"]
 mod masked_normal;
-pub(super) fn validate_masked_normal(doc: &Document, quota: &BackingQuota, c: &ReadControl<'_>) -> Result<(), BackingError> {
-    masked_normal::validate(doc, quota, c)
+pub(super) fn validate_assigned_geometry(doc: &Document, quota: &BackingQuota, c: &ReadControl<'_>) -> Result<(), BackingError> {
+    masked_normal::validate_assigned(doc, quota, c)
 }
 pub(super) fn copy_masked_normal(doc: &Document, quota: &BackingQuota, c: &ReadControl<'_>) -> Result<Document, BackingError> {
-    masked_normal::validate(doc, quota, c)?;
+    masked_normal::validate_assigned(doc, quota, c)?;
     let mut copied = copy_document(doc, c)?;
     for (source, destination) in doc.layers.iter().zip(&mut copied.layers) {
         c.check(std::mem::size_of::<crate::LayerMask>() as u64)?;

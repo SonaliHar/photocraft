@@ -83,14 +83,22 @@ pub fn is_current_point_candidate(document: &photocraft_doc::Document, control: 
 /// No class, source/profile authority or locator access follows from this hint;
 /// even malformed matching metadata must undergo the full typed validation.
 pub fn is_current_analytic_geometry_candidate(document: &photocraft_doc::Document, control: &ReadControl<'_>) -> std::result::Result<bool, BackingError> {
-    use photocraft_doc::import_compositing::{XCF12_ANALYTIC_INTEGER_NORMAL_MASK_GEOMETRY_EPOCH, XCF12_ANALYTIC_NORMAL_MASK_GEOMETRY_EPOCH};
+    use photocraft_doc::import_compositing::{
+        XCF12_ANALYTIC_INTEGER_NORMAL_MASK_GEOMETRY_EPOCH, XCF12_ANALYTIC_LINEAR_NORMAL_MASK_GEOMETRY_EPOCH, XCF12_ANALYTIC_NORMAL_MASK_GEOMETRY_EPOCH,
+        XCF12_ANALYTIC_PERCEPTUAL_NORMAL_MASK_GEOMETRY_EPOCH,
+    };
     if let Some(state) = &document.xcf_state {
         for item in &state.items {
             control.check(1)?;
             if let Some(policy) = &item.composition {
                 control.check(policy.compatibility_epoch.len() as u64)?;
-                if matches!(policy.compatibility_epoch.as_str(), XCF12_ANALYTIC_NORMAL_MASK_GEOMETRY_EPOCH | XCF12_ANALYTIC_INTEGER_NORMAL_MASK_GEOMETRY_EPOCH)
-                {
+                if matches!(
+                    policy.compatibility_epoch.as_str(),
+                    XCF12_ANALYTIC_NORMAL_MASK_GEOMETRY_EPOCH
+                        | XCF12_ANALYTIC_INTEGER_NORMAL_MASK_GEOMETRY_EPOCH
+                        | XCF12_ANALYTIC_LINEAR_NORMAL_MASK_GEOMETRY_EPOCH
+                        | XCF12_ANALYTIC_PERCEPTUAL_NORMAL_MASK_GEOMETRY_EPOCH
+                ) {
                     return Ok(true);
                 }
             }

@@ -91,7 +91,7 @@ fn backed_display_image_with_owner(
             Some(profile)
         };
         let profile = if let Some(profile) = &analytic_profile {
-            &profile.profile
+            profile.binding.profile()
         } else if let Some(profile) = &parsed {
             profile
         } else {
@@ -107,7 +107,9 @@ fn backed_display_image_with_owner(
         let limits = photocraft_compose::backed_normal::NormalBandLimits::default();
         // Only the typed owner establishes retained model/mask/source accounting.
         // Errors from this route are authoritative; never retry a resident route.
-        let prepared = if let Some(owner) = owner {
+        let prepared = if let Some(owner) = owner && let Some(profile) = &analytic_profile {
+            photocraft_compose::backed_document::PreparedBackedDocument::new_accounted_with_assigned_profile(owner, &profile.binding, limits, &control)
+        } else if let Some(owner) = owner {
             photocraft_compose::backed_document::PreparedBackedDocument::new_accounted(owner, profile, limits, &control)
         } else {
             photocraft_compose::backed_document::PreparedBackedDocument::new(doc, profile, limits, &control)

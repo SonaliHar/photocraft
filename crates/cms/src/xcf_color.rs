@@ -2,6 +2,9 @@
 use crate::{Builtin, CmsError, ColorSpace, Curve, Profile};
 use std::sync::Arc;
 
+mod assigned_effective_plan;
+pub use assigned_effective_plan::{assigned_effective_planning_work_ceiling, semantic_analytic_profile_work_ceiling};
+
 mod implicit_planner;
 pub use implicit_planner::effective_implicit_rgb_nonlinear_planner_work_with_control;
 

@@ -1,4 +1,4 @@
-//! Exact existing assigned analytic geometry source, NL Union intersection.
+//! Exact existing assigned analytic geometry source, Union intersection.
 use super::*;
 fn fail(message: &str) -> IoError {
     IoError::Unsupported(message.into())
@@ -19,12 +19,7 @@ pub(super) fn hint<P>(file: &XcfFile<P>) -> bool {
 pub(super) fn qualify<P: ExactParsedPlane>(file: &XcfFile<P>, ctl: &Interrupt<'_>, budget: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
     pay(budget, 128)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    if !hint(file)
-        || file.encoding != Encoding::NonlinearProfile
-        || file.layers.first().is_none_or(|d| d.composite_mode != 1)
-        || !(132..=65536).contains(&file.icc.len())
-        || !metadata(file)
-    {
+    if !hint(file) || file.layers.first().is_none_or(|d| d.composite_mode != 1) || !(132..=65536).contains(&file.icc.len()) || !metadata(file) {
         return Ok(false);
     }
     // Exact old profile parser/gate remains the semantic authority. Its controlled
@@ -42,6 +37,15 @@ pub(super) fn qualify<P: ExactParsedPlane>(file: &XcfFile<P>, ctl: &Interrupt<'_
     let bytes = (req.peak_resident_bytes as u64).checked_mul(2).and_then(|n| n.checked_add(32768)).ok_or_else(|| fail("geometry profile bytes"))?;
     let _profile_fee = budget.reserve(BudgetKind::Resident, bytes, "geometry profile temporary").map_err(accounting_error)?;
     pay(budget, req.work_units.checked_mul(4).and_then(|n| n.checked_add(gate.work_units)).ok_or_else(|| fail("geometry profile work"))?)?;
+    // Keep an actual controlled parsed definition alive for prospective
+    // semantic admission; no source authority comes from this temporary model.
+    pay(budget, req.work_units)?;
+    let semantic_profile =
+        photocraft_cms::Profile::parse_with_control(&file.icc, photocraft_cms::control::Limits { work_units: req.work_units, ..limits }, &stop).map_err(cms)?;
+    let semantic = photocraft_cms::xcf_color::semantic_analytic_profile_work_ceiling(&semantic_profile).map_err(cms)?;
+    // parse_bounded_profile validates once; the original analytic qualifier
+    // validates a second time. These are separate from parser work above.
+    pay(budget, semantic.checked_mul(2).ok_or_else(|| fail("geometry source semantic work"))?)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let profile = qualified_analytic_normal_profile(file);
     ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -186,6 +190,7 @@ fn cms(error: photocraft_cms::control::Error) -> IoError {
 pub(super) fn effective<P>(
     file: &XcfFile<P>,
     space: photocraft_cms::ColorSpace,
+    encoding: photocraft_cms::xcf_color::Encoding,
     ctl: &Interrupt<'_>,
     budget: &photocraft_xcf::Budget<'_>,
 ) -> Result<photocraft_cms::Profile, IoError> {
@@ -199,6 +204,11 @@ pub(super) fn effective<P>(
     let bytes = (req.peak_resident_bytes as u64).checked_mul(2).and_then(|n| n.checked_add(32768)).ok_or_else(|| fail("geometry effective profile peak"))?;
     let _fee = budget.reserve(BudgetKind::Resident, bytes, "geometry effective profile temporary").map_err(accounting_error)?;
     pay(budget, req.work_units.checked_add(gate.work_units).ok_or_else(|| fail("geometry effective parse work"))?)?;
+    pay(budget, req.work_units)?;
+    let semantic_profile =
+        photocraft_cms::Profile::parse_with_control(&file.icc, photocraft_cms::control::Limits { work_units: req.work_units, ..parse_limits }, &stop)
+            .map_err(cms)?;
+    pay(budget, photocraft_cms::xcf_color::semantic_analytic_profile_work_ceiling(&semantic_profile).map_err(cms)?)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let profile = photocraft_cms::xcf_color::parse_bounded_profile(&file.icc, space).map_err(|_| fail("geometry assigned profile"))?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -206,24 +216,39 @@ pub(super) fn effective<P>(
     // The controlled constructor retains the same NL cached bytes/curve words.
     let defaults = photocraft_cms::control::Limits::default();
     let limits = photocraft_cms::control::Limits {
-        work_units: (req.peak_resident_bytes as u64)
-            .checked_mul(64)
-            .and_then(|n| n.checked_add(65536))
-            .ok_or_else(|| fail("geometry effective planner ceiling"))?
-            .min(defaults.work_units),
+        work_units: if encoding == photocraft_cms::xcf_color::Encoding::NonlinearProfile {
+            (req.peak_resident_bytes as u64)
+                .checked_mul(64)
+                .and_then(|n| n.checked_add(65536))
+                .ok_or_else(|| fail("geometry effective planner ceiling"))?
+                .min(defaults.work_units)
+        } else {
+            photocraft_cms::xcf_color::assigned_effective_planning_work_ceiling(&profile, encoding).map_err(cms)?
+        },
         ..defaults
     };
     pay(budget, limits.work_units)?;
-    let effective =
-        photocraft_cms::xcf_color::effective_profile_requirements_with_control(&profile, photocraft_cms::xcf_color::Encoding::NonlinearProfile, limits, &stop)
-            .map_err(cms)?;
+    let effective = photocraft_cms::xcf_color::effective_profile_requirements_with_control(
+        &profile,
+        encoding,
+        if encoding == photocraft_cms::xcf_color::Encoding::NonlinearProfile { limits } else { defaults },
+        &stop,
+    )
+    .map_err(cms)?;
     let _effective_fee =
         budget.reserve(BudgetKind::Resident, effective.peak_resident_bytes as u64, "geometry effective construction").map_err(accounting_error)?;
-    pay(budget, effective.work_units)?;
+    pay(
+        budget,
+        if encoding == photocraft_cms::xcf_color::Encoding::NonlinearProfile {
+            effective.work_units
+        } else {
+            effective.work_units.checked_mul(4).ok_or_else(|| fail("geometry effective constructor work"))?
+        },
+    )?;
     photocraft_cms::xcf_color::effective_profile_from_definition_with_control(
         &profile,
-        photocraft_cms::xcf_color::Encoding::NonlinearProfile,
-        photocraft_cms::control::Limits { work_units: effective.work_units, ..limits },
+        encoding,
+        photocraft_cms::control::Limits { work_units: effective.work_units, ..defaults },
         &stop,
     )
     .map_err(cms)

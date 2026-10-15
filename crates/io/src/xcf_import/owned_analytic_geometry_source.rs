@@ -1,4 +1,4 @@
-//! Original assigned-ICC nonlinear Union geometry, separately source-selected.
+//! Original assigned-ICC Union geometry, separately source-selected.
 //! This wrapper preserves shared charged custody; it grants no default policy.
 use super::*;
 pub struct OwnedAnalyticGeometryXcfImport {

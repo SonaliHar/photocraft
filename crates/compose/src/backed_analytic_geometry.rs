@@ -7,7 +7,10 @@ use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{
     LayerContent, SampleEncoding, WorkingProfileInterpretation,
     accounted_document::AccountedDocument,
-    import_compositing::{GimpOperator, GimpSpace, XCF12_ANALYTIC_INTEGER_NORMAL_MASK_GEOMETRY_EPOCH, XCF12_ANALYTIC_NORMAL_MASK_GEOMETRY_EPOCH},
+    import_compositing::{
+        GimpOperator, GimpSpace, XCF12_ANALYTIC_INTEGER_NORMAL_MASK_GEOMETRY_EPOCH, XCF12_ANALYTIC_LINEAR_NORMAL_MASK_GEOMETRY_EPOCH,
+        XCF12_ANALYTIC_NORMAL_MASK_GEOMETRY_EPOCH, XCF12_ANALYTIC_PERCEPTUAL_NORMAL_MASK_GEOMETRY_EPOCH,
+    },
     item_identity::ItemRef,
 };
 use photocraft_raster::{
@@ -29,8 +32,13 @@ pub(crate) fn is_candidate(doc: &photocraft_doc::Document, c: &ReadControl<'_>) 
                 return Ok(false);
             }
             c.check(policy.compatibility_epoch.len() as u64)?;
-            found |=
-                matches!(policy.compatibility_epoch.as_str(), XCF12_ANALYTIC_NORMAL_MASK_GEOMETRY_EPOCH | XCF12_ANALYTIC_INTEGER_NORMAL_MASK_GEOMETRY_EPOCH);
+            found |= matches!(
+                policy.compatibility_epoch.as_str(),
+                XCF12_ANALYTIC_NORMAL_MASK_GEOMETRY_EPOCH
+                    | XCF12_ANALYTIC_INTEGER_NORMAL_MASK_GEOMETRY_EPOCH
+                    | XCF12_ANALYTIC_LINEAR_NORMAL_MASK_GEOMETRY_EPOCH
+                    | XCF12_ANALYTIC_PERCEPTUAL_NORMAL_MASK_GEOMETRY_EPOCH
+            );
         }
     }
     Ok(found)
@@ -95,16 +103,55 @@ fn scan(view: CheckedRasterView<'_>, c: &ReadControl<'_>) -> Result<(), E> {
 /// The returned stored resolution is used by the existing NormalStack equations;
 /// it is never recomputed from raw Auto words or immutable provenance.
 pub(crate) fn qualify(owner: &AccountedDocument, profile: &Profile, c: &ReadControl<'_>) -> Result<GimpSpace, E> {
+    qualify_inner(owner, profile, None, c)
+}
+/// Typed assigned original/effective-current relation. Matching the immutable
+/// model and ledger is required; encoded bytes or epoch hints cannot fabricate
+/// this binding. The generated effective definition supplies the renderer math.
+pub(crate) fn qualify_assigned(
+    owner: &AccountedDocument,
+    binding: &crate::backed_assigned_current_profile::PreparedAssignedCurrentProfile,
+    c: &ReadControl<'_>,
+) -> Result<GimpSpace, E> {
+    qualify_inner(owner, binding.profile(), Some(binding), c)
+}
+fn qualify_inner(
+    owner: &AccountedDocument,
+    profile: &Profile,
+    binding: Option<&crate::backed_assigned_current_profile::PreparedAssignedCurrentProfile>,
+    c: &ReadControl<'_>,
+) -> Result<GimpSpace, E> {
     c.check(1).map_err(E::Backing)?;
-    owner.validate_masked_analytic_normal_storage(c).map_err(E::Backing)?;
+    let sample_encoding = owner.document().sample_encoding.ok_or_else(scope)?;
+    if let Some(binding) = binding {
+        if !binding.matches(owner, sample_encoding) {
+            return Err(scope());
+        }
+    } else if sample_encoding != SampleEncoding::NonlinearProfile {
+        return Err(scope());
+    }
+    if binding.is_some() {
+        owner.validate_assigned_analytic_geometry_storage(c).map_err(E::Backing)?;
+    } else {
+        owner.validate_masked_analytic_normal_storage(c).map_err(E::Backing)?;
+    }
     let doc = owner.document();
     let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
     let source = doc.source_color_context.as_ref().ok_or_else(scope)?;
     c.check(state.opaque.len() as u64).map_err(E::Backing)?;
     if doc.working_profile_interpretation != WorkingProfileInterpretation::Icc
-        || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
         || !matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale)
-        || !matches!((doc.depth, source.source_precision), (SampleType::U16, 250) | (SampleType::U32, 350) | (SampleType::F32, 650) | (SampleType::F64, 750))
+        || !matches!(
+            (doc.depth, source.source_precision, sample_encoding),
+            (SampleType::U16, 250, SampleEncoding::NonlinearProfile)
+                | (SampleType::U32, 350, SampleEncoding::NonlinearProfile)
+                | (SampleType::F32, 650, SampleEncoding::NonlinearProfile)
+                | (SampleType::F64, 750, SampleEncoding::NonlinearProfile)
+                | (SampleType::F32, 600, SampleEncoding::Linear)
+                | (SampleType::F64, 700, SampleEncoding::Linear)
+                | (SampleType::F32, 675, SampleEncoding::Perceptual)
+                | (SampleType::F64, 775, SampleEncoding::Perceptual)
+        )
         || state.provenance.format_version != 12
         || doc.layers.len() != 2
         || state.items.len() != 3
@@ -126,20 +173,29 @@ pub(crate) fn qualify(owner: &AccountedDocument, profile: &Profile, c: &ReadCont
         || profile.channels() != doc.mode.color_channels()
         || profile.description.len() > 65536
         || profile.copyright.len() > 65536
-        || !equal(current, original, c)?
-        || !equal(current, profile.encoded_bytes().ok_or_else(scope)?, c)?
+        || (binding.is_none() && (!equal(current, original, c)? || !equal(current, profile.encoded_bytes().ok_or_else(scope)?, c)?))
     {
         return Err(scope());
     }
-    // Bounded analytic qualification performs no profile clone/parse/encoding.
-    // The caller's genuine parsed Profile remains borrowed and externally paid.
-    c.check(1024).map_err(E::Backing)?;
-    photocraft_cms::xcf_color::qualify_effective_analytic_profile(profile, photocraft_cms::xcf_color::Encoding::NonlinearProfile)
-        .map_err(|e| E::Color(CompositionError::Color(e)))?;
-    let expected = if matches!(doc.depth, SampleType::U16 | SampleType::U32) {
-        XCF12_ANALYTIC_INTEGER_NORMAL_MASK_GEOMETRY_EPOCH
-    } else {
-        XCF12_ANALYTIC_NORMAL_MASK_GEOMETRY_EPOCH
+    if binding.is_none() {
+        // Existing bare-profile route remains nonlinear and exactly byte-bound.
+        let work = photocraft_cms::xcf_color::semantic_analytic_profile_work_ceiling(profile).map_err(|error| match error {
+            photocraft_cms::control::Error::Cancelled => E::Backing(BackingError::Cancelled),
+            photocraft_cms::control::Error::Limit(message) => E::Unsupported(message),
+            photocraft_cms::control::Error::Allocation => E::Allocation,
+            photocraft_cms::control::Error::Cms(error) => E::Color(CompositionError::Color(error)),
+        })?;
+        c.check(work).map_err(E::Backing)?;
+        photocraft_cms::xcf_color::qualify_effective_analytic_profile(profile, photocraft_cms::xcf_color::Encoding::NonlinearProfile)
+            .map_err(|e| E::Color(CompositionError::Color(e)))?;
+    }
+    // Typed preparation already qualified both the original and the generated
+    // effective definition. Do not reparse current bytes or recompute a relation.
+    let expected = match (doc.depth, sample_encoding) {
+        (SampleType::U16 | SampleType::U32, SampleEncoding::NonlinearProfile) => XCF12_ANALYTIC_INTEGER_NORMAL_MASK_GEOMETRY_EPOCH,
+        (_, SampleEncoding::NonlinearProfile) => XCF12_ANALYTIC_NORMAL_MASK_GEOMETRY_EPOCH,
+        (_, SampleEncoding::Linear) => XCF12_ANALYTIC_LINEAR_NORMAL_MASK_GEOMETRY_EPOCH,
+        (_, SampleEncoding::Perceptual) => XCF12_ANALYTIC_PERCEPTUAL_NORMAL_MASK_GEOMETRY_EPOCH,
     };
     let canvas = bounded(doc.bounds())?;
     let mut aggregate = canvas;

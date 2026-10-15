@@ -20,7 +20,7 @@ impl AccountedDocument {
         // edits retain the original strict unmasked validator.
         let masked_normal = self.document().layers.len() == 2 && self.document().layers.get(1).is_some_and(|layer| layer.mask.is_some());
         if masked_normal {
-            imported_selection::validate_masked_normal(self.document(), self.quota(), control)?;
+            imported_selection::validate_assigned_geometry(self.document(), self.quota(), control)?;
         } else {
             imported_selection::validate(self.document(), self.quota(), control)?;
         }

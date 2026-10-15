@@ -1,4 +1,4 @@
-//! UNRUN: authentic 32-case NL/Union geometry host continuation. Source and
+//! UNRUN: authentic 64-case NL/Linear/Perceptual Union geometry host continuation. Source and
 //! output Vecs/files are external harness captures, not quota receipts.
 use super::*;
 use photocraft_doc::{Document, LayerContent};
@@ -17,6 +17,8 @@ fn cases() -> Vec<(PathBuf, Value)> {
     for (set, pins) in [
         ("holdout", include_str!("../../../compose/tests/gimp_normal_mask_geometry_hashes.json")),
         ("integer", include_str!("../../../compose/tests/gimp_normal_mask_geometry_integer_hashes.json")),
+        ("linear", include_str!("../../../compose/tests/gimp_normal_mask_geometry_linear_hashes.json")),
+        ("perceptual", include_str!("../../../compose/tests/gimp_normal_mask_geometry_perceptual_hashes.json")),
     ] {
         let pins: Value = serde_json::from_str(pins).unwrap();
         for variant in ["left-top", "right-bottom"] {
@@ -37,7 +39,12 @@ fn cases() -> Vec<(PathBuf, Value)> {
                 if row["layers"][0]["spaces"]["composite_mode"] != 1 {
                     continue;
                 }
-                assert!(row["precision"].as_str().unwrap().ends_with("NON_LINEAR"));
+                let expected = match set {
+                    "linear" => "_LINEAR",
+                    "perceptual" => "_PERCEPTUAL",
+                    _ => "_NON_LINEAR",
+                };
+                assert!(row["precision"].as_str().unwrap().ends_with(expected));
                 assert_eq!(hash(&std::fs::read(root.join(row["source_file"].as_str().unwrap())).unwrap()), row["source_sha256"].as_str().unwrap());
                 // Frozen JSON binds these independent captured profile values.
                 // Loose .icc files are absent in this corpus layout; below we
@@ -48,8 +55,35 @@ fn cases() -> Vec<(PathBuf, Value)> {
             }
         }
     }
-    assert_eq!(result.len(), 32);
+    assert_eq!(result.len(), 64);
     result
+}
+// Observation ICC values describe GIMP source/profile roles. The canonical
+// current ICC for Linear/Perceptual is the existing CMS derivative of ORIGINAL;
+// parsing its rounded serialized curves as original would change the recipe.
+fn profiles(doc: &Document, row: &Value) {
+    let original = doc.source_color_context.as_ref().unwrap().original_icc.as_deref().unwrap();
+    assert_eq!(hash(original), row["assigned_icc"]["sha256"].as_str().unwrap());
+    assert_eq!(original.len() as u64, row["assigned_icc"]["bytes"].as_u64().unwrap());
+    assert_eq!(hash(original), row["effective_icc"]["sha256"].as_str().unwrap());
+    assert_eq!(original.len() as u64, row["effective_icc"]["bytes"].as_u64().unwrap());
+    let current = doc.icc_profile.as_deref().unwrap();
+    let encoding = match doc.sample_encoding.unwrap() {
+        photocraft_doc::SampleEncoding::NonlinearProfile => {
+            assert_eq!(current, original);
+            return;
+        }
+        photocraft_doc::SampleEncoding::Linear => photocraft_cms::xcf_color::Encoding::Linear,
+        photocraft_doc::SampleEncoding::Perceptual => photocraft_cms::xcf_color::Encoding::Perceptual,
+    };
+    let space = match doc.mode {
+        photocraft_doc::ColorMode::Rgb => photocraft_cms::ColorSpace::Rgb,
+        photocraft_doc::ColorMode::Grayscale => photocraft_cms::ColorSpace::Gray,
+        _ => panic!("closed RGB/Gray geometry evidence"),
+    };
+    let expected = photocraft_cms::xcf_color::effective_profile(Some(original), space, encoding).unwrap().to_bytes();
+    assert_eq!(current, expected.as_ref());
+    assert_ne!(current, original);
 }
 fn native(doc: &Document) -> Vec<(photocraft_raster::backing::NativePlaneDescriptor, String)> {
     doc.layers
@@ -110,7 +144,7 @@ impl Drop for Directory {
 }
 
 #[test]
-#[ignore = "UNRUN: 32 actual assigned ICC NL Union source/edit states use paid host/native routes and preserve original masks"]
+#[ignore = "UNRUN: 64 actual assigned ICC NL/Linear/Perceptual Union source/edit states use paid host/native routes and preserve original masks"]
 fn assigned_geometry_host_source_protection_title_save_and_native_continuation() {
     for (root, row) in cases() {
         let original = std::fs::read(root.join(row["source_file"].as_str().unwrap())).unwrap();
@@ -120,12 +154,10 @@ fn assigned_geometry_host_source_protection_title_save_and_native_continuation()
         let mut h = Headless::trusted_local();
         drop(h.open_owned_xcf_keep_current(&source, &ctl()).unwrap());
         let before = h.session.active().unwrap().doc.clone();
-        assert_eq!(hash(before.icc_profile.as_deref().unwrap()), row["assigned_icc"]["sha256"].as_str().unwrap());
-        assert_eq!(before.icc_profile.as_deref().unwrap().len() as u64, row["assigned_icc"]["bytes"].as_u64().unwrap());
-        assert_eq!(before.source_color_context.as_ref().unwrap().original_icc, before.icc_profile);
+        profiles(&before, &row);
         let identity = h.session.active().unwrap().source.clone();
         assert!(h.session.active().unwrap().source_read_only);
-        before.accounted().unwrap().validate_masked_analytic_normal_storage(&ctl()).unwrap();
+        before.accounted().unwrap().validate_assigned_analytic_geometry_storage(&ctl()).unwrap();
         let raw = native(&before);
         let reply = h.inspect_owned_command_with_read_control("xcf.inspect", &Value::Null, true, &ctl()).unwrap();
         query(reply.value(), &before);
@@ -149,7 +181,7 @@ fn assigned_geometry_host_source_protection_title_save_and_native_continuation()
         drop(reopened.open_owned_native_keep_current(&target, &ctl()).unwrap());
         let current = reopened.session.active().unwrap();
         assert!(!current.source_read_only);
-        current.doc.accounted().unwrap().validate_masked_analytic_normal_storage(&ctl()).unwrap();
+        current.doc.accounted().unwrap().validate_assigned_analytic_geometry_storage(&ctl()).unwrap();
         assert_eq!(current.doc.name, saved.name);
         assert_eq!(current.doc.xcf_state, before.xcf_state);
         assert_eq!(current.doc.icc_profile, before.icc_profile);
@@ -168,25 +200,27 @@ fn assigned_geometry_host_source_protection_title_save_and_native_continuation()
 #[test]
 #[ignore = "UNRUN: authentic assigned geometry host authorizer and preparation control refuse before publication"]
 fn assigned_geometry_host_denial_keeps_session_and_source() {
-    let (root, row) = cases().remove(0);
-    let original = std::fs::read(root.join(row["source_file"].as_str().unwrap())).unwrap();
-    let dir = Directory::new();
-    let source = dir.0.join("source.xcf");
-    std::fs::write(&source, &original).unwrap();
-    let mut h = Headless::trusted_local();
-    let denied = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(photocraft_raster::backing::BackingError::Work) };
-    assert!(h.open_owned_xcf_keep_current(&source, &denied).is_err());
-    assert!(h.session.active().is_none());
-    drop(h.open_owned_xcf_keep_current(&source, &ctl()).unwrap());
-    let before = h.session.active().unwrap().doc.clone();
-    let raw = native(&before);
-    h.session.authorize = Some(|_, _| Err(photocraft_engine::EngineError::Other("denied".into())));
-    let error = match h.inspect_owned_command_with_read_control("xcf.inspect", &Value::Null, true, &ctl()) {
-        Err(error) => error,
-        Ok(_) => panic!("supported paid query must pass through the rejecting authorizer"),
-    };
-    assert!(error.to_string().contains("denied"), "actual supported-query authorizer refusal: {error}");
-    assert!(h.session.active().unwrap().doc.shares_state(&before));
-    assert_eq!(native(&before), raw);
-    assert_eq!(std::fs::read(&source).unwrap(), original);
+    // One actual source from each retained NL-float/NL-integer/Linear/Perceptual family.
+    for (root, row) in cases().into_iter().step_by(16) {
+        let original = std::fs::read(root.join(row["source_file"].as_str().unwrap())).unwrap();
+        let dir = Directory::new();
+        let source = dir.0.join("source.xcf");
+        std::fs::write(&source, &original).unwrap();
+        let mut h = Headless::trusted_local();
+        let denied = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(photocraft_raster::backing::BackingError::Work) };
+        assert!(h.open_owned_xcf_keep_current(&source, &denied).is_err());
+        assert!(h.session.active().is_none());
+        drop(h.open_owned_xcf_keep_current(&source, &ctl()).unwrap());
+        let before = h.session.active().unwrap().doc.clone();
+        let raw = native(&before);
+        h.session.authorize = Some(|_, _| Err(photocraft_engine::EngineError::Other("denied".into())));
+        let error = match h.inspect_owned_command_with_read_control("xcf.inspect", &Value::Null, true, &ctl()) {
+            Err(error) => error,
+            Ok(_) => panic!("supported paid query must pass through the rejecting authorizer"),
+        };
+        assert!(error.to_string().contains("denied"), "actual supported-query authorizer refusal: {error}");
+        assert!(h.session.active().unwrap().doc.shares_state(&before));
+        assert_eq!(native(&before), raw);
+        assert_eq!(std::fs::read(&source).unwrap(), original);
+    }
 }

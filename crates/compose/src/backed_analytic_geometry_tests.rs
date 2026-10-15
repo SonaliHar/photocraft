@@ -143,3 +143,138 @@ fn full_operative_scanner_rejects_nonunit_and_cancel_before_native_access() {
     let view = CheckedRasterView::resident_with_control(&surface, rect, &ctl()).unwrap();
     assert!(matches!(scan(view, &control), Err(E::Backing(BackingError::Cancelled))));
 }
+
+// These are CURRENT-only producer/consumer integration drafts; they do not
+// manufacture original GIMP source qualification or compare normalized profiles.
+fn assigned_model(sample: SampleType, stored: SampleEncoding) -> (AccountedDocument, BackingQuota) {
+    let (mut doc, q, guard, basis) = model(sample);
+    let cms_encoding = match stored {
+        SampleEncoding::Linear => photocraft_cms::xcf_color::Encoding::Linear,
+        SampleEncoding::Perceptual => photocraft_cms::xcf_color::Encoding::Perceptual,
+        SampleEncoding::NonlinearProfile => photocraft_cms::xcf_color::Encoding::NonlinearProfile,
+    };
+    // Existing fixed generated fixture reserve precedes all replacement model
+    // strings/profile bytes/mask allocations; the actual returned owner retains it.
+    let effective = photocraft_cms::xcf_color::effective_profile_from_definition(basis, cms_encoding).unwrap();
+    doc.icc_profile = Some(effective.to_bytes());
+    doc.sample_encoding = Some(stored);
+    doc.source_color_context.as_mut().unwrap().source_precision = match (sample, stored) {
+        (SampleType::F32, SampleEncoding::Linear) => 600,
+        (SampleType::F64, SampleEncoding::Linear) => 700,
+        (SampleType::F32, SampleEncoding::Perceptual) => 675,
+        (SampleType::F64, SampleEncoding::Perceptual) => 775,
+        _ => panic!("closed generated assigned geometry fixture"),
+    };
+    let epoch = match stored {
+        SampleEncoding::Linear => XCF12_ANALYTIC_LINEAR_NORMAL_MASK_GEOMETRY_EPOCH,
+        SampleEncoding::Perceptual => XCF12_ANALYTIC_PERCEPTUAL_NORMAL_MASK_GEOMETRY_EPOCH,
+        _ => panic!("L/P integration fixture"),
+    };
+    for item in &mut doc.xcf_state.as_mut().unwrap().items {
+        if let Some(policy) = &mut item.composition {
+            policy.compatibility_epoch = epoch.into();
+        }
+    }
+    let mask = doc.layers[1].mask.as_mut().unwrap();
+    mask.surface = Arc::new(Surface::with_default(mask.surface.format(), &[0.5]));
+    (adopt(doc, q.clone(), guard), q)
+}
+fn native_storage_hash(owner: &AccountedDocument) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    let c = ctl();
+    for layer in &owner.document().layers {
+        let LayerContent::BackedRaster(backed) = &layer.content else { panic!("backed fixture") };
+        let view = backed.checked_view();
+        view.default_bytes().hash(&mut hash);
+        for coord in backed.operative_bounds().tiles() {
+            let pin = view.pin_tile(coord, &c).unwrap();
+            let r = coord.rect();
+            for y in r.y0..r.y1 {
+                for x in r.x0..r.x1 {
+                    let mut raw = [0; 40];
+                    let pixel = &mut raw[..view.format().bytes_per_pixel()];
+                    pin.read_pixel_native_into(x, y, pixel, &c).unwrap();
+                    hash.write(pixel);
+                }
+            }
+        }
+        if let Some(mask) = &layer.mask {
+            mask.surface.default_bytes().hash(&mut hash);
+            // This generated fixture has sparse default-only coverage; no hidden
+            // mask tile is omitted from the identity assertion.
+            assert_eq!(mask.surface.tile_count(), 0);
+        }
+    }
+    hash.finish()
+}
+#[test]
+fn typed_assigned_factory_all_linear_perceptual_depth_pairs_matches_existing_resident_math() {
+    use crate::{
+        backed_assigned_current_profile::{AssignedCurrentProfileLimits, PreparedAssignedCurrentProfile},
+        backed_document::PreparedBackedDocument,
+        backed_normal::NormalBandLimits,
+    };
+    for sample in [SampleType::F32, SampleType::F64] {
+        for stored in [SampleEncoding::Linear, SampleEncoding::Perceptual] {
+            let (owner, q) = assigned_model(sample, stored);
+            let raw = native_storage_hash(&owner);
+            let binding = PreparedAssignedCurrentProfile::prepare(&owner, AssignedCurrentProfileLimits::default(), &ctl()).unwrap();
+            assert!(qualify(&owner, binding.profile(), &ctl()).is_err(), "old bare-profile endpoint stays NL-only");
+            assert_eq!(qualify_assigned(&owner, &binding, &ctl()).unwrap(), GimpSpace::LinearRgb);
+            let prepared = PreparedBackedDocument::new_accounted_with_assigned_profile(&owner, &binding, NormalBandLimits::default(), &ctl()).unwrap();
+            let actual = prepared.render_band(owner.document().bounds(), &ctl()).unwrap();
+            // This independent existing renderer consumes ordinary resident layers.
+            // Its generated model/materialization/output buffers are test-owned and
+            // prepaid on the real fixture ledger before any clone or allocation.
+            let _reference_fee = q.reserve(QuotaKind::Resident, 8 << 20).unwrap();
+            let mut resident = owner.document().clone();
+            for layer in &mut resident.layers {
+                let LayerContent::BackedRaster(backed) = &layer.content else { panic!("backed fixture") };
+                let rect = backed.operative_bounds();
+                let mut values = Vec::new();
+                for y in rect.y0..rect.y1 {
+                    for x in rect.x0..rect.x1 {
+                        let mut pixel = [0.; 4];
+                        backed.checked_view().read_logical_pixel_f64_into(x, y, &mut pixel, &ctl()).unwrap();
+                        values.extend_from_slice(&pixel);
+                    }
+                }
+                let mut surface = Surface::new(backed.format());
+                surface.try_write_region_f64_with(rect, &values, &Interrupt::NONE).unwrap();
+                layer.content = LayerContent::Raster(surface);
+            }
+            let reference = crate::gimp_render::PreparedRenderer::new(&resident).unwrap().render(resident.bounds(), &mut |_| Ok(())).unwrap();
+            assert_eq!(actual.rect(), reference.rect);
+            assert_eq!(actual.pixels().len(), reference.px.len());
+            for (a, b) in actual.pixels().iter().zip(&reference.px) {
+                for (a, b) in a.iter().zip(b) {
+                    assert!((a - b).abs() < 1e-6, "{sample:?}/{stored:?}: {a} != {b}");
+                }
+            }
+            assert_eq!(native_storage_hash(&owner), raw);
+        }
+    }
+}
+#[test]
+fn assigned_factory_refuses_other_model_binding_and_control_without_mutation() {
+    use crate::{
+        backed_assigned_current_profile::{AssignedCurrentProfileLimits, PreparedAssignedCurrentProfile},
+        backed_document::PreparedBackedDocument,
+        backed_normal::NormalBandLimits,
+    };
+    let (owner, q) = assigned_model(SampleType::F64, SampleEncoding::Perceptual);
+    let binding = PreparedAssignedCurrentProfile::prepare(&owner, AssignedCurrentProfileLimits::default(), &ctl()).unwrap();
+    let (other, _) = assigned_model(SampleType::F64, SampleEncoding::Perceptual);
+    assert!(!binding.matches(&other, SampleEncoding::Perceptual));
+    assert!(!binding.matches(&owner, SampleEncoding::Linear));
+    assert!(PreparedBackedDocument::new_accounted_with_assigned_profile(&other, &binding, NormalBandLimits::default(), &ctl()).is_err());
+    qualify_assigned(&owner, &binding, &ctl()).unwrap();
+    let before = q.usage().unwrap();
+    let denied = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(BackingError::Work) };
+    assert!(matches!(
+        PreparedBackedDocument::new_accounted_with_assigned_profile(&owner, &binding, NormalBandLimits::default(), &denied),
+        Err(E::Backing(BackingError::Work))
+    ));
+    assert_eq!(q.usage().unwrap(), before);
+}
