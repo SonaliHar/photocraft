@@ -966,3 +966,7 @@ mod owned_separable_blend_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_separable_metadata_tests.rs"]
 mod owned_separable_metadata_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_flat_current_tests.rs"]
+mod owned_flat_current_tests;

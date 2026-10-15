@@ -1694,3 +1694,20 @@ profile/native/canvas validation precedes publication under the actual quota and
 work control. The synchronous UI route applies even with background jobs enabled.
 A separate metadata-only routing hint preserves mask and Move restrictions.
 Original source gates stay unchanged; behavior tests remain deferred.
+CURRENT flat-composite rendering now accepts 1–4096 independently positioned
+native leaves and arbitrary checked canvas bounds within its retained F32
+nonlinear implicit-sRGB domain. Original XCF source enrollment stays at the
+existing exact family. Known stored Auto fields retain their version/mode/epoch
+rules. Fully explicit CURRENT settings use the existing composition command's
+supported RGB space/operator/mode subset. Unsupported advanced blending controls
+return an error. Complete native/default/hidden/off-canvas validation and bounded
+two-axis canvas evaluation precede publication.
+
+`xcf.inspect` now pages flat-composite items and selections independently using
+the existing offset/limit schema: default offset0/limit64, maximum limit128,
+offset up to100000, and valid empty pages beyond the total. Paid page facts and
+reply bounds cover only returned rows; conservative full canonical text work is
+still charged. Explicit all-Normal modern flat native stacks select the strict
+CURRENT endpoint; ordinary Auto Normal and mixed legacy Normal keep their prior
+route. These additions do not enable composition mutation or expand source
+import rules. Behavioral tests remain deferred.

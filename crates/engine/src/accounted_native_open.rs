@@ -116,9 +116,29 @@ pub fn is_current_isolated_gaussian_group_candidate(document:&photocraft_doc::Do
 /// endpoint even when other metadata is malformed. Exact epochs and tuples are
 /// checked by that endpoint, and refusal never retries generic native adoption.
 pub fn is_current_separable_blend_candidate(document:&photocraft_doc::Document,control:&ReadControl<'_>)->std::result::Result<bool,BackingError>{
- if let Some(state)=&document.xcf_state {for item in &state.items {control.check(1)?;
-  if item.composition.as_ref().is_some_and(|p|matches!(p.source_mode,23|30..=36|41..=53)) {return Ok(true)}
- }}Ok(false)
+ let Some(state)=&document.xcf_state else {return Ok(false)};
+ let mut explicit_normal=false;
+ let mut all_normal=true;
+ for item in &state.items {control.check(1)?;
+  if let Some(policy)=&item.composition {
+   if matches!(policy.source_mode,23|30..=36|41..=53) {return Ok(true)}
+   all_normal &= policy.source_mode==28;
+   explicit_normal |= policy.source_mode==28 && (policy.stored_blend_space>0 || policy.stored_composite_space>0 || policy.stored_operator>0);
+  } else {all_normal=false;}
+ }
+ // Explicit CURRENT Normal policies also belong to the general flat compiler.
+ // Preserve ordinary Auto Normal routing. This metadata hint checks no samples
+ // and accepts no policy: malformed matching tuples must fail the strict endpoint.
+ if !explicit_normal || !all_normal || document.mode!=photocraft_doc::ColorMode::Rgb || document.depth!=photocraft_doc::SampleType::F32
+  || document.sample_encoding!=Some(photocraft_doc::SampleEncoding::NonlinearProfile)
+  || !matches!(document.working_profile_interpretation,photocraft_doc::WorkingProfileInterpretation::ImplicitSrgb{..})
+  || document.source_color_context.as_ref().is_none_or(|source|source.source_precision!=650 || source.original_icc.is_some())
+  || document.layers.is_empty() || document.layers.len()>4096 || state.items.len()!=document.layers.len()
+  || !state.filter_stacks.is_empty() || !state.filter_masks.is_empty() {return Ok(false)}
+ for layer in &document.layers {control.check(1)?;
+  if !matches!(&layer.content,photocraft_doc::LayerContent::BackedRaster(_)) || layer.mask.is_some() {return Ok(false)}
+ }
+ Ok(true)
 }
 /// Exact retained geometry epochs select the stricter current endpoint only.
 /// No class, source/profile authority or locator access follows from this hint;

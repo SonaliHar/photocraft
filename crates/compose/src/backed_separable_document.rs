@@ -29,6 +29,9 @@ fn scope() -> E {
 #[cfg(test)]
 #[path = "backed_separable_document_tests.rs"]
 mod tests;
+
+#[path = "backed_separable_general_current.rs"]
+mod general_current;
 #[derive(Clone, Copy)]
 struct Recipe {
     mode: i32,
@@ -232,6 +235,7 @@ impl<S, L> LeasedSeparableBlendPipeline<S, L> {
 }
 pub struct PreparedBackedSeparableDocument<'a> {
     stack: PreparedBackedSeparableStack<'a>,
+    _metadata: general_current::Metadata<'a>,
     owner: &'a AccountedDocument,
     limits: NormalBandLimits,
     _index: QuotaLease,
@@ -240,41 +244,24 @@ impl<'a> PreparedBackedSeparableDocument<'a> {
     pub fn new(owner: &'a AccountedDocument, limits: NormalBandLimits, c: &ReadControl<'_>) -> Result<Self, E> {
         owner.validate_readonly_flat_composite_storage(c).map_err(E::Backing)?;
         let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(E::Quota)?;
-        let doc = owner.document();
-        let recipes = metadata(doc, false, c.interrupt, &mut |n| c.check(n).map_err(E::Backing))?;
-        let layers = [0usize, 1].map(|i| {
-            let layer = doc.layers.get(i).ok_or_else(scope)?;
-            let LayerContent::BackedRaster(backed) = &layer.content else { return Err(scope()) };
-            let r = recipes.get(i).ok_or_else(scope)?;
-            Ok(SeparableStackLayer {
-                layer: backed,
-                visible: layer.visible,
-                opacity: f64::from(layer.opacity),
-                source_mode: r.mode,
-                blend_space: r.blend,
-                composite_space: r.composite,
-                operator: r.operator,
-            })
-        });
-        let [a, b] = layers;
-        let inputs = [a?, b?];
-        let stack = PreparedBackedSeparableStack::new(&inputs, owner.quota(), Builtin::Srgb.profile(), SampleEncoding::NonlinearProfile, limits, c)?;
-        let out = Self { stack, owner, limits, _index: index };
-        out.scan_native(recipes.get(1).ok_or_else(scope)?.mode, c)?;
+        let metadata = general_current::Metadata::new(owner, c)?;
+        let stack = PreparedBackedSeparableStack::new(&metadata.inputs, owner.quota(), Builtin::Srgb.profile(), SampleEncoding::NonlinearProfile, limits, c)?;
+        let out = Self { stack, _metadata: metadata, owner, limits, _index: index };
         out.validate_operative(c)?;
         Ok(out)
     }
     pub fn bounds(&self) -> Rect {
         self.owner.document().bounds()
     }
-    fn scan_native(&self, mode: i32, c: &ReadControl<'_>) -> Result<(), E> {
+    fn scan_native(&self, c: &ReadControl<'_>) -> Result<(), E> {
         let _scratch = self
             .owner
             .quota()
             .reserve(QuotaKind::Resident, (std::mem::size_of::<photocraft_raster::checked_view::CheckedTilePin>() + 128) as u64)
             .map_err(E::Quota)?;
-        let unit = matches!(mode, 41..=49 | 51 | 53);
-        for (index, layer) in self.owner.document().layers.iter().enumerate() {
+        for (layer, recipe) in self.owner.document().layers.iter().zip(&self._metadata.recipes) {
+            let mode = recipe.mode;
+            let unit = matches!(mode, 41..=49 | 51 | 53);
             let LayerContent::BackedRaster(backed) = &layer.content else { return Err(scope()) };
             let view = backed.checked_view();
             let f = view.format();
@@ -287,7 +274,6 @@ impl<'a> PreparedBackedSeparableDocument<'a> {
                         return Err(scope());
                     }
                     if endpoint
-                        && index == 1
                         && match mode {
                             42 => v >= 1.,
                             48 => v <= 0. || v >= 1.,
@@ -317,16 +303,8 @@ impl<'a> PreparedBackedSeparableDocument<'a> {
         Ok(())
     }
     pub fn validate_operative(&self, c: &ReadControl<'_>) -> Result<(), E> {
-        self.stack.validate_operative(c)?;
-        let bounds = self.bounds();
-        let mut y = bounds.y0;
-        while y < bounds.y1 {
-            let rows = i32::try_from(self.limits.max_rows).map_err(|_| scope())?;
-            let y1 = y.checked_add(rows).ok_or_else(scope)?.min(bounds.y1);
-            drop(self.stack.render_band(Rect::new(bounds.x0, y, bounds.x1, y1), [0.; 4], c)?);
-            y = y1;
-        }
-        Ok(())
+        self.scan_native(c)?;
+        general_current::validate_bands(&self.stack, self.bounds(), self.limits, c)
     }
     pub fn render_band(&self, rect: Rect, c: &ReadControl<'_>) -> Result<OwnedNormalStackBand, E> {
         if !self.bounds().contains_rect(&rect) {

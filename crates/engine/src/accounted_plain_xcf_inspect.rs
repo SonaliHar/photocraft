@@ -191,6 +191,16 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     } else {
         owner.validate_plain_xcf_inspection(control)?;
     }
+    prepare_metadata_page(owner,offset,limit,false,control)
+}
+/// Paid metadata only on the actual readonly flat class. This is independent
+/// of source enrollment, current rendering and all editing permissions.
+pub(crate) fn prepare_flat_composite(owner:&photocraft_doc::accounted_document::AccountedDocument,offset:usize,limit:usize,control:&ReadControl<'_>)->Result<OwnedFilterInspectReply>{
+    if offset>100000 || !(1..=128).contains(&limit) {return Err(BackingError::Length.into())}
+    owner.validate_readonly_flat_composite_storage(control)?;
+    prepare_metadata_page(owner,offset,limit,true,control)
+}
+fn prepare_metadata_page(owner:&photocraft_doc::accounted_document::AccountedDocument,offset:usize,limit:usize,all_item_text:bool,control:&ReadControl<'_>)->Result<OwnedFilterInspectReply>{
     let doc = owner.document();
     let state = doc.xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     if !doc.paths.is_empty() {
@@ -198,7 +208,19 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     }
     let fallback = photocraft_doc::PhysicalResolution::square(f64::from(doc.resolution_dpi));
     let resolution = doc.physical_resolution.as_ref().unwrap_or(&fallback);
-    let plan = plan(state, resolution, offset, limit, control)?;
+    let mut plan = plan(state, resolution, offset, limit, control)?;
+    if all_item_text {
+        // Keep the readonly query's conservative debit for every canonical
+        // name/epoch, even though only the requested page needs text facts.
+        // plan() already includes page text; add only the other rows.
+        for (index,item) in state.items.iter().enumerate() {
+            control.check(1)?;
+            if index<offset || index.saturating_sub(offset)>=limit {
+                add(&mut plan.scanned,item.name.len())?;
+                if let Some(policy)=&item.composition {add(&mut plan.scanned,policy.compatibility_epoch.len())?;}
+            }
+        }
+    }
     paid_reply(owner.quota(), ReplyKind::Project, plan.bounds, plan.bytes, plan.scanned, control, || {
         validate_resolution(resolution, control)?;
         let facts = Facts::new(state, &plan, offset, limit, owner.quota(), control)?;
@@ -217,3 +239,7 @@ mod tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "accounted_masked_analytic_inspect_tests.rs"]
 mod masked_analytic_tests;
+
+#[cfg(test)]
+#[path="accounted_flat_composite_inspect_tests.rs"]
+mod flat_composite_tests;
