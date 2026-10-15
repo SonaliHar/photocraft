@@ -97,12 +97,14 @@ impl<L> ProfileBinding<L> {
 enum AssignedRecipe {
     Box,
     Median,
+    Gaussian,
 }
 impl AssignedRecipe {
     fn operation(self) -> &'static str {
         match self {
             Self::Box => "gegl:box-blur",
             Self::Median => "gegl:median-blur",
+            Self::Gaussian => "gegl:gaussian-blur",
         }
     }
 }
@@ -192,6 +194,11 @@ fn prepare_recipe<B: PlanBudget>(
     if recipe == Some(AssignedRecipe::Median) && node.composition.as_ref().is_none_or(|policy| policy.compatibility_epoch != "xcf22-rgb-alpha-median-v1") {
         return Err(scope());
     }
+    if recipe == Some(AssignedRecipe::Gaussian)
+        && node.composition.as_ref().is_none_or(|policy| policy.compatibility_epoch != "xcf22-rgb-alpha-finite-gaussian-v1")
+    {
+        return Err(scope());
+    }
     if finite {
         if !matches!((doc.depth, source.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750))
             || !(doc.mode == ColorMode::Rgb || doc.mode == ColorMode::Grayscale && node.operation.name == "gegl:median-blur")
@@ -279,7 +286,7 @@ fn prepare_recipe<B: PlanBudget>(
         Some(basis) => basis,
         None => profile.profile(),
     };
-    if recipe == Some(AssignedRecipe::Box) {
+    if matches!(recipe, Some(AssignedRecipe::Box | AssignedRecipe::Gaussian)) {
         let semantic = photocraft_cms::xcf_color::assigned_effective_planning_work_ceiling(basis, photocraft_cms::xcf_color::Encoding::NonlinearProfile)
             .map_err(|e| match e {
                 photocraft_cms::control::Error::Cancelled => E::Backing(BackingError::Cancelled),
@@ -353,6 +360,23 @@ impl<S, L> LeasedStockNeighborhoodPipeline<S, L> {
                 })?;
         Ok(Self { _plan: plan, _source: source_lease, _lease: lease })
     }
+    /// Exact assigned finite Gaussian source preparation; whole-axis execution
+    /// is deferred until the genuine CURRENT owner has been adopted.
+    pub fn new_assigned_gaussian_budgeted<B: PreparationBudget<Lease = L>>(
+        doc: &Document,
+        interrupt: &Interrupt<'_>,
+        budget: &mut B,
+        source_lease: S,
+    ) -> Result<Self, CompositionError> {
+        let (plan, lease) =
+            prepare_recipe(doc, None, std::mem::size_of::<Self>() as u64 + 128, interrupt, &mut Shared { budget }, Some(AssignedRecipe::Gaussian), false)
+                .map_err(|e| match e {
+                    E::Color(e) => e,
+                    E::Backing(BackingError::Cancelled) => photocraft_raster::RasterInputError::Cancelled.into(),
+                    _ => CompositionError::Unsupported("assigned Gaussian preparation"),
+                })?;
+        Ok(Self { _plan: plan, _source: source_lease, _lease: lease })
+    }
 }
 pub struct PreparedBackedNeighborhoodContext<'a> {
     derived: OwnedNeighborhoodSurface,
@@ -380,6 +404,11 @@ impl<'a> PreparedBackedNeighborhoodContext<'a> {
     pub fn new_assigned_median(owner: &'a AccountedDocument, limits: NormalBandLimits, c: &ReadControl<'_>) -> Result<Self, E> {
         Self::new_recipe(owner, None, limits, c, Some(AssignedRecipe::Median))
     }
+    /// Exact assigned finite Auto/FIR Gaussian CURRENT context. Stored F32
+    /// argument pairs remain the existing finite recipe, not group parameters.
+    pub fn new_assigned_gaussian(owner: &'a AccountedDocument, limits: NormalBandLimits, c: &ReadControl<'_>) -> Result<Self, E> {
+        Self::new_recipe(owner, None, limits, c, Some(AssignedRecipe::Gaussian))
+    }
     /// Actual assigned-class dispatcher. A selected recipe failure is final;
     /// unknown operations never retry the implicit or another assigned lane.
     pub fn new_assigned(owner: &'a AccountedDocument, limits: NormalBandLimits, c: &ReadControl<'_>) -> Result<Self, E> {
@@ -395,6 +424,7 @@ impl<'a> PreparedBackedNeighborhoodContext<'a> {
         let recipe = match node.operation.name.as_str() {
             "gegl:box-blur" => AssignedRecipe::Box,
             "gegl:median-blur" => AssignedRecipe::Median,
+            "gegl:gaussian-blur" => AssignedRecipe::Gaussian,
             _ => return Err(scope()),
         };
         Self::new_recipe(owner, None, limits, c, Some(recipe))

@@ -277,3 +277,6 @@ fn original_effective_and_image_fees_overlap_and_source_current_failure_refunds_
 
 #[path = "backed_neighborhood_assigned_median_tests.rs"]
 mod median;
+
+#[path = "backed_neighborhood_assigned_gaussian_tests.rs"]
+mod gaussian;

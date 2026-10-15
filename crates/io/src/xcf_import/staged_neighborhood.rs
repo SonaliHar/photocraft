@@ -7,6 +7,8 @@ mod original_gaussian;
 mod assigned_box;
 #[path="staged_neighborhood/assigned_median.rs"]
 mod assigned_median;
+#[path="staged_neighborhood/assigned_gaussian.rs"]
+mod assigned_gaussian;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::xcf_import) enum NeighborhoodSourceFamily {
     BoxOriginal,
@@ -18,6 +20,7 @@ pub(in crate::xcf_import) enum NeighborhoodSourceFamily {
     MedianGray,
     MotionOriginal,
     PixelizeOriginal,
+    GaussianAssignedF32,
     RasterFinite,
     OriginalGaussian,
 }
@@ -38,6 +41,7 @@ impl NeighborhoodSourceFamily {
             "gegl:median-blur" => Self::MedianOriginal,
             "gegl:motion-blur-linear" => Self::MotionOriginal,
             "gegl:pixelize" => Self::PixelizeOriginal,
+            "gegl:gaussian-blur" if file.model==Model::Rgb && file.sample==Sample::F32 && file.precision==650 && !file.icc.is_empty() => Self::GaussianAssignedF32,
             "gegl:gaussian-blur" if finite => Self::RasterFinite,
             // Routing only. The separate exact legacy predicate must pass;
             // this does not enroll arbitrary Auto, geometry, alpha or profiles.
@@ -56,7 +60,7 @@ impl NeighborhoodSourceFamily {
             Self::MedianGray => NeighborhoodDomain::MedianGray,
             Self::MotionOriginal => NeighborhoodDomain::MotionOriginal,
             Self::PixelizeOriginal => NeighborhoodDomain::PixelizeOriginal,
-            Self::RasterFinite => NeighborhoodDomain::RasterFinite,
+            Self::RasterFinite | Self::GaussianAssignedF32 => NeighborhoodDomain::RasterFinite,
             Self::OriginalGaussian => NeighborhoodDomain::RasterOriginal,
         }
     }
@@ -73,6 +77,7 @@ impl NeighborhoodSourceFamily {
             Self::MotionOriginal => domains.opaque_motion_domain = true,
             Self::PixelizeOriginal => domains.opaque_pixelize_domain = true,
             Self::RasterFinite => domains.finite_gaussian_domain = true,
+            Self::GaussianAssignedF32 => {domains.finite_gaussian_domain=true;domains.owned_assigned_gaussian_domain=true;},
             Self::OriginalGaussian => {}
         }
     }
@@ -88,6 +93,7 @@ impl NeighborhoodSourceFamily {
         match self {
             Self::BoxAssignedF32 => assigned_box::qualify(file,ctl,budget),
             Self::MedianAssignedF32 => assigned_median::qualify(file,ctl,budget),
+            Self::GaussianAssignedF32 => assigned_gaussian::qualify(file,ctl,budget),
             Self::BoxOriginal => residual::opaque_original(file, "gegl:box-blur", ctl, budget),
             Self::MedianOriginal => residual::opaque_original(file, "gegl:median-blur", ctl, budget),
             Self::MotionOriginal => residual::opaque_original(file, "gegl:motion-blur-linear", ctl, budget),

@@ -300,3 +300,7 @@ mod assigned_box_enabled_tests;
 #[cfg(all(test, not(target_arch="wasm32")))]
 #[path="canvas_backed_assigned_median_tests.rs"]
 mod assigned_median_tests;
+
+#[cfg(all(test, not(target_arch="wasm32")))]
+#[path="canvas_backed_assigned_gaussian_tests.rs"]
+mod assigned_gaussian_tests;

@@ -1689,6 +1689,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
     let admission::AdmissionDomains {
         owned_assigned_box_domain,
         owned_assigned_median_domain,
+        owned_assigned_gaussian_domain,
         general_separable_domain,
         legacy_separable_domain,
         component_separable_domain,
@@ -2668,6 +2669,11 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         let mut adapter=SharedPreparation{shared,failure:None};
         let checked=photocraft_compose::backed_neighborhood_context::LeasedStockNeighborhoodPipeline::new_assigned_median_budgeted(&doc,ctl,&mut adapter,source_lease);
         if let Err(error)=checked{return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("assigned Median preparation: {error}"))}))}
+    } else if P::requires_budgeted_assigned_gaussian_preparation(owned_assigned_gaussian_domain) {
+        let (shared,source_lease)=preparation.ok_or_else(||IoError::Unsupported("assigned Gaussian requires accounting".into()))?;
+        let mut adapter=SharedPreparation{shared,failure:None};
+        let checked=photocraft_compose::backed_neighborhood_context::LeasedStockNeighborhoodPipeline::new_assigned_gaussian_budgeted(&doc,ctl,&mut adapter,source_lease);
+        if let Err(error)=checked{return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("assigned Gaussian preparation: {error}"))}))}
     } else if P::requires_budgeted_neighborhood_preparation(owned_neighborhood_domain.is_some()) {
         let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("staged neighborhood scene requires transaction accounting".into()))?;
         let mut adapter = SharedPreparation { shared, failure: None };

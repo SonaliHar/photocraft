@@ -1835,3 +1835,15 @@ L1 activation patches are structural data operations; engine qualification
 supplies command authority. Save/reopen continuation uses native .pcraft files;
 XCF writing is outside this feature. Tests and visual/numerical/profile acceptance
 remain deferred, and missing producer ICC captures remain HOLD.
+Assigned-profile F32 Gaussian now has dedicated source/CURRENT preparation and
+joins the authoritative Box/Median/Gaussian current dispatcher. Four actual
+named-unit/HDR source/edit files use the exact existing five-field Auto/FIR
+contracts, finite RGB/unit alpha and full native/default/mask/profile proof.
+The generated current profile is bound to the retained original; actual profile
+peaks and working-transfer construction are paid through execution. Existing
+whole-axis Gaussian kernels, requirements and numeric schedule are unchanged.
+Box/Median-specific constructors remain exact. Gaussian filter edits, including
+same-value activation requests, remain unsupported. Native .pcraft saves/reopen,
+title and paid inspection use the existing assigned storage class. Eight missing
+producer ICC captures remain HOLD. Tests, numerical/profile and visual acceptance
+are deferred; this does not establish general image geometry or lazy source IO.

@@ -592,3 +592,7 @@ mod assigned_box_workflow_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_assigned_median_workflow_tests.rs"]
 mod assigned_median_workflow_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_assigned_gaussian_workflow_tests.rs"]
+mod assigned_gaussian_workflow_tests;

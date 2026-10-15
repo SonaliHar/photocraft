@@ -65,6 +65,7 @@ pub(super) trait MappingPlane: ExactParsedPlane + Sized {
     fn requires_budgeted_point_preparation(_point_domain: bool) -> bool { false }
     fn requires_budgeted_assigned_box_preparation(_domain: bool) -> bool {false}
     fn requires_budgeted_assigned_median_preparation(_domain: bool) -> bool {false}
+    fn requires_budgeted_assigned_gaussian_preparation(_domain: bool) -> bool {false}
     fn requires_budgeted_neighborhood_preparation(_domain: bool) -> bool { false }
     fn requires_budgeted_gaussian_group_preparation(_domain: bool) -> bool { false }
     fn requires_budgeted_lab_separable_preparation(_domain: bool) -> bool { false }
