@@ -138,7 +138,7 @@ impl Homography {
     /// the same matrix everywhere). Its columns' lengths are how far a step of one source pixel
     /// along x, and one along y, moves in the destination, which [`Self::local_scale`]'s area
     /// measure can't tell apart.
-    pub fn jacobian(&self, x: f64, y: f64) -> [f64; 4] {
+    pub(crate) fn jacobian(&self, x: f64, y: f64) -> [f64; 4] {
         let m = &self.0;
         let w = self.w(x, y);
         let (px, py) = self.apply(x, y);
@@ -266,62 +266,44 @@ fn corner_bounds(corners: &[(f64, f64); 4]) -> Option<Rect> {
 }
 
 /// The factors a Bicubic warp pre-reduces its source by along x and along y, 1 for an axis that
-/// doesn't shrink. One factor for both axes (√|det J|, taken at the centre) blurred an axis the
-/// map keeps 1:1 while it squashes the other, and the wide side of a Distort (#4864), so each axis
-/// gets its own: the length of its Jacobian column, at the least reduction found at the corners
-/// and centre of the source, or with a clip at the source points under the clip's corners and
-/// centre. The wide side of a perspective Distort then stays as sharp as a direct sample. Its
-/// narrow side gets less filtering than its own reduction calls for: when the wide side stays
-/// about 1:1, the source is reduced little or not at all, so the 4×4 kernel samples the narrow side
-/// at nearly its whole reduction and aliases, and its tiles read wider source windows than the one
-/// factor left them. A map that squashes along a slant (a rotated squash, or a skew that also
-/// flattens) shrinks a direction between the axes far more than either axis, which no axis-aligned
-/// prefilter follows; there both axes come down together until no direction is left a stronger
-/// reduction than the one factor left it (at most 50 %, where a 4×4 kernel starts to alias).
+/// doesn't shrink. An affine map (scale, skew, rotation) reduces the source the same everywhere, so
+/// each axis gets its own factor, the length of its Jacobian column: one factor for both axes
+/// (√|det J|) blurred an axis the map keeps 1:1 while it squashes the other, and filtered the
+/// squashed axis for less than its reduction (#4864). A map that squashes along a slant (a rotated
+/// squash, or a skew that also flattens) shrinks a direction between the axes far more than either
+/// axis, which no axis-aligned prefilter follows; there both axes come down together until no
+/// direction is left a stronger reduction than the one factor left it (at most 50 %, where a 4×4
+/// kernel starts to alias). A perspective map (a Distort) reduces each part of the source by a
+/// different amount, which no single prefilter follows either, so it keeps the one factor at the
+/// source point that matters, as before.
 fn prefilter_scales(h: &Homography, src_rect: Rect, clip: Option<Rect>) -> (f64, f64) {
     let r = [f64::from(src_rect.x0), f64::from(src_rect.y0), f64::from(src_rect.x1), f64::from(src_rect.y1)];
-    let points = |r: [f64; 4]| [(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3]), ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0)];
-    let inv = clip.and_then(|c| Some((c, h.inverse()?)));
-    let at = match inv {
-        // Non-finite points (a clip corner on the inverse map's horizon) are dropped below.
-        Some((c, inv)) => points([f64::from(c.x0), f64::from(c.y0), f64::from(c.x1), f64::from(c.y1)]).map(|(x, y)| {
-            let (u, v) = inv.apply(x, y);
-            if u.is_finite() && v.is_finite() { (u.max(r[0]).min(r[2]), v.max(r[1]).min(r[3])) } else { (f64::NAN, f64::NAN) }
-        }),
-        None => points(r),
+    // With a clip, the scale that matters is the one at the source point landing in the clip's centre.
+    let (cx, cy) = match clip.and_then(|c| Some((c, h.inverse()?))) {
+        Some((c, inv)) => inv.apply((f64::from(c.x0) + f64::from(c.x1)) / 2.0, (f64::from(c.y0) + f64::from(c.y1)) / 2.0),
+        None => ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0),
     };
-    // Only points on the side of the horizon that is drawn (#4863) count; past it the lengths mean nothing.
-    let side = h.front_side(r);
-    // The Jacobian at each point that counts and is finite.
-    let finite = |j: &[f64; 4]| j.iter().all(|e| e.is_finite()) && j[0].hypot(j[2]).is_finite() && j[1].hypot(j[3]).is_finite();
-    let js = at.map(|(u, v)| Some(h.jacobian(u, v)).filter(|j| side * h.w(u, v) > 0.0 && finite(j)));
     // `resize_surface_per_axis` copies an axis whose scale is exactly 1; 1/64 bounds the filter's width.
     let snap = |f: f64| if f > 0.0 && f < 0.999 { f.max(1.0 / 64.0) } else { 1.0 };
-    let Some((lx, ly)) = js.iter().flatten().map(|j| (j[0].hypot(j[2]), j[1].hypot(j[3]))).reduce(|a, b| (a.0.max(b.0), a.1.max(b.1))) else {
-        // None of them is usable: the one factor at the centre, as before.
-        let (cx, cy) = match inv {
-            Some((c, inv)) => inv.apply((f64::from(c.x0) + f64::from(c.x1)) / 2.0, (f64::from(c.y0) + f64::from(c.y1)) / 2.0),
-            None => ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0),
-        };
-        let f = snap(h.local_scale(cx, cy));
-        return (f, f);
-    };
-    let (fx, fy) = (snap(lx), snap(ly));
+    let one = snap(h.local_scale(cx, cy));
+    // Affine when w is the same over the whole source. A Distort's quad can leave the projective
+    // terms at rounding level, so this compares w itself rather than testing them for zero.
+    let w0 = h.w(cx, cy);
+    let affine =
+        w0.is_finite() && w0 != 0.0 && [(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3])].iter().all(|&(x, y)| (h.w(x, y) - w0).abs() <= 1e-9 * w0.abs());
+    let j = h.jacobian(cx, cy);
+    if !affine || !j.iter().all(|e| e.is_finite()) {
+        return (one, one);
+    }
+    let (fx, fy) = (snap(j[0].hypot(j[2])), snap(j[1].hypot(j[3])));
     // The warp is left `J · diag(1/fx, 1/fy)`. Along a slant both columns stay long while the map
     // squashes the direction between them, so both axes come down together until no direction is
-    // left a stronger reduction than the one factor √|det J| left it, √(σmin / σmax), or 50 %.
-    // Taken at the point that needs it least, like the factors; a point that collapses counts for
-    // nothing, and if all do (c = 0), nothing is reduced, as before.
-    let c = js
-        .iter()
-        .flatten()
-        .map(|j| {
-            let (hi, lo) = singular_values(*j);
-            let (_, left) = singular_values([j[0] / fx, j[1] / fy, j[2] / fx, j[3] / fy]);
-            let target = if hi > 0.0 { (lo / hi).sqrt().min(0.5) } else { 0.0 };
-            if target > 0.0 && left.is_finite() { left / target } else { 0.0 }
-        })
-        .fold(0.0, f64::max);
+    // left a stronger reduction than the one factor √|det J| left it, √(σmin / σmax), or 50 %. A map
+    // that collapses (c = 0) reduces nothing, as before.
+    let (hi, lo) = singular_values(j);
+    let (_, left) = singular_values([j[0] / fx, j[1] / fy, j[2] / fx, j[3] / fy]);
+    let target = if hi > 0.0 { (lo / hi).sqrt().min(0.5) } else { 0.0 };
+    let c = if target > 0.0 && left.is_finite() { left / target } else { 0.0 };
     if c < 1.0 { (snap(fx * c), snap(fy * c)) } else { (fx, fy) }
 }
 
@@ -885,7 +867,8 @@ mod tests {
     }
 
     /// #4864: the prefilter's factors, per axis. An affine map gives the same pair with or without
-    /// a clip, so a clipped warp matches the full one; a Distort keeps its wide side's; a skew
+    /// a clip, so a clipped warp matches the full one; a perspective Distort keeps the one factor at
+    /// its centre, as before; a skew
     /// reduces nothing, and a squash along a slant keeps the one factor; a corner past the horizon
     /// doesn't count; and a map that isn't finite reduces nothing.
     #[test]
@@ -896,8 +879,10 @@ mod tests {
         let eighth = Homography([0.125, 0.0, 24.0, 0.0, 0.125, 30.0, 0.0, 0.0, 1.0]);
         assert_eq!(prefilter_scales(&eighth, r, None), (0.125, 0.125));
         assert_eq!(prefilter_scales(&eighth, r, Some(Rect::new(10, 10, 52, 52))), (0.125, 0.125));
-        let (fx, fy) = prefilter_scales(&quad([[0.0, 0.0], [64.0, 0.0], [48.0, 24.0], [16.0, 24.0]]), r, None);
-        assert!(fx == 1.0 && (fy - 0.901).abs() < 0.001, "{fx} x {fy}");
+        let trapezoid = quad([[0.0, 0.0], [64.0, 0.0], [48.0, 24.0], [16.0, 24.0]]);
+        let one = trapezoid.local_scale(32.0, 32.0);
+        assert!(one > 0.4 && one < 0.5, "{one}");
+        assert_eq!(prefilter_scales(&trapezoid, r, None), (one, one));
         assert_eq!(prefilter_scales(&quad([[0.0, 0.0], [64.0, 0.0], [256.0, 64.0], [192.0, 64.0]]), r, None), (1.0, 1.0));
         // Skewed by 2 and flattened to 5 %, and a rhombus squashed to 25 % along its diagonal: both
         // keep the one factor, √|det J|. A 4× area rule left the skew's warp 5 % along its slant (the
@@ -915,23 +900,6 @@ mod tests {
         for h in [Homography([f64::NAN; 9]), Homography([f64::INFINITY, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])] {
             assert_eq!(prefilter_scales(&h, r, None), (1.0, 1.0), "{h:?}");
             assert_eq!(prefilter_scales(&h, r, Some(r)), (1.0, 1.0), "{h:?}");
-        }
-    }
-
-    /// #4864: a Distort squashing a layer into a trapezoid whose top edge keeps its 64 px. The one
-    /// prefilter factor taken at the centre (√|det J| ≈ 0.47) washed out the top, where x stays
-    /// 1:1; it must stay about as sharp as a direct (Bilinear) sample.
-    #[test]
-    fn a_distort_keeps_its_wide_side_sharp() {
-        let h = Homography::rect_to_quad([0.0, 0.0, 64.0, 64.0], [[0.0, 0.0], [64.0, 0.0], [48.0, 24.0], [16.0, 24.0]]).unwrap();
-        for sample in photocraft_color::SampleType::ALL {
-            let s = lines(sample, true, 1, 2);
-            let contrast = |interp: Interp| -> f32 {
-                let o = warp_surface(&s, s.content_bounds(), &h, interp).unwrap();
-                (8..56).map(|x| (o.pixel(x, 6)[0] - o.pixel(x + 1, 6)[0]).abs()).sum::<f32>() / 48.0
-            };
-            let (bicubic, bilinear) = (contrast(Interp::Bicubic), contrast(Interp::Bilinear));
-            assert!(bilinear > 0.3 && bicubic >= 0.8 * bilinear, "{sample:?}: row 6 contrast, Bicubic {bicubic} vs Bilinear {bilinear}");
         }
     }
 
