@@ -82,8 +82,31 @@ impl AccountedDocument {
     /// domain, argument order, original source and all other metadata survive.
     /// This accepts raw f32 words without a semantic numeric/range assertion.
     pub fn try_with_readonly_point_filter(&self, patch: PointFilterPatch<'_>, control: &ReadControl<'_>) -> Result<Self, BackingError> {
+        self.with_point_filter_patch(patch, control, false)
+    }
+    /// Replace one existing signed-32 scalar and/or activation on an assigned
+    /// singleton, retaining both independent ICC owners. This is structural
+    /// custody only: operation, scalar range and rendering eligibility must be
+    /// established by the caller before publishing the returned model.
+    pub fn try_with_readonly_assigned_point_filter(&self, patch: PointFilterPatch<'_>, control: &ReadControl<'_>) -> Result<Self, BackingError> {
+        self.with_point_filter_patch(patch, control, true)
+    }
+    fn with_point_filter_patch(&self, patch: PointFilterPatch<'_>, control: &ReadControl<'_>, assigned: bool) -> Result<Self, BackingError> {
         control.check(1)?;
-        if !self.is_readonly_point_storage() {
+        if assigned {
+            if !self.is_readonly_assigned_point_storage() {
+                return refused();
+            }
+            if patch.arguments.len() > 1 {
+                return Err(BackingError::Length);
+            }
+            for argument in patch.arguments {
+                control.check(1)?;
+                if !matches!(argument.value, PointArgumentValue::Signed32(_)) {
+                    return refused();
+                }
+            }
+        } else if !self.is_readonly_point_storage() {
             return refused();
         }
         if patch.arguments.len() > 10 {
@@ -95,10 +118,13 @@ impl AccountedDocument {
                 return Err(BackingError::Length);
             }
         }
-        let logical = measured(self.document(), self.quota(), control)?;
+        let logical = if assigned { measured_assigned(self.document(), self.quota(), control)? } else { measured(self.document(), self.quota(), control)? };
         let layer = self.document().layers.first().ok_or(BackingError::Integrity)?;
         let state = self.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
         let stack = state.filter_stacks.first().ok_or(BackingError::Integrity)?;
+        if assigned && (stack.nodes.len() != 1 || patch.layer.0 == 0 || patch.filter.0 == 0) {
+            return Err(BackingError::Integrity);
+        }
         let node_index = node_index(&stack.nodes, patch.filter, control)?;
         let node = stack.nodes.get(node_index).ok_or(BackingError::Integrity)?;
         if layer.id != patch.layer || stack.owner != ItemRef::Layer(patch.layer) || node.id != patch.filter || stack.revision != patch.expected_stack_revision {
@@ -136,20 +162,17 @@ impl AccountedDocument {
             return Ok(self.clone());
         }
         let revision = stack.revision.checked_add(1).ok_or(BackingError::Length)?;
-        current_copy(
-            self,
-            logical,
-            CopyKind::Filter(Plan {
-                layer: patch.layer,
-                filter: patch.filter,
-                node_index,
-                old_revision: stack.revision,
-                revision,
-                replacements,
-                enabled: patch.enabled,
-            }),
-            control,
-        )
+        let plan = Plan {
+            layer: patch.layer,
+            filter: patch.filter,
+            node_index,
+            old_revision: stack.revision,
+            revision,
+            replacements,
+            enabled: patch.enabled,
+        };
+        let kind = if assigned { CopyKind::AssignedFilter(plan) } else { CopyKind::Filter(plan) };
+        current_copy(self, logical, kind, control)
     }
 }
 pub(super) fn apply(document: &mut Document, plan: Plan, control: &ReadControl<'_>) -> Result<(), BackingError> {

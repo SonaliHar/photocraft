@@ -28,13 +28,19 @@ pub(crate) fn radius_for_current_float(node: &FilterNode, version: u32) -> Resul
 /// Distinct observed Replace envelope. The three retained i32 values are opaque
 /// provenance and deliberately never interpreted or compared to an alias.
 pub(crate) fn radius_for_observed_geometry(node: &FilterNode, version: u32) -> Result<u32> {
+    observed_radius(node, version, false)
+}
+pub(crate) fn radius_for_observed_current(node: &FilterNode, version: u32) -> Result<u32> {
+    observed_radius(node, version, true)
+}
+fn observed_radius(node: &FilterNode, version: u32, current: bool) -> Result<u32> {
     let c = node.composition.as_ref().ok_or(CompositionError::Unsupported("missing observed Box policy"))?;
     if version != 22
         || node.operation.name != "gegl:box-blur"
         || node.operation.stored_version != "0:0"
         || node.operation.schema_epoch != crate::backed_box_source::BOX_GEOMETRY_EPOCH
         || c.compatibility_epoch != crate::backed_box_source::BOX_GEOMETRY_EPOCH
-        || !node.enabled
+        || (!current && !node.enabled)
         || node.opacity_f64_bits != 1f64.to_bits()
         || node.source_clipping != Some(0)
         || node.source_region != Some(0)
@@ -50,8 +56,9 @@ pub(crate) fn radius_for_observed_geometry(node: &FilterNode, version: u32) -> R
     }
     match node.arguments.first() {
         Some(argument) if argument.name == "radius" => match argument.value {
-            FilterValue::Number(ExactNumber::Signed { width: 32, value: 4 }) => Ok(4),
-            FilterValue::Number(ExactNumber::Signed { width: 32, value: 5 }) => Ok(5),
+            FilterValue::Number(ExactNumber::Signed { width: 32, value }) if (0..=1000).contains(&value) => {
+                u32::try_from(value).map_err(|_| CompositionError::Unsupported("observed Box radius domain"))
+            }
             _ => Err(CompositionError::Unsupported("observed Box radius domain")),
         },
         _ => Err(CompositionError::Unsupported("observed Box radius absent")),

@@ -10,9 +10,9 @@ fn refuse_mutations(h: &mut Headless) {
     let revision = h.session.active().unwrap().revision;
     let journal = h.session.journal.len();
     for (command, params) in [
-        ("xcf.filter.set", json!({"filterId":id,"enabled":true})),
-        ("xcf.filter.enable", json!({"filterId":id,"enabled":false})),
-        ("xcf.filter.set", json!({"filterId":id,"arguments":[{"name":"radius","value":{"Number":{"Signed":{"value":5,"width":32}}}}]})),
+        ("xcf.filter.set", json!({"filterId":id,"enabled":null})),
+        ("xcf.filter.enable", json!({"filterId":id,"enabled":false,"opacityF64Bits":"0x3ff0000000000000"})),
+        ("xcf.filter.set", json!({"filterId":id,"arguments":[{"name":"radius","value":{"Number":{"Signed":{"value":1001,"width":32}}}}]})),
         ("layer.setProps", json!({"name":"closed"})),
         ("layer.translate", json!({"dx":1})),
         ("select.all", Value::Null),

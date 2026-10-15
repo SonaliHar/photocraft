@@ -2,7 +2,7 @@
 use super::*;
 
 #[test]
-#[ignore = "UNRUN: observational epoch refuses generic Point edits before native proof/no-op"]
+#[ignore = "UNRUN: observational epoch refuses unrelated stack/layer/pixel/selection edits before native reads"]
 fn observational_epoch_is_readonly_before_wire_helpers_or_native_reads() {
     let (mut doc, q, guard, reads, _, _) = fixture(ColorMode::Rgb, SampleType::F32, SampleEncoding::NonlinearProfile);
     let metadata = q.reserve(QuotaKind::Index, 32768).unwrap();
@@ -26,9 +26,6 @@ fn observational_epoch_is_readonly_before_wire_helpers_or_native_reads() {
     let revision = s.active().unwrap().revision;
     reads.store(0, Ordering::Relaxed);
     for (id, params) in [
-        ("xcf.filter.enable", json!({"filterId":"100","enabled":true})),
-        ("xcf.filter.set", json!({"filterId":"100","enabled":false})),
-        ("xcf.filter.set", json!({"filterId":"100","arguments":[{"name":"radius","value":{"Number":{"Signed":{"width":32,"value":5}}}}]})),
         ("xcf.filter.move", json!({"filterId":"100","index":0})),
         ("xcf.filter.remove", json!({"filterId":"100"})),
         ("layer.setProps", json!({"name":"changed"})),

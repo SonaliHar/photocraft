@@ -53,3 +53,7 @@ impl AccountedDocument {
 #[cfg(test)]
 #[path = "assigned_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "assigned_filter_tests.rs"]
+mod filter_tests;

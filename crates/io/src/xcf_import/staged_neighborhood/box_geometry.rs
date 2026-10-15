@@ -94,7 +94,7 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, 
         return Ok(false);
     }
     let Some(a) = e.arguments.first() else { return Ok(false) };
-    if a.name != "radius" || !matches!(a.value, ArgumentValue::Integer(4 | 5)) || a.configuration.is_some() || a.graph.is_some() {
+    if a.name != "radius" || !matches!(a.value, ArgumentValue::Integer(0..=1000)) || a.configuration.is_some() || a.graph.is_some() {
         return Ok(false);
     }
     let Some(p) = d.plane.as_ref() else { return Ok(false) };
@@ -190,3 +190,7 @@ mod f64_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "box_geometry_assigned_tests.rs"]
 mod assigned_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "box_geometry_radius_tests.rs"]
+mod radius_tests;

@@ -511,6 +511,7 @@ struct OriginalRetention {
 pub(super) enum CopyKind<'a> {
     Rename(&'a str),
     AssignedEnabled(assigned::enabled::Plan),
+    AssignedFilter(patch::Plan),
     LayerName(ReadonlyLayerNamePatch<'a>),
     LayerProperties(readonly_layer_properties::Plan<'a>),
     Filter(patch::Plan),
@@ -538,8 +539,8 @@ pub(super) fn current_copy(
     kind: CopyKind<'_>,
     control: &ReadControl<'_>,
 ) -> Result<AccountedDocument, BackingError> {
-    if owner.is_readonly_assigned_point_storage() && !matches!(kind, CopyKind::Rename(_) | CopyKind::AssignedEnabled(_))
-        || !owner.is_readonly_assigned_point_storage() && matches!(kind, CopyKind::AssignedEnabled(_))
+    if owner.is_readonly_assigned_point_storage() && !matches!(kind, CopyKind::Rename(_) | CopyKind::AssignedEnabled(_) | CopyKind::AssignedFilter(_))
+        || !owner.is_readonly_assigned_point_storage() && matches!(kind, CopyKind::AssignedEnabled(_) | CopyKind::AssignedFilter(_))
     {
         return refused();
     }
@@ -547,7 +548,7 @@ pub(super) fn current_copy(
         CopyKind::Rename(name) => name.len() as u64,
         CopyKind::LayerName(patch) => (patch.name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
         CopyKind::LayerProperties(plan) => plan.replacement_name_bytes()?,
-        CopyKind::AssignedEnabled(_) | CopyKind::Filter(_) | CopyKind::Structured(_) | CopyKind::Move(_) | CopyKind::Remove(_) => 0,
+        CopyKind::AssignedEnabled(_) | CopyKind::AssignedFilter(_) | CopyKind::Filter(_) | CopyKind::Structured(_) | CopyKind::Move(_) | CopyKind::Remove(_) => 0,
     };
     let replacement_value_bytes = match kind {
         CopyKind::Structured(plan) => plan.copy_index_bytes(),
@@ -603,7 +604,7 @@ pub(super) fn current_copy(
         CopyKind::AssignedEnabled(plan) => assigned::enabled::apply(&mut document, plan, control)?,
         CopyKind::LayerName(patch) => readonly_layer_name::apply(&mut document, patch, control)?,
         CopyKind::LayerProperties(plan) => readonly_layer_properties::apply(&mut document, plan, control)?,
-        CopyKind::Filter(plan) => patch::apply(&mut document, plan, control)?,
+        CopyKind::Filter(plan) | CopyKind::AssignedFilter(plan) => patch::apply(&mut document, plan, control)?,
         CopyKind::Structured(plan) => structured_patch::apply(&mut document, plan, control)?,
         CopyKind::Move(plan) => filter_move::apply(&mut document, plan, control)?,
         CopyKind::Remove(plan) => filter_remove::apply(&mut document, plan, control)?,

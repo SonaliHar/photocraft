@@ -9,6 +9,7 @@ use serde_json::json;
 mod alpha_clip;
 mod alpha_clip_finite;
 mod assigned_box;
+mod observed_box;
 mod channel_mixer;
 mod color_overlay;
 mod color_rotate;
@@ -342,6 +343,10 @@ pub(crate) fn filter_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, laye
                 && (!color_to_alpha || node.operation.stored_version == "0:0" && literal_color::valid_color_to_alpha_arguments(&node.arguments))
                 && (!component_extract || node.operation.stored_version == "0:0" && component_extract::valid_arguments_for_epoch(&node.operation.schema_epoch, &node.arguments));
             let caption: String = node.source_display_name.as_deref().filter(|name| !name.is_empty()).unwrap_or(&node.operation.name).chars().take(128).collect();
+            if observed_box::scope(&document, node) {
+                observed_box::controls(app, ui, &document, revision, layer, node, unlocked, &caption);
+                return;
+            }
             ui.horizontal_wrapped(|ui| {
                 let mut enabled = node.enabled;
                 let activation_editable = if assigned {

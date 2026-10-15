@@ -123,7 +123,7 @@ fn assigned_geometry_role_and_control_refusals() {
             3 => f.sample = Sample::F64,
             4 => f.layers[0].effects[0].state.enabled = Some(false),
             5 => f.layers[0].effects[0].state.opacity_bits = Some(0.5f32.to_bits()),
-            6 => f.layers[0].effects[0].arguments[0].value = ArgumentValue::Integer(6),
+            6 => f.layers[0].effects[0].arguments[0].value = ArgumentValue::Integer(1001),
             7 => f.icc.resize((16 << 20) + 1, 0),
             _ => f.encoding = Encoding::Linear,
         }

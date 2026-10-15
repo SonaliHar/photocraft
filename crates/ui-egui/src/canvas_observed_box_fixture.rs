@@ -21,7 +21,11 @@ pub(super) fn with_raw(base: &AccountedDocument, raw: [i32; 3], ctl: &ReadContro
     assert!(photocraft_io::retained_native_model_census(&document, Default::default(), &Interrupt::NONE).unwrap().retained_bytes() as u64 <= fee.bytes());
     // The clone has a distinct prepaid model; the real immutable native store,
     // profile, base model and their original receipts remain held together.
-    AccountedDocument::new_readonly_point_storage(document, Arc::new((base.clone(), fee)), base.quota().clone(), ctl).unwrap()
+    if base.is_readonly_assigned_point_storage() {
+        AccountedDocument::new_readonly_assigned_point_storage(document, Arc::new((base.clone(), fee)), base.quota().clone(), ctl).unwrap()
+    } else {
+        AccountedDocument::new_readonly_point_storage(document, Arc::new((base.clone(), fee)), base.quota().clone(), ctl).unwrap()
+    }
 }
 pub(super) fn raw(doc: &Document) -> [i32; 3] {
     let c = doc.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].composition.as_ref().unwrap();

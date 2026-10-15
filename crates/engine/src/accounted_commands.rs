@@ -67,12 +67,14 @@ pub fn supports(id: &str) -> bool {
     )
 }
 
-/// The observed source geometry scope admits viewing, native continuation and
-/// history navigation, while mutation qualification remains separate work.
+/// Observed Box admits only its sealed CURRENT filter edit lane, viewing and
+/// history navigation. Other mutations retain the original refusal.
 pub(crate) fn observed_box_mutation_refused(session: &Session, id: &str) -> bool {
     supports(id)
         && !matches!(id, "layer.select" | "edit.undo" | "edit.redo" | "history.selectState")
         && session.active().and_then(|state| state.doc.accounted()).is_some_and(point::observed_box_readonly)
+        && !(matches!(id, "xcf.filter.set" | "xcf.filter.enable")
+            && session.active().and_then(|state| state.doc.accounted()).is_some_and(point::observed_box_edit_candidate))
 }
 
 fn bad(id: &str, message: &str) -> EngineError {
@@ -145,6 +147,9 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
         return Ok(Request::Clear(params));
     }
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove") {
+        if session.active().and_then(|state| state.doc.accounted()).is_some_and(point::observed_box_readonly) {
+            return Ok(Request::Point(point::Request::parse_observed_box(session,id,params,control)?));
+        }
         if session.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_assigned_point_storage()) {
             return Ok(Request::Point(point::Request::parse_assigned_enabled(session,id,params,control)?));
         }
@@ -334,7 +339,9 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     // Null is the existing enabled-query shape, not a layer-property call.
     // Do not disable a menu because its eventual call parameters are absent.
     if !params.is_null() {
-        if matches!(id,"xcf.filter.set"|"xcf.filter.enable") && state.doc.accounted().is_some_and(|owner|owner.is_readonly_assigned_point_storage()) {
+        if matches!(id,"xcf.filter.set"|"xcf.filter.enable") && state.doc.accounted().is_some_and(point::observed_box_readonly) {
+            if !point::observed_box_wire_valid(id,params) { return Err(bad(id,"observed Box requires radius Signed32 0..1000 and/or enabled")); }
+        } else if matches!(id,"xcf.filter.set"|"xcf.filter.enable") && state.doc.accounted().is_some_and(|owner|owner.is_readonly_assigned_point_storage()) {
             if !point::assigned_enabled_wire_valid(id,params) { return Err(bad(id,"assigned activation requires only filterId and enabled")); }
         } else {
             request(session, id, params, &crate::read_control_none())?;

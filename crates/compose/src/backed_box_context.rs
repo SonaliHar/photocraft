@@ -7,7 +7,7 @@ use crate::{
     backed_stock_point_context::{OwnedStockPointWideBand, PlanBudget, bound_profile},
     gimp_composite::{CompositionError, WorkingSpace},
 };
-use photocraft_algo::gimp::neighborhood::{BoxBlurTilePlan, GaussianLimits, try_box_blur_packed_tile};
+use photocraft_algo::gimp::neighborhood::{BoxBlurRowError, BoxBlurRowPlan, BoxBlurTilePlan, GaussianLimits, try_box_blur_packed_tile, try_box_blur_row_tile};
 use photocraft_cms::{
     Profile,
     xcf_color::{self, Encoding},
@@ -240,7 +240,7 @@ impl<'a> PreparedBackedBoxContext<'a> {
             return Err(scope());
         }
         let radius = if observed {
-            crate::backed_box_source::metadata(doc, &mut Budget { q: owner.quota(), c, held: 0 }, c.interrupt)?.1
+            crate::backed_box_source::metadata_current(doc, &mut Budget { q: owner.quota(), c, held: 0 }, c.interrupt)?.1
         } else {
             crate::gimp_neighborhood::box_blur::radius_for_current_float(node, 22).map_err(E::Color)?
         };
@@ -271,8 +271,13 @@ impl<'a> PreparedBackedBoxContext<'a> {
             return Err(scope());
         }
         c.check(1024).map_err(E::Backing)?;
-        let plan = BoxBlurTilePlan::new(source, TileCoord::containing(source.x0, source.y0), radius, c.interrupt).map_err(lower)?;
-        let output = if node.enabled { plan.output_extent() } else { source };
+        let coordinate = TileCoord::containing(source.x0, source.y0);
+        let expanded = if radius == 0 || matches!(radius, 4 | 5) {
+            BoxBlurTilePlan::new(source, coordinate, radius, c.interrupt).map_err(lower)?.output_extent()
+        } else {
+            BoxBlurRowPlan::new(source, coordinate, radius, c.interrupt).map_err(lower)?.output_extent()
+        };
+        let output = if node.enabled { expanded } else { source };
         let out =
             Self { binding, owner, layer: backed, source, output, radius, enabled: node.enabled, layer_id: layer.id, limits, prepared_bytes, _lease: fee };
         out.validate_native(c)?;
@@ -350,6 +355,9 @@ impl<'a> PreparedBackedBoxContext<'a> {
         Ok(out)
     }
     fn tile(&self, coordinate: TileCoord, band_bytes: u64, c: &ReadControl<'_>) -> Result<Tile, E> {
+        if self.radius == 0 || matches!(self.radius, 4 | 5) { self.packed_tile(coordinate, band_bytes, c) } else { self.row_tile(coordinate, band_bytes, c) }
+    }
+    fn packed_tile(&self, coordinate: TileCoord, band_bytes: u64, c: &ReadControl<'_>) -> Result<Tile, E> {
         c.check(1024).map_err(E::Backing)?;
         let plan = BoxBlurTilePlan::new(self.source, coordinate, self.radius, c.interrupt).map_err(lower)?;
         let req = plan.requirements(c.interrupt).map_err(lower)?;
@@ -373,10 +381,77 @@ impl<'a> PreparedBackedBoxContext<'a> {
             c.interrupt,
         )
         .map_err(lower)?;
-        let mut tile = Tile { raw, rect: plan.tile_output(), _lease: fee };
+        let tile = Tile { raw, rect: plan.tile_output(), _lease: fee };
         drop(packed);
+        self.finish_tile(tile, kernelbytes, plan.output_bytes().map_err(lower)?, c)
+    }
+    fn row_tile(&self, coordinate: TileCoord, band_bytes: u64, c: &ReadControl<'_>) -> Result<Tile, E> {
+        c.check(1024).map_err(E::Backing)?;
+        let plan = BoxBlurRowPlan::new(self.source, coordinate, self.radius, c.interrupt).map_err(lower)?;
+        let req = plan.requirements(c.interrupt).map_err(lower)?;
+        let cap = req.row_pixels.checked_mul(2).ok_or_else(size)?;
+        let rowbytes = (cap as u64).checked_mul(32).and_then(|n| n.checked_add(std::mem::size_of::<Packed>() as u64 + 128)).ok_or_else(size)?;
+        let kernelbytes = req.peak_resident_bytes.checked_add(std::mem::size_of::<Tile>() as u64 + 128).ok_or_else(size)?;
+        let private = rowbytes.checked_add(kernelbytes).ok_or_else(size)?;
+        if private > CACHE {
+            return Err(scope());
+        }
+        self.admit(private.checked_add(band_bytes).ok_or_else(size)?)?;
+        // Recomputed rows are real repeated conversions, not a cache credit.
+        // Native pin/provider/read work remains independently charged below.
+        let conversion = req.row_requests.checked_mul(req.row_pixels as u64).and_then(|n| n.checked_mul(4 + 3 * 128)).ok_or_else(size)?;
+        c.check(conversion).map_err(E::Backing)?;
+        c.check(req.work_units).map_err(E::Backing)?;
+        let rowfee = self.owner.quota().reserve(QuotaKind::Resident, rowbytes).map_err(E::Quota)?;
+        let mut row = Packed { pixels: Vec::new(), _lease: rowfee };
+        let fee = self.owner.quota().reserve(QuotaKind::Resident, kernelbytes).map_err(E::Quota)?;
+        c.check((req.row_pixels as u64).checked_mul(4).ok_or_else(size)?).map_err(E::Backing)?;
+        row.pixels.try_reserve_exact(req.row_pixels).map_err(|_| E::Allocation)?;
+        if row.pixels.capacity() > cap {
+            return Err(E::Allocation);
+        }
+        row.pixels.resize(req.row_pixels, [0.; 4]);
+        let actual = (row.pixels.capacity() as u64).checked_mul(32).and_then(|n| n.checked_add(std::mem::size_of::<Packed>() as u64 + 128)).ok_or_else(size)?;
+        row._lease.reconcile_capacity(actual).map_err(E::Quota)?;
+        let raw = try_box_blur_row_tile(
+            &plan,
+            &mut row.pixels,
+            GaussianLimits { resident_bytes: req.peak_resident_bytes, work_units: req.work_units },
+            c.interrupt,
+            &mut |x, y, pixels| self.read_linear_row(plan.source_read(), x, y, pixels, c),
+        )
+        .map_err(|e| match e {
+            BoxBlurRowError::Source(e) => e,
+            BoxBlurRowError::Kernel(e) => lower(e),
+        })?;
+        // Guard the returned payload before any kernel peak is refunded.
+        let tile = Tile { raw, rect: plan.tile_output(), _lease: fee };
+        drop(row);
+        self.finish_tile(tile, kernelbytes, req.output_bytes, c)
+    }
+    fn read_linear_row(&self, read: Rect, x0: i32, y: i32, pixels: &mut [[f64; 4]], c: &ReadControl<'_>) -> Result<(), E> {
+        c.check(0).map_err(E::Backing)?;
+        if x0 != read.x0 || pixels.len() != read.width() as usize || y < read.y0 || y >= read.y1 {
+            return Err(size());
+        }
+        let rect = Rect::new(read.x0, y, read.x1, y.checked_add(1).ok_or_else(size)?);
+        let view = self.layer.checked_view();
+        for coordinate in rect.tiles() {
+            let pin = view.pin_tile(coordinate, c).map_err(E::View)?;
+            let part = coordinate.rect().intersect(&rect);
+            for x in part.x0..part.x1 {
+                let p = read_pin(&pin, x, y, self.layer.format(), c)?;
+                valid(p)?;
+                let rgb = self.binding.working.convert([p[0], p[1], p[2]], true).map_err(E::Color)?;
+                let at = usize::try_from(i64::from(x) - i64::from(x0)).map_err(|_| size())?;
+                *pixels.get_mut(at).ok_or_else(size)? = [rgb[0], rgb[1], rgb[2], p[3]];
+            }
+        }
+        c.check(0).map_err(E::Backing)
+    }
+    fn finish_tile(&self, mut tile: Tile, kernelbytes: u64, output_bytes: usize, c: &ReadControl<'_>) -> Result<Tile, E> {
         let actual = (tile.raw.capacity() as u64).checked_add(std::mem::size_of::<Tile>() as u64 + 128).ok_or_else(size)?;
-        if actual > kernelbytes || tile.raw.len() != plan.output_bytes().map_err(lower)? {
+        if actual > kernelbytes || tile.raw.len() != output_bytes {
             return Err(E::Allocation);
         }
         tile._lease.reconcile_capacity(actual).map_err(E::Quota)?;

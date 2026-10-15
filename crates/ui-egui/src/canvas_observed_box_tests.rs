@@ -4,7 +4,7 @@ use super::*;
 #[allow(dead_code)]
 mod observed;
 #[test]
-#[ignore = "UNRUN: new observed Box epoch preserves distinct opaque raw tuple through paid CURRENT native/title/query/canvas; strict read-only guard refuses even equal activation, no normalization or source proof"]
+#[ignore = "UNRUN: observed Box preserves opaque raw tuple through paid CURRENT native/title/query/canvas; unrelated mutations and malformed filter edits refuse, no normalization or source proof"]
 fn observed_box_current_raw_tuple_is_not_mutation_authority() {
     // These six local originals are independently saved GIMP files. Their
     // source/native bindings are distinct from the synthetic raw control below;
@@ -54,9 +54,9 @@ fn observed_box_current_raw_tuple_is_not_mutation_authority() {
     let revision = app.session.active().unwrap().revision;
     let journal = app.session.journal.len();
     for (command, params) in [
-        ("xcf.filter.enable", json!({"filterId":id,"enabled":true})),
-        ("xcf.filter.enable", json!({"filterId":id,"enabled":false})),
-        ("xcf.filter.set", json!({"filterId":id,"arguments":[{"name":"radius","value":{"Number":{"Signed":{"width":32,"value":5}}}}]})),
+        ("xcf.filter.enable", json!({"filterId":id,"enabled":null})),
+        ("xcf.filter.enable", json!({"filterId":id,"enabled":false,"opacityF64Bits":"0x3ff0000000000000"})),
+        ("xcf.filter.set", json!({"filterId":id,"arguments":[{"name":"radius","value":{"Number":{"Signed":{"width":32,"value":1001}}}}]})),
         ("layer.setProps", json!({"name":"closed"})),
         ("layer.translate", json!({"dx":1})),
         ("select.all", Value::Null),

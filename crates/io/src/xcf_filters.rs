@@ -1223,6 +1223,7 @@ fn qualified_stack_with_activation<P>(
             }
             if box_blur {
                 let value = match (&*argument.name, &argument.value) {
+                    ("radius", ArgumentValue::Integer(value @ 0..=1000)) if observed_box_geometry => FilterValue::Number(ExactNumber::Signed { width: 32, value: i64::from(*value) }),
                     ("radius", ArgumentValue::Integer(value @ (4 | 5))) => FilterValue::Number(ExactNumber::Signed { width: 32, value: i64::from(*value) }),
                     _ => return Err(unsupported(effect, "unqualified Box Blur argument type or value")),
                 };

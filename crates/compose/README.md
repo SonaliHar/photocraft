@@ -924,3 +924,21 @@ its actual assigned storage/profile role and existing paid original-to-current
 relation. Full native/default/mask/profile proof and readonly mutations remain.
 GIMP straight-color repeat instability is retained as evidence; alpha-weighted
 saved-sample analysis is not PhotoCraft/CMS qualification or a tolerance change.
+
+The observed geometry epoch now accepts integer Box radii 0..=1000 for enabled
+original sources and CURRENT radius/activation edits. This supersedes its earlier
+radius4/5 and readonly notes. Old source identities and specific/eager admission
+rules keep their original priority and final refusal. Actual implicit RGB F32/F64
+and assigned RGB F32 profiles, native/default samples and the physical zero mask
+remain fully checked before activity/no-op shortcuts.
+
+Positive radii other than4/5 use a row-fed kernel: one original native input row,
+two horizontal rows, per-column sums and complete canonical-tile output. Each
+column retains the previous arithmetic order and original-source edge clamp;
+full tile color conversion precedes ROI cropping. Existing packed4/5 remains.
+Active radius0 retains native-to-Linear conversion, packed working identity and
+inverse conversion; disabled filtering is the separate native identity path.
+The16MiB private and32MiB Box overlap guards remain, with actual-capacity and
+provider charges on the same quota. Repeated conversions and native reads are
+real work; high-radius/large-image operations can reach the finite work/deadline
+ceiling. No throughput or numerical qualification is claimed.

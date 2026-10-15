@@ -1,5 +1,7 @@
 //! UNRUN observational Box adapter consumers. Generated models are CURRENT
 //! foundation controls, not independent GIMP producer or ingestion evidence.
+#[path = "backed_box_radius_tests.rs"]
+mod full_radius;
 use super::*;
 use crate::backed_box_source::{BOX_GEOMETRY_EPOCH, LeasedStreamedBoxPipeline};
 use crate::gimp_composite::CompositionError;

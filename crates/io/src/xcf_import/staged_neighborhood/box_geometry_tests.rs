@@ -103,7 +103,7 @@ fn source_refusals_and_old_priority() {
             2 => f.layers[0].effects[0].state.enabled = Some(false),
             3 => f.layers[0].effects[0].state.blend_space = None,
             4 => f.layers[0].effects[0].state.clipping = Some(1),
-            5 => f.layers[0].effects[0].arguments[0].value = ArgumentValue::Integer(6),
+            5 => f.layers[0].effects[0].arguments[0].value = ArgumentValue::Integer(1001),
             6 => f.layers[0].effects[0].mask.as_mut().unwrap().offset = (1, 0),
             7 => f.layers[0].effects[0].mask.as_mut().unwrap().plane.as_mut().unwrap().bytes[..4].copy_from_slice(&0.25f32.to_ne_bytes()),
             8 => f.layers[0].plane.as_mut().unwrap().bytes[..4].copy_from_slice(&f32::NAN.to_ne_bytes()),

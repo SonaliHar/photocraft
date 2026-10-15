@@ -31,9 +31,15 @@ fn check(b: &mut impl PlanBudget, i: &Interrupt<'_>, n: u64) -> Result<(), E> {
     b.check(n)?;
     i.check().map_err(|_| E::Backing(BackingError::Cancelled))
 }
-/// Shared sealed observational descriptor check. Source activity is deliberately
-/// exact; the first observational lane has no activation/metadata edit grant.
+/// Sealed original preparation: activation remains enabled-only, independently
+/// of the additive CURRENT activation policy below.
 pub(crate) fn metadata(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_>) -> Result<(Rect, u32), E> {
+    metadata_mode(doc, b, i, false)
+}
+pub(crate) fn metadata_current(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_>) -> Result<(Rect, u32), E> {
+    metadata_mode(doc, b, i, true)
+}
+fn metadata_mode(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_>, current: bool) -> Result<(Rect, u32), E> {
     check(b, i, 32768)?;
     let [layer] = doc.layers.as_slice() else { return Err(scope()) };
     let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
@@ -64,7 +70,7 @@ pub(crate) fn metadata(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_
         || stack.owner != ItemRef::Layer(layer.id)
         || !layer.visible
         || layer.opacity.to_bits() != 1f32.to_bits()
-        || !node.enabled
+        || (!current && !node.enabled)
         || item.name != layer.name
         || item.raster_bounds != Some(s)
         || item.parent.is_some()
@@ -94,7 +100,12 @@ pub(crate) fn metadata(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_
     {
         return Err(scope());
     }
-    let radius = crate::gimp_neighborhood::box_blur::radius_for_observed_geometry(node, 22).map_err(E::Color)?;
+    let radius = if current {
+        crate::gimp_neighborhood::box_blur::radius_for_observed_current(node, 22)
+    } else {
+        crate::gimp_neighborhood::box_blur::radius_for_observed_geometry(node, 22)
+    }
+    .map_err(E::Color)?;
     let mask = state.filter_masks.first().ok_or_else(scope)?;
     let mi = state.items.iter().find(|v| v.item == ItemRef::Mask(mask.id)).ok_or_else(scope)?;
     let m = mi.mask.as_ref().ok_or_else(scope)?;
@@ -127,7 +138,11 @@ pub(crate) fn metadata(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_
         zero(tile.bytes(), doc.depth, b, i)?;
     }
     check(b, i, 1024)?;
-    photocraft_algo::gimp::neighborhood::BoxBlurTilePlan::new(s, TileCoord::containing(s.x0, s.y0), radius, i).map_err(|e| E::Color(e.into()))?;
+    if radius == 0 || matches!(radius, 4 | 5) {
+        photocraft_algo::gimp::neighborhood::BoxBlurTilePlan::new(s, TileCoord::containing(s.x0, s.y0), radius, i).map_err(|e| E::Color(e.into()))?;
+    } else {
+        photocraft_algo::gimp::neighborhood::BoxBlurRowPlan::new(s, TileCoord::containing(s.x0, s.y0), radius, i).map_err(|e| E::Color(e.into()))?;
+    }
     Ok((s, radius))
 }
 fn zero(bytes: &[u8], sample_type: SampleType, b: &mut impl PlanBudget, i: &Interrupt<'_>) -> Result<(), E> {

@@ -1948,3 +1948,23 @@ limits, now with platform encoded/logical byte bounds. These ceilings promise
 neither full fit nor dense large-image throughput and do not enable native_large.
 Fourteen new groups remain UNRUN/uncompiled; numerical/visual/workflow acceptance
 and PhotoCraft test/runtime execution remain deferred.
+
+The observed Box geometry epoch now supports radius0..1000 in original enabled
+sources and CURRENT editing, superseding its earlier readonly/radius4/5 notes.
+Both actual implicit RGB F32/F64 and assigned RGB F32 owners use the existing
+xcf.filter.set and xcf.filter.enable transactions. Set accepts exactly filterId,
+one existing radius Signed32 argument and/or enabled; other arguments, opacity,
+unknown keys and other mutations remain refused. The owned panel exposes the
+same radius and activation controls through the existing checked dispatch.
+Current/history equality, locks, full current/staged native/default/mask/profile
+proof and paid revision/history/view/source/journal/reply fences precede even
+same-value acceptance. Assigned data copying preserves both ICC owners and the
+original source; its structural Signed32 API does not authorize an operation.
+
+Other positive radii use bounded row recomputation;4/5 retain the old packed
+path. Active0 still converts through Linear and inverses after its packed
+working identity. Disabled filtering is distinct. Full canonical tiles complete
+before cropping, typed source errors survive and all actual reads/conversions
+are charged. Existing16MiB/32MiB temporary guards and standard operation caps
+remain. Large/high-radius completion and numerical/UI/runtime acceptance remain
+pending; all new regression drafts are UNRUN/uncompiled.

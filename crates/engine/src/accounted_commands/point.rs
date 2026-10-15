@@ -207,6 +207,40 @@ fn pre_dispatch(session: &Session, id: &str, params: &Value) -> Result<()> {
 enum EditStorage {
     ImplicitPoint,
     AssignedBox,
+    ObservedBox,
+}
+/// Cheap CURRENT routing hint only; complete recipe proof remains mandatory.
+pub(super) fn observed_box_edit_candidate(owner: &AccountedDocument) -> bool {
+    (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
+        && owner.document().xcf_state.as_ref().is_some_and(|state| {
+            matches!(state.filter_stacks.as_slice(), [stack] if matches!(stack.nodes.as_slice(), [node]
+                if node.operation.name == "gegl:box-blur"
+                    && node.operation.stored_version == "0:0"
+                    && node.operation.schema_epoch == photocraft_compose::backed_box_source::BOX_GEOMETRY_EPOCH
+                    && node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == photocraft_compose::backed_box_source::BOX_GEOMETRY_EPOCH)))
+        })
+}
+fn observed_box_fields<'a>(id: &str, params: &'a Value) -> Option<Fields<'a>> {
+    let object = params.as_object()?;
+    if object.keys().any(|key| !matches!(key.as_str(), "filterId" | "arguments" | "enabled")) {
+        return None;
+    }
+    let fields = wire(id, params)?;
+    if object.contains_key("arguments") {
+        if id != "xcf.filter.set" || fields.count != 1 {
+            return None;
+        }
+        let argument = fields.arguments.first()?.as_ref()?;
+        if argument.name != "radius" || !matches!(argument.value, PointArgumentValue::Signed32(0..=1000)) || argument.domain.is_some() {
+            return None;
+        }
+    } else if fields.enabled.is_none() {
+        return None;
+    }
+    Some(fields)
+}
+pub(super) fn observed_box_wire_valid(id: &str, params: &Value) -> bool {
+    observed_box_fields(id, params).is_some()
 }
 /// Routing hint only. Full assigned storage/profile/native qualification still
 /// runs before either equal or changed activation can be accepted.
@@ -245,6 +279,21 @@ pub(super) struct Request<'a> {
     storage: EditStorage,
 }
 impl<'a> Request<'a> {
+    pub(super) fn parse_observed_box(session: &Session, id: &str, params: &'a Value, ctl: &ReadControl<'_>) -> Result<Self> {
+        ctl.check(32768)?;
+        let id = match id {
+            "xcf.filter.set" => "xcf.filter.set",
+            "xcf.filter.enable" => "xcf.filter.enable",
+            _ => return Err(BackingError::Unsupported.into()),
+        };
+        let fields = observed_box_fields(id, params).ok_or_else(|| bad(id, "observed Box requires radius Signed32 0..1000 and/or boolean enabled"))?;
+        let owner = session.active().and_then(|state| state.doc.accounted()).ok_or(BackingError::Unsupported)?;
+        if !observed_box_edit_candidate(owner) { return Err(BackingError::Unsupported.into()); }
+        ctl.check(32768)?;
+        pre_dispatch(session, id, params)?;
+        if crate::xcf_filter_cmds::id(id, params)? != fields.filter { return Err(BackingError::Integrity.into()); }
+        Ok(Self { id, params, fields, structured: None, move_to: None, storage: EditStorage::ObservedBox })
+    }
     /// Assigned storage does not inherit the implicit Point patch parser.
     /// Only the existing two-field activation wire is admitted here.
     pub(super) fn parse_assigned_enabled(session: &Session, id: &str, params: &'a Value, ctl: &ReadControl<'_>) -> Result<Self> {
@@ -299,10 +348,20 @@ impl<'a> Request<'a> {
     pub(super) fn prepare(self, session: &Session, ctl: &ReadControl<'_>) -> Result<Prepared<'a>> {
         let state = session.active().ok_or(EngineError::NoDocument)?;
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
-        if observed_box_readonly(owner) {
+        if observed_box_readonly(owner) && !matches!(self.storage, EditStorage::ObservedBox) {
             return Err(BackingError::Unsupported.into());
         }
         match self.storage {
+            EditStorage::ObservedBox => {
+                if !observed_box_edit_candidate(owner) { return Err(BackingError::Unsupported.into()); }
+                if owner.is_readonly_assigned_point_storage() {
+                    owner.validate_readonly_assigned_point_storage(ctl)?;
+                } else {
+                    owner.validate_readonly_point_storage(ctl)?;
+                }
+                ctl.check(1)?;
+                if !state.history.current()?.shares_state(&state.doc) { return Err(BackingError::Integrity.into()); }
+            }
             EditStorage::ImplicitPoint => owner.validate_readonly_point_storage(ctl)?,
             EditStorage::AssignedBox => {
                 owner.validate_readonly_assigned_point_storage(ctl)?;
@@ -460,16 +519,18 @@ impl<'a> Request<'a> {
                 }
                 *patches.get_mut(index).ok_or(BackingError::Integrity)? = PointArgumentPatch { name: argument.name, value: argument.value };
             }
-            let staged = owner.try_with_readonly_point_filter(
-                PointFilterPatch {
+            let patch = PointFilterPatch {
                     layer,
                     filter: self.fields.filter,
                     expected_stack_revision: stack.revision,
                     arguments: patches.get(..self.fields.count).ok_or(BackingError::Integrity)?,
                     enabled: self.fields.enabled,
-                },
-                ctl,
-            )?;
+                };
+            let staged = if matches!(self.storage, EditStorage::ObservedBox) && owner.is_readonly_assigned_point_storage() {
+                owner.try_with_readonly_assigned_point_filter(patch, ctl)?
+            } else {
+                owner.try_with_readonly_point_filter(patch, ctl)?
+            };
             staged
         };
         if self.structured.is_none() {
@@ -605,7 +666,8 @@ pub(super) struct Prepared<'a> {
 impl Prepared<'_> {
     pub(super) fn execute(self, session: &mut Session, ctl: &ReadControl<'_>) -> Result<Value> {
         ctl.check(self.request.structured.map_or(Ok(32768), |plan| plan.helper_work())?)?;
-        if session.active().and_then(|state| state.doc.accounted()).is_some_and(observed_box_readonly) {
+        if session.active().and_then(|state| state.doc.accounted()).is_some_and(observed_box_readonly)
+            && !matches!(self.request.storage, EditStorage::ObservedBox) {
             return Err(BackingError::Unsupported.into());
         }
         pre_dispatch(session, self.request.id, self.request.params)?;
@@ -675,3 +737,7 @@ mod empty_lifecycle_tests;
 #[cfg(all(test, feature="corpus", not(target_arch="wasm32")))]
 #[path="point_assigned_enabled_tests.rs"]
 mod assigned_enabled_tests;
+
+#[cfg(all(test, feature="corpus", not(target_arch="wasm32")))]
+#[path="point_observed_edit_tests.rs"]
+mod observed_edit_tests;
