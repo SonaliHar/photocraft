@@ -11,7 +11,6 @@ use photocraft_raster::{
 };
 use serde_json::{Value, json};
 
-const WORK_LIMIT: u64 = 8_000_000_000;
 fn path_shape(path: &str) -> Result<(), String> {
     if path.is_empty()
         || path.len() > 4096
@@ -82,7 +81,8 @@ pub(crate) fn invoke_authorized(app: &mut PhotocraftApp, params: &Value) -> Resu
 }
 fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Result<Value, String> {
     path_shape(path)?;
-    let work = photocraft_io::accounted_operation_work::OperationWork::legacy(WORK_LIMIT);
+    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| e.to_string())?;
+    let work = photocraft_io::accounted_operation_work::OperationWork::standard(&limits).map_err(|e| e.to_string())?;
     let charge = |units| work.check(units);
     let expired = || work.deadline_expired();
     let interrupt = Interrupt::cancel_only(&expired);
@@ -101,12 +101,6 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
         .map_err(|_| "owned native Open failed unexpectedly; existing documents were retained".to_owned())??;
     if quota.as_ref().is_some_and(|q| !q.shares_ledger(archive.quota())) {
         return Err("owned native Open returned a different catalog quota".into());
-    }
-    // Verification still uses the legacy bootstrap allowance. Promotion here
-    // preserves its used work/active clock and grants no class or recipe.
-    if photocraft_engine::accounted_native_open::is_current_box_work_candidate(archive.document(), &control).map_err(|e| e.to_string())? {
-        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| e.to_string())?;
-        work.select_standard_box(&limits).map_err(|e| e.to_string())?;
     }
     let name = path.rsplit(['/', '\\']).next().filter(|name| !name.is_empty()).ok_or("owned native Open has no file name")?;
     // Reply strings and serde containers are admitted before construction and

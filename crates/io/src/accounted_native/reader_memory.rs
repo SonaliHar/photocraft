@@ -14,7 +14,7 @@ use photocraft_raster::backing::{
 use std::{io::Read, sync::Arc};
 
 const CHUNK: usize = 65_536;
-// The existing owned native storage profile: 65,536 blocks of 4,096 bytes.
+// Same platform standard encoded ceiling as verified persistent native storage.
 const MAX_CAPTURE_BYTES: u64 = crate::native_plane_store::NATIVE_STORE_MAX_BLOCKS as u64 * crate::native_plane_store::NATIVE_STORE_BLOCK_BYTES as u64;
 const CAPACITY_SLACK: usize = 64;
 const OWNER_SLACK: usize = 128;
@@ -138,7 +138,7 @@ impl ImmutableCanonicalArchive for MemoryArchive {
 ///
 /// Encoded capacity/header is reserved before allocation and remains charged
 /// through the archive's last owner. Existing manifest/object/model/native-plane
-/// admissions use this same ledger. The standard 256 MiB encoded ceiling is not
+/// admissions use this same ledger. The platform standard encoded ceiling is not
 /// a native_large route or a promise that every file below it fits the quota.
 /// Profile policy belongs to the caller; the existing format loader is unchanged.
 pub fn open_accounted_native_from_reader(
@@ -161,3 +161,7 @@ pub fn open_accounted_native_from_reader(
 #[cfg(test)]
 #[path = "reader_memory_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "reader_memory_standard_limit_tests.rs"]
+mod standard_limit_tests;

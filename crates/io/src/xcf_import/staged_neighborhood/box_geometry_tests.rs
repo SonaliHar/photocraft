@@ -108,7 +108,7 @@ fn source_refusals_and_old_priority() {
             7 => f.layers[0].effects[0].mask.as_mut().unwrap().plane.as_mut().unwrap().bytes[..4].copy_from_slice(&0.25f32.to_ne_bytes()),
             8 => f.layers[0].plane.as_mut().unwrap().bytes[..4].copy_from_slice(&f32::NAN.to_ne_bytes()),
             9 => f.layers[0].plane.as_mut().unwrap().bytes[12..16].copy_from_slice(&1.25f32.to_ne_bytes()),
-            10 => f.icc.push(1),
+            10 => f.icc.resize((16 << 20) + 1, 0),
             11 => f.sample = Sample::F64,
             12 => f.layers[0].visible = false,
             _ => f.layers[0].offset = (i32::MAX, 0),

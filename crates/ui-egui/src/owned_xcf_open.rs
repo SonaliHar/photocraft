@@ -10,7 +10,6 @@ use photocraft_raster::{
 };
 use serde_json::{Value, json};
 
-const WORK_LIMIT: u64 = 8_000_000_000;
 fn path_shape(path: &str) -> Result<(), String> {
     if path.is_empty() || path.len() > 4096 || !std::path::Path::new(path).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("xcf")) {
         return Err("explicit keepCurrent Open requires a bounded .xcf path".into());
@@ -77,7 +76,8 @@ pub(crate) fn invoke_authorized(app: &mut PhotocraftApp, params: &Value) -> Resu
 }
 fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Result<Value, String> {
     path_shape(path)?;
-    let work = photocraft_io::accounted_operation_work::OperationWork::legacy(WORK_LIMIT);
+    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| e.to_string())?;
+    let work = photocraft_io::accounted_operation_work::OperationWork::standard(&limits).map_err(|e| e.to_string())?;
     let charge = |units| work.check(units);
     let expired = || work.deadline_expired();
     let interrupt = Interrupt::cancel_only(&expired);
@@ -112,13 +112,6 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
     .map_err(|_| "owned XCF Open failed unexpectedly; existing documents were retained".to_owned())??;
     if quota.as_ref().is_some_and(|q| !q.shares_ledger(imported.document().quota())) {
         return Err("owned XCF Open returned a different catalog quota".into());
-    }
-    let owner = imported.document();
-    if (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
-        && photocraft_engine::accounted_native_open::is_current_box_work_candidate(owner.document(), &control).map_err(|e| e.to_string())?
-    {
-        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| e.to_string())?;
-        work.select_standard_box(&limits).map_err(|e| e.to_string())?;
     }
     let name = path.rsplit(['/', '\\']).next().filter(|name| !name.is_empty()).ok_or("owned XCF Open has no file name")?;
     let prepared = PreparedReply::new(&imported, path, name, authority, &control)?;
@@ -339,6 +332,10 @@ impl PreparedReply {
 #[cfg(test)]
 #[path = "owned_xcf_open_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "owned_intake_policy_tests.rs"]
+mod intake_policy_tests;
 
 #[cfg(test)]
 #[path = "owned_current_xcf_open_tests.rs"]

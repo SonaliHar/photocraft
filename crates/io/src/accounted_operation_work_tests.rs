@@ -107,3 +107,71 @@ fn shared_callers_cannot_each_spend_the_same_allowance() {
     assert_eq!(meter.diagnostics().used, 4000);
     assert_eq!(meter.check(1), Err(BackingError::Work));
 }
+
+#[test]
+#[ignore = "UNRUN: generic owned intake selects before active capture and respects early deadline"]
+fn generic_standard_constructor_is_lazy_but_zero_deadline_refuses_first_work() {
+    let zero_deadline = standard().lowered(&[("deadlineMs", 0)]).unwrap();
+    let meter = OperationWork::standard(&zero_deadline).unwrap();
+    assert!(meter.state().started.is_none());
+    assert!(!meter.deadline_expired());
+    assert_eq!(meter.diagnostics().policy, Some(ResourcePolicy::default()));
+    assert_eq!(meter.diagnostics().used, 0);
+    assert_eq!(meter.check(1), Err(BackingError::Cancelled));
+    assert_eq!(meter.diagnostics().used, 0);
+    assert!(meter.deadline_expired());
+    assert_eq!(meter.select_standard_box(&standard()), Err(BackingError::Integrity));
+
+    let zero_work = standard().lowered(&[("sampleWorkUnits", 0)]).unwrap();
+    let meter = OperationWork::standard(&zero_work).unwrap();
+    meter.check(0).unwrap();
+    assert_eq!(meter.check(1), Err(BackingError::Work));
+}
+
+#[test]
+#[ignore = "UNRUN: generic selection and Box compatibility share one nonrefundable capture ledger"]
+fn generic_and_box_names_cannot_reselect_or_reset_capture() {
+    let limits = standard().lowered(&[("sampleWorkUnits", 9)]).unwrap();
+    let generic = OperationWork::legacy(4);
+    generic.check(3).unwrap();
+    let started = generic.state().started;
+    generic.select_standard(&limits).unwrap();
+    assert_eq!(generic.state().started, started);
+    assert_eq!(generic.diagnostics().used, 3);
+    assert_eq!(generic.select_standard_box(&standard()), Err(BackingError::Integrity));
+    generic.check(6).unwrap();
+    assert_eq!(generic.check(1), Err(BackingError::Work));
+
+    let compatibility = OperationWork::legacy(4);
+    compatibility.check(3).unwrap();
+    compatibility.select_standard_box(&limits).unwrap();
+    assert_eq!(compatibility.select_standard(&standard()), Err(BackingError::Integrity));
+    assert_eq!(compatibility.diagnostics().used, 3);
+    assert_eq!(compatibility.diagnostics().limit, generic.diagnostics().limit);
+}
+
+#[test]
+#[ignore = "UNRUN: generic standard meter does not replace caller-supplied lower ReadControl"]
+fn external_lower_control_remains_authoritative() {
+    use photocraft_raster::{Interrupt, backing::ReadControl};
+    let meter = OperationWork::standard(&standard()).unwrap();
+    let external_used = std::sync::atomic::AtomicU64::new(0);
+    let external = |n| {
+        external_used
+            .try_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |used| used.checked_add(n).filter(|next| *next <= 2))
+            .map(|_| ())
+            .map_err(|_| BackingError::Work)
+    };
+    // A service that deliberately composes both controls must still propagate
+    // its caller's lower refusal instead of substituting the selected ceiling.
+    let charge = |n| {
+        external(n)?;
+        meter.check(n)
+    };
+    let control = ReadControl { interrupt: &Interrupt::NONE, work: &charge };
+    control.check(2).unwrap();
+    assert_eq!(control.check(1), Err(BackingError::Work));
+    // The failed extra debit is not retried against the larger selected limit.
+    assert_eq!(external_used.load(std::sync::atomic::Ordering::Relaxed), 2);
+    assert_eq!(meter.diagnostics().used, 2);
+}

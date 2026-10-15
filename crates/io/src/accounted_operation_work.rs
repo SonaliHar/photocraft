@@ -1,4 +1,5 @@
-//! Finite operation work accounting for explicitly selected CURRENT Box services.
+//! Finite operation work accounting for explicitly selected owned intake and
+//! CURRENT Box services.
 //!
 //! This is a policy ceiling, not a completion estimate or source/render grant.
 //! Callers must select the actual eligible route themselves. Existing caller-owned
@@ -41,6 +42,15 @@ impl OperationWork {
         Self { state: Mutex::new(State { used: 0, limit: baseline, started: None, selected: None }) }
     }
 
+    /// Select an owned-intake standard policy before source access. Construction
+    /// does not start active time, so an interactive picker can wait first.
+    /// This grants no content eligibility and does not change external controls.
+    pub fn standard(limits: &ResourceLimits) -> Result<Self, BackingError> {
+        let meter = Self::legacy(0);
+        meter.select_standard(limits)?;
+        Ok(meter)
+    }
+
     fn state(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
@@ -60,7 +70,7 @@ impl OperationWork {
     /// selected, so retrying cannot grant another allowance.
     ///
     /// This changes no memory limits and promises no provider will complete.
-    pub fn select_standard_box(&self, limits: &ResourceLimits) -> Result<(), BackingError> {
+    pub fn select_standard(&self, limits: &ResourceLimits) -> Result<(), BackingError> {
         let policy = limits.policy();
         if policy == ResourcePolicy::NativeLarge || cfg!(target_arch = "wasm32") && policy != ResourcePolicy::WasmStandard {
             return Err(BackingError::Unsupported);
@@ -84,6 +94,12 @@ impl OperationWork {
             return Err(BackingError::Work);
         }
         Ok(())
+    }
+
+    /// Compatibility name for the existing explicitly selected Box service.
+    /// Shares the same single selection with generic owned intake.
+    pub fn select_standard_box(&self, limits: &ResourceLimits) -> Result<(), BackingError> {
+        self.select_standard(limits)
     }
 
     /// Charge every actual debit, including provider work, without refunds or

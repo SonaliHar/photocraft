@@ -1916,3 +1916,35 @@ legacy work limits. Encoded native256MiB/browser16MiB intake and preselection
 work/deadline boundaries remain; no dense24–36MP or native_large completion is
 claimed. Nine new regression groups are UNRUN/uncompiled; runtime/visual/numerical
 and performance acceptance stay deferred.
+
+Observed Box geometry now includes assigned RGB F32 nonlinear650 through the
+actual readonly assigned Point owner. Source preparation and CURRENT rendering
+reuse the existing controlled original-to-generated-current profile binding,
+retain both ICC owners/peaks and use one Linear working space. Full physical
+mask/native/default/profile proof remains mandatory; raw words remain opaque,
+old identities retain deterministic priority/final refusal and this epoch's
+mutations remain closed. No new profile class, kernel math or CMS transfer is
+introduced. Independent source/native/profile/alpha words are exact. GIMP fresh
+straight RGB varies near small alpha; preserved-sample premultiplied and
+black/white comparisons are small, but this is not matched-display/CMS or
+PhotoCraft qualification. SC-002 and all acceptance tolerances stay unchanged.
+
+All explicit owned keepCurrent native/XCF intake now selects the declared
+standard resource work/deadline policy before input access, independent of file
+content. One used count, original cancellation and lazy active clock span source
+capture/decode, validation, response and adoption. Browser picker wait precedes
+first actual label/capture work. Late Box reselection is removed. Caller-supplied
+ReadControl routes, ordinary non-owned Open and unrelated registered caps remain
+unchanged. This supersedes the earlier8b/unenforced-deadline bootstrap notes for
+these explicitly selected intake routes.
+
+Encoded backing/capture ceilings now match the existing platform standard:
+1GiB native and256MiB wasm. The same native-store constants constrain selected
+paths, held roots, memory/persistent captures and browser bytes; lower source/
+block limits remain authoritative. Persistent digest indexes, Scratch/Resident
+and browser provider/Rust overlap are still actually reserved before reads/fill.
+Browser source preparation retains its lower resident128MiB/index16MiB/scratch0
+limits, now with platform encoded/logical byte bounds. These ceilings promise
+neither full fit nor dense large-image throughput and do not enable native_large.
+Fourteen new groups remain UNRUN/uncompiled; numerical/visual/workflow acceptance
+and PhotoCraft test/runtime execution remain deferred.

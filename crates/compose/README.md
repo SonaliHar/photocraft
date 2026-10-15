@@ -918,3 +918,9 @@ actual32-byte native pixels and8-byte mask samples. The existing packed F64
 renderer and working transfer are reused without narrowing. Assigned geometry
 remains separately gated; source/current validation and readonly mutation policy
 remain mandatory. New role regression groups are UNRUN/uncompiled.
+
+Assigned RGB F32 nonlinear650 also joins the observed geometry epoch through
+its actual assigned storage/profile role and existing paid original-to-current
+relation. Full native/default/mask/profile proof and readonly mutations remain.
+GIMP straight-color repeat instability is retained as evidence; alpha-weighted
+saved-sample analysis is not PhotoCraft/CMS qualification or a tolerance change.

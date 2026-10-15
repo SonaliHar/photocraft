@@ -12,6 +12,11 @@ pub mod provider;
 pub mod generated;
 
 pub const NATIVE_STORE_BLOCK_BYTES: usize = 4096;
+/// Encoded standard-profile ceiling: native1GiB, wasm256MiB. Actual storage,
+/// digest index, scratch and resident capacity are admitted independently.
+#[cfg(not(target_arch = "wasm32"))]
+pub const NATIVE_STORE_MAX_BLOCKS: u32 = 262_144;
+#[cfg(target_arch = "wasm32")]
 pub const NATIVE_STORE_MAX_BLOCKS: u32 = 65_536;
 pub const NATIVE_STORE_MAX_READ_BYTES: usize = 65_536;
 #[derive(Clone, Copy, Debug)]
@@ -66,7 +71,7 @@ struct Buffer {
     bytes: Vec<u8>,
     _lease: QuotaLease,
 }
-/// Sealed bytes (up to 256 MiB) and per-block digests own their persistent leases until
+/// Sealed standard-profile bytes and per-block digests own their persistent leases until
 /// the last shared store owner drops. No operation callback or path is retained.
 /// Each read <=64KiB is transactional: caller output changes only after every
 /// touched block passes integrity checks and the final cancellation/work check.

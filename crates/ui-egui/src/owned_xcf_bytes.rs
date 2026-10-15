@@ -21,8 +21,9 @@ enum Family {
     Native,
 }
 
-const CAP: usize = 16 << 20;
-const WORK: u64 = 8_000_000_000;
+// Same explicit standard encoded ceiling as the immutable native store; actual
+// Rust/provider overlap still has to fit this request's real quota separately.
+const CAP: usize = photocraft_io::native_plane_store::NATIVE_STORE_MAX_BLOCKS as usize * photocraft_io::native_plane_store::NATIVE_STORE_BLOCK_BYTES;
 struct Work {
     meter: photocraft_io::accounted_operation_work::OperationWork,
     cancelled: AtomicBool,
@@ -43,7 +44,9 @@ impl Request {
         if std::mem::size_of::<Work>() + std::mem::size_of::<Pending>() + 128 > 4096 {
             return Err("owned byte picker header exceeds admission".into());
         }
-        Ok(Self { quota, family, work: Arc::new(Work { meter: photocraft_io::accounted_operation_work::OperationWork::legacy(WORK), cancelled: AtomicBool::new(false), _lease: lease }) })
+        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| e.to_string())?;
+        let meter = photocraft_io::accounted_operation_work::OperationWork::standard(&limits).map_err(|e| e.to_string())?;
+        Ok(Self { quota, family, work: Arc::new(Work { meter, cancelled: AtomicBool::new(false), _lease: lease }) })
     }
     /// Advisory picker filter; content still passes the selected strict decoder.
     pub fn extension(&self) -> &'static str {
@@ -234,10 +237,6 @@ fn apply(app: &mut PhotocraftApp, capture: Capture) -> Result<Value, String> {
             }
             let loaded = native_archive::load(capture, control)?;
             let (label, archive) = loaded.into_parts();
-            if photocraft_engine::accounted_native_open::is_current_box_work_candidate(archive.document(), control).map_err(|e| e.to_string())? {
-                let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| e.to_string())?;
-                request.work.meter.select_standard_box(&limits).map_err(|e| e.to_string())?;
-            }
             crate::owned_native_open::adopt_bytes(app, label.name(), archive, control)
         });
     }
@@ -264,13 +263,6 @@ fn apply_xcf(app: &mut PhotocraftApp, capture: &Capture) -> Result<Value, String
             control,
         )
         .map_err(|e| e.to_string())?;
-        let owner = imported.document();
-        if (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
-            && photocraft_engine::accounted_native_open::is_current_box_work_candidate(owner.document(), control).map_err(|e| e.to_string())?
-        {
-            let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| e.to_string())?;
-            capture.request.work.meter.select_standard_box(&limits).map_err(|e| e.to_string())?;
-        }
         crate::owned_xcf_open::adopt_bytes(app, &capture.name, &imported, control)
     })
 }
@@ -323,3 +315,7 @@ mod native_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_streamed_box_work_tests.rs"]
 mod streamed_box_work_tests;
+
+#[cfg(test)]
+#[path = "owned_bytes_policy_tests.rs"]
+mod policy_tests;

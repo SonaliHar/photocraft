@@ -21,7 +21,7 @@ impl Drop for Directory {
     }
 }
 #[test]
-#[ignore = "UNRUN: bounded native Box wrapper uses selected standard after bootstrap; explicit lower ReadControl is never replaced, no publication on work denial; no24/36MP completion or producer geometry claim"]
+#[ignore = "UNRUN: bounded owned native wrapper selects standard before input; explicit lower ReadControl is never replaced, no publication on work denial; no24/36MP completion or producer geometry claim"]
 fn box_bounded_native_does_not_upgrade_external_lower_control() {
     for assigned in [false, true] {
         let dir = Directory::new();

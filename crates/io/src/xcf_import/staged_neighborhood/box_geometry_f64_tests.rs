@@ -1,6 +1,6 @@
 //! UNRUN genuine local F64 Box source controls; external captures are not corpus enrollment.
 //! Producer effectiveICC header bytes33/35 differ across process and remain unnormalized HOLD.
-//! Assigned F32 geometry remains closed due fresh-to-fresh RGB instability.
+//! Assigned F32 is a separate source role; straight-RGB/effectiveICC capture limitations remain distinct.
 use super::*;
 use photocraft_raster::backing::{
     ReadControl,
@@ -102,7 +102,7 @@ fn genuine_f64_sources_preserve_actual_word_precision() {
 }
 #[test]
 #[ignore = "UNRUN: F64 nonfinite/sub-F32unit violation/mask tinywords andcross-role refusals, oldidentityfinalfailure, realwork/cancel"]
-fn f64_precision_controls_and_assigned_hold() {
+fn f64_precision_controls_and_assigned_role() {
     for case in 0..14 {
         let mut f = file(0);
         match case {
@@ -147,9 +147,9 @@ fn f64_precision_controls_and_assigned_hold() {
     let assigned = std::fs::read(root().join("author-v1/outputs/assigned-f32-nl-r4.xcf")).unwrap();
     assert_eq!(hash(&assigned), "74bbd0fc33951f617c11bce5fb8613243ae1595a2c5d849759a5f889769c654a");
     let f = photocraft_xcf::decode(&assigned, &Default::default()).unwrap();
-    assert!(!hint(&f));
-    assert!(!qualify(&f, &Interrupt::NONE, Some(&budget())).unwrap());
-    assert!(imported(&assigned, &quota()).is_err());
+    assert!(hint(&f));
+    assert!(qualify(&f, &Interrupt::NONE, Some(&budget())).unwrap());
+    assert_eq!(NeighborhoodSourceFamily::hint(&f), Some(NeighborhoodSourceFamily::BoxGeometryAssignedF32));
     let f = file(0);
     let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap().lowered(&[("sampleWorkUnits", 32)]).unwrap();
     let b = photocraft_xcf::Budget::new_persistent(limits, None).unwrap();

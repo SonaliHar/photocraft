@@ -14,27 +14,28 @@ fn capture(request: Request, bytes: &[u8]) -> Capture {
 }
 
 #[test]
-#[ignore = "UNRUN: genuine native Box browser capture retains one used meter/cancel owner through load and standard selection; future provider reads use caller control, failed strict recipe cannot publish or reset work"]
-fn box_capture_promotes_same_meter_only_after_native_bootstrap() {
+#[ignore = "UNRUN: explicit native browser capture selects standard before input and retains one used meter/cancel owner through load/adoption; future provider reads use caller control, failed strict recipe cannot publish or reset work"]
+fn box_capture_retains_upfront_standard_meter() {
     let (owner, literal) = fixture::fixture(SampleType::F32, false, 0);
     let request = Request::with_family(owner.quota().clone(), Family::Native).unwrap();
     let original_work = request.work.clone();
+    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
     let waiting = request.work.meter.diagnostics();
     assert_eq!(waiting.used, 0);
-    assert_eq!(waiting.limit, WORK);
-    assert_eq!(waiting.policy, None);
-    assert_eq!(waiting.deadline_ms, None);
+    assert_eq!(waiting.limit, limits.get(photocraft_xcf::BudgetKind::Work));
+    assert_eq!(waiting.policy, Some(limits.policy()));
+    assert_eq!(waiting.deadline_ms, Some(limits.get(photocraft_xcf::BudgetKind::Deadline)));
+    assert!(!waiting.deadline_expired);
     // This file Vec is an external harness writer capture. Capture/provider
     // fees, immutable native archive and model remain actual paid owners.
     let captured = capture(request.clone(), &fixture::encoded(&owner));
     let before = request.work.meter.diagnostics();
     assert!(before.used > 0);
-    assert_eq!(before.policy, None);
+    assert_eq!(before.policy, waiting.policy);
     assert!(Arc::ptr_eq(&original_work, &captured.request.work));
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     apply(&mut app, captured).unwrap();
     let selected = request.work.meter.diagnostics();
-    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
     assert!(selected.used > before.used);
     assert_eq!(selected.limit, limits.get(photocraft_xcf::BudgetKind::Work));
     assert_eq!(selected.policy, Some(limits.policy()));
@@ -57,5 +58,5 @@ fn box_capture_promotes_same_meter_only_after_native_bootstrap() {
     assert_eq!(app.session.documents().len(), 1);
     assert!(app.session.active().unwrap().doc.shares_state(&current));
     // Selection is once-only even following a failed strict publication.
-    assert!(rejected.work.meter.select_standard_box(&limits).is_err());
+    assert!(rejected.work.meter.select_standard(&limits).is_err());
 }

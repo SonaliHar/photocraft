@@ -1,6 +1,7 @@
 //! Observational Box source preparation. Raw Replace words are retained opaque;
 //! this closed envelope is not a general interpretation of those words.
 use crate::{
+    backed_neighborhood_context::assigned_profile::BoundAssignedNeighborhoodProfile,
     backed_normal::BackedNormalError as E,
     backed_stock_point_context::{PlanBudget, bound_profile},
     gimp_composite::{CompositionError, WorkingSpace},
@@ -51,10 +52,10 @@ pub(crate) fn metadata(doc: &Document, b: &mut impl PlanBudget, i: &Interrupt<'_
     if doc.mode != ColorMode::Rgb
         || !matches!(doc.depth, SampleType::F32 | SampleType::F64)
         || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
-        || doc
-            .source_color_context
-            .as_ref()
-            .is_none_or(|v| !matches!((doc.depth, v.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750)) || v.original_icc.is_some())
+        || doc.source_color_context.as_ref().is_none_or(|v| {
+            !matches!((doc.depth, v.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750))
+                || v.original_icc.is_some() && doc.depth != SampleType::F32
+        })
         || state.provenance.format_version != 22
         || state.current_filter_output_precision != photocraft_doc::FilterOutputPrecision::Canonical
         || state.items.len() != 2
@@ -166,9 +167,21 @@ impl<B: PreparationBudget> PlanBudget for Shared<'_, B> {
 /// retained separately; no decoded copy or whole filtered Surface is produced.
 pub struct LeasedStreamedBoxPipeline<S, L> {
     _working: WorkingSpace,
-    _profile: Profile,
+    _profile: SourceProfile<L>,
     _source: S,
     _lease: L,
+}
+enum SourceProfile<L> {
+    Implicit(Profile),
+    Assigned(BoundAssignedNeighborhoodProfile<L>),
+}
+impl<L> SourceProfile<L> {
+    fn profile(&self) -> &Profile {
+        match self {
+            Self::Implicit(p) => p,
+            Self::Assigned(p) => p.profile(),
+        }
+    }
 }
 impl<S, L> LeasedStreamedBoxPipeline<S, L> {
     pub fn new_geometry_budgeted<B: PreparationBudget<Lease = L>>(
@@ -199,7 +212,19 @@ impl<S, L> LeasedStreamedBoxPipeline<S, L> {
             .and_then(|v| v.checked_add(std::mem::size_of::<Self>() as u64 + 128))
             .ok_or_else(length)?;
         let fee = b.reserve(envelope)?;
-        let (profile, basis) = bound_profile(doc, None, &mut b, i)?;
+        let assigned = doc.source_color_context.as_ref().is_some_and(|v| v.original_icc.is_some());
+        let (profile, implicit_basis) = if assigned {
+            let profile = BoundAssignedNeighborhoodProfile::prepare(doc, i, &mut b)?;
+            let _ = profile.held_peak()?;
+            (SourceProfile::Assigned(profile), None)
+        } else {
+            let (profile, basis) = bound_profile(doc, None, &mut b, i)?;
+            (SourceProfile::Implicit(profile), Some(basis))
+        };
+        let basis: &Profile = match implicit_basis {
+            Some(p) => p,
+            None => profile.profile(),
+        };
         let semantic = xcf_color::assigned_effective_planning_work_ceiling(basis, Encoding::NonlinearProfile).map_err(|_| scope())?;
         check(&mut b, i, semantic.checked_mul(3).ok_or_else(length)?)?;
         check(&mut b, i, envelope.checked_mul(64).ok_or_else(length)?)?;

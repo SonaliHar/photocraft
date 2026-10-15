@@ -240,9 +240,6 @@ impl<'a> PreparedBackedBoxContext<'a> {
             return Err(scope());
         }
         let radius = if observed {
-            if assigned {
-                return Err(scope());
-            }
             crate::backed_box_source::metadata(doc, &mut Budget { q: owner.quota(), c, held: 0 }, c.interrupt)?.1
         } else {
             crate::gimp_neighborhood::box_blur::radius_for_current_float(node, 22).map_err(E::Color)?

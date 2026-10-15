@@ -27,7 +27,10 @@ fn observed(s: Rect, r: i64) -> (Document, BackingQuota, Arc<dyn std::any::Any +
     observed_depth(SampleType::F32, s, r)
 }
 fn observed_depth(sample: SampleType, s: Rect, r: i64) -> (Document, BackingQuota, Arc<dyn std::any::Any + Send + Sync>, Profile) {
-    let (mut d, q, g, p, _) = fixture(sample, false, s, Rect::new(0, 0, 283, 281), r, true);
+    observed_role(sample, false, s, r)
+}
+fn observed_role(sample: SampleType, assigned: bool, s: Rect, r: i64) -> (Document, BackingQuota, Arc<dyn std::any::Any + Send + Sync>, Profile) {
+    let (mut d, q, g, p, _) = fixture(sample, assigned, s, Rect::new(0, 0, 283, 281), r, true);
     let n = &mut d.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
     n.operation.schema_epoch = BOX_GEOMETRY_EPOCH.into();
     let c = n.composition.as_mut().unwrap();
@@ -264,6 +267,126 @@ fn f64_source_rejects_mismatched_roles_and_nonfinite_or_nonunit_physical_words()
         let baseline = q.usage().unwrap();
         let mut budget = Budget { q: q.clone(), work: u64::MAX, deny: false };
         assert!(LeasedStreamedBoxPipeline::new_geometry_budgeted(&input.document, &Interrupt::NONE, &mut budget, &input).is_err());
+        assert_eq!(q.usage().unwrap(), baseline);
+    }
+}
+
+#[test]
+#[ignore = "UNRUN assigned geometry source exact-role/both-profile custody"]
+fn assigned_source_retains_original_current_and_three_distinct_curves() {
+    let s = Rect::new(-7, 11, 250, 270);
+    for radius in [4, 5] {
+        let (d, q, g, profile) = observed_role(SampleType::F32, true, s, radius);
+        let input = resident_source(d, &q, g, s);
+        let trc = profile.trc.as_ref().unwrap();
+        assert_ne!(trc[0], trc[1]);
+        assert_ne!(trc[1], trc[2]);
+        let expected = input.document.clone(); // External oracle, no producer equality claim.
+        let baseline = q.usage().unwrap();
+        let mut budget = Budget { q: q.clone(), work: u64::MAX, deny: false };
+        let prepared = LeasedStreamedBoxPipeline::new_geometry_budgeted(&input.document, &Interrupt::NONE, &mut budget, &input).unwrap();
+        assert_eq!(input.document, expected);
+        assert!(q.usage().unwrap().resident > baseline.resident);
+        drop(prepared);
+        assert_eq!(q.usage().unwrap(), baseline);
+        assert!(
+            crate::backed_neighborhood_context::LeasedStockNeighborhoodPipeline::new_assigned_box_budgeted(
+                &input.document,
+                &Interrupt::NONE,
+                &mut budget,
+                &input
+            )
+            .is_err()
+        );
+    }
+}
+#[test]
+#[ignore = "UNRUN assigned geometry per-channel native/linear/premultiplied/native reference"]
+fn assigned_current_uses_actual_profile_and_preserves_specific_api_boundaries() {
+    let s = Rect::new(13, 9, 270, 268);
+    for radius in [4, 5] {
+        let (d, q, g, p) = observed_role(SampleType::F32, true, s, radius);
+        let owned = owner(d, q, g, true);
+        assert!(crate::backed_neighborhood_context::PreparedBackedNeighborhoodContext::new_assigned_box(&owned, NormalBandLimits::default(), &ctl()).is_err());
+        let context = PreparedBackedBoxContext::new(&owned, NormalBandLimits::default(), &ctl()).unwrap();
+        let (o, expected) = reference(owned.document().pixel_format(), s, radius as u32, &p);
+        assert_eq!(context.bounds(), o);
+        for roi in [Rect::new(255, 255, 273, 257), Rect::new(8, 10, 17, 13)] {
+            compare(&context, roi, &expected);
+        }
+        // Existing shared factory's placeholder supplies no assigned authority.
+        let placeholder = photocraft_cms::Builtin::SGray.profile();
+        let renderer = PreparedBackedDocument::new_accounted(&owned, placeholder, NormalBandLimits::default(), &ctl()).unwrap();
+        let roi = Rect::new(14, 10, 19, 12);
+        let got = renderer.render_band(roi, &ctl()).unwrap();
+        for (index, pixel) in got.pixels().iter().enumerate() {
+            let x = roi.x0 + (index % roi.width() as usize) as i32;
+            let y = roi.y0 + (index / roi.width() as usize) as i32;
+            let mut expected_pixel = [0.; 4];
+            expected.try_read_pixel_f64(x, y, &mut expected_pixel).unwrap();
+            assert_eq!(*pixel, expected_pixel);
+        }
+    }
+}
+#[test]
+#[ignore = "UNRUN assigned geometry exact current/original/mask/role refusals"]
+fn assigned_source_profile_relation_and_physical_inputs_remain_authoritative() {
+    let s = Rect::new(13, 9, 270, 268);
+    for defect in 0..6 {
+        let (d, q, g, _) = observed_role(SampleType::F32, true, s, 4);
+        let mut input = resident_source(d, &q, g, s);
+        match defect {
+            0 => input.document.icc_profile = Some(Arc::new(photocraft_cms::Builtin::Srgb.profile().encoded_bytes().unwrap().to_vec())),
+            1 => input.document.working_profile_interpretation = photocraft_doc::WorkingProfileInterpretation::ImplicitSrgb { icc_blake3: "0".repeat(64) },
+            2 => input.document.source_color_context.as_mut().unwrap().original_icc = Some(Arc::new(vec![0; 640])),
+            3 => input.document.xcf_state.as_mut().unwrap().filter_masks[0]
+                .surface
+                .try_write_interleaved(Rect::new(511, 511, 512, 512), &f32::from_bits(1).to_ne_bytes())
+                .unwrap(),
+            4 => {
+                let LayerContent::Raster(v) = &mut input.document.layers[0].content else { panic!() };
+                let mut raw = [0u8; 16];
+                raw[..4].copy_from_slice(&f32::NAN.to_ne_bytes());
+                v.try_write_interleaved(Rect::new(511, 511, 512, 512), &raw).unwrap();
+            }
+            _ => {
+                input.document.depth = SampleType::F64;
+                input.document.source_color_context.as_mut().unwrap().source_precision = 750;
+            }
+        }
+        let baseline = q.usage().unwrap();
+        let mut budget = Budget { q: q.clone(), work: u64::MAX, deny: false };
+        assert!(LeasedStreamedBoxPipeline::new_geometry_budgeted(&input.document, &Interrupt::NONE, &mut budget, &input).is_err());
+        assert_eq!(q.usage().unwrap(), baseline);
+    }
+}
+#[test]
+#[ignore = "UNRUN assigned geometry profile peak late work/cancellation cleanup"]
+fn assigned_source_profile_peaks_remain_charged_until_failure_cleanup() {
+    let s = Rect::new(-7, 11, 250, 270);
+    let (d, q, g, _) = observed_role(SampleType::F32, true, s, 4);
+    let input = resident_source(d, &q, g, s);
+    let baseline = q.usage().unwrap();
+    let polls = AtomicU64::new(0);
+    let count = || {
+        polls.fetch_add(1, Ordering::Relaxed);
+        false
+    };
+    let interrupt = Interrupt::cancel_only(&count);
+    let mut budget = Budget { q: q.clone(), work: u64::MAX, deny: false };
+    drop(LeasedStreamedBoxPipeline::new_geometry_budgeted(&input.document, &interrupt, &mut budget, &input).unwrap());
+    let consumed = u64::MAX - budget.work;
+    let total = polls.load(Ordering::Relaxed);
+    assert!(total > 2);
+    let mut late = Budget { q: q.clone(), work: consumed - 1, deny: false };
+    assert!(LeasedStreamedBoxPipeline::new_geometry_budgeted(&input.document, &Interrupt::NONE, &mut late, &input).is_err());
+    assert_eq!(q.usage().unwrap(), baseline);
+    for stop in [total / 2, total - 1] {
+        let observed = AtomicU64::new(0);
+        let cancel = || observed.fetch_add(1, Ordering::Relaxed) >= stop;
+        let interrupt = Interrupt::cancel_only(&cancel);
+        let mut budget = Budget { q: q.clone(), work: u64::MAX, deny: false };
+        assert!(LeasedStreamedBoxPipeline::new_geometry_budgeted(&input.document, &interrupt, &mut budget, &input).is_err());
         assert_eq!(q.usage().unwrap(), baseline);
     }
 }
