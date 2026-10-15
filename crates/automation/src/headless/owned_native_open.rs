@@ -2,7 +2,7 @@
 use super::owned_xcf_open::{OwnedXcfOpenReply, ReplyError, id_copy_bound};
 use super::{Filesystem, Headless};
 use crate::AutomationError;
-use photocraft_raster::backing::{BackingError, ReadControl};
+use photocraft_raster::backing::ReadControl;
 use serde_json::Value;
 use std::path::Path;
 /// Same charged summary/envelope carrier as owned XCF Open; the public existing
@@ -16,21 +16,19 @@ impl Headless {
         self.open_owned_native_bounded(path, Some(id))
     }
     fn open_owned_native_bounded(&mut self, path: &Path, id: Option<&Value>) -> Result<OwnedNativeOpenReply, AutomationError> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        let used = AtomicU64::new(0);
-        let charge = |n: u64| {
-            used.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(n).filter(|v| *v <= 8_000_000_000)).map_err(|_| BackingError::Work)?;
-            Ok(())
-        };
-        self.open_owned_native_impl(path, id, &ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &charge })
+        let work = photocraft_io::accounted_operation_work::OperationWork::legacy(8_000_000_000);
+        let charge = |units| work.check(units);
+        let expired = || work.deadline_expired();
+        let interrupt = photocraft_raster::Interrupt::cancel_only(&expired);
+        self.open_owned_native_impl(path, id, &ReadControl { interrupt: &interrupt, work: &charge }, Some(&work))
     }
     pub fn open_owned_native_keep_current(&mut self, path: &Path, control: &ReadControl<'_>) -> Result<OwnedNativeOpenReply, AutomationError> {
-        self.open_owned_native_impl(path, None, control)
+        self.open_owned_native_impl(path, None, control, None)
     }
     pub fn open_owned_native_keep_current_with_read_control(&mut self, path: &str, control: &ReadControl<'_>) -> Result<OwnedNativeOpenReply, AutomationError> {
-        self.open_owned_native_impl(Path::new(path), None, control)
+        self.open_owned_native_impl(Path::new(path), None, control, None)
     }
-    fn open_owned_native_impl(&mut self, path: &Path, id: Option<&Value>, control: &ReadControl<'_>) -> Result<OwnedNativeOpenReply, AutomationError> {
+    fn open_owned_native_impl(&mut self, path: &Path, id: Option<&Value>, control: &ReadControl<'_>, work: Option<&photocraft_io::accounted_operation_work::OperationWork>) -> Result<OwnedNativeOpenReply, AutomationError> {
         let id_bytes = id.map(|v| id_copy_bound(v, control)).transpose().map_err(ReplyError::into_automation)?;
         let path = path.to_str().ok_or_else(|| AutomationError::BadRequest("owned native path must be UTF-8".into()))?;
         if path.is_empty() || path.len() > 4096 || !Path::new(path).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pcraft")) {
@@ -70,6 +68,15 @@ impl Headless {
             };
             if !quota.shares_ledger(archive.quota()) {
                 return Err(AutomationError::Other("owned native reader changed catalog quota".into()));
+            }
+            // Native verification retains the 8b bootstrap. Only convenience
+            // wrappers may promote their SAME meter after an actual Box hint;
+            // externally supplied controls are never silently replaced.
+            if let Some(work) = work
+                && photocraft_engine::accounted_native_open::is_current_box_work_candidate(archive.document(), control).map_err(photocraft_engine::EngineError::from)?
+            {
+                let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| AutomationError::Other(e.to_string()))?;
+                work.select_standard_box(&limits).map_err(photocraft_engine::EngineError::from)?;
             }
             let label = path
                 .rsplit(['/', '\\'])
@@ -128,3 +135,7 @@ impl Headless {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_native_open_tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "owned_native_box_work_tests.rs"]
+mod box_work_tests;

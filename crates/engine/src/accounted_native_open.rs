@@ -23,6 +23,13 @@ enum NativeHandoff {
     CurrentSeparableBlend,
 }
 
+/// Bounded work-policy routing hint only. Selecting the standard profile work
+/// ceiling does not establish source, storage or rendering authority. Every
+/// selected archive still undergoes its complete typed current validation.
+pub fn is_current_box_work_candidate(document: &photocraft_doc::Document, control: &ReadControl<'_>) -> std::result::Result<bool, BackingError> {
+    photocraft_compose::backed_box_context::is_candidate(document, control)
+}
+
 /// Allocation-free route hint selecting the stricter current Point endpoint.
 /// Version, arguments, profile and storage still require the typed handoff;
 /// a refusal must never retry through the generic archive endpoint.

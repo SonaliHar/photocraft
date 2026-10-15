@@ -739,6 +739,9 @@ impl Session {
         if id == "document.pixel.inspect" {
             crate::inspect_pixel_cmds::dispatch_preflight(&params)?;
         }
+        if crate::accounted_commands::observed_box_mutation_refused(self, id) {
+            return Err(EngineError::Disabled(id.into(), "this observed Box geometry recipe is read-only".into()));
+        }
         if id == "layer.translate" && self.active().is_some_and(|state| state.doc.accounted().is_some()) {
             crate::accounted_commands::imported_translation_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
@@ -1176,13 +1179,26 @@ impl Session {
                             || matches!(id, "xcf.filter.set" | "xcf.filter.enable")
                                 && (owner.is_readonly_gaussian_group_storage() || owner.is_readonly_assigned_point_storage())
                     });
-            let registered_work = std::sync::atomic::AtomicU64::new(crate::accounted_clear::REGISTERED_WORK_LIMIT);
+            let registered_work = photocraft_io::accounted_operation_work::OperationWork::legacy(crate::accounted_clear::REGISTERED_WORK_LIMIT);
             let debit = |units| {
                 if !bounded_work { return Ok(()); }
-                registered_work.try_update(std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Relaxed, |left| left.checked_sub(units))
-                    .map(|_| ()).map_err(|_| photocraft_raster::backing::BackingError::Work)
+                registered_work.check(units)
             };
-            let control = photocraft_raster::backing::ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &debit };
+            let deadline = || registered_work.deadline_expired();
+            let interrupt = photocraft_raster::Interrupt::cancel_only(&deadline);
+            let control = photocraft_raster::backing::ReadControl { interrupt: &interrupt, work: &debit };
+            // Box uses the declared finite standard profile, with one cumulative
+            // work counter and active-operation deadline across both proofs and
+            // publication. Other registered commands retain their old ceiling.
+            if matches!(id, "xcf.filter.set" | "xcf.filter.enable")
+                && let Some(owner) = self.active().and_then(|state| state.doc.accounted())
+                && (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
+                && crate::accounted_native_open::is_current_box_work_candidate(owner.document(), &control)?
+            {
+                let limits = photocraft_xcf::ResourceLimits::for_policy(photocraft_xcf::ResourcePolicy::default())
+                    .map_err(|error| EngineError::Other(error.to_string()))?;
+                registered_work.select_standard_box(&limits)?;
+            }
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::accounted_commands::dispatch(self, id, &params, &control)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
             // The carrier publishes a prepaid journal with the successful

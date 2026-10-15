@@ -63,6 +63,7 @@ pub(super) trait MappingPlane: ExactParsedPlane + Sized {
     }
     /// Only an already admitted original Point domain can select this paid path.
     fn requires_budgeted_point_preparation(_point_domain: bool) -> bool { false }
+    fn requires_budgeted_observed_box_geometry_preparation(_domain:bool)->bool{false}
     fn requires_budgeted_assigned_box_preparation(_domain: bool) -> bool {false}
     fn requires_budgeted_assigned_median_preparation(_domain: bool) -> bool {false}
     fn requires_budgeted_assigned_gaussian_preparation(_domain: bool) -> bool {false}

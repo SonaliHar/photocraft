@@ -216,6 +216,15 @@ pub(super) fn assigned_enabled_candidate(owner: &AccountedDocument) -> bool {
             matches!(state.filter_stacks.as_slice(), [stack] if matches!(stack.nodes.as_slice(), [node] if node.operation.name == "gegl:box-blur"))
         })
 }
+/// The observational source geometry epoch has rendering/native continuation
+/// only. It must not inherit the generic implicit Point mutation wire.
+pub(super) fn observed_box_readonly(owner: &AccountedDocument) -> bool {
+    owner.document().xcf_state.as_ref().is_some_and(|state| {
+        matches!(state.filter_stacks.as_slice(), [stack] if matches!(stack.nodes.as_slice(), [node]
+            if node.operation.schema_epoch == photocraft_compose::backed_box_source::BOX_GEOMETRY_EPOCH
+                || node.composition.as_ref().is_some_and(|policy| policy.compatibility_epoch == photocraft_compose::backed_box_source::BOX_GEOMETRY_EPOCH)))
+    })
+}
 fn assigned_enabled_fields<'a>(id: &str, params: &'a Value) -> Option<Fields<'a>> {
     if !matches!(id,"xcf.filter.set"|"xcf.filter.enable") { return None; }
     let object=params.as_object()?;
@@ -255,6 +264,9 @@ impl<'a> Request<'a> {
     }
     pub(super) fn parse(session: &Session, id: &str, params: &'a Value, ctl: &ReadControl<'_>) -> Result<Self> {
         ctl.check(32768)?;
+        if session.active().and_then(|state| state.doc.accounted()).is_some_and(observed_box_readonly) {
+            return Err(BackingError::Unsupported.into());
+        }
         let id = match id {
             "xcf.filter.set" => "xcf.filter.set",
             "xcf.filter.enable" => "xcf.filter.enable",
@@ -287,6 +299,9 @@ impl<'a> Request<'a> {
     pub(super) fn prepare(self, session: &Session, ctl: &ReadControl<'_>) -> Result<Prepared<'a>> {
         let state = session.active().ok_or(EngineError::NoDocument)?;
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
+        if observed_box_readonly(owner) {
+            return Err(BackingError::Unsupported.into());
+        }
         match self.storage {
             EditStorage::ImplicitPoint => owner.validate_readonly_point_storage(ctl)?,
             EditStorage::AssignedBox => {
@@ -590,6 +605,9 @@ pub(super) struct Prepared<'a> {
 impl Prepared<'_> {
     pub(super) fn execute(self, session: &mut Session, ctl: &ReadControl<'_>) -> Result<Value> {
         ctl.check(self.request.structured.map_or(Ok(32768), |plan| plan.helper_work())?)?;
+        if session.active().and_then(|state| state.doc.accounted()).is_some_and(observed_box_readonly) {
+            return Err(BackingError::Unsupported.into());
+        }
         pre_dispatch(session, self.request.id, self.request.params)?;
         let state = session.active().ok_or(EngineError::NoDocument)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;

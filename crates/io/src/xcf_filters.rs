@@ -112,6 +112,7 @@ pub(crate) enum NeighborhoodDomain {
     RasterOriginal,
     RasterFinite,
     IsolatedSmallAuto,
+    BoxGeometry,
     BoxOriginal,
     BoxFinite,
     MedianOriginal,
@@ -578,6 +579,11 @@ fn qualified_stack_with_activation<P>(
     effects: &[Effect<P>], masks: &[Option<ItemRef>], owner: ItemRef,
     first_id: u64, version: u32, domain: NeighborhoodDomain, activation: StackActivation,
 ) -> Result<FilterStack, IoError> {
+    // This observational envelope is Box-only; raw fields never authorize
+    // another operation, activation, opacity or ordinary composition mode.
+    if domain==NeighborhoodDomain::BoxGeometry && (effects.len()!=1 || effects.first().is_none_or(|e|e.operation!="gegl:box-blur" || e.version.as_deref()!=Some("0:0") || e.arguments.len()!=1 || e.state.enabled!=Some(true))) {
+        return Err(IoError::Unsupported("observational Box source envelope".into()));
+    }
     let generic_replace = matches!(domain, NeighborhoodDomain::PointReplace(_));
     let domain = if let NeighborhoodDomain::PointReplace(family) = domain { family.domain() } else { domain };
     if generic_replace && effects.len() != 1 {
@@ -836,6 +842,7 @@ fn qualified_stack_with_activation<P>(
         let finite_gaussian = gaussian && domain == NeighborhoodDomain::RasterFinite;
         let box_blur = effect.operation == "gegl:box-blur";
         let finite_box = box_blur && domain == NeighborhoodDomain::BoxFinite;
+        let observed_box_geometry = domain == NeighborhoodDomain::BoxGeometry;
         let median = effect.operation == "gegl:median-blur";
         let finite_median = median && matches!(domain, NeighborhoodDomain::MedianFinite | NeighborhoodDomain::MedianGray);
         let motion = effect.operation == "gegl:motion-blur-linear";
@@ -901,7 +908,7 @@ fn qualified_stack_with_activation<P>(
             || effects.len() > 256
             || source.mode != Some(62)
             || source.opacity_u8.is_some()
-            || if generic_replace {
+            || if generic_replace || observed_box_geometry {
                 source.composite_mode.is_none() || source.composite_space.is_none() || source.blend_space.is_none()
             } else {
                 source.composite_mode != sentinel || source.composite_space != sentinel || source.blend_space != sentinel
@@ -925,7 +932,7 @@ fn qualified_stack_with_activation<P>(
             return Err(unsupported(effect, "unqualified Gaussian source domain or version"));
         }
         if box_blur
-            && (!matches!(domain, NeighborhoodDomain::BoxOriginal | NeighborhoodDomain::BoxFinite)
+            && (!matches!(domain, NeighborhoodDomain::BoxOriginal | NeighborhoodDomain::BoxFinite | NeighborhoodDomain::BoxGeometry)
                 || effect.version.as_deref() != Some("0:0")
                 || effects.len() != 1)
         {
@@ -1469,6 +1476,8 @@ fn qualified_stack_with_activation<P>(
                     "xcf22-rgb-u8-linear-motion-v1"
                 } else if pixelize {
                     "xcf22-rgb-u8-square-pixelize-v1"
+                } else if observed_box_geometry {
+                    photocraft_compose::backed_box_source::BOX_GEOMETRY_EPOCH
                 } else if box_blur {
                     "xcf22-rgb-box-replace-v1"
                 } else if finite_gaussian {
@@ -1554,6 +1563,8 @@ fn qualified_stack_with_activation<P>(
                     "xcf22-rgb-u8-linear-motion-v1"
                 } else if pixelize {
                     "xcf22-rgb-u8-square-pixelize-v1"
+                } else if observed_box_geometry {
+                    photocraft_compose::backed_box_source::BOX_GEOMETRY_EPOCH
                 } else if box_blur {
                     "xcf22-rgb-box-replace-v1"
                 } else if finite_gaussian {

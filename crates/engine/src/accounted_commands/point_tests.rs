@@ -459,3 +459,6 @@ mod signed;
 
 #[path = "point_configured_tests.rs"]
 mod configured;
+
+#[path = "point_observed_box_tests.rs"]
+mod observed_box;

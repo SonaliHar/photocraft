@@ -67,6 +67,14 @@ pub fn supports(id: &str) -> bool {
     )
 }
 
+/// The observed source geometry scope admits viewing, native continuation and
+/// history navigation, while mutation qualification remains separate work.
+pub(crate) fn observed_box_mutation_refused(session: &Session, id: &str) -> bool {
+    supports(id)
+        && !matches!(id, "layer.select" | "edit.undo" | "edit.redo" | "history.selectState")
+        && session.active().and_then(|state| state.doc.accounted()).is_some_and(point::observed_box_readonly)
+}
+
 fn bad(id: &str, message: &str) -> EngineError {
     EngineError::BadParams { cmd: id.into(), msg: message.into() }
 }
@@ -116,6 +124,9 @@ fn require_history_selection_enabled(session: &Session) -> Result<()> {
 }
 
 fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadControl<'_>) -> Result<Request<'a>> {
+    if observed_box_mutation_refused(session, id) {
+        return Err(BackingError::Unsupported.into());
+    }
     if id == "xcf.composition.set" {
         return Ok(Request::FlatComposition(flat_composition::Request::parse(session,params,control)?));
     }
@@ -290,6 +301,9 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     }
     if id == "history.selectState" && history_selection_disabled(session)? {
         return Ok(Some("the history holds only one state"));
+    }
+    if observed_box_mutation_refused(session, id) {
+        return Ok(Some("this observed Box geometry recipe is read-only"));
     }
     if matches!(id, "xcf.filter.move" | "xcf.filter.remove") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_point_storage()) {
         return Ok(Some("this accounted filter storage has no qualified stack edit recipe"));

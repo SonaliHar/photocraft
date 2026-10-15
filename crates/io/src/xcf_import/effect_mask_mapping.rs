@@ -17,14 +17,17 @@ pub(super) fn map<P: MappingPlane>(
     color_balance_depth_mask: bool,
     exposure_geometry_mask: bool,
     point_replace_canvas: Option<Rect>,
+    observational_box_canvas:Option<Rect>,
 ) -> Result<Vec<Option<photocraft_doc::item_identity::ItemRef>>, IoError> {
     use photocraft_doc::{
         item_identity::{FilterId, ItemRef, MaskId},
         xcf_state::{ItemLocks, ItemState, MaskState},
     };
+    if point_replace_canvas.is_some() && observational_box_canvas.is_some(){return Err(IoError::Unsupported("conflicting filter mask canvas policies".into()));}
+    let canvas_mask=point_replace_canvas.or(observational_box_canvas);
     let owner_sample = drawable.plane.as_ref().map(|p| p.descriptor().sample);
     let mut needs_owner_bounds = false;
-    if point_replace_canvas.is_none() && !exposure_geometry_mask && !canvas_group_mask {
+    if canvas_mask.is_none() && !exposure_geometry_mask && !canvas_group_mask {
         for effect in &drawable.effects {
             ctl.check().map_err(|_| IoError::Cancelled)?;
             if effect.mask.is_some() {
@@ -46,15 +49,15 @@ pub(super) fn map<P: MappingPlane>(
         let plane = mask.plane.as_ref().ok_or_else(|| unsupported(mask, "missing filter mask plane"))?.descriptor();
         if !mask.unsupported.is_empty()
             || !(plane.sample == Sample::U8
-                || point_replace_canvas.is_some() && matches!(plane.sample, Sample::U16 | Sample::U32 | Sample::F32 | Sample::F64)
+                || canvas_mask.is_some() && matches!(plane.sample, Sample::U16 | Sample::U32 | Sample::F32 | Sample::F64)
                 || color_balance_depth_mask && plane.sample == Sample::U32
                 || (value_precision_mask || exposure_geometry_mask) && plane.sample == Sample::U16
                 || (effect.operation == "gimp:levels" || canvas_group_mask) && plane.sample == Sample::F32
                 || (finite_raster_mask || exposure_geometry_mask) && matches!(plane.sample, Sample::F32 | Sample::F64) && owner_sample == Some(plane.sample))
-            || (finite_raster_mask || exposure_geometry_mask || point_replace_canvas.is_some()) && owner_sample != Some(plane.sample)
+            || (finite_raster_mask || exposure_geometry_mask || canvas_mask.is_some()) && owner_sample != Some(plane.sample)
             || plane.channels != 1
             || rect
-                != if let Some(canvas) = point_replace_canvas {
+                != if let Some(canvas) = canvas_mask {
                     canvas
                 } else if exposure_geometry_mask {
                     Rect::new(0, 0, 295, 160)
@@ -63,7 +66,7 @@ pub(super) fn map<P: MappingPlane>(
                 } else {
                     owner_bounds.ok_or_else(|| IoError::Unsupported("XCF filter mask owner bounds unavailable".into()))?
                 }
-            || (finite_raster_mask || exposure_geometry_mask || point_replace_canvas.is_some())
+            || (finite_raster_mask || exposure_geometry_mask || canvas_mask.is_some())
                 && (mask.model != Model::Gray
                     || mask.alpha
                     || !mask.visible

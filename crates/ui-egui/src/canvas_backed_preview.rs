@@ -6,10 +6,12 @@ use photocraft_doc::{Document, LayerContent, WorkingProfileInterpretation};
 use photocraft_raster::{
     Interrupt,
     backing::{
-        BackingError, ReadControl,
+        ReadControl,
         quota::{QuotaKind, QuotaLease},
     },
 };
+#[cfg(test)]
+use photocraft_raster::backing::BackingError;
 
 // Field order releases the allocation before its accounting on every error path.
 struct ReducedInput {
@@ -42,15 +44,18 @@ fn backed_display_image_with_owner(
                 _ => None,
             })
             .ok_or("backed canvas has no owned source")?;
-        let work = std::sync::atomic::AtomicU64::new(0);
-        let charge = |units: u64| {
-            work.try_update(std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Acquire, |used| {
-                used.checked_add(units).filter(|next| *next <= 36_000_000u64 * 512)
-            })
-            .map(|_| ())
-            .map_err(|_| BackingError::Work)
-        };
-        let control = ReadControl { interrupt, work: &charge };
+        let work = photocraft_io::accounted_operation_work::OperationWork::legacy(36_000_000u64 * 512);
+        let charge = |units| work.check(units);
+        let cancelled = || interrupt.cancelled() || work.deadline_expired();
+        let progress = |value| interrupt.progress(value);
+        let timed_interrupt = Interrupt::new(&cancelled, &progress);
+        let control = ReadControl { interrupt: &timed_interrupt, work: &charge };
+        if owner.is_some_and(|owner| owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
+            && photocraft_engine::accounted_native_open::is_current_box_work_candidate(doc, &control).map_err(|e| e.to_string())?
+        {
+            let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| e.to_string())?;
+            work.select_standard_box(&limits).map_err(|e| e.to_string())?;
+        }
         let analytic_profile = if let Some(owner) = owner {
             if photocraft_engine::accounted_native_open::is_current_isolated_normal_group_candidate(doc, &control).map_err(|e| e.to_string())? {
                 Some(analytic_profile::prepare_isolated_normal_group(owner, &control)?)

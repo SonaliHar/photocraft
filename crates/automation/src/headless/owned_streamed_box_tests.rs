@@ -116,3 +116,6 @@ fn streamed_box_native_headless_continues_existing_transactions_without_source_g
         }
     }
 }
+
+#[path = "owned_observed_box_tests.rs"]
+mod observed_epoch_tests;

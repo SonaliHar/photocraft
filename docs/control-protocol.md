@@ -1865,3 +1865,34 @@ XCF input or a total-process memory bound. Full24–36MP enabled proof currently
 exceeds normal4.295b/8b caller work allowances; bounded work admission remains
 unfinished. Twelve new regression groups are UNRUN/uncompiled. Tests and
 numerical/visual/performance acceptance remain deferred.
+
+Original-XCF Box geometry now has a separate observational compatibility epoch,
+xcf22-observed-box-geometry-v1. Implicit RGB F32 nonlinear650 uses checked generic
+canvas/drawable bounds, enabled radius4/5, Replace62 at unit effect/layer opacity,
+region/clipping zero, no auxiliaries and an actual canvas-sized numeric-zero
+physical filter mask. Three present stored effect-policy i32 words remain opaque
+provenance with resolvedNone; they are never normalized or interpreted as enum
+permissions. The old16x12/origin+old-triple identity retains route priority and
+final refusal. Other supported identities are selected before qualification;
+there is no failure retry. Independent GIMP observations support this deliberate
+closed compatibility policy, not a universal statement about arbitrary XCF enums.
+
+The new epoch supports paid inspection/viewing and native .pcraft continuation.
+Accounted mutations are refused before helpers/no-op; layer selection and history
+navigation remain separate. Original native/default/profile/physical-mask proof
+and postpromotion full expanded-output proof remain mandatory. Source preparation
+retains the decoded Surface and paid profile/working-space state, without a full
+filtered Surface. It makes no lazy-source or total-memory claim.
+
+Box host rendering, registered set/enable for existing editable epochs, and
+native/XCF adoption now select the spec's finite standard work policy: native2^40
+or wasm2^36 units, with120s active deadline or an explicitly lowered helper limit.
+One cumulative used count/clock/cancellation owner spans preparation, current and
+staged proofs, reply and publication. Provider work is never discounted; external
+ReadControl entrypoints remain authoritative and unrelated registered caps stay
+unchanged. Browser picker wait precedes the first active clock. Native/XCF intake
+still uses legacy8b bootstrap until the actual Box owner is available, with no
+selected120s enforcement in that earlier phase; selection retains elapsed time
+and immediately refuses an expired operation. Native logical extent limits,
+decoded input costs, lower wasm allowances and numerical/performance acceptance
+remain unfinished large-image boundaries. New regression groups are UNRUN.

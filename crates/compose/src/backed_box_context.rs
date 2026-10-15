@@ -188,6 +188,7 @@ impl<'a> PreparedBackedBoxContext<'a> {
         let [stack] = state.filter_stacks.as_slice() else { return Err(scope()) };
         let [node] = stack.nodes.as_slice() else { return Err(scope()) };
         let source_color = doc.source_color_context.as_ref().ok_or_else(scope)?;
+        let observed = node.operation.schema_epoch == crate::backed_box_source::BOX_GEOMETRY_EPOCH;
         if doc.mode != ColorMode::Rgb
             || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
             || !matches!((doc.depth, source_color.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750))
@@ -199,7 +200,10 @@ impl<'a> PreparedBackedBoxContext<'a> {
             || state.filter_masks.len() != 1
             || stack.owner != ItemRef::Layer(layer.id)
             || !state.editable_indexed.is_empty()
-            || node.composition.as_ref().is_none_or(|p| p.compatibility_epoch != "xcf22-rgb-box-replace-v1")
+            || node
+                .composition
+                .as_ref()
+                .is_none_or(|p| p.compatibility_epoch != if observed { crate::backed_box_source::BOX_GEOMETRY_EPOCH } else { "xcf22-rgb-box-replace-v1" })
         {
             return Err(scope());
         }
@@ -235,7 +239,14 @@ impl<'a> PreparedBackedBoxContext<'a> {
         {
             return Err(scope());
         }
-        let radius = crate::gimp_neighborhood::box_blur::radius_for_current_float(node, 22).map_err(E::Color)?;
+        let radius = if observed {
+            if assigned {
+                return Err(scope());
+            }
+            crate::backed_box_source::metadata(doc, &mut Budget { q: owner.quota(), c, held: 0 }, c.interrupt)?.1
+        } else {
+            crate::gimp_neighborhood::box_blur::radius_for_current_float(node, 22).map_err(E::Color)?
+        };
         let mask = state.filter_masks.first().ok_or_else(scope)?;
         if node.mask != Some(ItemRef::Mask(mask.id))
             || mask.owner != node.id

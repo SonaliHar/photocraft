@@ -130,3 +130,6 @@ fn current_streamed_box_ui_native_geometry_and_existing_transactions() {
         }
     }
 }
+
+#[path = "canvas_observed_box_tests.rs"]
+mod observed_epoch_tests;

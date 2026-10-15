@@ -1,6 +1,8 @@
 //! UNRUN streamed CURRENT Box consumers. Generated lazy providers here are
 //! foundation fixtures, not a claim of lazy XCF ingestion or new source evidence.
 //! Reference Surfaces/Profile clones are external test harness allocations.
+#[path = "backed_box_source_tests.rs"]
+mod observed_source;
 use super::*;
 use crate::{
     backed_box_context::{PreparedBackedBoxContext, is_candidate},

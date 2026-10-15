@@ -83,3 +83,6 @@ fn a_positive_name_hint_does_not_supply_runtime_storage_adoption() {
         "typed handoff rejects missing native owner/profile/schema despite the routing hint"
     );
 }
+
+#[path = "accounted_box_work_hint_tests.rs"]
+mod box_work;

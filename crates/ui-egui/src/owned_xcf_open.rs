@@ -9,7 +9,6 @@ use photocraft_raster::{
     backing::{BackingError, ReadControl, quota::QuotaKind},
 };
 use serde_json::{Value, json};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 const WORK_LIMIT: u64 = 8_000_000_000;
 fn path_shape(path: &str) -> Result<(), String> {
@@ -78,13 +77,11 @@ pub(crate) fn invoke_authorized(app: &mut PhotocraftApp, params: &Value) -> Resu
 }
 fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Result<Value, String> {
     path_shape(path)?;
-    let work = AtomicU64::new(0);
-    let charge = |units: u64| {
-        work.try_update(Ordering::Relaxed, Ordering::Relaxed, |used| used.checked_add(units).filter(|next| *next <= WORK_LIMIT))
-            .map_err(|_| BackingError::Work)?;
-        Ok(())
-    };
-    let control = ReadControl { interrupt: &Interrupt::NONE, work: &charge };
+    let work = photocraft_io::accounted_operation_work::OperationWork::legacy(WORK_LIMIT);
+    let charge = |units| work.check(units);
+    let expired = || work.deadline_expired();
+    let interrupt = Interrupt::cancel_only(&expired);
+    let control = ReadControl { interrupt: &interrupt, work: &charge };
     control.check(path.len() as u64).map_err(|e| e.to_string())?;
     if path.contains('\0') {
         return Err("owned XCF Open path contains NUL".into());
@@ -115,6 +112,13 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
     .map_err(|_| "owned XCF Open failed unexpectedly; existing documents were retained".to_owned())??;
     if quota.as_ref().is_some_and(|q| !q.shares_ledger(imported.document().quota())) {
         return Err("owned XCF Open returned a different catalog quota".into());
+    }
+    let owner = imported.document();
+    if (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
+        && photocraft_engine::accounted_native_open::is_current_box_work_candidate(owner.document(), &control).map_err(|e| e.to_string())?
+    {
+        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| e.to_string())?;
+        work.select_standard_box(&limits).map_err(|e| e.to_string())?;
     }
     let name = path.rsplit(['/', '\\']).next().filter(|name| !name.is_empty()).ok_or("owned XCF Open has no file name")?;
     let prepared = PreparedReply::new(&imported, path, name, authority, &control)?;

@@ -449,6 +449,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn requires_budgeted_point_preparation(point_domain: bool) -> bool {
         P::SOURCE_SELECTED && point_domain
     }
+    fn requires_budgeted_observed_box_geometry_preparation(domain:bool)->bool{P::SOURCE_SELECTED && domain}
     fn requires_budgeted_assigned_box_preparation(domain: bool) -> bool {P::SOURCE_SELECTED && domain}
     fn requires_budgeted_assigned_median_preparation(domain: bool) -> bool {P::SOURCE_SELECTED && domain}
     fn requires_budgeted_assigned_gaussian_preparation(domain: bool) -> bool {P::SOURCE_SELECTED && domain}

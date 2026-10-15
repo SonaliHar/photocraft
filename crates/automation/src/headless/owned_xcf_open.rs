@@ -33,21 +33,18 @@ impl Headless {
         self.open_owned_xcf_bounded(path, Some(id))
     }
     fn open_owned_xcf_bounded(&mut self, path: &Path, id: Option<&Value>) -> Result<OwnedXcfOpenReply, AutomationError> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        let used = AtomicU64::new(0);
-        let charge = |units: u64| {
-            used.try_update(Ordering::Relaxed, Ordering::Relaxed, |old| old.checked_add(units).filter(|next| *next <= 8_000_000_000))
-                .map_err(|_| BackingError::Work)?;
-            Ok(())
-        };
-        self.open_owned_xcf_impl(path, id, &ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &charge })
+        let work = photocraft_io::accounted_operation_work::OperationWork::legacy(8_000_000_000);
+        let charge = |units| work.check(units);
+        let expired = || work.deadline_expired();
+        let interrupt = photocraft_raster::Interrupt::cancel_only(&expired);
+        self.open_owned_xcf_impl(path, id, &ReadControl { interrupt: &interrupt, work: &charge }, Some(&work))
     }
     /// Explicitly keep the current interpretation of one eligible original XCF.
     /// The installed authority is selected once; a failed reader never retries.
     pub fn open_owned_xcf_keep_current(&mut self, path: &Path, control: &ReadControl<'_>) -> Result<OwnedXcfOpenReply, AutomationError> {
-        self.open_owned_xcf_impl(path, None, control)
+        self.open_owned_xcf_impl(path, None, control, None)
     }
-    fn open_owned_xcf_impl(&mut self, path: &Path, id: Option<&Value>, control: &ReadControl<'_>) -> Result<OwnedXcfOpenReply, AutomationError> {
+    fn open_owned_xcf_impl(&mut self, path: &Path, id: Option<&Value>, control: &ReadControl<'_>, work: Option<&photocraft_io::accounted_operation_work::OperationWork>) -> Result<OwnedXcfOpenReply, AutomationError> {
         // Bound hostile request IDs before reading any source. This is an
         // allocation-free recipe for the later owned copy, not an input fee.
         let id_bytes = id.map(|value| id_copy_bound(value, control)).transpose().map_err(ReplyError::into_automation)?;
@@ -79,6 +76,14 @@ impl Headless {
         };
         if !quota.shares_ledger(imported.document().quota()) {
             return Err(AutomationError::Other("owned XCF reader changed catalog quota".into()));
+        }
+        let owner = imported.document();
+        if let Some(work) = work
+            && (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
+            && photocraft_engine::accounted_native_open::is_current_box_work_candidate(owner.document(), control).map_err(photocraft_engine::EngineError::from)?
+        {
+            let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| AutomationError::Other(e.to_string()))?;
+            work.select_standard_box(&limits).map_err(photocraft_engine::EngineError::from)?;
         }
         let name = path
             .rsplit(['/', '\\'])

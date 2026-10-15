@@ -1687,6 +1687,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
     authorized_font: Option<&PreparedRuntimeFont<'_>>,
 ) -> Result<(ImportResult, usize), IoError> {
     let admission::AdmissionDomains {
+        observed_box_geometry_domain,
         owned_assigned_box_domain,
         owned_assigned_median_domain,
         owned_assigned_gaussian_domain,
@@ -2129,6 +2130,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 color_balance_depth_domain,
                 exposure_geometry_domain,
                 point_replace_domain.map(|_| doc.bounds()),
+                observed_box_geometry_domain.then(||doc.bounds()),
             )?;
             let neighborhood_domain = if let Some(domain) = point_replace_domain.or(owned_point_domain).or(owned_neighborhood_domain) {
                 domain
@@ -2207,11 +2209,11 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 if domain != neighborhood_domain {
                     return Err(unsupported(d, "owned neighborhood source domain mismatch"));
                 }
-                if domain == crate::xcf_filters::NeighborhoodDomain::RasterOriginal {
-                    // The exact original Gaussian source predicate selected
-                    // this private domain before mapping. Preserve its existing
-                    // strict legacy stack envelope, not the eight-domain owned
-                    // activation extension. A refusal never retries either path.
+                if matches!(domain, crate::xcf_filters::NeighborhoodDomain::RasterOriginal | crate::xcf_filters::NeighborhoodDomain::BoxGeometry) {
+                    // Separately selected original-source recipes stay enabled-only.
+                    // Observational Box has a distinct opaque Replace envelope;
+                    // neither route inherits the owned activation extension, and
+                    // a refusal never retries another source route.
                     crate::xcf_filters::qualified_stack(&d.effects, &masks, owner, next_filter_id, file.version, domain)?
                 } else {
                     crate::xcf_filters::qualified_owned_neighborhood_stack(&d.effects, &masks, owner, next_filter_id, file.version, domain)?
@@ -2659,6 +2661,11 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         let mut adapter=SharedPreparation{shared,failure:None};
         let checked=photocraft_compose::backed_gaussian_group::LeasedGaussianGroupPipeline::new_budgeted(&doc,ctl,&mut adapter,source_lease);
         if let Err(error)=checked {return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("XCF staged Gaussian group rendering consumer: {error}"))}))}
+    } else if P::requires_budgeted_observed_box_geometry_preparation(observed_box_geometry_domain) {
+        let (shared,source_lease)=preparation.ok_or_else(||IoError::Unsupported("observed Box geometry requires accounting".into()))?;
+        let mut adapter=SharedPreparation{shared,failure:None};
+        let checked=photocraft_compose::backed_box_source::LeasedStreamedBoxPipeline::new_geometry_budgeted(&doc,ctl,&mut adapter,source_lease);
+        if let Err(error)=checked{return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("observed Box geometry preparation: {error}"))}))}
     } else if P::requires_budgeted_assigned_box_preparation(owned_assigned_box_domain) {
         let (shared,source_lease)=preparation.ok_or_else(||IoError::Unsupported("assigned Box requires accounting".into()))?;
         let mut adapter=SharedPreparation{shared,failure:None};
@@ -2724,10 +2731,11 @@ fn effect_masks<P: MappingPlane>(
     color_balance_depth_mask: bool,
     exposure_geometry_mask: bool,
     point_replace_canvas: Option<Rect>,
+    observational_box_canvas:Option<Rect>,
 ) -> Result<Vec<Option<photocraft_doc::item_identity::ItemRef>>, IoError> {
     effect_mask_mapping::map(drawable, owner, first_filter, next_mask, state, budget, ctl,
         canvas_group_mask, finite_raster_mask, value_precision_mask, color_balance_depth_mask,
-        exposure_geometry_mask, point_replace_canvas)
+        exposure_geometry_mask, point_replace_canvas, observational_box_canvas)
 }
 
 fn record_memberships(

@@ -50,7 +50,7 @@ fn budget(max: usize) -> Budget<'static> {
     Budget { used: 0, max, peak: 0, shared: None }
 }
 fn run(d: &mut Drawable, state: &mut photocraft_doc::XcfState, b: &mut Budget<'_>, ctl: &Interrupt<'_>) -> Result<Vec<Option<ItemRef>>, IoError> {
-    map(d, ItemRef::Layer(LayerId(91)), 17, &mut 8, state, b, ctl, false, true, false, false, false, None)
+    map(d, ItemRef::Layer(LayerId(91)), 17, &mut 8, state, b, ctl, false, true, false, false, false, None, None)
 }
 
 #[test]

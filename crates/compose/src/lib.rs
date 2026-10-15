@@ -21,6 +21,7 @@ pub mod advanced;
 pub mod backed_document;
 pub mod backed_box_context;
 pub mod backed_box_document;
+pub mod backed_box_source;
 pub mod backed_gaussian_group;
 pub mod backed_separable;
 pub mod backed_separable_document;

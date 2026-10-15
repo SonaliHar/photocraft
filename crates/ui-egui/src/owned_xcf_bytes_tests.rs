@@ -75,7 +75,7 @@ fn capture_caps_cumulative_work_consumed_builder_and_failure_cleanup_are_real() 
     drop(builder);
     drop(capture);
     assert_eq!(q.usage().unwrap(), baseline);
-    request.work.used.store(WORK, Ordering::Relaxed);
+    request.work.meter.check(WORK - request.work.meter.diagnostics().used).unwrap();
     assert!(request.clone().begin_capture("x.xcf", 1).is_err());
     drop(request);
     assert_eq!(q.usage().unwrap(), QuotaUsage::default());

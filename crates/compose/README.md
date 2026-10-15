@@ -885,3 +885,30 @@ large-image publication remains unfinished even where individual ROI bands
 fit. The new regression groups are authored but remain UNRUN/uncompiled during
 the implementation-first pass; no numerical or performance qualification is
 claimed.
+
+`LeasedStreamedBoxPipeline::new_geometry_budgeted` is the separate original-XCF
+preparation route for `xcf22-observed-box-geometry-v1`. Its implicit RGB F32
+nonlinear source envelope requires enabled Box radius4/5, Replace62 at unit
+opacity, region/clipping zero, no auxiliary input and an actual canvas-sized
+numeric-zero physical mask. Three stored effect-policy words remain opaque
+provenance with no resolved enum interpretation. Checked geometry is generic;
+the independent GIMP controls establish the observed behavior rather than a
+filename or coordinate whitelist. Older source constructors retain their exact
+contracts. The old source identity keeps selection priority and final refusal.
+
+This adapter checks retained source tiles/defaults and every stored mask word,
+then retains paid profile/working-space preparation. It creates no full filtered
+Surface. Promotion still requires complete CURRENT validation of the actual
+native owner and expanded output. This observational epoch currently refuses
+mutations while supporting viewing and native continuation. Its drafts are
+UNRUN/uncompiled, with no independent negative-zero mask qualification.
+
+Box host services now select the existing standard policy work ceiling
+(native2^40, wasm2^36) and active-operation deadline (120 seconds), retaining
+one used counter, clock and cancellation owner. External caller controls stay
+authoritative. Every provider debit remains charged; these are hard maxima,
+not sufficient-work or throughput promises. Native/XCF ingress still has its
+legacy8-billion bootstrap before the actual Box owner is known. The clock is
+retained across it, but the selected deadline is enforced only after selection;
+an already expired operation then fails immediately. Existing native logical
+extent limits and retained-input costs remain separate large-image work.

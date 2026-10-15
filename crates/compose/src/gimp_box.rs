@@ -25,6 +25,38 @@ pub(crate) fn radius_for_current_float(node: &FilterNode, version: u32) -> Resul
     let c = node.composition.as_ref().ok_or(CompositionError::Unsupported("missing Box Blur policy"))?;
     radius_policy(node, c, version, -1474592175, true)
 }
+/// Distinct observed Replace envelope. The three retained i32 values are opaque
+/// provenance and deliberately never interpreted or compared to an alias.
+pub(crate) fn radius_for_observed_geometry(node: &FilterNode, version: u32) -> Result<u32> {
+    let c = node.composition.as_ref().ok_or(CompositionError::Unsupported("missing observed Box policy"))?;
+    if version != 22
+        || node.operation.name != "gegl:box-blur"
+        || node.operation.stored_version != "0:0"
+        || node.operation.schema_epoch != crate::backed_box_source::BOX_GEOMETRY_EPOCH
+        || c.compatibility_epoch != crate::backed_box_source::BOX_GEOMETRY_EPOCH
+        || !node.enabled
+        || node.opacity_f64_bits != 1f64.to_bits()
+        || node.source_clipping != Some(0)
+        || node.source_region != Some(0)
+        || !matches!(node.mask, Some(photocraft_doc::item_identity::ItemRef::Mask(_)))
+        || !node.auxiliary.is_empty()
+        || c.source_mode != 62
+        || c.legacy
+        || c.pass_through
+        || c.resolved.is_some()
+        || node.arguments.len() != 1
+    {
+        return Err(CompositionError::Unsupported("observed Box Replace envelope"));
+    }
+    match node.arguments.first() {
+        Some(argument) if argument.name == "radius" => match argument.value {
+            FilterValue::Number(ExactNumber::Signed { width: 32, value: 4 }) => Ok(4),
+            FilterValue::Number(ExactNumber::Signed { width: 32, value: 5 }) => Ok(5),
+            _ => Err(CompositionError::Unsupported("observed Box radius domain")),
+        },
+        _ => Err(CompositionError::Unsupported("observed Box radius absent")),
+    }
+}
 fn radius_policy(node: &FilterNode, c: &photocraft_doc::import_compositing::GimpComposition, version: u32, raw: i32, owned: bool) -> Result<u32> {
     if version != 22
         || node.operation.name != "gegl:box-blur"

@@ -1,0 +1,175 @@
+//! UNRUN observational Box adapter consumers. Generated models are CURRENT
+//! foundation controls, not independent GIMP producer or ingestion evidence.
+use super::*;
+use crate::backed_box_source::{BOX_GEOMETRY_EPOCH, LeasedStreamedBoxPipeline};
+use crate::gimp_composite::CompositionError;
+use crate::gimp_render::PreparationBudget;
+use photocraft_raster::RasterInputError;
+struct Budget {
+    q: BackingQuota,
+    work: u64,
+    deny: bool,
+}
+impl PreparationBudget for Budget {
+    type Lease = QuotaLease;
+    fn reserve_prepared_bytes(&mut self, n: u64) -> Result<QuotaLease, CompositionError> {
+        if self.deny {
+            return Err(CompositionError::Invalid("harness quota refusal"));
+        }
+        self.q.reserve(QuotaKind::Resident, n).map_err(|_| CompositionError::Invalid("harness quota"))
+    }
+    fn consume_preparation_work(&mut self, n: u64) -> Result<(), CompositionError> {
+        self.work = self.work.checked_sub(n).ok_or(CompositionError::Invalid("harness work"))?;
+        Ok(())
+    }
+}
+fn observed(s: Rect, r: i64) -> (Document, BackingQuota, Arc<dyn std::any::Any + Send + Sync>, Profile) {
+    let (mut d, q, g, p, _) = fixture(SampleType::F32, false, s, Rect::new(0, 0, 283, 281), r, true);
+    let n = &mut d.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
+    n.operation.schema_epoch = BOX_GEOMETRY_EPOCH.into();
+    let c = n.composition.as_mut().unwrap();
+    c.compatibility_epoch = BOX_GEOMETRY_EPOCH.into();
+    c.stored_blend_space = 1654948433;
+    c.stored_composite_space = 1654948433;
+    c.stored_operator = 1654948433;
+    (d, q, g, p)
+}
+// Payload fields precede every retained source fee. The raw staging Vec and
+// physical tile construction overlap is admitted before either is allocated.
+struct ResidentSource {
+    document: Document,
+    _original_guard: Arc<dyn std::any::Any + Send + Sync>,
+    _resident_lease: QuotaLease,
+}
+fn resident_source(d: Document, q: &BackingQuota, guard: Arc<dyn std::any::Any + Send + Sync>, s: Rect) -> ResidentSource {
+    let physical = (s.tiles().count() as u64).checked_mul(256 * 256 * 16).unwrap();
+    let raw = u64::from(s.width()).checked_mul(u64::from(s.height())).unwrap().checked_mul(16).unwrap();
+    // Two physical payload envelopes cover destination construction, growing
+    // replacement map and tile temporaries. The staging Vec may reserve twice
+    // its logical raw length. Map/default/holder overhead is separately added.
+    let peak = physical
+        .checked_mul(2)
+        .unwrap()
+        .checked_add(raw.checked_mul(2).unwrap())
+        .unwrap()
+        .checked_add(2 * 256 * 256 * 16 + (s.tiles().count() as u64) * 1024 + 65536 + std::mem::size_of::<ResidentSource>() as u64)
+        .unwrap();
+    let fee = q.reserve(QuotaKind::Resident, peak).unwrap();
+    let mut out = ResidentSource { document: d, _original_guard: guard, _resident_lease: fee };
+    let v = resident(out.document.pixel_format(), s);
+    let retained = v.resident_accounted_bytes().unwrap().checked_add(std::mem::size_of::<ResidentSource>() as u64 + 1024).unwrap();
+    assert!(retained <= peak);
+    out.document.layers[0].content = LayerContent::Raster(v);
+    // resident() has now dropped its temporary interleaved raw Vec.
+    out._resident_lease.reconcile_capacity(retained).unwrap();
+    out
+}
+#[test]
+#[ignore = "UNRUN observational source adapter; all PhotoCraft execution deferred"]
+fn opaque_raw_provenance_and_real_preparation_are_preserved() {
+    for s in [Rect::new(0, 0, 257, 259), Rect::new(-7, 11, 250, 270), Rect::new(13, 9, 270, 268)] {
+        for r in [4, 5] {
+            let (d, q, g, _) = observed(s, r);
+            let mut input = resident_source(d, &q, g, s);
+            let d = &mut input.document;
+            let raw = d.clone(); // External oracle copy, not a production receipt.
+            let mut budget = Budget { q: q.clone(), work: u64::MAX, deny: false };
+            let baseline = q.usage().unwrap();
+            let prepared =
+                LeasedStreamedBoxPipeline::new_geometry_budgeted(&d, &Interrupt::NONE, &mut budget, (&input._original_guard, &input._resident_lease)).unwrap();
+            assert_eq!(*d, raw);
+            assert!(budget.work < u64::MAX);
+            assert!(q.usage().unwrap().resident > baseline.resident);
+            drop(prepared);
+            assert_eq!(q.usage().unwrap(), baseline);
+            // Raw words are opaque, even when independently different.
+            let c = d.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].composition.as_mut().unwrap();
+            c.stored_blend_space = i32::MIN;
+            c.stored_composite_space = 17;
+            c.stored_operator = i32::MAX;
+            LeasedStreamedBoxPipeline::new_geometry_budgeted(&d, &Interrupt::NONE, &mut budget, (&input._original_guard, &input._resident_lease)).unwrap();
+        }
+    }
+}
+#[test]
+#[ignore = "UNRUN observational CURRENT packed/reference parity"]
+fn observed_current_uses_original_source_clamp_and_full_tile_before_crop() {
+    let s = Rect::new(-7, 11, 250, 270);
+    for r in [4, 5] {
+        let (d, q, g, p) = observed(s, r);
+        let owned = owner(d, q, g, false);
+        let context = PreparedBackedBoxContext::new(&owned, NormalBandLimits::default(), &ctl()).unwrap();
+        let (o, expected) = reference(owned.document().pixel_format(), s, r as u32, &p);
+        assert_eq!(context.bounds(), o);
+        for roi in [Rect::new(-9, 12, 4, 15), Rect::new(245, 250, 253, 260), Rect::new(0, 255, 19, 257)] {
+            let got = context.render_wide_band(roi, &ctl()).unwrap();
+            for (index, actual) in got.pixels().iter().enumerate() {
+                let x = roi.x0 + (index % roi.width() as usize) as i32;
+                let y = roi.y0 + (index / roi.width() as usize) as i32;
+                let mut p = [0.; 4];
+                expected.try_read_pixel_f64(x, y, &mut p).unwrap();
+                assert_eq!(*actual, p);
+            }
+        }
+    }
+}
+#[test]
+#[ignore = "UNRUN full physical source/mask/default validation"]
+fn hidden_padding_mask_and_profile_failures_are_not_waived() {
+    let s = Rect::new(13, 9, 270, 268);
+    for defect in 0..5 {
+        let (d, q, g, _) = observed(s, 4);
+        let mut input = resident_source(d, &q, g, s);
+        let d = &mut input.document;
+        match defect {
+            0 => {
+                d.layers[0].visible = false;
+                d.xcf_state.as_mut().unwrap().items.iter_mut().find(|v| v.item == ItemRef::Layer(d.layers[0].id)).unwrap().visible = false;
+            }
+            1 => {
+                let LayerContent::Raster(v) = &mut d.layers[0].content else { panic!() };
+                let mut raw = [0u8; 16];
+                raw[..4].copy_from_slice(&f32::NAN.to_ne_bytes());
+                raw[12..].copy_from_slice(&1f32.to_ne_bytes());
+                v.try_write_interleaved(Rect::new(0, 0, 1, 1), &raw).unwrap();
+            }
+            2 => {
+                d.xcf_state.as_mut().unwrap().filter_masks[0].surface.try_write_region_f64(Rect::new(511, 511, 512, 512), &[1.]).unwrap();
+            }
+            3 => {
+                d.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].source_clipping = Some(1);
+            }
+            _ => {
+                d.working_profile_interpretation = photocraft_doc::WorkingProfileInterpretation::Icc;
+            }
+        }
+        let mut budget = Budget { q: q.clone(), work: u64::MAX, deny: false };
+        assert!(LeasedStreamedBoxPipeline::new_geometry_budgeted(&d, &Interrupt::NONE, &mut budget, (&input._original_guard, &input._resident_lease)).is_err());
+    }
+}
+#[test]
+#[ignore = "UNRUN actual Budget work/allocation/caller cancellation boundaries"]
+fn source_preparation_refuses_budget_and_caller_cancellation() {
+    let s = Rect::new(0, 0, 257, 259);
+    let (d, q, g, _) = observed(s, 4);
+    let mut input = resident_source(d, &q, g, s);
+    let d = &mut input.document;
+    let baseline = q.usage().unwrap();
+    let mut measured = Budget { q: q.clone(), work: u64::MAX, deny: false };
+    drop(LeasedStreamedBoxPipeline::new_geometry_budgeted(&d, &Interrupt::NONE, &mut measured, (&input._original_guard, &input._resident_lease)).unwrap());
+    let consumed = u64::MAX - measured.work;
+    let mut late = Budget { q: q.clone(), work: consumed - 1, deny: false };
+    assert!(LeasedStreamedBoxPipeline::new_geometry_budgeted(&d, &Interrupt::NONE, &mut late, (&input._original_guard, &input._resident_lease)).is_err());
+    assert_eq!(q.usage().unwrap(), baseline);
+    for (work, deny) in [(0, false), (u64::MAX, true)] {
+        let mut budget = Budget { q: q.clone(), work, deny };
+        assert!(LeasedStreamedBoxPipeline::new_geometry_budgeted(&d, &Interrupt::NONE, &mut budget, (&input._original_guard, &input._resident_lease)).is_err());
+    }
+    let cancelled = || true;
+    let interrupt = Interrupt::cancel_only(&cancelled);
+    let mut budget = Budget { q, work: u64::MAX, deny: false };
+    assert!(matches!(
+        LeasedStreamedBoxPipeline::new_geometry_budgeted(&d, &interrupt, &mut budget, (&input._original_guard, &input._resident_lease)),
+        Err(CompositionError::Raster(RasterInputError::Cancelled))
+    ));
+}

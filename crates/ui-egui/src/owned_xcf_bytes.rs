@@ -3,14 +3,14 @@ use crate::PhotocraftApp;
 use photocraft_raster::{
     Interrupt,
     backing::{
-        BackingError, ReadControl,
+        ReadControl,
         quota::{BackingQuota, QuotaKind, QuotaLease},
     },
 };
 use serde_json::{Value, json};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicBool, Ordering},
     mpsc::{self, Receiver, Sender, TryRecvError},
 };
 mod native_archive;
@@ -24,7 +24,7 @@ enum Family {
 const CAP: usize = 16 << 20;
 const WORK: u64 = 8_000_000_000;
 struct Work {
-    used: AtomicU64,
+    meter: photocraft_io::accounted_operation_work::OperationWork,
     cancelled: AtomicBool,
     _lease: QuotaLease,
 }
@@ -43,7 +43,7 @@ impl Request {
         if std::mem::size_of::<Work>() + std::mem::size_of::<Pending>() + 128 > 4096 {
             return Err("owned byte picker header exceeds admission".into());
         }
-        Ok(Self { quota, family, work: Arc::new(Work { used: AtomicU64::new(0), cancelled: AtomicBool::new(false), _lease: lease }) })
+        Ok(Self { quota, family, work: Arc::new(Work { meter: photocraft_io::accounted_operation_work::OperationWork::legacy(WORK), cancelled: AtomicBool::new(false), _lease: lease }) })
     }
     /// Advisory picker filter; content still passes the selected strict decoder.
     pub fn extension(&self) -> &'static str {
@@ -53,12 +53,10 @@ impl Request {
         }
     }
     pub fn with_control<R>(&self, f: impl FnOnce(&ReadControl<'_>) -> Result<R, String>) -> Result<R, String> {
-        let cancelled = || self.work.cancelled.load(Ordering::Relaxed);
+        let cancelled = || self.work.cancelled.load(Ordering::Relaxed) || self.work.meter.deadline_expired();
         let interrupt = Interrupt::cancel_only(&cancelled);
-        let charge = |n: u64| {
-            self.work.used.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(n).filter(|v| *v <= WORK)).map_err(|_| BackingError::Work)?;
-            Ok(())
-        };
+        // First selected-file work starts the clock, never picker creation/wait.
+        let charge = |n| self.work.meter.check(n);
         let ctl = ReadControl { interrupt: &interrupt, work: &charge };
         ctl.check(0).map_err(|e| e.to_string())?;
         f(&ctl)
@@ -236,6 +234,10 @@ fn apply(app: &mut PhotocraftApp, capture: Capture) -> Result<Value, String> {
             }
             let loaded = native_archive::load(capture, control)?;
             let (label, archive) = loaded.into_parts();
+            if photocraft_engine::accounted_native_open::is_current_box_work_candidate(archive.document(), control).map_err(|e| e.to_string())? {
+                let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| e.to_string())?;
+                request.work.meter.select_standard_box(&limits).map_err(|e| e.to_string())?;
+            }
             crate::owned_native_open::adopt_bytes(app, label.name(), archive, control)
         });
     }
@@ -262,6 +264,13 @@ fn apply_xcf(app: &mut PhotocraftApp, capture: &Capture) -> Result<Value, String
             control,
         )
         .map_err(|e| e.to_string())?;
+        let owner = imported.document();
+        if (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
+            && photocraft_engine::accounted_native_open::is_current_box_work_candidate(owner.document(), control).map_err(|e| e.to_string())?
+        {
+            let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|e| e.to_string())?;
+            capture.request.work.meter.select_standard_box(&limits).map_err(|e| e.to_string())?;
+        }
         crate::owned_xcf_open::adopt_bytes(app, &capture.name, &imported, control)
     })
 }
@@ -310,3 +319,7 @@ mod tests;
 #[cfg(test)]
 #[path = "owned_native_bytes_tests.rs"]
 mod native_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "owned_streamed_box_work_tests.rs"]
+mod streamed_box_work_tests;
