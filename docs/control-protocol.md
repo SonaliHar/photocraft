@@ -179,6 +179,14 @@ contents editor opened or last saved; save a copy of conflicting edits before re
 source. A successful save refreshes every open instance of that file, preserving each instance's
 placement and filters. Save the affected parent documents to keep those refreshed caches on disk.
 
+Don't Save closes contents without writing their source or updating their parent. Close All and
+Quit close each answered tab immediately; cancelling a later prompt keeps only the unanswered
+documents open and dirty. Contents editors are answered before their parents, preserving
+save-back until the contents are saved or explicitly discarded. The `file.close*` commands accept
+`discardDocuments: [{document: id, revision: revision}]` for explicit discards; identities and
+revisions must match the documents being closed. Close All and Quit ask about mockups that become
+dirty while saving contents, including shared instances in other open documents.
+
 `type.editText` starts inline editing of the active type layer and selects all its text, like
 double-clicking its thumbnail in Layers. Text input, Commit and Cancel use the existing Type tool
 editing session; non-type layers return an error without changing the tool or document.

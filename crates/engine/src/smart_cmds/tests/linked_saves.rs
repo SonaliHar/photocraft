@@ -168,6 +168,39 @@ fn busy_shared_mockup_blocks_save_before_any_file_or_cache_changes() {
 }
 
 #[test]
+fn explicit_discard_closes_linked_or_embedded_contents_without_saveback() {
+    for linked in [false, true] {
+        let (mut s, path, layer) = linked_session();
+        if !linked {
+            s.execute("layer.smartObjects.convertToEmbedded", json!({})).unwrap();
+        }
+        let parent = s.documents()[0].doc.clone();
+        let original = std::fs::read(&path).unwrap();
+        open_child(&mut s, 0, layer);
+        s.execute("layer.setProps", json!({"opacity": 0.5})).unwrap();
+        for malformed in [json!(null), json!({}), json!([{}]), json!([{"document": "bad", "revision": 1}]), json!([{"document": 1}])] {
+            assert!(s.execute("file.close", json!({"discardDocuments": malformed})).is_err());
+            assert_eq!(s.documents().len(), 2);
+            assert!(s.active().unwrap().is_dirty());
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+        }
+        let st = s.active().unwrap();
+        let confirmations = json!([{"document": st.doc.id.0, "revision": st.revision}]);
+        // A changed child cannot be thrown away with an old confirmation.
+        s.execute("layer.setProps", json!({"name": "newer edit"})).unwrap();
+        assert!(s.execute("file.close", json!({"discardDocuments": confirmations})).is_err());
+        assert_eq!(s.documents().len(), 2);
+        let st = s.active().unwrap();
+        s.execute("file.close", json!({"discardDocuments": [{"document": st.doc.id.0, "revision": st.revision}]})).unwrap();
+        assert_eq!(s.documents().len(), 1);
+        assert!(Arc::ptr_eq(&parent, &s.documents()[0].doc));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert!(s.smart_links.is_empty());
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[test]
 fn linked_contents_save_survives_deleting_the_originating_duplicate() {
     let (mut s, path, original) = linked_session();
     let duplicate = LayerId(s.execute("layer.duplicate", json!({"layer": original.0})).unwrap()["layer"].as_u64().unwrap());
