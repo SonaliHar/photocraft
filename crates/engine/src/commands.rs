@@ -1371,6 +1371,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::stamp_cmds::specs());
     v.extend(crate::align_cmds::specs());
     v.extend(crate::photo_cmds::specs());
+    v.extend(crate::raw_profile_cmds::specs());
     v.extend(crate::lens_cmds::specs());
     v.extend(crate::vp_cmds::specs());
     v.extend(crate::channel_cmds::specs());

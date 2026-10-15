@@ -30,6 +30,7 @@ pub fn document(d: &DocState) -> Value {
     let instances = smart_instances(&doc.layers);
     json!({
         "name": doc.name,
+        "rawProfile": photocraft_io::raw::profile_info(doc),
         "path": &d.path,
         "width": doc.size.width,
         "height": doc.size.height,

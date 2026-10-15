@@ -472,7 +472,8 @@ keeps the dialog open for correction. Nothing else writes document history.
 **Opening a raw file.** An interactive open (File › Open, Open Recent, drag and drop, the
 command line) of a camera raw developed from its sensor data shows this dialog first, titled
 "Camera Raw (name)", with **Open** and **Cancel**, as Photoshop opens raws in Adobe Camera Raw.
-`ui.inspect.cameraRaw.openingRaw` is then `{name, path}`. Commit (Open) re-develops the raw when
+`ui.inspect.cameraRaw.openingRaw` is then `{name, path, profile}`; `profile` carries the applied
+DCP provenance or is null (see [camera profiles](camera-profiles.md)). Commit (Open) re-develops the raw when
 Temperature, Tint, Exposure, Shadows, Highlights, Clarity, Texture or Dehaze changed (as-shot
 white-balance gains, develop exposure, and the other five in linear light before the camera's
 tone curve, as Camera Raw does for raw files; without an as-shot white balance, or without the file's bytes, they stay RGB
