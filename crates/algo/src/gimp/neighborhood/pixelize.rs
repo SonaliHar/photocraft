@@ -1,6 +1,6 @@
 //! Independent grid-aligned rectangular means; caller supplies linear working
 //! samples. Only full-size square blocks are represented by this named API.
-use super::{GaussianAbyss, GaussianLimits, allocate, poll, read_premultiplied};
+use super::{GaussianAbyss, GaussianLimits, NeighborhoodRequirements, allocate, clone_requirements, poll, read_premultiplied};
 use photocraft_color::try_write_sample_f64;
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES, RasterInputError, Surface, checked_region_byte_len};
@@ -11,18 +11,25 @@ pub struct PixelizeParams {
     pub offset_x: i32,
     pub offset_y: i32,
 }
-/// Square/full-ratio Pixelize. Grid coordinates use Euclidean division, including
-/// negative offsets. Each block averages only its actual intersection with the
-/// finite input extent (no padded/clamped edge denominator). Associated-alpha
-/// f64 arithmetic retains finite HDR color; caller owns CMS/filter envelope.
-pub fn try_pixelize_square(
+
+/// Allocation-free, cancellation-polled requirements for the existing kernel.
+/// These are prospective kernel costs, not retained memory or quota authority.
+/// Empty output reports a conservative source-clone lifetime envelope and scan
+/// work. The legacy constructor still bypasses numeric limits on that branch.
+pub fn pixelize_requirements(
     source: &Surface,
     output: Rect,
     input: Rect,
     params: PixelizeParams,
-    limits: GaussianLimits,
     interrupt: &Interrupt<'_>,
-) -> Result<Surface, RasterInputError> {
+) -> Result<NeighborhoodRequirements, RasterInputError> {
+    validate(source, output, input, params, interrupt)?;
+    if output.is_empty() {
+        return clone_requirements(source, interrupt);
+    }
+    cost(source, output, input, interrupt)
+}
+fn validate(source: &Surface, output: Rect, input: Rect, params: PixelizeParams, interrupt: &Interrupt<'_>) -> Result<(), RasterInputError> {
     checked_region_byte_len(input, source.format())?;
     checked_region_byte_len(output, source.format())?;
     source.try_validate_tile_origins_with(interrupt)?;
@@ -39,9 +46,10 @@ pub fn try_pixelize_square(
     if interrupt.cancelled() {
         return Err(RasterInputError::Cancelled);
     }
-    if output.is_empty() {
-        return Ok(source.clone());
-    }
+    Ok(())
+}
+fn cost(source: &Surface, output: Rect, input: Rect, interrupt: &Interrupt<'_>) -> Result<NeighborhoodRequirements, RasterInputError> {
+    let channels = source.channels();
     let tile_bytes = (256 * 256 * source.format().bytes_per_pixel()) as u64;
     let mut growth = 0u64;
     for (i, tile) in output.tiles().enumerate() {
@@ -64,9 +72,30 @@ pub fn try_pixelize_square(
         .and_then(|v| v.checked_add(growth))
         .and_then(|v| v.checked_add(tile_bytes * 3 + source.tile_count() as u64 * 128 + 4096))
         .ok_or(RasterInputError::LimitExceeded)?;
-    if peak > limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) || work > limits.work_units {
+    Ok(NeighborhoodRequirements { peak_resident_bytes: peak, work_units: work })
+}
+
+/// Square/full-ratio Pixelize. Grid coordinates use Euclidean division, including
+/// negative offsets. Each block averages only its actual intersection with the
+/// finite input extent (no padded/clamped edge denominator). Associated-alpha
+/// f64 arithmetic retains finite HDR color; caller owns CMS/filter envelope.
+pub fn try_pixelize_square(
+    source: &Surface,
+    output: Rect,
+    input: Rect,
+    params: PixelizeParams,
+    limits: GaussianLimits,
+    interrupt: &Interrupt<'_>,
+) -> Result<Surface, RasterInputError> {
+    validate(source, output, input, params, interrupt)?;
+    if output.is_empty() {
+        return Ok(source.clone());
+    }
+    let requirements = cost(source, output, input, interrupt)?;
+    if requirements.peak_resident_bytes > limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) || requirements.work_units > limits.work_units {
         return Err(RasterInputError::LimitExceeded);
     }
+    let channels = source.channels();
     let sx = i64::from(params.size_x);
     let sy = i64::from(params.size_y);
     let ox = i64::from(params.offset_x);

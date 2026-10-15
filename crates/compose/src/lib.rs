@@ -21,6 +21,8 @@ pub mod advanced;
 pub mod backed_document;
 pub mod backed_normal;
 pub mod backed_normal_stack;
+pub mod backed_neighborhood_context;
+pub mod backed_neighborhood_document;
 pub mod backed_point_filter;
 pub mod backed_point;
 pub mod backed_stock_point_context;

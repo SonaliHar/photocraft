@@ -2,7 +2,7 @@
 //! documentation and independent native impulse/neighborhood observations.
 //! Caller supplies the operation working space; quantized evaluation has a
 //! separate encoded-space entry point so no implicit profile conversion occurs.
-use super::{GaussianLimits, allocate, poll};
+use super::{GaussianLimits, NeighborhoodRequirements, allocate, checked_allocation_capacity, poll};
 use photocraft_color::try_write_sample_f64;
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES, RasterInputError, Surface, checked_region_byte_len};
@@ -55,14 +55,28 @@ pub fn try_median_blur_quantized_encoded(
     }
     evaluate(source, output, input, params, limits, interrupt)
 }
-fn evaluate(
+/// Allocation-free, polled admission formulas shared by both percentile modes.
+/// Encoded/high-precision entry-point selection remains the caller's decision.
+/// Empty ROI includes a conservative clone envelope, independently of legacy limits.
+pub fn median_requirements(
     source: &Surface,
     output: Rect,
     input: Rect,
     params: MedianParams,
-    limits: GaussianLimits,
     interrupt: &Interrupt<'_>,
-) -> Result<Surface, RasterInputError> {
+) -> Result<NeighborhoodRequirements, RasterInputError> {
+    match plan(source, output, input, params, interrupt)? {
+        Some(required) => Ok(required),
+        None => super::clone_requirements(source, interrupt),
+    }
+}
+fn plan(
+    source: &Surface,
+    output: Rect,
+    input: Rect,
+    params: MedianParams,
+    interrupt: &Interrupt<'_>,
+) -> Result<Option<NeighborhoodRequirements>, RasterInputError> {
     checked_region_byte_len(input, source.format())?;
     checked_region_byte_len(output, source.format())?;
     source.try_validate_tile_origins_with(interrupt)?;
@@ -81,7 +95,7 @@ fn evaluate(
         return Err(RasterInputError::Cancelled);
     }
     if output.is_empty() {
-        return Ok(source.clone());
+        return Ok(None);
     }
     let channels = source.channels();
     if channels == 0 || channels > 5 {
@@ -110,13 +124,32 @@ fn evaluate(
         .and_then(|v| v.checked_add(growth))
         .and_then(|v| v.checked_add(tile_bytes * 3 + count as u64 * 64 + source.tile_count() as u64 * 128 + ((256 + 2 * r) as u64).pow(2) * 40 + 4096))
         .ok_or(RasterInputError::LimitExceeded)?;
-    if work > limits.work_units || peak > limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) {
+    Ok(Some(NeighborhoodRequirements { peak_resident_bytes: peak, work_units: work }))
+}
+
+fn evaluate(
+    source: &Surface,
+    output: Rect,
+    input: Rect,
+    params: MedianParams,
+    limits: GaussianLimits,
+    interrupt: &Interrupt<'_>,
+) -> Result<Surface, RasterInputError> {
+    // Keep the legacy empty/identity clone before limit admission. Public
+    // requirements additionally price that clone for an aggregate owned caller.
+    let Some(required) = plan(source, output, input, params, interrupt)? else { return Ok(source.clone()) };
+    if required.work_units > limits.work_units || required.peak_resident_bytes > limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) {
         return Err(RasterInputError::LimitExceeded);
     }
+    let channels = source.channels();
+    let r = params.radius.abs();
+    let count = ((2 * r + 1) * (2 * r + 1)) as usize;
     let mut samples = Vec::<[f64; 5]>::new();
     samples.try_reserve_exact(count).map_err(|_| RasterInputError::AllocationFailed)?;
+    checked_allocation_capacity::<[f64; 5]>(samples.capacity(), count)?;
     let mut ranks = Vec::<(f64, f64)>::new();
     ranks.try_reserve_exact(count).map_err(|_| RasterInputError::AllocationFailed)?;
+    checked_allocation_capacity::<(f64, f64)>(ranks.capacity(), count)?;
     let mut result = source.clone();
     let mut units = 0;
     for tile in output.tiles() {
@@ -124,7 +157,9 @@ fn evaluate(
         let cw = part.width() as usize + 2 * r as usize;
         let ch = part.height() as usize + 2 * r as usize;
         let mut cache = Vec::<[f64; 5]>::new();
-        cache.try_reserve_exact(cw * ch).map_err(|_| RasterInputError::AllocationFailed)?;
+        let cache_length = cw.checked_mul(ch).ok_or(RasterInputError::LimitExceeded)?;
+        cache.try_reserve_exact(cache_length).map_err(|_| RasterInputError::AllocationFailed)?;
+        checked_allocation_capacity::<[f64; 5]>(cache.capacity(), cache_length)?;
         for cy in 0..ch as i32 {
             for cx in 0..cw as i32 {
                 poll(&mut units, channels, interrupt)?;

@@ -1501,3 +1501,13 @@ its journal receives only the existing five keys (`documentId`, `expectedRevisio
 `channelId`, `rawStorage`, `storedSource`). Original paths, bytes and grants are
 not persisted. Replaying that five-key request without the scoped host offer
 refuses. Native source/cache/filter state remains unchanged.
+
+Owned XCF neighborhood continuation uses the existing command and native-save
+interfaces for eight closed source domains: original/finite Box Blur and Median,
+finite Gray Median, original Motion Blur and Pixelize, and finite Gaussian.
+The renderer evaluates the existing neighborhood kernels over their actual
+extents, including halos, under shared resident and work limits. Source and
+native adoption validate the complete current recipe before publication.
+Existing geometry, precision, implicit-profile and enabled-filter restrictions
+still apply. Source XCF remains read-only; native continuation uses `.pcraft`.
+This implementation has compilation checks only; behavioral acceptance is pending.

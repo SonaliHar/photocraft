@@ -40,7 +40,7 @@ fn scope() -> BackedNormalError {
 fn length() -> BackedNormalError {
     BackedNormalError::Invalid("stock Point size or coordinate overflow")
 }
-trait PlanBudget {
+pub(crate) trait PlanBudget {
     type Lease;
     fn reserve(&mut self, bytes: u64) -> Result<Self::Lease, BackedNormalError>;
     fn check(&mut self, units: u64) -> Result<(), BackedNormalError>;
@@ -437,7 +437,7 @@ fn cms_error(error: photocraft_cms::control::Error) -> BackedNormalError {
         Error::Cms(error) => BackedNormalError::Color(CompositionError::Color(error)),
     }
 }
-fn bound_profile(
+pub(crate) fn bound_profile(
     doc: &Document,
     supplied: Option<&Profile>,
     budget: &mut impl PlanBudget,

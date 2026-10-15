@@ -95,6 +95,21 @@ impl fmt::Display for AllocationError {
 
 impl std::error::Error for AllocationError {}
 
+// Checked callers can price a twice-requested transient Vec envelope. Refuse
+// an allocator capacity outside it before initializing or copying payload;
+// the final boxed slice still retains exactly the requested encoded length.
+fn checked_reserved_capacity(actual: usize, requested: usize) -> Result<(), AllocationError> {
+    let maximum = requested.checked_mul(2).ok_or(AllocationError::SizeOverflow)?;
+    if actual < requested || actual > maximum {
+        return Err(AllocationError::NotEnoughMemory { bytes: requested });
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "checked_capacity_tests.rs"]
+mod checked_capacity_tests;
+
 /// Pixel storage for one tile: `TILE_SIZE² × bytes_per_pixel`, row-major, interleaved channels.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tile {
@@ -107,6 +122,7 @@ impl Tile {
         let bytes = n.checked_mul(format.bytes_per_pixel()).ok_or(AllocationError::SizeOverflow)?;
         let mut data = Vec::new();
         data.try_reserve_exact(bytes).map_err(|_| AllocationError::NotEnoughMemory { bytes })?;
+        checked_reserved_capacity(data.capacity(), bytes)?;
         data.resize(bytes, 0);
         if pixel.iter().any(|&b| b != 0) {
             for px in data.chunks_exact_mut(pixel.len()) {
@@ -121,6 +137,7 @@ impl Tile {
         let bytes = self.data.len();
         let mut data = Vec::new();
         data.try_reserve_exact(bytes).map_err(|_| AllocationError::NotEnoughMemory { bytes })?;
+        checked_reserved_capacity(data.capacity(), bytes)?;
         data.extend_from_slice(&self.data);
         Ok(Tile { data: data.into_boxed_slice() })
     }
@@ -228,6 +245,7 @@ impl Surface {
         }
         let mut data = Vec::new();
         data.try_reserve_exact(pixel.len()).map_err(|_| RasterInputError::AllocationFailed)?;
+        checked_reserved_capacity(data.capacity(), pixel.len()).map_err(|_| RasterInputError::AllocationFailed)?;
         data.extend_from_slice(pixel);
         Ok(Self { format, default_pixel: data.into_boxed_slice(), tiles: BTreeMap::new() })
     }
@@ -352,6 +370,7 @@ impl Surface {
         }
         let mut encoded = Vec::new();
         encoded.try_reserve_exact(encoded_len).map_err(|_| RasterInputError::AllocationFailed)?;
+        checked_reserved_capacity(encoded.capacity(), encoded_len).map_err(|_| RasterInputError::AllocationFailed)?;
         encoded.resize(encoded_len, 0);
         for (index, value) in values.iter().enumerate() {
             if index % 4096 == 0 && interrupt.cancelled() {
@@ -1118,6 +1137,7 @@ impl Surface {
             }
             let mut data = Vec::new();
             data.try_reserve_exact(tile_len).map_err(|_| RasterInputError::AllocationFailed)?;
+            checked_reserved_capacity(data.capacity(), tile_len).map_err(|_| RasterInputError::AllocationFailed)?;
             if let Some(t) = self.tile(tc) {
                 if t.bytes().len() != tile_len {
                     return Err(RasterInputError::LengthMismatch);

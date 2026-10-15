@@ -4,7 +4,10 @@
 //! This explicit alignment differs from the infinite-clamp evaluator.
 //! Public mathematical source (paper 9, equations 3 and 8; no implementation):
 //! https://thoth.inrialpes.fr/people/triggs/pubs/Triggs-hdr-papers.pdf
-use super::{GaussianAbyss, GaussianLimits, GaussianParams, poll, read_premultiplied, young_coefficients};
+use super::{
+    GaussianAbyss, GaussianLimits, GaussianParams, NeighborhoodRequirements, checked_allocation_capacity, clone_requirements, poll, read_premultiplied,
+    young_coefficients,
+};
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES, RasterInputError, Surface, checked_region_byte_len};
 
@@ -42,21 +45,41 @@ pub enum GaussianFilter {
     Iir,
 }
 
-/// Finite, full-line Gaussian in caller-supplied linear working samples.
-/// Qualified numerical basis: official GIMP 3.2.6/GEGL 0.4.72, Clamp,
-/// clip=true, sigma 0..=15 (explicit IIR requires nonzero sigma >=0.5).
-/// Larger sigmas and other abyss policies are explicit
-/// unsupported until their independent numerical differences are resolved.
-/// Memory/work are checked before any allocation; output is staged privately.
-pub fn try_gaussian_finite_clamp(
+struct FinitePlan {
+    output: Rect,
+    width: usize,
+    height: usize,
+    channels: usize,
+    count: usize,
+    line_count: usize,
+    output_count: usize,
+    requirements: NeighborhoodRequirements,
+}
+/// Allocation-free, cancellation-polled prospective kernel requirements.
+/// Empty/clipped output or zero sigmas report a conservative source-clone
+/// envelope; legacy constructors retain their pre-limit clone bypass. These
+/// numbers are not quota receipts and do not grant any source or CMS policy.
+pub fn gaussian_finite_requirements(
     source: &Surface,
     output: Rect,
     input: Rect,
     params: GaussianParams,
     filter: GaussianFilter,
-    limits: GaussianLimits,
     interrupt: &Interrupt<'_>,
-) -> Result<Surface, RasterInputError> {
+) -> Result<NeighborhoodRequirements, RasterInputError> {
+    match plan(source, output, input, params, filter, interrupt)? {
+        Some(plan) => Ok(plan.requirements),
+        None => clone_requirements(source, interrupt),
+    }
+}
+fn plan(
+    source: &Surface,
+    output: Rect,
+    input: Rect,
+    params: GaussianParams,
+    filter: GaussianFilter,
+    interrupt: &Interrupt<'_>,
+) -> Result<Option<FinitePlan>, RasterInputError> {
     checked_region_byte_len(input, source.format())?;
     checked_region_byte_len(output, source.format())?;
     source.try_validate_tile_origins_with(interrupt)?;
@@ -76,7 +99,7 @@ pub fn try_gaussian_finite_clamp(
     }
     let output = output.intersect(&input);
     if output.is_empty() || params.std_dev_x == 0. && params.std_dev_y == 0. {
-        return Ok(source.clone());
+        return Ok(None);
     }
     let width = input.width() as usize;
     let height = input.height() as usize;
@@ -112,11 +135,41 @@ pub fn try_gaussian_finite_clamp(
         .and_then(|n| n.checked_add((256 * 256 * source.format().bytes_per_pixel()) as u64 * 4))
         .ok_or(RasterInputError::LimitExceeded)?;
     let work_per_sample = 64 + axis_work(params.std_dev_x, filter) + axis_work(params.std_dev_y, filter);
-    if peak > limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES)
-        || (count as u64).checked_mul(work_per_sample).ok_or(RasterInputError::LimitExceeded)? > limits.work_units
-    {
+    let work = (count as u64).checked_mul(work_per_sample).ok_or(RasterInputError::LimitExceeded)?;
+    Ok(Some(FinitePlan {
+        output,
+        width,
+        height,
+        channels,
+        count,
+        line_count,
+        output_count,
+        requirements: NeighborhoodRequirements { peak_resident_bytes: peak, work_units: work },
+    }))
+}
+
+/// Finite, full-line Gaussian in caller-supplied linear working samples.
+/// Qualified numerical basis: official GIMP 3.2.6/GEGL 0.4.72, Clamp,
+/// clip=true, sigma 0..=15 (explicit IIR requires nonzero sigma >=0.5).
+/// Larger sigmas and other abyss policies are explicit
+/// unsupported until their independent numerical differences are resolved.
+/// Memory/work are checked before any allocation; output is staged privately.
+pub fn try_gaussian_finite_clamp(
+    source: &Surface,
+    output: Rect,
+    input: Rect,
+    params: GaussianParams,
+    filter: GaussianFilter,
+    limits: GaussianLimits,
+    interrupt: &Interrupt<'_>,
+) -> Result<Surface, RasterInputError> {
+    let Some(plan) = plan(source, output, input, params, filter, interrupt)? else {
+        return Ok(source.clone());
+    };
+    if plan.requirements.peak_resident_bytes > limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) || plan.requirements.work_units > limits.work_units {
         return Err(RasterInputError::LimitExceeded);
     }
+    let FinitePlan { output, width, height, channels, count, line_count, output_count, .. } = plan;
     let mut data = allocate_interrupt(count, interrupt)?;
     let mut line = allocate_interrupt(line_count, interrupt)?;
     let mut copied = allocate_interrupt(line_count, interrupt)?;
@@ -178,6 +231,7 @@ fn axis_work(sigma: f64, filter: GaussianFilter) -> u64 {
 fn allocate_interrupt(count: usize, interrupt: &Interrupt<'_>) -> Result<Vec<f64>, RasterInputError> {
     let mut values = Vec::new();
     values.try_reserve_exact(count).map_err(|_| RasterInputError::LimitExceeded)?;
+    checked_allocation_capacity::<f64>(values.capacity(), count)?;
     while values.len() < count {
         if interrupt.cancelled() {
             return Err(RasterInputError::Cancelled);
@@ -289,3 +343,7 @@ fn recurrence_step(pixel: &mut [f64], history: &[[f64; 5]; 3], coefficients: [f6
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "finite_allocation_requirements_tests.rs"]
+mod allocation_requirements_tests;

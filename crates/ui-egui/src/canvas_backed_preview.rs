@@ -185,6 +185,10 @@ mod stock_point_tests;
 #[path = "canvas_backed_residual_point_tests.rs"]
 mod residual_point_tests;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_backed_neighborhood_tests.rs"]
+mod neighborhood_tests;
+
 #[cfg(test)]
 fn backed_display_image(
     doc: &Document,

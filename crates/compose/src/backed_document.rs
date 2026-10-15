@@ -26,6 +26,7 @@ enum DocumentCompositor<'a> {
     Threshold(crate::backed_threshold_document::PreparedBackedThresholdDocument<'a>),
     ThresholdAlpha(crate::backed_threshold_alpha_document::PreparedBackedThresholdAlphaDocument<'a>),
     Point(crate::backed_stock_point_document::PreparedBackedStockPointDocument<'a>),
+    Neighborhood(crate::backed_neighborhood_document::PreparedBackedNeighborhoodDocument<'a>),
 }
 
 pub struct PreparedBackedDocument<'a> {
@@ -81,6 +82,13 @@ impl<'a> PreparedBackedDocument<'a> {
         control: &ReadControl<'_>,
     ) -> Result<Self, BackedNormalError> {
         if owner.is_readonly_point_storage() {
+            if crate::backed_neighborhood_context::is_candidate(owner.document(), control).map_err(BackedNormalError::Backing)? {
+                let prepared = crate::backed_neighborhood_document::PreparedBackedNeighborhoodDocument::new(owner, profile, limits, control)?;
+                let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
+                let bounds = prepared.bounds();
+                control.check(1).map_err(BackedNormalError::Backing)?;
+                return Ok(Self { stack: DocumentCompositor::Neighborhood(prepared), limits, quota: owner.quota().clone(), bounds, _index: index });
+            }
             let prepared = crate::backed_stock_point_document::PreparedBackedStockPointDocument::new(owner, profile, limits, control)?;
             let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
             let bounds = prepared.bounds();
@@ -272,6 +280,7 @@ impl<'a> PreparedBackedDocument<'a> {
             DocumentCompositor::Threshold(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::ThresholdAlpha(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::Point(prepared) => prepared.render_band(rect, control),
+            DocumentCompositor::Neighborhood(prepared) => prepared.render_band(rect, control),
         }
     }
 

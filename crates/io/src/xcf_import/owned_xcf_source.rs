@@ -136,7 +136,7 @@ pub fn import_owned_xcf_bytes_in_quota(
     let family = source.family();
     let context = Context { quota: quota.clone(), control };
     match family {
-        staged_selected_source::SelectedStagedFamily::Point(_) | staged_selected_source::SelectedStagedFamily::ResidualPoint(_) | staged_selected_source::SelectedStagedFamily::ConfiguredPoint(_) | staged_selected_source::SelectedStagedFamily::PointStackEdits | staged_selected_source::SelectedStagedFamily::LegacyScalar(_) => owned_point_source::promote_source(source, &budget, quota, control, &mut preparation.hold).map(OwnedXcfImport::Point),
+        staged_selected_source::SelectedStagedFamily::Point(_) | staged_selected_source::SelectedStagedFamily::ResidualPoint(_) | staged_selected_source::SelectedStagedFamily::ConfiguredPoint(_) | staged_selected_source::SelectedStagedFamily::PointStackEdits | staged_selected_source::SelectedStagedFamily::LegacyScalar(_) | staged_selected_source::SelectedStagedFamily::Neighborhood(_) => owned_point_source::promote_source(source, &budget, quota, control, &mut preparation.hold).map(OwnedXcfImport::Point),
         staged_selected_source::SelectedStagedFamily::Plain => {
             owned_plain_source::promote_source(source, &budget, &effective, aggregate, Some(&context), &mut preparation.hold, control.interrupt)
                 .map(OwnedXcfImport::Plain)

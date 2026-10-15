@@ -1,7 +1,7 @@
 //! Uniform centered line exposure with bilinear premultiplied sampling.
 //! Public parameters and independent native holdouts qualify the named slice;
 //! caller supplies linear working samples and owns CMS/outer filter semantics.
-use super::{GaussianAbyss, GaussianLimits, allocate, poll, read_premultiplied};
+use super::{GaussianAbyss, GaussianLimits, NeighborhoodRequirements, allocate, poll, read_premultiplied};
 use photocraft_color::try_write_sample_f64;
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES, RasterInputError, Surface, checked_region_byte_len};
@@ -36,18 +36,16 @@ pub fn motion_blur_extent(input: Rect, params: MotionBlurParams) -> Result<Rect,
         input.y1.checked_add(ry).ok_or(RasterInputError::InvalidBounds)?,
     ))
 }
-/// Transparent abyss, ceil(length)+1 equally spaced centered samples including
-/// both line endpoints, each sampled bilinearly in associated alpha. Writes only
-/// ROI; retained source/default/outside-ROI bits are exact. No hidden color epsilon
-/// or transfer approximation is introduced; caller controls working color space.
-pub fn try_motion_blur_linear(
+
+/// Allocation-free, cancellation-polled requirements for the existing kernel.
+/// These are prospective kernel costs, not retained memory or quota authority.
+pub fn motion_blur_requirements(
     source: &Surface,
     output: Rect,
     input: Rect,
     params: MotionBlurParams,
-    limits: GaussianLimits,
     interrupt: &Interrupt<'_>,
-) -> Result<Surface, RasterInputError> {
+) -> Result<NeighborhoodRequirements, RasterInputError> {
     checked_region_byte_len(input, source.format())?;
     checked_region_byte_len(output, source.format())?;
     source.try_validate_tile_origins_with(interrupt)?;
@@ -56,7 +54,7 @@ pub fn try_motion_blur_linear(
     if output.intersect(&extent) != output {
         return Err(RasterInputError::InvalidBounds);
     }
-    let (dx, dy, count) = line(params)?;
+    let (_, _, count) = line(params)?;
     let channels = source.channels();
     if channels == 0 || channels > 5 {
         return Err(RasterInputError::UnsupportedConversion);
@@ -81,12 +79,30 @@ pub fn try_motion_blur_linear(
         .and_then(|v| v.checked_add(growth))
         .and_then(|v| v.checked_add(tile_bytes * 3 + source.tile_count() as u64 * 128 + 4096))
         .ok_or(RasterInputError::LimitExceeded)?;
-    if peak > limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) || work > limits.work_units {
+    Ok(NeighborhoodRequirements { peak_resident_bytes: peak, work_units: work })
+}
+
+/// Transparent abyss, ceil(length)+1 equally spaced centered samples including
+/// both line endpoints, each sampled bilinearly in associated alpha. Writes only
+/// ROI; retained source/default/outside-ROI bits are exact. No hidden color epsilon
+/// or transfer approximation is introduced; caller controls working color space.
+pub fn try_motion_blur_linear(
+    source: &Surface,
+    output: Rect,
+    input: Rect,
+    params: MotionBlurParams,
+    limits: GaussianLimits,
+    interrupt: &Interrupt<'_>,
+) -> Result<Surface, RasterInputError> {
+    let requirements = motion_blur_requirements(source, output, input, params, interrupt)?;
+    if requirements.peak_resident_bytes > limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) || requirements.work_units > limits.work_units {
         return Err(RasterInputError::LimitExceeded);
     }
     if interrupt.cancelled() {
         return Err(RasterInputError::Cancelled);
     }
+    let (dx, dy, count) = line(params)?;
+    let channels = source.channels();
     let mut result = source.clone();
     let mut units = 0;
     for tile in output.tiles() {
@@ -138,3 +154,7 @@ pub fn try_motion_blur_linear(
     }
     Ok(result)
 }
+
+#[cfg(test)]
+#[path = "motion_pixelize_finite_requirements_tests.rs"]
+mod requirements_tests;

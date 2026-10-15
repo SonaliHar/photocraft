@@ -64,6 +64,11 @@ pub fn is_current_point_candidate(document: &photocraft_doc::Document, control: 
                         | "gimp:curves"
                         | "gegl:rgb-clip"
                         | "gegl:unpremultiply"
+                        | "gegl:box-blur"
+                        | "gegl:median-blur"
+                        | "gegl:motion-blur-linear"
+                        | "gegl:pixelize"
+                        | "gegl:gaussian-blur"
                 ) {
                     return Ok(true);
                 }
@@ -89,6 +94,13 @@ fn point_error(error: photocraft_compose::backed_normal::BackedNormalError, cont
 /// Independently qualify and visit the complete current operative drawable,
 /// using its genuine model quota and the caller's cumulative control.
 pub(crate) fn validate_current_stock_point_storage(owner: &photocraft_doc::accounted_document::AccountedDocument, control: &ReadControl<'_>) -> Result<()> {
+    validate_current_owned_filter_storage(owner, control)
+}
+
+/// Shared current-filter recipe validation. The exact neighborhood name hint
+/// selects a stricter semantic context only; no failure retries another family.
+/// Both contexts retain the real model quota and visit the full operative input.
+pub(crate) fn validate_current_owned_filter_storage(owner: &photocraft_doc::accounted_document::AccountedDocument, control: &ReadControl<'_>) -> Result<()> {
     control.check(1)?;
     let profile = match owner.document().mode {
         photocraft_doc::ColorMode::Rgb => photocraft_cms::Builtin::Srgb.profile(),
@@ -98,10 +110,17 @@ pub(crate) fn validate_current_stock_point_storage(owner: &photocraft_doc::accou
     control.check(1)?;
     // Nonlinear builtin basis only. The context independently binds and owns
     // the actual stored-encoding effective current profile on the same quota.
-    let prepared = photocraft_compose::backed_stock_point_context::PreparedBackedStockPointContext::new(owner, profile, Default::default(), control)
-        .map_err(|error| point_error(error, control))?;
-    prepared.validate_operative(control).map_err(|error| point_error(error, control))?;
-    drop(prepared);
+    if photocraft_compose::backed_neighborhood_context::is_candidate(owner.document(), control)? {
+        let prepared = photocraft_compose::backed_neighborhood_context::PreparedBackedNeighborhoodContext::new(owner, profile, Default::default(), control)
+            .map_err(|error| point_error(error, control))?;
+        prepared.validate_operative(control).map_err(|error| point_error(error, control))?;
+        drop(prepared);
+    } else {
+        let prepared = photocraft_compose::backed_stock_point_context::PreparedBackedStockPointContext::new(owner, profile, Default::default(), control)
+            .map_err(|error| point_error(error, control))?;
+        prepared.validate_operative(control).map_err(|error| point_error(error, control))?;
+        drop(prepared);
+    }
     control.check(1)?;
     Ok(())
 }
@@ -386,3 +405,7 @@ mod residual_point_workflow_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_scalar_point_workflow_tests.rs"]
 mod scalar_point_workflow_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_neighborhood_workflow_tests.rs"]
+mod neighborhood_workflow_tests;

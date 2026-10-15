@@ -6,6 +6,7 @@ pub(super) struct AdmissionDomains {
     pub(super) point_replace_domain: Option<crate::xcf_filters::NeighborhoodDomain>,
     // Successful sealed owned scalar admission; does not change old mask rules.
     pub(super) owned_point_domain: Option<crate::xcf_filters::NeighborhoodDomain>,
+    pub(super) owned_neighborhood_domain: Option<crate::xcf_filters::NeighborhoodDomain>,
     pub(super) unpremultiply_domain: bool,
     pub(super) finite_normal_domain: bool,
     pub(super) floating_records: Option<(u64, u64)>,
@@ -70,6 +71,7 @@ pub(super) fn classify(file: &XcfFile, ctl: &Interrupt<'_>, preparation: Option<
     Ok(AdmissionDomains {
         point_replace_domain,
         owned_point_domain: None,
+        owned_neighborhood_domain: None,
         unpremultiply_domain,
         finite_normal_domain,
         floating_records,

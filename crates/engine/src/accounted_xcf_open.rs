@@ -124,7 +124,7 @@ impl Session {
         control: &ReadControl<'_>,
     ) -> Result<usize> {
         let owner = imported.document();
-        crate::accounted_native_open::validate_current_stock_point_storage(owner, control)?;
+        crate::accounted_native_open::validate_current_owned_filter_storage(owner, control)?;
         self.add_owned_xcf_model(
             ImportedModel { document: owner, origin: imported.origin(), source_read_only: imported.source_read_only(), preview_only: imported.preview_only() },
             label,

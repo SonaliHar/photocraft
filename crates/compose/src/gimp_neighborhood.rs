@@ -34,6 +34,10 @@ pub(crate) use motion_blur::EPOCH as MOTION_BLUR_EPOCH;
 mod pixelize;
 pub(crate) use pixelize::EPOCH as PIXELIZE_EPOCH;
 
+#[path = "gimp_neighborhood_owned.rs"]
+mod owned;
+pub(crate) use owned::OwnedNeighborhoodSurface;
+
 const CACHE_BYTES: u64 = 16 * 1024 * 1024;
 const JOB_BYTES: u64 = CACHE_BYTES * 2;
 enum Stage {
@@ -109,17 +113,17 @@ impl OrderedStack {
     }
     pub(crate) fn new_with_interrupt(source: &FilterStack, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, qualified: [bool; 3], control: &Interrupt<'_>) -> Result<Self> {
         control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
-        let result = Self::prepare_with_interrupt(source, profile, stored, version, extent, qualified, control, false);
+        let result = Self::prepare_with_interrupt(source, profile, stored, version, extent, qualified, control, false, false);
         control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
         result
     }
     pub(crate) fn new_for_stock(source:&FilterStack,profile:&Profile,stored:SampleEncoding,version:u32,extent:Rect,control:&Interrupt<'_>)->Result<Self> {
         control.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
-        let result=Self::prepare_with_interrupt(source,profile,stored,version,extent,[false;3],control,true);
+        let result=Self::prepare_with_interrupt(source,profile,stored,version,extent,[false;3],control,true,false);
         control.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
         result
     }
-    fn prepare_with_interrupt(source: &FilterStack, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, qualified: [bool; 3], control: &Interrupt<'_>, stock:bool) -> Result<Self> {
+    fn prepare_with_interrupt(source: &FilterStack, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, qualified: [bool; 3], control: &Interrupt<'_>, stock:bool, owned:bool) -> Result<Self> {
         if source.nodes.len() > 256 {
             return Err(CompositionError::Invalid("ordered filter stack limit"));
         }
@@ -136,6 +140,9 @@ impl OrderedStack {
         let mut spaces = Vec::new();
         spaces.try_reserve_exact(source.nodes.len()).map_err(|_| CompositionError::Invalid("ordered space allocation denied"))?;
         stages.try_reserve_exact(source.nodes.len()).map_err(|_| CompositionError::Invalid("ordered preparation allocation denied"))?;
+        if owned && (stages.capacity()>source.nodes.len().saturating_mul(2) || spaces.capacity()>source.nodes.len().saturating_mul(2)) {
+            return Err(CompositionError::Invalid("owned neighborhood preparation capacity"));
+        }
         if stock && source.nodes.first().is_some_and(|n|matches!(n.operation.name.as_str(),"gimp:curves"|"gimp:levels"|"gimp:color-balance")) {
             let [node]=source.nodes.as_slice() else {return Err(CompositionError::Unsupported("stock configured singleton"))};
             let stage=match node.operation.name.as_str() {
@@ -273,6 +280,27 @@ impl OrderedStack {
             filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical,
                 stock_disabled:false,
         })
+    }
+    pub(crate) fn new_owned_neighborhood(source:&FilterStack,profile:&Profile,stored:SampleEncoding,version:u32,extent:Rect,control:&Interrupt<'_>)->Result<Self> {
+        let [node]=source.nodes.as_slice() else {return Err(CompositionError::Unsupported("owned neighborhood singleton"))};
+        if !node.enabled || !matches!(node.operation.name.as_str(), "gegl:box-blur"|"gegl:median-blur"|"gegl:motion-blur-linear"|"gegl:pixelize"|"gegl:gaussian-blur") {
+            return Err(CompositionError::Unsupported("owned neighborhood enabled recipe"));
+        }
+        let result=Self::prepare_with_interrupt(source,profile,stored,version,extent,[true,false,false],control,false,true)?;
+        let [stage]=result.stages.as_slice() else {return Err(CompositionError::Unsupported("owned neighborhood stage"))};
+        if !matches!(stage,Stage::BoxBlur{..}|Stage::MotionBlur{..}|Stage::Pixelize{..}|Stage::MedianBlur{..}|Stage::GaussianFinite{..}) {
+            return Err(CompositionError::Unsupported("owned finite neighborhood stage"));
+        }
+        Ok(result)
+    }
+    pub(crate) fn neighborhood_retained_bytes(&self)->Result<u64> {
+        let own=self.stages.capacity().checked_mul(std::mem::size_of::<Stage>()).and_then(|v|self.spaces.capacity().checked_mul(std::mem::size_of::<WorkingSpace>()).and_then(|s|v.checked_add(s))).ok_or(CompositionError::Invalid("neighborhood retained size"))?;
+        if self.stages.len()!=1 || self.stages.capacity()>2 || self.spaces.capacity()>2 {return Err(CompositionError::Invalid("neighborhood retained capacity"));}
+        (own as u64).checked_add((self.spaces.len() as u64)*65536).ok_or(CompositionError::Invalid("neighborhood retained size"))
+    }
+    pub(crate) fn output_bounds(&self)->Rect {self.output_extent}
+    pub(crate) fn evaluate_owned(&self,source:&Surface,quota:&photocraft_raster::backing::quota::BackingQuota,control:&photocraft_raster::backing::ReadControl<'_>)->std::result::Result<OwnedNeighborhoodSurface,crate::backed_normal::BackedNormalError> {
+        owned::evaluate(self,source,quota,control)
     }
     pub(crate) fn stock_retained_bytes(&self)->Result<u64> {
         let own=self.stages.capacity().checked_mul(std::mem::size_of::<Stage>()).and_then(|n|self.spaces.capacity().checked_mul(std::mem::size_of::<WorkingSpace>()).and_then(|v|n.checked_add(v))).ok_or(CompositionError::Invalid("stock ordered capacity"))? as u64;
@@ -1009,8 +1037,14 @@ fn map_pixels_at(
     roi: Rect,
     poll: &mut impl FnMut(WideWork) -> Result<()>,
     interrupt: &Interrupt<'_>,
-    mut f: impl FnMut((i32, i32), [f64; 4]) -> Result<[f64; 4]>,
+    f: impl FnMut((i32, i32), [f64; 4]) -> Result<[f64; 4]>,
 ) -> Result<Surface> {
+    map_pixels_at_bounded(source,roi,poll,interrupt,f,None)
+}
+fn map_pixels_at_bounded(
+    source:&Surface,roi:Rect,poll:&mut impl FnMut(WideWork)->Result<()>,interrupt:&Interrupt<'_>,
+    mut f:impl FnMut((i32,i32),[f64;4])->Result<[f64;4]>,capacity_limit:Option<usize>
+)->Result<Surface> {
     let mut out = Surface::new(PixelFormat::RGBA64F);
     let count =
         u64::from(roi.width()).checked_mul(u64::from(roi.height())).and_then(|v| v.checked_mul(4)).ok_or(CompositionError::Invalid("filter scratch size"))?;
@@ -1021,6 +1055,7 @@ fn map_pixels_at(
     samples
         .try_reserve_exact(usize::try_from(count).map_err(|_| CompositionError::Invalid("filter scratch size"))?)
         .map_err(|_| CompositionError::Invalid("filter scratch allocation denied"))?;
+    if capacity_limit.is_some_and(|limit|samples.capacity()>limit) {return Err(CompositionError::Invalid("owned filter scratch capacity"));}
     for y in roi.y0..roi.y1 {
         poll(WideWork::SampleUnits(u64::from(roi.width()) * 128))?;
         if interrupt.cancelled() {

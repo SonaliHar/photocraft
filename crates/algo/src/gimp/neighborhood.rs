@@ -10,11 +10,11 @@ mod finite;
 mod median;
 mod motion;
 mod pixelize;
-pub use box_blur::{box_blur_extent, try_box_blur};
-pub use finite::{GaussianFilter, try_gaussian_finite_clamp, try_gaussian_small_auto};
-pub use median::{MedianNeighborhood, MedianParams, try_median_blur, try_median_blur_quantized_encoded};
-pub use motion::{MotionBlurParams, motion_blur_extent, try_motion_blur_linear};
-pub use pixelize::{PixelizeParams, try_pixelize_square};
+pub use box_blur::{box_blur_extent, box_blur_requirements, try_box_blur};
+pub use finite::{GaussianFilter, gaussian_finite_requirements, try_gaussian_finite_clamp, try_gaussian_small_auto};
+pub use median::{MedianNeighborhood, MedianParams, median_requirements, try_median_blur, try_median_blur_quantized_encoded};
+pub use motion::{MotionBlurParams, motion_blur_extent, motion_blur_requirements, try_motion_blur_linear};
+pub use pixelize::{PixelizeParams, pixelize_requirements, try_pixelize_square};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GaussianAbyss {
@@ -35,6 +35,41 @@ pub struct GaussianParams {
 pub struct GaussianLimits {
     pub resident_bytes: u64,
     pub work_units: u64,
+}
+
+/// Existing logical peak/work admission formulas for one neighborhood call.
+/// This report allocates nothing and conveys neither working-space authority
+/// nor a quota reservation or proof of actual allocator capacity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NeighborhoodRequirements {
+    pub peak_resident_bytes: u64,
+    pub work_units: u64,
+}
+
+// A legacy no-op clones a Surface before considering its numeric limits. Owned
+// callers still need an admission envelope: include shared payload twice plus
+// map/default/header bookkeeping, without asserting physical duplication or a
+// reservation. Every metadata entry is polled; tile sample bytes are not read.
+pub(super) fn clone_requirements(source: &Surface, interrupt: &Interrupt<'_>) -> Result<NeighborhoodRequirements, RasterInputError> {
+    if interrupt.cancelled() {
+        return Err(RasterInputError::Cancelled);
+    }
+    let mut payload = source.default_bytes().len() as u64;
+    for (_, tile) in source.tiles() {
+        if interrupt.cancelled() {
+            return Err(RasterInputError::Cancelled);
+        }
+        payload = payload.checked_add(tile.bytes().len() as u64).ok_or(RasterInputError::LimitExceeded)?;
+    }
+    let map = (source.tile_count() as u64).checked_mul(128).ok_or(RasterInputError::LimitExceeded)?;
+    let metadata = map
+        .checked_add((source.default_bytes().len() as u64).checked_mul(2).ok_or(RasterInputError::LimitExceeded)?)
+        .and_then(|v| v.checked_add(std::mem::size_of::<Surface>() as u64 + 128))
+        .ok_or(RasterInputError::LimitExceeded)?;
+    Ok(NeighborhoodRequirements {
+        peak_resident_bytes: payload.checked_mul(2).and_then(|v| v.checked_add(metadata)).ok_or(RasterInputError::LimitExceeded)?,
+        work_units: metadata,
+    })
 }
 
 // The enclosing operation owns its aggregate transaction reservations and deadline;
@@ -578,8 +613,22 @@ fn read_premultiplied(source: &Surface, extent: Rect, abyss: GaussianAbyss, x: i
 fn allocate<T: Default + Clone>(length: usize) -> Result<Vec<T>, RasterInputError> {
     let mut values = Vec::new();
     values.try_reserve_exact(length).map_err(|_| RasterInputError::AllocationFailed)?;
+    checked_allocation_capacity::<T>(values.capacity(), length)?;
     values.resize(length, T::default());
     Ok(values)
+}
+
+// Check the actual allocator result before initialization or input copies. The
+// aggregate owned caller reserves twice the old logical peak separately; this
+// bounded capacity check is not a reservation or a physical RSS assertion.
+pub(super) fn checked_allocation_capacity<T>(actual: usize, requested: usize) -> Result<(), RasterInputError> {
+    let maximum = requested.checked_mul(2).ok_or(RasterInputError::LimitExceeded)?;
+    let bytes = actual.checked_mul(std::mem::size_of::<T>()).ok_or(RasterInputError::LimitExceeded)?;
+    let bytes = u64::try_from(bytes).map_err(|_| RasterInputError::LimitExceeded)?;
+    if actual < requested || actual > maximum || bytes > MAX_CHECKED_RASTER_BYTES {
+        return Err(RasterInputError::LimitExceeded);
+    }
+    Ok(())
 }
 
 fn poll(units: &mut usize, count: usize, interrupt: &Interrupt<'_>) -> Result<(), RasterInputError> {
@@ -592,3 +641,7 @@ fn poll(units: &mut usize, count: usize, interrupt: &Interrupt<'_>) -> Result<()
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "neighborhood/requirements_tests.rs"]
+mod requirements_tests;

@@ -19,6 +19,9 @@ mod point_stack;
 #[path = "staged_legacy_scalar.rs"]
 mod legacy_scalar;
 use legacy_scalar::LegacyScalarFamily;
+#[path = "staged_neighborhood.rs"]
+mod neighborhood;
+use neighborhood::NeighborhoodSourceFamily;
 
 trait StagePolicy {
     const THRESHOLD_ALPHA: bool;
@@ -39,6 +42,7 @@ pub(super) enum SelectedStagedFamily {
     ConfiguredPoint(ConfiguredPointFamily),
     PointStackEdits,
     LegacyScalar(LegacyScalarFamily),
+    Neighborhood(NeighborhoodSourceFamily),
 }
 impl std::fmt::Debug for SelectedStagedFamily {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -51,6 +55,7 @@ impl std::fmt::Debug for SelectedStagedFamily {
             Self::ConfiguredPoint(_) => "ConfiguredPoint",
             Self::PointStackEdits => "PointStackEdits",
             Self::LegacyScalar(_) => "LegacyScalar",
+            Self::Neighborhood(_) => "Neighborhood",
         })
     }
 }
@@ -70,6 +75,9 @@ impl StagePolicy for SourceSelectedPolicy {
             // This chooses a strict validator only. admissions() must obtain
             // the SAME family from the original whole-file classifier before
             // mapping; completion cannot return this route after a refusal.
+            if let Some(family) = NeighborhoodSourceFamily::hint(file) {
+                return SelectedStagedFamily::Neighborhood(family);
+            }
             if point_stack::hint(file) {
                 return SelectedStagedFamily::PointStackEdits;
             }
@@ -413,6 +421,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn requires_budgeted_point_preparation(point_domain: bool) -> bool {
         P::SOURCE_SELECTED && point_domain
     }
+    fn requires_budgeted_neighborhood_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
         let family = P::family(file);
         let histogram = family == SelectedStagedFamily::Threshold;
@@ -451,7 +460,13 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             }
             Some(family.domain())
         } else { None };
-        if point.is_some() || owned_point.is_some() {
+        let neighborhood = if let SelectedStagedFamily::Neighborhood(expected) = family {
+            if !expected.qualify(file, ctl, shared)? {
+                return Err(IoError::Unsupported("staged neighborhood source is outside its exact whole-file predicate".into()));
+            }
+            Some(expected)
+        } else { None };
+        if point.is_some() || owned_point.is_some() || neighborhood.is_some() {
             // Full original source, precision, geometry, mask flags and unit
             // domains were just checked by the unchanged classifier policy.
         } else if histogram {
@@ -483,6 +498,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             if !threshold
                 && point.is_none()
                 && owned_point.is_none()
+                && neighborhood.is_none()
                 && (d.group
                     || d.path.len() > 1
                     || d.model != file.model
@@ -517,12 +533,14 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             })?;
             validate_drawable_alpha(d, point.is_some(), false, ctl, 0)?;
         }
-        Ok(admission::AdmissionDomains {
+        let mut domains = admission::AdmissionDomains {
             point_replace_domain: point,
             owned_point_domain: owned_point,
             unpremultiply_domain: matches!(family, SelectedStagedFamily::LegacyScalar(LegacyScalarFamily::Unpremultiply)),
             ..Default::default()
-        })
+        };
+        if let Some(family) = neighborhood { family.set_admission(&mut domains); }
+        Ok(domains)
     }
     fn late_admissions(file: &XcfFile<Self>) -> admission::LateAdmissionDomains {
         // Generic mapping always runs admissions before this side-effect-free

@@ -1,7 +1,7 @@
 //! Checked f64 square-neighborhood mean, independently derived from public
 //! GEGL box-blur documentation and original native edge/alpha observations.
 //! Caller supplies linear working-space samples and owns CMS/envelope mapping.
-use super::{GaussianAbyss, GaussianLimits, allocate, poll, read_premultiplied};
+use super::{GaussianAbyss, GaussianLimits, NeighborhoodRequirements, allocate, poll, read_premultiplied};
 use photocraft_color::try_write_sample_f64;
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES, RasterInputError, Surface, checked_region_byte_len};
@@ -22,18 +22,28 @@ pub fn box_blur_extent(input: Rect, radius: u32) -> Result<Rect, RasterInputErro
         input.y1.checked_add(r).ok_or(RasterInputError::InvalidBounds)?,
     ))
 }
-/// Square mean with repeated endpoints (stock Clamp) and premultiplied alpha.
-/// Writes only the requested ROI within the operation's radius-inflated extent.
-/// Scratch is tile-local, all authoritative reads/math remain f64, original/default
-/// bytes stay unchanged, and cancellation abandons the private output.
-pub fn try_box_blur(
+/// Allocation-free, polled admission formulas used by the existing evaluator.
+/// An identity/empty ROI includes a conservative shared-payload/map clone envelope.
+/// This logical peak is not a quota reservation or allocator-capacity receipt.
+pub fn box_blur_requirements(
     source: &Surface,
     output: Rect,
     input: Rect,
     radius: u32,
-    limits: GaussianLimits,
     interrupt: &Interrupt<'_>,
-) -> Result<Surface, RasterInputError> {
+) -> Result<NeighborhoodRequirements, RasterInputError> {
+    match plan(source, output, input, radius, interrupt)? {
+        Some(required) => Ok(required),
+        None => super::clone_requirements(source, interrupt),
+    }
+}
+fn plan(
+    source: &Surface,
+    output: Rect,
+    input: Rect,
+    radius: u32,
+    interrupt: &Interrupt<'_>,
+) -> Result<Option<NeighborhoodRequirements>, RasterInputError> {
     checked_region_byte_len(input, source.format())?;
     checked_region_byte_len(output, source.format())?;
     source.try_validate_tile_origins_with(interrupt)?;
@@ -43,7 +53,7 @@ pub fn try_box_blur(
         return Err(RasterInputError::InvalidBounds);
     }
     if output.is_empty() || radius == 0 {
-        return Ok(source.clone());
+        return Ok(None);
     }
     let channels = source.channels();
     let r = radius as usize;
@@ -83,9 +93,30 @@ pub fn try_box_blur(
         .and_then(|v| v.checked_add(tile_bytes * 2 + 4096))
         .and_then(|v| v.checked_add((source.tile_count() as u64) * 128))
         .ok_or(RasterInputError::LimitExceeded)?;
-    if peak > limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) || work > limits.work_units {
+    Ok(Some(NeighborhoodRequirements { peak_resident_bytes: peak, work_units: work }))
+}
+
+/// Square mean with repeated endpoints (stock Clamp) and premultiplied alpha.
+/// Writes only the requested ROI within the operation's radius-inflated extent.
+/// Scratch is tile-local, all authoritative reads/math remain f64, original/default
+/// bytes stay unchanged, and cancellation abandons the private output.
+pub fn try_box_blur(
+    source: &Surface,
+    output: Rect,
+    input: Rect,
+    radius: u32,
+    limits: GaussianLimits,
+    interrupt: &Interrupt<'_>,
+) -> Result<Surface, RasterInputError> {
+    // Keep the legacy empty/identity clone before limit admission. Public
+    // requirements additionally price that clone for an aggregate owned caller.
+    let Some(required) = plan(source, output, input, radius, interrupt)? else { return Ok(source.clone()) };
+    if required.peak_resident_bytes > limits.resident_bytes.min(MAX_CHECKED_RASTER_BYTES) || required.work_units > limits.work_units {
         return Err(RasterInputError::LimitExceeded);
     }
+    let channels = source.channels();
+    let r = radius as usize;
+    let window = r.checked_mul(2).and_then(|v| v.checked_add(1)).ok_or(RasterInputError::LimitExceeded)?;
     let mut result = source.clone();
     let mut units = 0;
     for tile in output.tiles() {
