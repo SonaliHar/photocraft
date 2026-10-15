@@ -663,7 +663,9 @@ fn replace_color_localized_clusters_only_change_the_colour_near_the_sample() {
 }
 
 /// #6095: ⌘I in Quick Mask inverts the whole mask, not only where it was white, so leaving Quick
-/// Mask selects everything but the original rectangle. A black alpha channel inverts to white.
+/// Mask selects everything but the original rectangle, whichever way the colour reads. With
+/// Color Indicates Selected Areas and nothing selected, it selects everything. A black alpha
+/// channel inverts to white.
 #[test]
 fn invert_turns_the_black_of_quick_mask_and_alpha_channels_white() {
     for depth in DEPTHS {
@@ -688,5 +690,24 @@ fn invert_turns_the_black_of_quick_mask_and_alpha_channels_white() {
         assert!(a > 0.99, "{depth}-bit black alpha channel inverts to white ({a})");
         s.undo();
         assert!(doc(&s).channels[0].surface.sample_channel(40, 30, 0) < 0.01, "{depth}-bit: undo restores the black");
+
+        // Color Indicates Selected Areas: a rectangle comes back inverted, and nothing selected
+        // comes back as everything selected.
+        for (start, inside, outside) in [("rectangle", 0.0, 1.0), ("nothing", 1.0, 1.0)] {
+            let mut s = session(depth, "rgb");
+            s.execute("channel.options", json!({"channel": "quickMask", "indicates": "selected"})).unwrap();
+            if start == "rectangle" {
+                s.execute("select.rect", json!({"x": 10, "y": 8, "width": 20, "height": 10})).unwrap();
+            }
+            s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+            s.execute("image.adjustments.invert", json!({"target": "quickMask"})).unwrap();
+            s.execute("select.editInQuickMaskMode", json!({"on": false})).unwrap();
+            let sel = doc(&s).selection.as_ref().unwrap_or_else(|| panic!("{depth}-bit Selected Areas, {start}: a selection after Quick Mask"));
+            let got = (sel.sample_channel(15, 12, 0), sel.sample_channel(2, 2, 0));
+            assert!(
+                (got.0 - inside).abs() < 0.01 && (got.1 - outside).abs() < 0.01,
+                "{depth}-bit Selected Areas, {start}: selection (inside, outside) {got:?}"
+            );
+        }
     }
 }
