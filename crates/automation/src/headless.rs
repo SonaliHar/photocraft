@@ -15,6 +15,7 @@ use crate::{AuthorizedWorkspace, AutomationError, files};
 mod linked_root;
 mod stored_channel_root;
 mod owned_xcf_open;
+mod owned_native_save;
 pub use owned_xcf_open::OwnedXcfOpenReply;
 pub use stored_channel_root::{load_stored_selection_from_root_with_context, validate_stored_selection_request};
 
@@ -540,6 +541,12 @@ impl Headless {
     ) -> Result<Value, AutomationError> {
         control.check().map_err(|_| photocraft_engine::EngineError::Cancelled)?;
         let i = self.doc_index(index)?;
+        if self.session.documents().get(i).is_some_and(|state|state.doc.accounted().is_some()) {
+            if self.session.active_index()!=Some(i) {
+                return Err(AutomationError::BadRequest("owned native save currently requires the active document; select it explicitly first".into()));
+            }
+            return self.save_owned_native_active_bounded(path,format,control);
+        }
         let (stored_path, doc) = {
             let state = &self.session.documents()[i];
             state.doc.validate_resident().map_err(|error| AutomationError::Engine(error.into()))?;

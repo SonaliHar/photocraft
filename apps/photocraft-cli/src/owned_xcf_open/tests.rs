@@ -13,7 +13,7 @@ fn malformed_duplicate_and_unsupported_owned_policy_decline_before_input_or_root
     for args in [
         vec!["info", "missing.xcf", "--xcf-profile-policy", "unknown"],
         vec!["info", "missing.xcf", "--xcf-profile-policy", "keepCurrent", "--xcf-profile-policy", "keepCurrent"],
-        vec!["run", "missing.xcf", "--xcf-profile-policy", "keepCurrent", "--out", "never.pcraft", "--automation-read-root", "missing-root"],
+        vec!["run", "missing.xcf", "--xcf-profile-policy", "keepCurrent", "--out", "never.png", "--automation-read-root", "missing-root"],
         vec!["run", "--new", "{}", "--xcf-profile-policy", "keepCurrent", "--cmd", "edit.undo"],
     ] {
         let (code, _, error) = invoke(&args);

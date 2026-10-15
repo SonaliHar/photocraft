@@ -15,6 +15,12 @@ pub use owned_native_open::open_accounted_native_selected_path;
 pub(crate) mod owned_xcf_open;
 pub use owned_xcf_open::{open_owned_plain_xcf_selected_path, open_owned_current_xcf_selected_path};
 
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "files/accounted_native_save.rs"]
+mod accounted_native_save;
+#[cfg(not(target_arch = "wasm32"))]
+pub use accounted_native_save::save_accounted_native_selected_path;
+
 #[path = "files/protected_save.rs"]
 mod protected_save;
 #[cfg(not(target_arch = "wasm32"))]

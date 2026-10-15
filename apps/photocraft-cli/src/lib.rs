@@ -38,7 +38,9 @@ USAGE:
       applies to the preceding --cmd. Prints each command's JSON result.
       Stored-original select.loadSelection requires an explicit --automation-read-root;
       its originalPath is relative to that held root, with no ambient fallback.
-      Explicit keepCurrent accepts a .xcf input only and currently refuses --new/--out;
+      Explicit keepCurrent accepts a .xcf input and optional .pcraft --out only;
+      --new and flat exports are refused before opening input.
+      Example: photocraft-cli run source.xcf --xcf-profile-policy keepCurrent --cmd select.all --out copy.pcraft
       registered commands retain their existing typed eligibility and source guards.
   photocraft-cli batch --actions <actions.json|set.atn> [--action <name>] --in <dir> --out <dir> [--format <ext>] [--quality <1-100>] [--in-place] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>]
       --json-errors emits per-file JSON failures and a separate aggregate error on stderr.

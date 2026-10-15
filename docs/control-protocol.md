@@ -421,6 +421,15 @@ The retained JSON-lines transport keeps its paid complete reply through writing;
 raw-Value `Headless::handle`/`respond` and nested generic batches refuse this explicit policy.
 The typed Headless owned method remains available to callers that retain its reply carrier.
 
+For an active owned document, Headless `doc.save` supports native `.pcraft`
+Save/Save As through the same prepared engine transaction used by the desktop.
+The installed trusted or write-root capability remains mandatory; source aliases
+and fingerprints are checked before the atomic write. Nonactive owned targets
+and flat exports refuse without switching tabs. CLI
+`run source.xcf --xcf-profile-policy keepCurrent --cmd select.all --out copy.pcraft`
+uses this route. Unsupported output suffixes or formats fail before opening the
+input; saving produces a native project and does not write XCF.
+
 
 ```sh
 printf '%s\n' \

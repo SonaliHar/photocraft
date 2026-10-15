@@ -1,6 +1,10 @@
 //! Runtime source provenance, separate from editable pixels and writable save destinations.
 use photocraft_io::ImportOrigin;
 
+#[path = "source_policy/accounted_save_protection.rs"]
+mod accounted_save_protection;
+pub use accounted_save_protection::AccountedSaveProtection;
+
 /// Inert destination exclusions; these values confer no file-read authority.
 #[derive(Debug, Clone, Default)]
 pub struct WriteProtection {

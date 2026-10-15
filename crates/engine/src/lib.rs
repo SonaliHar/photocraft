@@ -236,7 +236,7 @@ pub mod xcf_resources;
 pub mod xcf_text_cmds;
 pub mod xcf_vector_cmds;
 mod xcf_vector_guard;
-pub use source_policy::{SourceIdentity, WriteProtection};
+pub use source_policy::{AccountedSaveProtection, SourceIdentity, WriteProtection};
 
 use std::sync::{Arc, Mutex};
 

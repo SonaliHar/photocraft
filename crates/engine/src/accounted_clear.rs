@@ -249,7 +249,7 @@ impl<'a> Prepared<'a> {
         let bpp = format.bytes_per_pixel();
         let length = mul(mul(area.width() as usize, area.height() as usize)?, bpp)?;
         if !area.is_empty() && (!backed.operative_bounds().contains_rect(&area) || length > MAX_NATIVE_BYTES) {
-            return Err(bad("accounted Clear requires a contained native ROI of at most16MiB"));
+            return Err(bad("accounted Clear requires a contained native ROI of at most 16 MiB"));
         }
         let cells = if area.is_empty() {
             0
