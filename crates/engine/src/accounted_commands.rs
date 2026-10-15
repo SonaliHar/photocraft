@@ -19,6 +19,7 @@ pub(crate) use save_journal::PreparedSaveJournalWitness;
 mod assigned_mask;
 #[path = "imported_accounted_metadata.rs"]
 mod imported_metadata;
+mod imported_translate;
 mod point;
 mod readonly_layer_name;
 mod threshold;
@@ -33,10 +34,18 @@ const MAX_STRING: usize = 4096;
 const MAX_NODES: usize = 4096;
 const MAX_DEPTH: usize = 4;
 
+/// Early synchronous routing for the paid plain Move lane. This is only wire
+/// context admission; actual class, locks, native/profile and view validation
+/// remain in the controlled typed transaction.
+pub fn imported_translation_dispatch_preflight(session: &Session, params: &Value, background: bool) -> Result<()> {
+    imported_translate::dispatch_preflight(session, params, background)
+}
+
 pub fn supports(id: &str) -> bool {
     matches!(
         id,
         "layer.select"
+            | "layer.translate"
             | "layer.setProps"
             | "edit.clear"
             | "edit.fill"
@@ -59,6 +68,8 @@ fn bad(id: &str, message: &str) -> EngineError {
 }
 
 enum Request<'a> {
+    ImportedTranslate(imported_translate::Request<'a>),
+    PreparedImportedTranslate(imported_translate::Prepared<'a>),
     AssignedMask(assigned_mask::Request<'a>),
     PreparedAssignedMask(assigned_mask::Prepared<'a>),
     ImportedMetadata(imported_metadata::Request<'a>),
@@ -97,6 +108,9 @@ fn require_history_selection_enabled(session: &Session) -> Result<()> {
 }
 
 fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadControl<'_>) -> Result<Request<'a>> {
+    if id == "layer.translate" {
+        return Ok(Request::ImportedTranslate(imported_translate::Request::parse(session, params, control)?));
+    }
     if id == "xcf.mask.enabled.set" {
         return Ok(Request::AssignedMask(assigned_mask::Request::parse(session, params, control)?));
     }
@@ -247,6 +261,9 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     let state = session.active().ok_or(EngineError::NoDocument)?;
     if let Some(reason) = global_refusal(session) {
         return Ok(Some(reason));
+    }
+    if id == "layer.translate" && !state.doc.accounted().is_some_and(imported_translate::candidate) {
+        return Ok(Some("this accounted storage has no qualified plain Move transaction"));
     }
     if id == "xcf.mask.enabled.set" && !state.doc.accounted().is_some_and(crate::assigned_geometry_metadata_candidate) {
         return Ok(Some("this accounted storage has no qualified assigned layer mask"));
@@ -566,6 +583,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             return Err(EngineError::Other(reason.into()));
         }
         let request = match request {
+            Request::ImportedTranslate(request) => Request::PreparedImportedTranslate(request.prepare(session, control)?),
             Request::AssignedMask(request) => Request::PreparedAssignedMask(request.prepare(session, control)?),
             Request::ImportedMetadata(request) => Request::PreparedMetadata(request.prepare(session, control)?),
             Request::ThresholdAlpha(request) => Request::PreparedThresholdAlpha(request.prepare(session, control)?),
@@ -694,6 +712,7 @@ impl<'a> PreparedAccountedCommand<'a> {
         let history = if matches!(
             &request,
             Request::HistorySelect(_)
+                | Request::PreparedImportedTranslate(_)
                 | Request::PreparedPoint(_)
                 | Request::PreparedThresholdAlpha(_)
                 | Request::PreparedThreshold(_)
@@ -742,6 +761,7 @@ impl<'a> PreparedAccountedCommand<'a> {
         if matches!(
             &self.request,
             Request::ClearSelection
+                | Request::PreparedImportedTranslate(_)
                 | Request::SelectAll(_)
                 | Request::ColorRange(_)
                 | Request::PreparedMetadata(_)
@@ -783,6 +803,8 @@ impl<'a> PreparedAccountedCommand<'a> {
             return Err(BackingError::Integrity.into());
         }
         let result = match self.request {
+            Request::PreparedImportedTranslate(prepared) => prepared.execute(session, control)?,
+            Request::ImportedTranslate(_) => return Err(BackingError::Integrity.into()),
             Request::PreparedAssignedMask(prepared) => prepared.execute(session, control)?,
             Request::PreparedMetadata(prepared) => prepared.execute(session, control)?,
             Request::PreparedThresholdAlpha(prepared) => prepared.execute(session, control)?,

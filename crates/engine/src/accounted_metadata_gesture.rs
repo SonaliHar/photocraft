@@ -70,11 +70,11 @@ impl std::fmt::Debug for PaidMetadataGesture {
     }
 }
 impl PaidMetadataGesture {
-    fn matches(&self, key: &str, document: DocId, quota: &BackingQuota, c: &ReadControl<'_>) -> Result<bool> {
+    pub(crate) fn matches(&self, key: &str, document: DocId, quota: &BackingQuota, c: &ReadControl<'_>) -> Result<bool> {
         c.check((self.owner.key.len() + key.len() + 1) as u64)?;
         Ok(self.owner.document == document && self.owner.quota.shares_ledger(quota) && self.owner.key == key)
     }
-    fn prepare(key: &str, document: DocId, quota: &BackingQuota, c: &ReadControl<'_>) -> Result<Self> {
+    pub(crate) fn prepare(key: &str, document: DocId, quota: &BackingQuota, c: &ReadControl<'_>) -> Result<Self> {
         if key.len() > 128 {
             return Err(BackingError::Length.into());
         }

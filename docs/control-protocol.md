@@ -1573,3 +1573,17 @@ are validated before publication, with unchanged native/mask/source custody.
 Typed CURRENT composition permits backdrop visibility and opacity changes;
 bare constructors and original source qualification retain their stricter gates.
 Other property, mask, geometry and group-mode edits remain outside this family.
+
+For plain imported native layers with an implicit RGB or Gray working profile,
+the existing `layer.translate` command supports whole-layer integer movement.
+It shares upstream pixel/point parsing and rounding, hidden-target checks,
+effective position locks, `Move` undo labels and null replies. An exact opaque
+`coalesce` key shares the document's existing metadata/Move gesture and retains
+its first undo label; rounded-zero movement preserves model and redo state.
+Both current and staged native/default data and complete canvas rendering are
+validated under the same quota and work control before publication. The backing
+view and canonical current raster bounds move together, retaining original
+source pixels, profile and source protection. This path requires synchronous
+dispatch and one selected layer, with no pixel selection, mask, linked-layer
+expansion or effect reference. Native continuation uses the existing current
+descriptor and tile writer. Behavioral tests remain deferred.

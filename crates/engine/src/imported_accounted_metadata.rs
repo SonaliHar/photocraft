@@ -65,7 +65,7 @@ pub(super) fn parse(params: &Value) -> Result<Request<'_>> {
     let only_visibility = p.contains_key("visible") && p.keys().all(|k| matches!(k.as_str(), "layer" | "visible" | "coalesce"));
     Ok(Request { target, name, visible, opacity, coalesce, only_visibility })
 }
-fn channel_check(channel: &ChannelView, colors: usize) -> Result<()> {
+pub(super) fn channel_check(channel: &ChannelView, colors: usize) -> Result<()> {
     if channel.color_hidden.len() > 32 || channel.alpha_visible.len() > 4096 {
         return Err(BackingError::Length.into());
     }
@@ -77,7 +77,7 @@ fn channel_check(channel: &ChannelView, colors: usize) -> Result<()> {
     }
     Ok(())
 }
-fn booleans(values: &[bool], control: &ReadControl<'_>) -> Result<Vec<bool>> {
+pub(super) fn booleans(values: &[bool], control: &ReadControl<'_>) -> Result<Vec<bool>> {
     let mut result = Vec::new();
     result.try_reserve_exact(values.len()).map_err(|_| BackingError::Allocation)?;
     if result.capacity() > values.len().checked_mul(2).ok_or(BackingError::Length)? {
@@ -89,7 +89,7 @@ fn booleans(values: &[bool], control: &ReadControl<'_>) -> Result<Vec<bool>> {
     }
     Ok(result)
 }
-fn same_name(left: &str, right: &str, c: &ReadControl<'_>) -> Result<bool> {
+pub(super) fn same_name(left: &str, right: &str, c: &ReadControl<'_>) -> Result<bool> {
     c.check(1)?;
     if left.len() != right.len() {
         return Ok(false);

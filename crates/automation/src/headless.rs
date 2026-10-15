@@ -800,6 +800,12 @@ impl Headless {
             }
             return Ok(self.session.execute(id, params)?);
         }
+        if id == "layer.translate" && self.session.active().is_some_and(|state| state.doc.accounted().is_some()) {
+            if !wait {
+                return Err(AutomationError::BadRequest(format!("{id}.context: synchronous dispatch is required")));
+            }
+            return Ok(self.session.execute(id, params)?);
+        }
         if matches!(
             id,
             "document.pixel.inspect"
@@ -920,3 +926,7 @@ fn exported(dir: &str, written: photocraft_engine::Result<Vec<String>>, outputs:
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_isolated_group_props_tests.rs"]
 mod owned_isolated_group_props_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_plain_translate_tests.rs"]
+mod owned_plain_translate_tests;

@@ -230,3 +230,7 @@ fn backed_display_image(
 ) -> Result<(egui::ColorImage, QuotaLease), String> {
     backed_display_image_with_owner(doc, None, width, height, display, interrupt)
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_backed_translate_tests.rs"]
+mod translate_tests;

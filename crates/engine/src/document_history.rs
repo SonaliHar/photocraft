@@ -532,6 +532,61 @@ impl DocumentHistory {
         })
     }
 
+    /// Continue a typed caller's already-paid model on the existing undo anchor.
+    /// This is history custody only: callers must validate the full staged
+    /// operation and fence the Session before publishing this private history.
+    pub(crate) fn try_continue_prepared_accounted(
+        &mut self,
+        expected_history: &DocumentHistory,
+        expected_current: &AccountedDocument,
+        staged: AccountedDocument,
+        layers: &LayerTarget,
+        ctl: &ReadControl<'_>,
+    ) -> Result<DocumentSnapshot, BackingError> {
+        ctl.check(1)?;
+        if !self.shares_accounted_history(expected_history) || self.max_states != expected_history.max_states || self.max_bytes != expected_history.max_bytes {
+            return Err(BackingError::Integrity);
+        }
+        let Branch::Accounted(owner) = &self.branch else { return Err(BackingError::Unsupported) };
+        let current = owner.states.get(owner.cursor).ok_or(BackingError::Integrity)?;
+        if !current.document.shares_model(expected_current)
+            || staged.document().id != expected_current.document().id
+            || !staged.quota().shares_ledger(expected_current.quota())
+        {
+            return Err(BackingError::Integrity);
+        }
+        let snapshot = DocumentSnapshot::from_accounted(staged.clone())?;
+        if staged.shares_model(&current.document) {
+            ctl.check(1)?;
+            return Ok(snapshot);
+        }
+        if owner.cursor == 0 || owner.cursor.checked_add(1) != Some(owner.states.len()) {
+            return Err(BackingError::Integrity);
+        }
+        if layers.selected.len() > 4096 {
+            return Err(BackingError::Length);
+        }
+        ctl.check(layers.selected.len() as u64)?;
+        if current.metadata.target != *layers {
+            return Err(BackingError::Integrity);
+        }
+        let first_metadata = Arc::clone(&current.metadata);
+        self.sync_limits()?;
+        let meta = Arc::new(metadata(staged.quota(), &first_metadata.label, layers, ctl)?);
+        self.update(ctl, |history| {
+            if history.cursor == 0 || history.cursor.checked_add(1) != Some(history.states.len()) {
+                return Err(BackingError::Integrity);
+            }
+            let current = history.states.get_mut(history.cursor).ok_or(BackingError::Integrity)?;
+            if !current.document.shares_model(expected_current) {
+                return Err(BackingError::Integrity);
+            }
+            ctl.check(1)?;
+            *current = Entry { document: staged, metadata: meta };
+            Ok(snapshot)
+        })
+    }
+
     /// Typed charged pixel selection, separate from layer-target transactions.
     pub fn try_commit_accounted_selection(
         &mut self,

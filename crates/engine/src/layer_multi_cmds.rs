@@ -300,10 +300,9 @@ pub fn moves_mask_alone(l: &Layer) -> bool {
     l.mask.as_ref().is_some_and(|m| !m.linked)
 }
 
-/// `layer.translate`: the explicit layer, or every selected layer, plus their linked layers.
-/// With `"target":"mask"` a layer whose mask is unlinked moves that mask alone.
-pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
-    let (dx, dy) = match p.get("units").and_then(Value::as_str) {
+/// Exact delta parsing shared by resident and paid whole-layer translation.
+pub(crate) fn translation_delta(s: &Session, p: &Value) -> Result<(i32, i32)> {
+    let delta = match p.get("units").and_then(Value::as_str) {
         None | Some("px") => (int_i32("layer.translate", p, "dx")?.unwrap_or(0), int_i32("layer.translate", p, "dy")?.unwrap_or(0)),
         // Points (1/72 in), as a Photoshop action records a nudge: whole pixels at this
         // document's resolution.
@@ -324,6 +323,13 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Some(other) => return Err(bad("layer.translate", format!("unknown units `{other}` (px|pt)"))),
     };
+    Ok(delta)
+}
+
+/// `layer.translate`: the explicit layer, or every selected layer, plus their linked layers.
+/// With `"target":"mask"` a layer whose mask is unlinked moves that mask alone.
+pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
+    let (dx, dy) = translation_delta(s, p)?;
     if dx == 0 && dy == 0 {
         return Ok(Value::Null);
     }
