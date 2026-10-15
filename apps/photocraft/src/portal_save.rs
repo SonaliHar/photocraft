@@ -3,9 +3,10 @@
 //! The GTK file chooser behind the portal keeps the typed name when the user picks another file
 //! type, and rfd 0.17 reads only the file name from the portal's answer, so `image.psd` with PNG
 //! picked came back as `image.psd` and was written as a PSD. The answer does say which type was
-//! picked (`current_filter`), so Save As asks the portal itself and gives the name that type's
-//! extension ([`crate::services::with_chosen_type`]). rfd stays the fallback (zenity, or no portal),
-//! and this can go once an rfd release reads the picked type (PolyMeilex/rfd#341).
+//! picked (`current_filter`), so Save As asks the portal itself and gives a name the dialog left
+//! alone that type's extension ([`crate::services::with_chosen_type`]). rfd stays the fallback
+//! (zenity, or no portal), and this can go once an rfd release reads the picked type
+//! (PolyMeilex/rfd#341).
 //!
 //! The dialog is attached to the window on X11. On Wayland it has no parent: naming the window to
 //! the portal needs an xdg-foreign handle, which takes `unsafe` code the workspace forbids.
@@ -23,7 +24,12 @@ pub type Filter = (String, Vec<String>);
 pub struct SaveRequest {
     /// The portal's parent window identifier (`x11:<xid>`), or empty.
     pub parent: String,
+    /// The name the dialog shows: the stem of the suggested file (`test`), see
+    /// `services::dialog_file_name`.
     pub name: Option<String>,
+    /// The suggested file's name (`test.psd`): a name that comes back with its extension still
+    /// takes the extension of the type picked ([`crate::services::with_chosen_type`]).
+    pub suggested: Option<String>,
     pub folder: Option<PathBuf>,
     pub filters: Vec<Filter>,
     /// The filter the dialog starts on.
@@ -61,8 +67,17 @@ pub fn save_file(conn: &zbus::blocking::Connection, req: &SaveRequest) -> Result
     let mut replies = futures_lite::future::block_on(request.inner().receive_signal("Response")).map_err(|e| e.to_string())?;
     let chooser = Proxy::new(conn, "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop", "org.freedesktop.portal.FileChooser")
         .map_err(|e| e.to_string())?;
-    let _handle: OwnedObjectPath = chooser.call("SaveFile", &(req.parent.as_str(), "Save As", options(req, &token))).map_err(|e| e.to_string())?;
-    let reply = futures_lite::future::block_on(replies.next()).ok_or("The save dialog closed without an answer")?;
+    let handle: OwnedObjectPath = chooser.call("SaveFile", &(req.parent.as_str(), "Save As", options(req, &token))).map_err(|e| e.to_string())?;
+    // A portal older than 0.9 ignores `handle_token` and answers on a request path of its own,
+    // which it returns: listen there instead, as the Request documentation asks.
+    let reply = if handle.as_str() == path {
+        futures_lite::future::block_on(replies.next())
+    } else {
+        let request = Proxy::new(conn, "org.freedesktop.portal.Desktop", handle.as_str(), "org.freedesktop.portal.Request").map_err(|e| e.to_string())?;
+        let mut replies = futures_lite::future::block_on(request.inner().receive_signal("Response")).map_err(|e| e.to_string())?;
+        futures_lite::future::block_on(replies.next())
+    }
+    .ok_or("The save dialog closed without an answer")?;
     let (code, results): (u32, HashMap<String, OwnedValue>) = reply.body().deserialize().map_err(|e| e.to_string())?;
     answer(code, &results)
 }
@@ -90,11 +105,13 @@ fn options<'a>(req: &'a SaveRequest, token: &'a str) -> HashMap<&'static str, Va
     o
 }
 
-/// Reads the portal's `Response`: code 0 with the first `uris` entry, 1 for Cancel.
+/// Reads the portal's `Response`: code 0 with the first `uris` entry. 1 is Cancel, and 2 a dialog
+/// closed some other way, such as with Esc in GNOME's: no file either, and not a reason to show
+/// rfd's dialog instead (it did, so Esc opened a second Save As).
 fn answer(code: u32, results: &HashMap<String, OwnedValue>) -> Result<Option<Saved>, String> {
     match code {
         0 => {}
-        1 => return Ok(None),
+        1 | 2 => return Ok(None),
         _ => return Err(format!("the save dialog failed (portal response {code})")),
     }
     let uris: Vec<String> = results
@@ -151,11 +168,12 @@ pub fn save_as(conn: &zbus::blocking::Connection, mut req: SaveRequest) -> Resul
             Some(i) if req.filters.len() > 1 => &req.filters[i].1,
             _ => &[],
         };
-        let path = crate::services::with_chosen_type(&saved.path, exts);
+        let path = crate::services::with_chosen_type(&saved.path, req.suggested.as_deref(), exts);
         if path == saved.path || !path.exists() {
             return Ok(Some(path));
         }
         req.name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+        req.suggested = req.name.clone();
         req.folder = path.parent().map(Path::to_path_buf);
         req.current = picked;
     }

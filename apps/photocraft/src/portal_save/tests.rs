@@ -28,6 +28,13 @@ type Seen = Arc<Mutex<Vec<(Option<String>, Option<String>)>>>;
 /// A private session bus (`dbus-daemon`) with a mock `org.freedesktop.portal.FileChooser` that
 /// answers `SaveFile` from `script`. `None` when there is no `dbus-daemon` to run.
 fn mock_portal(script: Script) -> Option<(zbus::blocking::Connection, Seen, std::process::Child)> {
+    mock_portal_with(script, false)
+}
+
+/// [`mock_portal`]; with `own_paths` it is a portal older than 0.9, which ignores `handle_token`,
+/// answers on a request path of its own and returns that from `SaveFile`, as a real dialog does
+/// once the user is done with it (here after 300 ms).
+fn mock_portal_with(script: Script, own_paths: bool) -> Option<(zbus::blocking::Connection, Seen, std::process::Child)> {
     use std::io::BufRead;
     let mut daemon =
         std::process::Command::new("dbus-daemon").args(["--session", "--nofork", "--print-address=1"]).stdout(std::process::Stdio::piped()).spawn().ok()?;
@@ -53,8 +60,12 @@ fn mock_portal(script: Script) -> Option<(zbus::blocking::Connection, Seen, std:
             });
             log.lock().unwrap().push((text("current_name"), filter));
             let sender = header.sender().unwrap().as_str().trim_start_matches(':').replace('.', "_");
-            let path = format!("/org/freedesktop/portal/desktop/request/{sender}/{}", text("handle_token").unwrap());
+            let token = if own_paths { format!("old{}", log.lock().unwrap().len()) } else { text("handle_token").unwrap() };
+            let path = format!("/org/freedesktop/portal/desktop/request/{sender}/{token}");
             server.reply(&header, &OwnedObjectPath::try_from(path.as_str()).unwrap()).unwrap();
+            if own_paths {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
             let (code, pick) = script.next().unwrap_or((2, None));
             let mut results: HashMap<&str, Value<'_>> = HashMap::new();
             if let Some((uri, label)) = pick {
@@ -81,6 +92,7 @@ fn request(name: &str) -> SaveRequest {
     SaveRequest {
         parent: String::new(),
         name: Some(name.into()),
+        suggested: Some(name.into()),
         folder: Some(PathBuf::from("/tmp")),
         filters: filters.iter().map(|(l, e)| (l.to_string(), e.iter().map(|s| s.to_string()).collect())).collect(),
         current: Some(0),
@@ -108,6 +120,80 @@ fn save_as_follows_the_file_type_picked_in_the_portal_dialog() {
     assert_eq!(save_as(&conn, request("Untitled-1.psd")).unwrap(), Some(dir.join("Untitled-1.psd")));
     daemon.kill().ok();
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// The dialog opens on the bare name (`test`, see `services::dialog_file_name`), so GTK doesn't
+/// ask to replace test.psd when PNG is picked: the type picked gives the extension, and a name
+/// that then exists is asked about under that name.
+#[test]
+fn a_bare_name_takes_the_picked_type_and_an_existing_target_is_asked_about() {
+    let dir = std::env::temp_dir().join(format!("photocraft-portal-bare-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("test.psd"), b"open document").unwrap();
+    let uri = |name: &str| -> &'static str { Box::leak(format!("file://{}/{name}", dir.display()).into_boxed_str()) };
+    let Some((conn, seen, mut daemon)) = mock_portal(vec![
+        (0, Some((uri("test"), "PNG"))),
+        (0, Some((uri("test.psd"), "PNG"))),
+        (0, Some((uri("test"), "PSD Document"))),
+        (0, Some((uri("test.psd"), "PSD Document"))),
+    ]) else {
+        eprintln!("no dbus-daemon: skipped");
+        return;
+    };
+    // As File › Save As opens it: `test` shown, `test.psd` suggested.
+    let opened = || SaveRequest { suggested: Some("test.psd".into()), ..request("test") };
+    // PNG picked: test.png, and nothing was asked about test.psd.
+    assert_eq!(save_as(&conn, opened()).unwrap(), Some(dir.join("test.png")));
+    // The suggested extension back in the name (typed again, or GTK's completion) with PNG
+    // picked: test.png too, not a PSD written over test.psd.
+    assert_eq!(save_as(&conn, opened()).unwrap(), Some(dir.join("test.png")));
+    // The type untouched: test.psd, which exists, so the dialog asks again as test.psd (the
+    // portal's replace prompt is then about the file that is written).
+    assert_eq!(save_as(&conn, opened()).unwrap(), Some(dir.join("test.psd")));
+    let seen = seen.lock().unwrap().clone();
+    let names: Vec<_> = seen.iter().map(|(name, _)| name.as_deref()).collect();
+    assert_eq!(names, [Some("test"), Some("test"), Some("test"), Some("test.psd")], "{seen:?}");
+    assert_eq!(seen[3].1.as_deref(), Some("PSD Document"));
+    daemon.kill().ok();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// GNOME's dialog closed with Esc answers 2 ("ended some other way"): no file, like Cancel, and
+/// no fallback to rfd, which opened a second Save As.
+#[test]
+fn a_dialog_closed_some_other_way_is_a_cancel() {
+    let Some((conn, _seen, mut daemon)) = mock_portal(vec![(2, None)]) else {
+        eprintln!("no dbus-daemon: skipped");
+        return;
+    };
+    assert_eq!(save_as(&conn, request("test")), Ok(None));
+    daemon.kill().ok();
+}
+
+/// An extension the user typed is theirs: `art.png` with the PSD type left as the dialog opened
+/// saves a PNG, as it did before the type was read.
+#[test]
+fn a_typed_extension_wins_over_an_untouched_file_type() {
+    let typed: &'static str = "file:///tmp/photocraft-none/art.png";
+    let Some((conn, _seen, mut daemon)) = mock_portal(vec![(0, Some((typed, "PSD Document")))]) else {
+        eprintln!("no dbus-daemon: skipped");
+        return;
+    };
+    assert_eq!(save_as(&conn, request("Untitled-1.psd")).unwrap(), Some(PathBuf::from("/tmp/photocraft-none/art.png")));
+    daemon.kill().ok();
+}
+
+/// A portal older than 0.9 answers on a request path of its own: the wait follows the handle
+/// `SaveFile` returns, as the Request documentation asks, instead of the predicted path.
+#[test]
+fn the_answer_is_awaited_on_the_handle_the_portal_returns() {
+    let typed: &'static str = "file:///tmp/photocraft-none/Untitled-1.psd";
+    let Some((conn, _seen, mut daemon)) = mock_portal_with(vec![(0, Some((typed, "PNG")))], true) else {
+        eprintln!("no dbus-daemon: skipped");
+        return;
+    };
+    assert_eq!(save_as(&conn, request("Untitled-1.psd")).unwrap(), Some(PathBuf::from("/tmp/photocraft-none/Untitled-1.png")));
+    daemon.kill().ok();
 }
 
 /// When the extension the type gives names a file that exists, the dialog opens again under that

@@ -95,17 +95,23 @@ fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
     v
 }
 
-/// `path` as the file type picked in the save dialog writes it (#6121): the format follows the
-/// extension, so one PhotoCraft saves (`.psd` with PNG picked) becomes the type's own
-/// (`chosen[0]`), and a name with none or another (`scan.2024`) gets it appended. A name that
-/// already has one of the type's extensions (`.psb` for PSD), or no type (`chosen` empty), stays.
+/// `path` with the extension of the file type picked in the save dialog (`chosen`), where the
+/// dialog left the name alone (#6121): the format follows the extension, and the GTK file chooser
+/// keeps the typed name when another type is picked. Only a name that still has the extension the
+/// dialog opened with (`opened_with`, `Untitled-1.psd` with PNG picked) or none gets the type's
+/// extension, as PolyMeilex/rfd#341 does. An extension the user typed that PhotoCraft saves
+/// (`art.png` with the PSD type untouched, the way to save a PNG before this) is theirs and stays,
+/// and so does one of the type's own (`.psb` for PSD). One PhotoCraft doesn't save (`scan.2024`)
+/// is part of the name, and the type's extension is added after it.
 #[cfg(any(target_os = "linux", test))]
-pub(crate) fn with_chosen_type(path: &Path, chosen: &[String]) -> PathBuf {
+pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &[String]) -> PathBuf {
     let Some(first) = chosen.first() else { return path.to_path_buf() };
     let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    let opened_ext = opened_with.and_then(|n| Path::new(n).extension()).and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
     match ext {
         Some(ext) if chosen.contains(&ext) => path.to_path_buf(),
-        Some(ext) if SAVE_FILTERS.iter().chain(OTHER_SAVE_FILTERS).any(|(_, exts)| exts.contains(&ext.as_str())) => path.with_extension(first),
+        Some(ext) if opened_ext.as_ref() == Some(&ext) => path.with_extension(first),
+        Some(ext) if SAVE_FILTERS.iter().chain(OTHER_SAVE_FILTERS).any(|(_, exts)| exts.contains(&ext.as_str())) => path.to_path_buf(),
         _ => {
             let mut name = path.as_os_str().to_owned();
             name.push(".");
@@ -115,18 +121,25 @@ pub(crate) fn with_chosen_type(path: &Path, chosen: &[String]) -> PathBuf {
     }
 }
 
-/// The name the save dialog starts with. On Windows a visible extension stays put when the user
-/// picks another type (with File name extensions shown, `image.psd` saved as PhotoCraft stayed
-/// `image.psd`, #4394), while a bare name gets the chosen type's extension, so there the dialog
-/// gets the stem and the suggested type (listed first by [`save_filters`]) supplies `.psd`. A
-/// stem that still has a dot (`scan.jpg.psd`: Windows could keep `scan.jpg`) or an upper-case
+/// The name the save dialog starts with. Where the type picked gives a bare name its extension
+/// (`adds_extension`), the dialog gets the stem and the suggested type (listed first by
+/// [`save_filters`]) supplies `.psd`:
+/// - On Windows a visible extension stays put when the user picks another type (with File name
+///   extensions shown, `image.psd` saved as PhotoCraft stayed `image.psd`, #4394).
+/// - On Linux the portal's dialog keeps the name as typed, and before returning asks whether to
+///   replace a file of that name, so `test.psd` with PNG picked asked to replace test.psd, which
+///   the save leaves alone (#6121). From the stem [`with_chosen_type`] gives the picked type's
+///   extension, and a name that then exists is asked about under that name
+///   (`portal_save::save_as`).
+///
+/// A stem that still has a dot (`scan.jpg.psd`: Windows could keep `scan.jpg`) or an upper-case
 /// extension (the user's spelling) keeps the whole name. Elsewhere the whole name is kept: the
-/// macOS panel has no type list, and on Linux the type picked fixes the extension afterwards (#6121).
-fn dialog_file_name(suggested: &str, windows: bool) -> Option<String> {
+/// macOS panel has no type list, and rfd's Linux dialogs don't say which type was picked.
+fn dialog_file_name(suggested: &str, adds_extension: bool) -> Option<String> {
     let path = Path::new(suggested);
     let name = path.file_name()?.to_string_lossy().into_owned();
     let (Some(stem), Some(ext)) = (path.file_stem(), path.extension().and_then(|e| e.to_str())) else { return Some(name) };
-    let bare = windows && Path::new(stem).extension().is_none() && !ext.is_empty() && ext == ext.to_ascii_lowercase();
+    let bare = adds_extension && Path::new(stem).extension().is_none() && !ext.is_empty() && ext == ext.to_ascii_lowercase();
     Some(if bare { stem.to_string_lossy().into_owned() } else { name })
 }
 
@@ -186,7 +199,14 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             {
                 use eframe::wgpu::rwh::HasWindowHandle;
                 let parent = crate::portal_save::parent_id(parent.and_then(|p| p.window_handle().ok()).map(|h| h.as_raw()));
-                let req = crate::portal_save::SaveRequest { parent, name, folder: dir, filters, current: Some(0) };
+                let req = crate::portal_save::SaveRequest {
+                    parent,
+                    name: dialog_file_name(&suggested, true),
+                    suggested: Path::new(&suggested).file_name().map(|n| n.to_string_lossy().into_owned()),
+                    folder: dir,
+                    filters,
+                    current: Some(0),
+                };
                 Box::pin(async move {
                     let portal = zbus::blocking::connection::Builder::session()
                         .and_then(|b| b.build())
@@ -633,31 +653,39 @@ mod tests {
     use photocraft_ui_egui::{PhotocraftApp, prefs_ui};
     use serde_json::{Value, json};
 
-    /// #6121: the file type picked in the save dialog decides the extension.
+    /// #6121: the file type picked in the save dialog gives the name its extension where the
+    /// dialog left the one it opened with, and only there.
     #[test]
     fn the_picked_file_type_gives_the_name_its_extension() {
         let exts = |e: &[&str]| e.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let png = exts(&["png"]);
+        let (png, psd) = (exts(&["png"]), exts(&["psd", "psb"]));
+        let opened = Some("Untitled-1.psd");
         let cases = [
-            ("/pics/Untitled-1.psd", &png, "/pics/Untitled-1.png"),
-            ("/pics/art.pcraft", &png, "/pics/art.png"),
-            ("/pics/ART.PSD", &png, "/pics/ART.png"),
-            // No extension, or one PhotoCraft doesn't save: appended.
-            ("/pics/art", &png, "/pics/art.png"),
-            ("/pics/scan.2024", &png, "/pics/scan.2024.png"),
-            ("/pics/my.photo.jpg", &png, "/pics/my.photo.png"),
+            // PNG picked, the name as the dialog opened (or renamed, its extension kept).
+            ("/pics/Untitled-1.psd", opened, &png, "/pics/Untitled-1.png"),
+            ("/pics/art.psd", opened, &png, "/pics/art.png"),
+            ("/pics/ART.PSD", opened, &png, "/pics/ART.png"),
+            // No extension: the type's. One PhotoCraft doesn't save is part of the name.
+            ("/pics/art", opened, &png, "/pics/art.png"),
+            ("/pics/scan.2024", opened, &png, "/pics/scan.2024.png"),
+            // Typed, an extension PhotoCraft saves is the user's: kept, whatever the type says
+            // (the PSD type untouched, or PNG picked and .jpg typed).
+            ("/pics/art.png", opened, &psd, "/pics/art.png"),
+            ("/pics/art.jpg", opened, &png, "/pics/art.jpg"),
+            ("/pics/art.pcraft", opened, &png, "/pics/art.pcraft"),
             // Already the type's: kept, including its other extensions.
-            ("/pics/art.png", &png, "/pics/art.png"),
-            ("/pics/art.PNG", &png, "/pics/art.PNG"),
+            ("/pics/art.png", opened, &png, "/pics/art.png"),
+            ("/pics/art.PNG", opened, &png, "/pics/art.PNG"),
+            ("/pics/big.psb", opened, &psd, "/pics/big.psb"),
+            // The dialog opened on a .pcraft: that is the extension the type replaces.
+            ("/pics/art.pcraft", Some("art.pcraft"), &png, "/pics/art.png"),
+            ("/pics/art.psd", Some("art.pcraft"), &png, "/pics/art.psd"),
         ];
-        for (typed, chosen, want) in cases {
-            assert_eq!(with_chosen_type(Path::new(typed), chosen), PathBuf::from(want), "{typed}");
+        for (typed, opened, chosen, want) in cases {
+            assert_eq!(with_chosen_type(Path::new(typed), opened, chosen), PathBuf::from(want), "{typed} (opened {opened:?})");
         }
-        let psd = exts(&["psd", "psb"]);
-        assert_eq!(with_chosen_type(Path::new("/pics/big.psb"), &psd), PathBuf::from("/pics/big.psb"));
-        assert_eq!(with_chosen_type(Path::new("/pics/big.png"), &psd), PathBuf::from("/pics/big.psd"));
         // No type picked: the name as typed.
-        assert_eq!(with_chosen_type(Path::new("/pics/art.psd"), &[]), PathBuf::from("/pics/art.psd"));
+        assert_eq!(with_chosen_type(Path::new("/pics/art.psd"), opened, &[]), PathBuf::from("/pics/art.psd"));
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
