@@ -463,12 +463,48 @@ struct Geometry {
     front: Option<f64>,
     /// Cell (a, b)'s rect: the source rect reduced by 2⁻ᵃ along x and 2⁻ᵇ along y.
     cells: [[Rect; 7]; 7],
+    /// Every pixel samples the source alone ([`samples_source_only`]), so tiles need no plan.
+    source_only: bool,
 }
 
 impl Geometry {
     fn cell(&self, a: usize, b: usize) -> Option<Rect> {
         self.cells.get(a).and_then(|row| row.get(b)).copied()
     }
+}
+
+/// Whether every pixel a perspective map draws samples the source alone (cell (0, 0)), from bounds
+/// over the whole source and the sampler's margin: each axis keeps at least 0.6 of its length (the
+/// cross-fade into octave 1 starts below 2^−0.75 ≈ 0.595), and every direction at least 0.51, so
+/// the slant rule in [`axis_factors`], which acts only below half, leaves both axes alone. A pixel's
+/// kernel is then widened by less than 1 / 0.6, and its taps lie within 4 source pixels of its
+/// source point. `false` whenever the bounds can't show it, including when they overflow. The
+/// caller checks that w keeps one sign over the source.
+fn samples_source_only(h: &Homography, src_rect: Rect) -> bool {
+    let m = &h.0;
+    let (x0, y0) = (f64::from(src_rect.x0) - 1.0, f64::from(src_rect.y0) - 1.0);
+    let (x1, y1) = (f64::from(src_rect.x1) + 1.0, f64::from(src_rect.y1) + 1.0);
+    let ws = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(u, v)| (m[6] * u + m[7] * v + m[8]).abs());
+    let (w_min, w_max) = (ws.iter().copied().fold(f64::INFINITY, f64::min), ws.iter().copied().fold(0.0f64, f64::max));
+    // The Jacobian's columns times w²: the x column is affine in y alone, the y column in x alone.
+    let col_x = |y: f64| [(m[0] * m[7] - m[6] * m[1]) * y + (m[0] * m[8] - m[6] * m[2]), (m[3] * m[7] - m[6] * m[4]) * y + (m[3] * m[8] - m[6] * m[5])];
+    let col_y = |x: f64| [(m[1] * m[6] - m[7] * m[0]) * x + (m[1] * m[8] - m[7] * m[2]), (m[4] * m[6] - m[7] * m[3]) * x + (m[4] * m[8] - m[7] * m[5])];
+    // The shortest and longest of them along a segment: its nearest point to 0, and its far end.
+    let span = |a: [f64; 2], b: [f64; 2]| {
+        let d = [b[0] - a[0], b[1] - a[1]];
+        let dd = d[0] * d[0] + d[1] * d[1];
+        let t = if dd > 0.0 { (-(a[0] * d[0] + a[1] * d[1]) / dd).clamp(0.0, 1.0) } else { 0.0 };
+        (f64::hypot(a[0] + t * d[0], a[1] + t * d[1]), f64::hypot(a[0], a[1]).max(f64::hypot(b[0], b[1])))
+    };
+    let (x_lo, x_hi) = span(col_x(y0), col_x(y1));
+    let (y_lo, y_hi) = span(col_y(x0), col_y(x1));
+    let det = (m[0] * (m[4] * m[8] - m[5] * m[7]) - m[1] * (m[3] * m[8] - m[5] * m[6]) + m[2] * (m[3] * m[7] - m[4] * m[6])).abs();
+    // A column is at least its shortest numerator over the largest w². The weakest direction
+    // stretches by |det J| / σmax, where |det J| = |det H| / w³ and σmax is at most the columns'
+    // root sum of squares.
+    let column = x_lo.min(y_lo) / (w_max * w_max);
+    let weakest = det / (w_max * w_max * w_max) * (w_min * w_min) / x_hi.hypot(y_hi);
+    w_min > 0.0 && column.is_finite() && weakest.is_finite() && column >= 0.6 && weakest >= 0.51
 }
 
 /// Destination pixel (x, y)'s filter, from the map's exact Jacobian at its source point: each axis
@@ -630,6 +666,12 @@ fn plan_tile(t: Rect, g: &Geometry, src: &Surface) -> Option<TilePlan> {
     let foot = footprint(&t, &g.inv, g.side, g.w_lo, g.src_rect);
     if foot.is_empty() || !src.has_tiles_in(foot.inflate(REACH)) {
         return None;
+    }
+    if g.source_only {
+        // The footprint, padded by 3 and 2 more, holds every tap (within 4 pixels of a source
+        // point): planning each pixel would only narrow the window, which changes no pixel.
+        let win = foot.inflate(2).intersect(&g.src_rect);
+        return (!win.is_empty()).then(|| TilePlan { tile: t, cells: vec![(0, 0, win)] });
     }
     let mut boxes = [[Rect::EMPTY; 7]; 7];
     for y in t.y0..t.y1 {
@@ -966,16 +1008,18 @@ fn footprint(t: &Rect, inv: &Homography, side: Option<f64>, w_lo: f64, src_rect:
     if straddles { src_rect } else { Rect::new(fx0, fy0, fx1, fy1).intersect(&src_rect) }
 }
 
-/// Knobs the tests turn: the valve forced (a perspective map takes today's one-factor path), and
-/// the window cap.
+/// Knobs the tests turn: the valve forced (a perspective map takes today's one-factor path), the
+/// window cap, and every tile planned pixel by pixel.
 #[derive(Clone, Copy, Debug)]
 struct Tuning {
     force_valve: bool,
     window_cap: usize,
+    /// Plan every tile pixel by pixel, even where [`samples_source_only`] says no pixel needs it.
+    plan_pixels: bool,
 }
 
 impl Tuning {
-    const DEFAULT: Tuning = Tuning { force_valve: false, window_cap: WINDOW_CAP };
+    const DEFAULT: Tuning = Tuning { force_valve: false, window_cap: WINDOW_CAP, plan_pixels: false };
 }
 
 /// A cancelled `ctl` skips the remaining tiles; the caller discards the result.
@@ -1079,7 +1123,8 @@ fn warp_with(
     let src_ref: &Surface = src;
     if per_pixel {
         let cells = std::array::from_fn(|a| std::array::from_fn(|b| scaled_rect(src_rect, octave_scale(a), octave_scale(b))));
-        let g = Geometry { h, inv, src_rect, side, w_lo, front, cells };
+        let source_only = !tuning.plan_pixels && side.is_some() && samples_source_only(&h, src_rect);
+        let g = Geometry { h, inv, src_rect, side, w_lo, front, cells, source_only };
         let Some(done) = warp_per_pixel(src_ref, &g, &tiles, ctl, tuning)? else {
             return warp_with(src_in, rect_in, h_in, interp, clip, ctl, Tuning { force_valve: true, ..tuning });
         };
@@ -2393,7 +2438,7 @@ mod tests {
         for h in maps {
             let inv = h.inverse().unwrap_or(Homography([f64::NAN; 9]));
             let cells = std::array::from_fn(|a| std::array::from_fn(|b| scaled_rect(r, octave_scale(a), octave_scale(b))));
-            let g = Geometry { h, inv, src_rect: r, side: None, w_lo: 0.0, front: Some(1.0), cells };
+            let g = Geometry { h, inv, src_rect: r, side: None, w_lo: 0.0, front: Some(1.0), cells, source_only: false };
             for (x, y) in [(0, 0), (10, 10), (32, 24), (-5, 3), (1000, 1000)] {
                 if let Some(l) = pixel_lod(&g, x, y) {
                     assert!(l.u.is_finite() && l.v.is_finite() && (0.0..=1.0).contains(&l.cu) && (0.0..=1.0).contains(&l.cv), "{h:?} ({x}, {y}): {l:?}");
@@ -2455,6 +2500,50 @@ mod tests {
                 let split = warp_with(&src, r, &h, Interp::Bicubic, None, &Interrupt::NONE, Tuning { window_cap: 1024, ..Tuning::DEFAULT }).unwrap();
                 assert!(whole == split, "{sample:?}: a split tile changed pixels");
             }
+        }
+    }
+
+    /// #4864: a Distort that leaves every part of the source at 0.6 or more along each axis (here
+    /// magnifying ones, one mirrored) skips planning each pixel, which changes no pixel: every
+    /// pixel samples the source alone, and the warp is bit-identical with its tiles planned pixel
+    /// by pixel. Maps that reduce more anywhere plan.
+    #[test]
+    fn source_only_maps_skip_planning_exactly() {
+        let (w, hh) = (400, 300);
+        let r = Rect::new(0, 0, w, hh);
+        let (fw, fh) = (f64::from(w), f64::from(hh));
+        let quads = [
+            [[0.0, 0.0], [1.3 * fw, 0.1 * fh], [1.4 * fw, 1.1 * fh], [0.0, fh]],
+            [[0.0, 0.0], [2.2 * fw, 0.1 * fh], [2.0 * fw, 2.1 * fh], [0.1 * fw, 2.0 * fh]],
+            [[1.4 * fw, 0.0], [0.1 * fw, 0.1 * fh], [0.0, 1.1 * fh], [1.4 * fw, fh]],
+        ];
+        for q in quads {
+            let h = Homography::rect_to_quad([0.0, 0.0, fw, fh], q).unwrap();
+            assert!(samples_source_only(&h, r), "{q:?}");
+            let inv = h.inverse().unwrap();
+            let cells = std::array::from_fn(|a| std::array::from_fn(|b| scaled_rect(r, octave_scale(a), octave_scale(b))));
+            let g = Geometry { h, inv, src_rect: r, side: Some(1.0), w_lo: 0.0, front: None, cells, source_only: true };
+            let b = warp_output_bounds(r, &h).unwrap().inflate(2);
+            let one = |a: &Axis| a.n == 1 && a.lv[0] == 0 && a.r[0] < 1.0 / 0.6;
+            for y in b.y0..b.y1 {
+                for x in b.x0..b.x1 {
+                    if let Some(l) = pixel_lod(&g, x, y) {
+                        assert!(one(&l.ax) && one(&l.ay), "{q:?} ({x}, {y}): {l:?}");
+                    }
+                }
+            }
+            for sample in [SampleType::U8, SampleType::F32] {
+                let src = paint(w, hh, sample, |x, y| {
+                    let v = ((x * 7 + y * 3) % 23) as f32 / 22.0;
+                    [v, ((x / 3) & 1) as f32, ((y / 2) & 1) as f32, 1.0]
+                });
+                let fast = warp_with(&src, r, &h, Interp::Bicubic, None, &Interrupt::NONE, Tuning::DEFAULT).unwrap();
+                let planned = warp_with(&src, r, &h, Interp::Bicubic, None, &Interrupt::NONE, Tuning { plan_pixels: true, ..Tuning::DEFAULT }).unwrap();
+                assert!(fast == planned, "{sample:?} {q:?}: skipping the plan changed pixels");
+            }
+        }
+        for q in [wedge as fn(f64, f64) -> [[f64; 2]; 4], q6, trapezoid] {
+            assert!(!samples_source_only(&map(q, w, hh), r));
         }
     }
 
