@@ -682,9 +682,9 @@ fn deep_tile_count_table_is_admitted_against_max_alloc() {
 /// where its full size passes the check and is only tried as the data arrives. Each tile is
 /// admitted on its own, because its table is freed before the next chunk: three 16×16 tiles over
 /// a 48×1 image are all edge tiles, so every full-size table reaches the check (an interior tile's
-/// full size equals its clipped size, so it never does). They need 2 KiB each for the table and
-/// its copy, 6 KiB in all, and decode under a budget of 4096 bytes. Half and uint channels decode
-/// after full-size tables like float ones.
+/// full size equals its clipped size, so it uses the clipped check). They need 2 KiB each for
+/// the table and its copy, 6 KiB in all, and decode under a budget of 4096 bytes. Half and uint
+/// channels decode after full-size tables like float ones.
 #[test]
 fn deep_tile_table_admission_edges() {
     let budget = |max_alloc: u64| Limits { max_alloc, ..Limits::none() };
@@ -708,6 +708,52 @@ fn deep_tile_table_admission_edges() {
             let what = format!("{} channels, compression {compression}", channels.len());
             let want = decode_deep_exr(&clipped, &Limits::none()).expect("clipped tables");
             assert_eq!(decode_deep_exr(&full, &budget(4096)).expect("full-size tables, admitted one at a time"), want, "{what}");
+        }
+    }
+}
+
+/// A one-channel data-window check admits only four bytes per pixel, but a compressed count
+/// table and its scratch copy need eight. Cover scanlines, interior tiles and the clipped fallback;
+/// the existing multichannel cases have enough pixel allowance to hide this gap.
+#[test]
+fn clipped_count_tables_include_scratch_in_the_budget() {
+    let channels = [Chan { name: "Y", ty: 2 }];
+    let counts = vec![0u32; 64];
+    let sample = |_: usize, _: usize| Vec::new();
+    let budget = |max_alloc: u64| Limits { max_alloc, ..Limits::none() };
+    for tile in [None, Some((64, 1)), Some((128, 2))] {
+        for compression in [0u8, 1, 2] {
+            let bytes = gen_deep(64, 1, &channels, compression, tile, &counts, &sample);
+            let what = format!("tile {tile:?}, compression {compression}");
+            let want = decode_deep_exr(&bytes, &Limits::none()).expect("unlimited decode");
+            let required = if compression == 0 { 256 } else { 512 };
+            assert_eq!(decode_deep_exr(&bytes, &budget(required)).expect("table and any scratch fit exactly"), want, "{what}");
+            assert!(matches!(decode_deep_exr(&bytes, &budget(required - 1)), Err(CodecError::LimitExceeded(_))), "{what}");
+            let flat = photocraft_codecs::decode_with(&bytes, &photocraft_codecs::DecodeOptions { limits: budget(required - 1), ..Default::default() });
+            assert!(matches!(flat, Err(CodecError::LimitExceeded(_))), "{what}");
+            if compression == 0 {
+                assert_eq!(decode_deep_exr(&bytes, &budget(511)).expect("raw table needs no scratch"), want, "{what}");
+            }
+        }
+    }
+}
+
+/// RLE and ZIPS store incompressible tables raw too. Their actual payload, not the header's
+/// compression tag, decides whether a scratch buffer is needed.
+#[test]
+fn raw_count_tables_need_no_scratch_even_with_compression() {
+    let channels = [Chan { name: "Y", ty: 2 }];
+    let limits = Limits { max_alloc: 4, ..Limits::none() };
+    for tile in [None, Some((1, 1)), Some((2, 2))] {
+        for compression in [0u8, 1, 2] {
+            let bytes = gen_deep(1, 1, &channels, compression, tile, &[0], &|_, _| Vec::new());
+            let header_end = header_end_of(&bytes);
+            let chunk = u64::from_le_bytes(bytes[header_end..header_end + 8].try_into().expect("chunk offset")) as usize;
+            let table_size = chunk + if tile.is_some() { 16 } else { 4 };
+            let packed = u64::from_le_bytes(bytes[table_size..table_size + 8].try_into().expect("table size"));
+            assert_eq!(packed, 4, "the four-byte count table is stored raw");
+            let want = decode_deep_exr(&bytes, &Limits::none()).expect("unlimited decode");
+            assert_eq!(decode_deep_exr(&bytes, &limits).expect("raw table fits"), want, "tile {tile:?}, compression {compression}");
         }
     }
 }

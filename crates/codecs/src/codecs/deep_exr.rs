@@ -39,9 +39,15 @@ fn unsup(reason: impl Into<String>) -> CodecError {
 // Every length and offset comes from the file, so every read is bounds-checked and a short
 // read is a malformed file, never a panic.
 
-fn read_exact(cur: &mut Cursor<&[u8]>, n: usize, what: &str) -> Result<Vec<u8>, CodecError> {
-    let mut v = vec![0u8; n];
-    cur.read_exact(&mut v).map_err(|_| err(format!("truncated file while reading {what}")))?;
+fn read_exact<'a>(cur: &mut Cursor<&'a [u8]>, n: usize, what: &str) -> Result<&'a [u8], CodecError> {
+    // Borrow packed payloads from the input. Copying them here allocates before count-table
+    // admission and needlessly duplicates the table even when the second pass just skips it.
+    let truncated = || err(format!("truncated file while reading {what}"));
+    let start = usize::try_from(cur.position()).map_err(|_| truncated())?;
+    let end = start.checked_add(n).ok_or_else(truncated)?;
+    let bytes = *cur.get_ref();
+    let v = bytes.get(start..end).ok_or_else(truncated)?;
+    cur.set_position(end as u64);
     Ok(v)
 }
 
@@ -127,7 +133,8 @@ fn reserve_up_to(out: &mut Vec<u8>, extra: usize, limit: usize, what: &str) -> R
 /// OpenEXR RLE tokens: a negative byte `n` means `-n` literal bytes follow, a non-negative
 /// byte `n` means the next byte repeats `n + 1` times (as `ImfRle.cpp` and the `exr` crate).
 fn rle_decode(src: &[u8], expected: usize, what: &str) -> Result<Vec<u8>, CodecError> {
-    let mut out = Vec::with_capacity(expected.min(1 << 20));
+    let mut out = Vec::new();
+    reserve_up_to(&mut out, expected.min(1 << 20), expected, what)?;
     let mut i = 0;
     while i < src.len() {
         let count = src[i] as i8;
@@ -161,7 +168,10 @@ fn rle_decode(src: &[u8], expected: usize, what: &str) -> Result<Vec<u8>, CodecE
 /// has the uncompressed length is stored raw whatever the declared compression.
 fn decompress(compression: Compression, packed: &[u8], expected: usize, what: &str) -> Result<Vec<u8>, CodecError> {
     if packed.len() == expected {
-        return Ok(packed.to_vec());
+        let mut out = Vec::new();
+        reserve_up_to(&mut out, expected, expected, what)?;
+        out.extend_from_slice(packed);
+        return Ok(out);
     }
     match compression {
         Compression::Uncompressed => Err(err(format!("{what}: expected {expected} uncompressed bytes, found {}", packed.len()))),
@@ -379,6 +389,17 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
         let what = "the sample-count table";
         let table_bytes = read_exact(&mut cur, packed_table as usize, what)?;
         let expected_table = block_pixels.len().checked_mul(4).ok_or_else(|| err("count table overflows"))?;
+        // A compressed clipped table also needs its scratch copy. The data-window check only
+        // budgets four bytes per channel per pixel, insufficient for a one-channel image.
+        // An equal-sized payload takes decompress's raw path, which allocates no scratch.
+        let buffers = if table_bytes.len() == expected_table { 1 } else { 2 };
+        let clipped_need = (expected_table as u64).saturating_mul(buffers);
+        if clipped_need > limits.max_alloc {
+            return Err(CodecError::LimitExceeded(format!(
+                "{what} needs {clipped_need} bytes including decompression scratch, exceeding max_alloc {}",
+                limits.max_alloc
+            )));
+        }
         // An edge tile's table may still be stored at the full tile size (its pixels first, in
         // rows of the clipped width, then unused entries), as the OpenEXR library writes it.
         // That size comes from the header's tile size alone, which nothing ties to the data
@@ -387,11 +408,11 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
         let full_table = tile_w.checked_mul(tile_h).and_then(|n| n.checked_mul(4));
         let raw = match full_table {
             // Scan lines and interior tiles: the full size is the clipped size.
-            Some(full) if full <= expected_table => decompress(compression, &table_bytes, expected_table, what)?,
+            Some(full) if full <= expected_table => decompress(compression, table_bytes, expected_table, what)?,
             Some(full) if (full as u64).saturating_mul(2) <= limits.max_alloc => {
-                decompress(compression, &table_bytes, full, what).or_else(|_| decompress(compression, &table_bytes, expected_table, what))?
+                decompress(compression, table_bytes, full, what).or_else(|_| decompress(compression, table_bytes, expected_table, what))?
             }
-            _ => decompress(compression, &table_bytes, expected_table, what).map_err(|_| {
+            _ => decompress(compression, table_bytes, expected_table, what).map_err(|_| {
                 // Four bytes per pixel of the tile, twice: the table and its scratch copy.
                 let need = (tile_w as u64).saturating_mul(tile_h as u64).saturating_mul(8);
                 CodecError::LimitExceeded(format!(
@@ -476,7 +497,7 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
         // The count table sits between the sizes and the sample data; skip its bytes.
         read_exact(&mut cur, packed_table as usize, "the sample-count table")?;
         let data_bytes = read_exact(&mut cur, chunk.packed_data as usize, "the deep sample data")?;
-        let raw = decompress(compression, &data_bytes, chunk.unpacked_data as usize, "the deep sample data")?;
+        let raw = decompress(compression, data_bytes, chunk.unpacked_data as usize, "the deep sample data")?;
         // Row by row (a scan line block is one row), and within a row channel by channel, as
         // flat tiles are laid out: each pixel's samples are contiguous within its channel.
         let mut in_off = 0usize;
@@ -669,6 +690,22 @@ pub(crate) fn flatten(deep: &DeepImage) -> Result<Image, CodecError> {
 mod tests {
     use super::*;
     use std::io::Write as _;
+
+    #[test]
+    fn packed_reads_borrow_input_and_reject_bad_sizes_before_allocation() {
+        let bytes = [1u8, 2, 3, 4];
+        let mut cur = Cursor::new(bytes.as_slice());
+        let prefix = read_exact(&mut cur, 3, "x").expect("three input bytes");
+        assert_eq!(prefix, &[1, 2, 3]);
+        assert_eq!(prefix.as_ptr(), bytes.as_ptr());
+        assert_eq!(cur.position(), 3);
+        assert!(matches!(read_exact(&mut cur, usize::MAX, "x"), Err(CodecError::Malformed { .. })));
+        assert_eq!(cur.position(), 3);
+        assert_eq!(read_exact(&mut cur, 1, "x").expect("last byte"), &[4]);
+        assert!(matches!(read_exact(&mut cur, 1, "x"), Err(CodecError::Malformed { .. })));
+        cur.set_position(u64::MAX);
+        assert!(matches!(read_exact(&mut cur, 1, "x"), Err(CodecError::Malformed { .. })));
+    }
 
     /// What the writer stores before compressing: the byte split, then the +128 predictor.
     fn predicted(raw: &[u8]) -> Vec<u8> {
