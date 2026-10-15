@@ -4,15 +4,16 @@
 //! rotate, skew and flips are affine special cases; Distort and Perspective use the full
 //! homography. Warping is an inverse mapping with premultiplied-alpha sampling (nearest, bilinear
 //! or Photoshop's Keys bicubic), processed per destination tile (in parallel on native) so memory stays
-//! bounded by the tile working set. Large reductions are pre-filtered with a proper resize first,
-//! so shrinking a layer doesn't alias.
+//! bounded by the tile working set. Bicubic reductions are pre-filtered with a proper resize
+//! first, each axis by its own scale, so shrinking a layer doesn't alias and an axis that doesn't
+//! shrink stays sharp.
 
 use photocraft_color::PixelFormat;
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, Surface};
 use serde::{Deserialize, Serialize};
 
-use crate::resample::{Resample, resize_surface};
+use crate::resample::{resize_surface_per_axis, scaled_rect};
 
 /// 3×3 projective matrix, row-major: `[x', y', w'] = H · [x, y, 1]`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -131,6 +132,17 @@ impl Homography {
         let (c, d) = (self.apply(x, y - e), self.apply(x, y + e));
         let (jx, jy) = ((b.0 - a.0, b.1 - a.1), (d.0 - c.0, d.1 - c.1));
         (jx.0 * jy.1 - jx.1 * jy.0).abs().sqrt()
+    }
+
+    /// The map's Jacobian at `(x, y)`, `[∂X/∂x, ∂X/∂y, ∂Y/∂x, ∂Y/∂y]`, exact (an affine map gives
+    /// the same matrix everywhere). Its columns' lengths are how far a step of one source pixel
+    /// along x, and one along y, moves in the destination, which [`Self::local_scale`]'s area
+    /// measure can't tell apart.
+    pub fn jacobian(&self, x: f64, y: f64) -> [f64; 4] {
+        let m = &self.0;
+        let w = self.w(x, y);
+        let (px, py) = self.apply(x, y);
+        [(m[0] - m[6] * px) / w, (m[1] - m[7] * px) / w, (m[3] - m[6] * py) / w, (m[4] - m[7] * py) / w]
     }
 }
 
@@ -253,6 +265,54 @@ fn corner_bounds(corners: &[(f64, f64); 4]) -> Option<Rect> {
     Some(Rect::new(bx0, by0, bx1, by1))
 }
 
+/// The factors a Bicubic warp pre-reduces its source by along x and along y, 1 for an axis that
+/// doesn't shrink. One factor for both axes (√|det J|, taken at the centre) blurred an axis the
+/// map keeps 1:1 while it squashes the other, and the wide side of a Distort (#4864), so each axis
+/// gets its own: the length of its Jacobian column, at the least reduction found at the corners
+/// and centre of the source, or with a clip at the source points under the clip's corners and
+/// centre. The near side of a strong perspective then stays as sharp as a direct sample, while the
+/// far side gets less filtering than its own reduction calls for, as with Bilinear. A skew that
+/// also flattens shrinks the area far more than either axis, along a slant no axis-aligned
+/// prefilter follows; there both axes come down in proportion until the warp is left at most a
+/// 4× area reduction (50 % × 50 %, where a 4×4 kernel starts to alias), which also keeps each
+/// tile's source footprint small; the reduced source still keeps 4× the pixels the one factor kept.
+fn prefilter_scales(h: &Homography, src_rect: Rect, clip: Option<Rect>) -> (f64, f64) {
+    let r = [f64::from(src_rect.x0), f64::from(src_rect.y0), f64::from(src_rect.x1), f64::from(src_rect.y1)];
+    let points = |r: [f64; 4]| [(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3]), ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0)];
+    let inv = clip.and_then(|c| Some((c, h.inverse()?)));
+    let at = match inv {
+        // Non-finite points (a clip corner on the inverse map's horizon) are dropped below.
+        Some((c, inv)) => points([f64::from(c.x0), f64::from(c.y0), f64::from(c.x1), f64::from(c.y1)]).map(|(x, y)| {
+            let (u, v) = inv.apply(x, y);
+            if u.is_finite() && v.is_finite() { (u.max(r[0]).min(r[2]), v.max(r[1]).min(r[3])) } else { (f64::NAN, f64::NAN) }
+        }),
+        None => points(r),
+    };
+    // Only points on the side of the horizon that is drawn (#4863) count; past it the lengths mean nothing.
+    let side = h.front_side(r);
+    // Per point: the two axes' scales and the area's.
+    let measures = at.iter().filter(|(u, v)| side * h.w(*u, *v) > 0.0).map(|&(u, v)| {
+        let j = h.jacobian(u, v);
+        (j[0].hypot(j[2]), j[1].hypot(j[3]), (j[0] * j[3] - j[1] * j[2]).abs())
+    });
+    let usable = measures.filter(|m| m.0.is_finite() && m.1.is_finite() && m.2.is_finite());
+    let (lx, ly, area) = usable.reduce(|a, b| (a.0.max(b.0), a.1.max(b.1), a.2.max(b.2))).unwrap_or_else(|| {
+        // None of them is usable: the one factor at the centre, as before.
+        let (cx, cy) = match inv {
+            Some((c, inv)) => inv.apply((f64::from(c.x0) + f64::from(c.x1)) / 2.0, (f64::from(c.y0) + f64::from(c.y1)) / 2.0),
+            None => ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0),
+        };
+        let f = h.local_scale(cx, cy);
+        (f, f, f * f)
+    });
+    // `resize_surface_per_axis` copies an axis whose scale is exactly 1; 1/64 bounds the filter's width.
+    let snap = |f: f64| if f > 0.0 && f < 0.999 { f.max(1.0 / 64.0) } else { 1.0 };
+    let (fx, fy) = (snap(lx), snap(ly));
+    // The area the warp is left to shrink is `area / (fx * fy)`; a map that collapses it (0) reduces nothing, as before.
+    let c = (4.0 * area / (fx * fy)).sqrt();
+    if c < 1.0 { (snap(fx * c), snap(fy * c)) } else { (fx, fy) }
+}
+
 /// A cancelled `ctl` skips the remaining tiles; the caller discards the result.
 fn warp(
     src: &Surface,
@@ -277,24 +337,19 @@ fn warp(
     }
     let mut h = *h;
     let mut src_rect = src_rect;
-    // Pre-reduce for large downscales (bicubic alone aliases below ~50%). With a clip, the scale
-    // that matters is the one at the source point landing in the clip's centre.
-    let (cx, cy) = match clip.and_then(|c| Some((c, h.inverse()?))) {
-        Some((c, inv)) => inv.apply((c.x0 as f64 + c.x1 as f64) / 2.0, (c.y0 as f64 + c.y1 as f64) / 2.0),
-        None => ((f64::from(src_rect.x0) + f64::from(src_rect.x1)) / 2.0, (f64::from(src_rect.y0) + f64::from(src_rect.y1)) / 2.0),
-    };
-    let scale = h.local_scale(cx, cy);
     let reduced;
     // Photoshop reduces with its Bicubic widened by 1 / scale (as Image Size does), so the source is
-    // brought down by the whole local scale first and the warp samples it at about 1:1; a plain
-    // 4×4 kernel at 50 % aliased (Photoshop 27.11 Free Transform, 50 % of an impulse image).
-    // Bilinear samples the source directly, as Photoshop's does (exact at 50 % without a prefilter).
-    if interp == Interp::Bicubic && scale < 0.999 && scale > 0.0 {
-        let f = scale.max(1.0 / 64.0);
-        reduced = resize_surface(src, f, f, Resample::Bicubic);
-        src = &reduced;
-        h = h.mul(&Homography([1.0 / f, 0.0, 0.0, 0.0, 1.0 / f, 0.0, 0.0, 0.0, 1.0]));
-        src_rect = crate::resample::scaled_rect(src_rect, f, f);
+    // brought down by the local scale first and the warp samples it at about 1:1; a plain 4×4
+    // kernel at 50 % aliased (Photoshop 27.11 Free Transform, 50 % of an impulse image). Bilinear
+    // samples the source directly, as Photoshop's does (exact at 50 % without a prefilter).
+    if interp == Interp::Bicubic {
+        let (fx, fy) = prefilter_scales(&h, src_rect, clip);
+        if fx < 1.0 || fy < 1.0 {
+            reduced = resize_surface_per_axis(src, fx, fy);
+            src = &reduced;
+            h = h.mul(&Homography([1.0 / fx, 0.0, 0.0, 0.0, 1.0 / fy, 0.0, 0.0, 0.0, 1.0]));
+            src_rect = scaled_rect(src_rect, fx, fy);
+        }
     }
     let Some(inv) = h.inverse() else { return Ok(out) };
     // Destination bounds: the warped corners (plus a pixel for filter support).
@@ -753,6 +808,99 @@ mod tests {
         let o = warp_surface(&s, s.content_bounds(), &h, Interp::Bicubic).unwrap();
         let p = o.pixel(4, 4);
         assert!((p[0] - 0.5).abs() < 0.1, "{p:?}");
+    }
+
+    /// 64 × 64 opaque white lines on black, `width` px wide every `period` px: columns when
+    /// `vertical`, rows otherwise.
+    fn lines(sample: photocraft_color::SampleType, vertical: bool, width: i32, period: i32) -> Surface {
+        let mut s = Surface::new(PixelFormat::new(photocraft_color::ColorMode::Rgb, sample, true));
+        s.fill_rect(Rect::new(0, 0, 64, 64), &[0.0, 0.0, 0.0, 1.0]);
+        for i in (0..64).filter(|i| i % period >= period - width) {
+            s.fill_rect(if vertical { Rect::new(i, 0, i + 1, 64) } else { Rect::new(0, i, 64, i + 1) }, &[1.0, 1.0, 1.0, 1.0]);
+        }
+        s
+    }
+
+    /// #4864: Free Transform to 100 % × 25 % shrinks only y, so 1 px columns keep their full
+    /// contrast along x. The Bicubic prefilter used one factor for both axes, √|det J| = 50 %, which
+    /// averaged the columns to flat grey and stretched them back. The shrunk axis is still
+    /// prefiltered: rows 3 px apart come out an even third grey instead of aliasing into bands.
+    #[test]
+    fn a_one_axis_reduction_keeps_the_other_axis_sharp() {
+        let h = Homography::rect_to_quad([0.0, 0.0, 64.0, 64.0], [[0.0, 0.0], [64.0, 0.0], [64.0, 16.0], [0.0, 16.0]]).unwrap();
+        for sample in photocraft_color::SampleType::ALL {
+            let s = lines(sample, true, 1, 2);
+            let o = warp_surface(&s, s.content_bounds(), &h, Interp::Bicubic).unwrap();
+            for x in 4..60 {
+                let (a, b) = (o.pixel(x, 8)[0], o.pixel(x + 1, 8)[0]);
+                assert!((a - b).abs() > 0.9, "{sample:?}: columns {x} and {}: {a} vs {b}", x + 1);
+            }
+            let s = lines(sample, false, 1, 3);
+            let o = warp_surface(&s, s.content_bounds(), &h, Interp::Bicubic).unwrap();
+            for y in 2..14 {
+                let v = o.pixel(32, y)[0];
+                assert!((v - 1.0 / 3.0).abs() < 0.1, "{sample:?}: row {y}: {v}");
+            }
+        }
+    }
+
+    /// #4864: both axes shrink, by different amounts (87.5 % × 25 %). Each needs its own filter:
+    /// one designed for 25 % blurs 4 px bars that only shrink to 87.5 % along x.
+    #[test]
+    fn unequal_reductions_filter_each_axis_for_its_own_scale() {
+        let h = Homography::rect_to_quad([0.0, 0.0, 64.0, 64.0], [[0.0, 0.0], [56.0, 0.0], [56.0, 16.0], [0.0, 16.0]]).unwrap();
+        for sample in photocraft_color::SampleType::ALL {
+            let s = lines(sample, true, 4, 8);
+            let o = warp_surface(&s, s.content_bounds(), &h, Interp::Bicubic).unwrap();
+            let steepest = (4..50).map(|x| (o.pixel(x, 8)[0] - o.pixel(x + 1, 8)[0]).abs()).fold(0.0f32, f32::max);
+            assert!(steepest > 0.8, "{sample:?}: bar edges blurred along x, steepest step {steepest}");
+        }
+    }
+
+    /// #4864: the prefilter's factors, per axis. An affine map gives the same pair with or without
+    /// a clip, so a clipped warp matches the full one; a Distort keeps its wide side's; a skew
+    /// reduces nothing, and a skew that also flattens leaves the warp a 4× area reduction; a corner
+    /// past the horizon doesn't count; and a map that isn't finite reduces nothing.
+    #[test]
+    fn prefilter_scales_are_per_axis_and_finite() {
+        let r = Rect::new(0, 0, 64, 64);
+        let quad = |q| Homography::rect_to_quad([0.0, 0.0, 64.0, 64.0], q).unwrap();
+        assert_eq!(prefilter_scales(&quad([[0.0, 0.0], [64.0, 0.0], [64.0, 16.0], [0.0, 16.0]]), r, None), (1.0, 0.25));
+        let eighth = Homography([0.125, 0.0, 24.0, 0.0, 0.125, 30.0, 0.0, 0.0, 1.0]);
+        assert_eq!(prefilter_scales(&eighth, r, None), (0.125, 0.125));
+        assert_eq!(prefilter_scales(&eighth, r, Some(Rect::new(10, 10, 52, 52))), (0.125, 0.125));
+        let (fx, fy) = prefilter_scales(&quad([[0.0, 0.0], [64.0, 0.0], [48.0, 24.0], [16.0, 24.0]]), r, None);
+        assert!(fx == 1.0 && (fy - 0.901).abs() < 0.001, "{fx} x {fy}");
+        assert_eq!(prefilter_scales(&quad([[0.0, 0.0], [64.0, 0.0], [256.0, 64.0], [192.0, 64.0]]), r, None), (1.0, 1.0));
+        // Skewed by 2 and flattened to 5 %: the one factor was √0.05 ≈ 0.22 for both axes.
+        let (fx, fy) = prefilter_scales(&quad([[0.0, 0.0], [64.0, 0.0], [192.0, 3.2], [128.0, 3.2]]), r, None);
+        assert!(fx == fy && (fx * fy - 4.0 * 0.05).abs() < 1e-9, "{fx} x {fy}");
+        let past = Homography::rect_to_quad([0.0, 0.0, 100.0, 100.0], [[0.0, 0.0], [300.0, 0.0], [60.0, 60.0], [0.0, 300.0]]).unwrap();
+        for clip in [None, Some(Rect::new(-400, -400, 700, 700))] {
+            let (fx, fy) = prefilter_scales(&past, Rect::new(0, 0, 100, 100), clip);
+            assert!(fx > 0.0 && fx <= 1.0 && fy > 0.0 && fy <= 1.0, "{clip:?}: {fx} x {fy}");
+        }
+        for h in [Homography([f64::NAN; 9]), Homography([f64::INFINITY, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])] {
+            assert_eq!(prefilter_scales(&h, r, None), (1.0, 1.0), "{h:?}");
+            assert_eq!(prefilter_scales(&h, r, Some(r)), (1.0, 1.0), "{h:?}");
+        }
+    }
+
+    /// #4864: a Distort squashing a layer into a trapezoid whose top edge keeps its 64 px. The one
+    /// prefilter factor taken at the centre (√|det J| ≈ 0.47) washed out the top, where x stays
+    /// 1:1; it must stay about as sharp as a direct (Bilinear) sample.
+    #[test]
+    fn a_distort_keeps_its_wide_side_sharp() {
+        let h = Homography::rect_to_quad([0.0, 0.0, 64.0, 64.0], [[0.0, 0.0], [64.0, 0.0], [48.0, 24.0], [16.0, 24.0]]).unwrap();
+        for sample in photocraft_color::SampleType::ALL {
+            let s = lines(sample, true, 1, 2);
+            let contrast = |interp: Interp| -> f32 {
+                let o = warp_surface(&s, s.content_bounds(), &h, interp).unwrap();
+                (8..56).map(|x| (o.pixel(x, 6)[0] - o.pixel(x + 1, 6)[0]).abs()).sum::<f32>() / 48.0
+            };
+            let (bicubic, bilinear) = (contrast(Interp::Bicubic), contrast(Interp::Bilinear));
+            assert!(bilinear > 0.3 && bicubic >= 0.8 * bilinear, "{sample:?}: row 6 contrast, Bicubic {bicubic} vs Bilinear {bilinear}");
+        }
     }
 
     #[test]
