@@ -202,7 +202,7 @@ fn current_with(change: impl FnOnce(&mut Document)) -> Session {
     out
 }
 #[test]
-#[ignore = "UNRUN: native position/all locks vs pixel-only, explicit effect-reference/linked refusal without partial canonical updates"]
+#[ignore = "UNRUN: native position/all locks vs pixel-only, exact effect-reference shift and linked refusal without partial canonical updates"]
 fn unsupported_current_fields_and_position_locks_never_apply_a_prefix() {
     for kind in 0..5 {
         let mut s = current_with(|doc| match kind {
@@ -216,8 +216,11 @@ fn unsupported_current_fields_and_position_locks_never_apply_a_prefix() {
         let history = s.active().unwrap().history.clone();
         let journal = s.journal.clone();
         let response = s.execute(ID, json!({"dx":1,"dy":1}));
-        if kind == 4 {
+        if matches!(kind, 2 | 4) {
             response.unwrap();
+            if kind == 2 {
+                assert_eq!(s.active().unwrap().doc.layers[0].effects.reference, Some((2.25, 1.0)));
+            }
             let LayerContent::BackedRaster(old) = &before.layers[0].content else { panic!() };
             assert_eq!(bounds(&s), old.operative_bounds().translate(1, 1));
         } else {

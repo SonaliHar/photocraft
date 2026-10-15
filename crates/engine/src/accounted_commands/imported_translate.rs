@@ -7,6 +7,9 @@ use crate::{
     channel_cmds::ChannelView,
 };
 use photocraft_doc::accounted_document::{AccountedDocument, accounted_layer_access};
+#[path = "imported_translate_targets.rs"]
+mod targets;
+use targets::{TargetMode, Targets};
 const ID: &str = "layer.translate";
 fn invalid(message: &str) -> EngineError {
     bad(ID, message)
@@ -31,16 +34,22 @@ impl MovePolicy {
     fn for_owner(owner: &AccountedDocument) -> Self {
         if super::assigned_translate::candidate(owner) { Self::Assigned } else { Self::Plain }
     }
-    fn validate(self, owner: &AccountedDocument, layer: LayerId, dx: i32, dy: i32, c: &ReadControl<'_>) -> Result<()> {
+    fn validate(self, owner: &AccountedDocument, layers: &[LayerId], dx: i32, dy: i32, c: &ReadControl<'_>) -> Result<()> {
         match self {
-            Self::Plain => Ok(owner.validate_imported_layer_translation(layer, dx, dy, c)?),
-            Self::Assigned => super::assigned_translate::validate(owner, layer, dx, dy, c),
+            Self::Plain => Ok(owner.validate_imported_layers_translation(layers, dx, dy, c)?),
+            Self::Assigned => {
+                let [layer] = layers else { return Err(BackingError::Unsupported.into()) };
+                super::assigned_translate::validate(owner, *layer, dx, dy, c)
+            }
         }
     }
-    fn stage(self, owner: &AccountedDocument, layer: LayerId, dx: i32, dy: i32, c: &ReadControl<'_>) -> Result<AccountedDocument> {
+    fn stage(self, owner: &AccountedDocument, layers: &[LayerId], dx: i32, dy: i32, c: &ReadControl<'_>) -> Result<AccountedDocument> {
         match self {
-            Self::Plain => Ok(owner.try_with_imported_layer_translation(layer, dx, dy, c)?),
-            Self::Assigned => super::assigned_translate::stage(owner, layer, dx, dy, c),
+            Self::Plain => Ok(owner.try_with_imported_layers_translation(layers, dx, dy, c)?),
+            Self::Assigned => {
+                let [layer] = layers else { return Err(BackingError::Unsupported.into()) };
+                super::assigned_translate::stage(owner, *layer, dx, dy, c)
+            }
         }
     }
     fn current(self, owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
@@ -130,9 +139,6 @@ fn target_check(owner: &AccountedDocument, layer: LayerId, c: &ReadControl<'_>) 
     if (access.layer.mask.is_some() && !matches!(MovePolicy::for_owner(owner), MovePolicy::Assigned)) || access.layer.link_group.is_some() {
         return Err(invalid("Move masks and linked-layer expansion are not qualified"));
     }
-    if access.layer.effects.reference.is_some() {
-        return Err(invalid("owned Move effect reference translation is not qualified"));
-    }
     // Ordinary move_layers enforces native inherited position/all. Canonical
     // imported.position is preserved, not introduced as an extra command ban.
     if access.locks.all || access.locks.position {
@@ -146,8 +152,12 @@ fn view_check(state: &crate::DocState, c: &ReadControl<'_>) -> Result<()> {
         return Err(BackingError::Integrity.into());
     }
     c.check(view.selected().len() as u64)?;
-    if view.selected().len() != 1 || state.active_layer != view.selected().first().copied() {
-        return Err(invalid("owned Move requires one selected layer"));
+    if view.selected().len() > 4096 {
+        return Err(BackingError::Length.into());
+    }
+    let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
+    if matches!(MovePolicy::for_owner(owner), MovePolicy::Assigned) && (view.selected().len() != 1 || state.active_layer != view.selected().first().copied()) {
+        return Err(invalid("assigned Move requires one selected foreground"));
     }
     super::imported_metadata::channel_check(&state.channel_view, state.doc.mode.color_channels())?;
     Ok(())
@@ -171,7 +181,7 @@ fn current(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
         .map_err(|error| current_error(error, c, "owned plain Move current recipe"))
 }
 pub(super) struct Request<'a> {
-    layer: Option<LayerId>,
+    mode: TargetMode,
     dx: i32,
     dy: i32,
     key: Option<&'a str>,
@@ -184,13 +194,14 @@ impl<'a> Request<'a> {
         let (dx, dy) = wire(session, p)?;
         let key = p.get("coalesce").and_then(Value::as_str);
         if (dx, dy) == (0, 0) {
-            return Ok(Self { layer: None, dx, dy, key });
+            return Ok(Self { mode: TargetMode::Zero, dx, dy, key });
         }
         let state = session.active().ok_or(EngineError::NoDocument)?;
-        let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
-        let layer = match p.get("layer") {
-            None | Some(Value::Null) => state.active_layer.ok_or(EngineError::NoDocument)?,
-            Some(Value::Number(n)) => LayerId(n.as_u64().ok_or_else(|| invalid("layer must be a non-negative integer identity or name"))?),
+        let mode = match p.get("layer") {
+            None | Some(Value::Null) => TargetMode::Selected,
+            Some(Value::Number(n)) => {
+                TargetMode::Explicit(LayerId(n.as_u64().ok_or_else(|| invalid("layer must be a non-negative integer identity or name"))?))
+            }
             Some(Value::String(name)) => {
                 let mut found = None;
                 for layer in state.doc.layers.iter().rev() {
@@ -199,21 +210,21 @@ impl<'a> Request<'a> {
                         break;
                     }
                 }
-                found.ok_or_else(|| invalid("no layer has the requested name"))?
+                TargetMode::Explicit(found.ok_or_else(|| invalid("no layer has the requested name"))?)
             }
             _ => return Err(invalid("layer must be an identity, bounded name, or null")),
         };
-        view_check(state, c)?;
-        MovePolicy::for_owner(owner).validate(owner, layer, dx, dy, c)?;
-        target_check(owner, layer, c)?;
-        Ok(Self { layer: Some(layer), dx, dy, key })
+        Ok(Self { mode, dx, dy, key })
     }
     pub(super) fn prepare(self, session: &Session, c: &ReadControl<'_>) -> Result<Prepared<'a>> {
         context(session)?;
         let state = session.active().ok_or(EngineError::NoDocument)?;
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
-        if self.layer.is_some() {
-            MovePolicy::for_owner(owner).current(owner, c)?;
+        let targets = Targets::prepare(state, self.mode, c)?;
+        if !targets.ids().is_empty() {
+            let policy = MovePolicy::for_owner(owner);
+            policy.validate(owner, targets.ids(), self.dx, self.dy, c)?;
+            policy.current(owner, c)?;
         }
         let fence = AssignedFence::prepare::<Prepared<'_>>(session, c)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
@@ -241,13 +252,14 @@ impl<'a> Request<'a> {
             return Err(BackingError::Allocation.into());
         }
         fee.reconcile_capacity(actual as u64).map_err(|_| BackingError::Allocation)?;
-        let result = Prepared { request: self, fence, view: view.clone(), channel, _fee: fee };
+        let result = Prepared { request: self, targets, fence, view: view.clone(), channel, _fee: fee };
         c.check(1)?;
         Ok(result)
     }
 }
 pub(super) struct Prepared<'a> {
     request: Request<'a>,
+    targets: Targets,
     fence: AssignedFence,
     view: AccountedView,
     channel: ChannelView,
@@ -265,7 +277,7 @@ impl Prepared<'_> {
         if !view.shares_state(&self.view) || state.channel_view != self.channel {
             return Err(invalid("prepared Move view changed"));
         }
-        session.translate_accounted_imported_layer(self.request.layer.unwrap_or(LayerId(0)), self.request.dx, self.request.dy, self.request.key, c)?;
+        session.translate_accounted_targets(self.targets.ids(), self.request.dx, self.request.dy, self.request.key, c)?;
         Ok(Value::Null)
     }
 }
@@ -274,6 +286,33 @@ impl Session {
     /// existing document gesture across metadata/Move commands, never grants
     /// source/locator/native pixel authority. No-op/error preserves key and redo.
     pub fn translate_accounted_imported_layer(&mut self, layer: LayerId, dx: i32, dy: i32, key: Option<&str>, c: &ReadControl<'_>) -> Result<()> {
+        context(self)?;
+        if key.is_some_and(|k| k.len() > 128) {
+            return Err(BackingError::Length.into());
+        }
+        if dx == 0 && dy == 0 {
+            c.check(1)?;
+            return Ok(());
+        }
+        let state = self.active().ok_or(EngineError::NoDocument)?;
+        let targets = Targets::prepare(state, TargetMode::Explicit(layer), c)?;
+        self.translate_accounted_targets(targets.ids(), dx, dy, key, c)
+    }
+    /// Move the current genuine paid selection in document order as one edit.
+    /// This does not accept caller IDs as proof of selected membership.
+    pub fn translate_accounted_imported_selection(&mut self, dx: i32, dy: i32, key: Option<&str>, c: &ReadControl<'_>) -> Result<()> {
+        context(self)?;
+        if key.is_some_and(|k| k.len() > 128) {
+            return Err(BackingError::Length.into());
+        }
+        if dx == 0 && dy == 0 {
+            c.check(1)?;
+            return Ok(());
+        }
+        let targets = Targets::prepare(self.active().ok_or(EngineError::NoDocument)?, TargetMode::Selected, c)?;
+        self.translate_accounted_targets(targets.ids(), dx, dy, key, c)
+    }
+    fn translate_accounted_targets(&mut self, layers: &[LayerId], dx: i32, dy: i32, key: Option<&str>, c: &ReadControl<'_>) -> Result<()> {
         c.check(1)?;
         context(self)?;
         if key.is_some_and(|k| k.len() > 128) {
@@ -286,14 +325,17 @@ impl Session {
         let state = self.active_mut().ok_or(EngineError::NoDocument)?;
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
         view_check(state, c)?;
-        MovePolicy::for_owner(owner).validate(owner, layer, dx, dy, c)?;
-        target_check(owner, layer, c)?;
+        MovePolicy::for_owner(owner).validate(owner, layers, dx, dy, c)?;
+        for layer in layers {
+            c.check(1)?;
+            target_check(owner, *layer, c)?;
+        }
         if !state.history.current()?.shares_state(&state.doc) {
             return Err(BackingError::Integrity.into());
         }
         let policy = MovePolicy::for_owner(owner);
         policy.current(owner, c)?;
-        let staged = policy.stage(owner, layer, dx, dy, c)?;
+        let staged = policy.stage(owner, layers, dx, dy, c)?;
         if staged.shares_model(owner) {
             c.check(1)?;
             return Ok(());
@@ -335,3 +377,7 @@ impl Session {
 #[cfg(test)]
 #[path = "imported_translate_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "imported_translate_bulk_tests.rs"]
+mod bulk_tests;

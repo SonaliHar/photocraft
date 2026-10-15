@@ -1584,8 +1584,11 @@ Both current and staged native/default data and complete canvas rendering are
 validated under the same quota and work control before publication. The backing
 view and canonical current raster bounds move together, retaining original
 source pixels, profile and source protection. This path requires synchronous
-dispatch and one selected layer, with no pixel selection, mask, linked-layer
-expansion or effect reference. Native continuation uses the existing current
+dispatch, with no pixel selection, mask or linked-layer expansion. An explicit
+layer ID or name overrides selection; otherwise all selected plain layers move
+in document order. All targets pass validation before one model/history
+publication. A retained effects reference point uses the same per-axis addition
+as upstream movement. Native continuation uses the existing current
 descriptor and tile writer. Behavioral tests remain deferred.
 
 For the existing assigned-ICC Normal geometry family, `layer.translate` also
@@ -1601,3 +1604,13 @@ assigned profile/native/mask/canvas validation precedes the shared undo and
 gesture transaction. Independent unlinked-mask, backdrop and group movement
 remain outside this path. These additions have compilation checks only;
 behavioral acceptance is pending.
+
+The same effects-reference positioning applies to the assigned foreground
+movement above. Zero-vector movement preserves its original bits; any nonzero
+move performs the upstream addition on both axes, including a zero delta on one
+axis. Plain bulk movement preserves unrelated layers and active/selected focus,
+creates at most one undo step and shares the existing exact gesture key and
+first label. Any target lock, invalid extent, cancellation or quota failure
+leaves the entire command unpublished. Assigned foreground movement continues
+to require a single selected layer; groups and linked-layer expansion need
+their own qualified transactions.

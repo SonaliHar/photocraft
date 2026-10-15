@@ -248,3 +248,6 @@ fn translated_consumer_control_quota_and_failure_boundaries() {
     assert_eq!(quota.usage().unwrap(), baseline);
     assert_eq!(store.bytes, raw);
 }
+
+#[path = "backed_multi_translation_consumer_tests.rs"]
+mod multiple;

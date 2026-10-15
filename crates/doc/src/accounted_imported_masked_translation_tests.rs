@@ -291,3 +291,23 @@ fn allocation_stage_cancellation_refunds_and_unlinked_or_hostile_moves_refuse() 
     let unlinked = AccountedDocument::from_owned(doc, Arc::new((original.clone(), fee)), q.clone(), &ctl()).unwrap();
     assert!(unlinked.try_with_assigned_layer_translation(id, 0, 0, &ctl()).is_err());
 }
+
+#[test]
+fn assigned_scalar_reference_uses_exact_upstream_addition_without_touching_backdrop() {
+    let original = fixture(SampleType::F64);
+    let fee = original.quota().reserve(QuotaKind::Index, 1 << 20).unwrap();
+    let mut doc = original.document().clone(); // Paid synthetic CURRENT metadata, not source evidence.
+    doc.layers[0].effects.reference = Some((5.0, 6.0));
+    doc.layers[1].effects.reference = Some((-0.0, -0.0));
+    let id = doc.layers[1].id;
+    let owner = AccountedDocument::from_owned(doc, Arc::new((original.clone(), fee)), original.quota().clone(), &ctl()).unwrap();
+    let zero = owner.try_with_assigned_layer_translation(id, 0, 0, &ctl()).unwrap();
+    assert!(zero.shares_model(&owner));
+    assert_eq!(zero.document().layers[1].effects.reference.unwrap().0.to_bits(), (-0.0f64).to_bits());
+    let moved = owner.try_with_assigned_layer_translation(id, 0, 3, &ctl()).unwrap();
+    let reference = moved.document().layers[1].effects.reference.unwrap();
+    assert_eq!(reference.0.to_bits(), 0f64.to_bits());
+    assert_eq!(reference.1.to_bits(), 3f64.to_bits());
+    assert_eq!(moved.document().layers[0].effects.reference, Some((5.0, 6.0)));
+    assert!(Arc::ptr_eq(moved.document().icc_profile.as_ref().unwrap(), owner.document().icc_profile.as_ref().unwrap()));
+}

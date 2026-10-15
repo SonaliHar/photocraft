@@ -212,6 +212,7 @@ impl AccountedDocument {
         let bounds = plan.translated.operative_bounds();
         let target = staged.document.layers.get_mut(1).ok_or(BackingError::Integrity)?;
         target.content = LayerContent::BackedRaster(plan.translated);
+        imported_translation::shift_reference(target, dx, dy, c)?;
         target.mask.as_mut().ok_or(BackingError::Integrity)?.surface = mask.surface.clone();
         let state = staged.document.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
         for item in &mut state.items {

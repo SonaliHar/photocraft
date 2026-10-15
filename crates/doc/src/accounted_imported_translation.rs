@@ -11,6 +11,10 @@ struct Plan {
 }
 
 fn plan(owner: &AccountedDocument, layer: LayerId, dx: i32, dy: i32, control: &ReadControl<'_>) -> Result<Plan, BackingError> {
+    validate_owner(owner, layer, control)?;
+    target_plan(owner, layer, dx, dy, control)
+}
+fn validate_owner(owner: &AccountedDocument, layer: LayerId, control: &ReadControl<'_>) -> Result<(), BackingError> {
     control.check(1)?;
     let doc = owner.document();
     if owner.owner._storage_class != StorageClass::Legacy
@@ -27,6 +31,10 @@ fn plan(owner: &AccountedDocument, layer: LayerId, dx: i32, dy: i32, control: &R
     // exact native bounds, shared ledger, and the closed mask/filter/group gates.
     imported_selection::validate(doc, owner.quota(), control)?;
     owner.validate_imported_metadata_edit(AccountedEdit::LayerMetadata { layer, name: None, visible: None, opacity: None }, control)?;
+    Ok(())
+}
+fn target_plan(owner: &AccountedDocument, layer: LayerId, dx: i32, dy: i32, control: &ReadControl<'_>) -> Result<Plan, BackingError> {
+    let doc = owner.document();
     let mut layer_index = None;
     for (index, candidate) in doc.layers.iter().enumerate() {
         control.check(1)?;
@@ -53,6 +61,16 @@ fn plan(owner: &AccountedDocument, layer: LayerId, dx: i32, dy: i32, control: &R
         BackedLayerError::DescriptorMismatch => BackingError::Integrity,
     })?;
     Ok(Plan { layer_index, item_index, translated })
+}
+
+// The exact ordinary Move arithmetic: on a nonzero vector even the zero axis
+// adds +0.0. No finite check, clamp, signed-zero or NaN normalization is added.
+pub(super) fn shift_reference(layer: &mut crate::Layer, dx: i32, dy: i32, control: &ReadControl<'_>) -> Result<(), BackingError> {
+    if let Some(reference) = &mut layer.effects.reference {
+        control.check(1)?;
+        *reference = (reference.0 + f64::from(dx), reference.1 + f64::from(dy));
+    }
+    Ok(())
 }
 
 impl AccountedDocument {
@@ -84,7 +102,9 @@ impl AccountedDocument {
         let document = imported_selection::copy_document(self.document(), control)?;
         let mut staged = ModelStaging { document, selection_view: None };
         let bounds = plan.translated.operative_bounds();
-        staged.document.layers.get_mut(plan.layer_index).ok_or(BackingError::Integrity)?.content = LayerContent::BackedRaster(plan.translated);
+        let target = staged.document.layers.get_mut(plan.layer_index).ok_or(BackingError::Integrity)?;
+        target.content = LayerContent::BackedRaster(plan.translated);
+        shift_reference(target, dx, dy, control)?;
         staged.document.xcf_state.as_mut().ok_or(BackingError::Integrity)?.items.get_mut(plan.item_index).ok_or(BackingError::Integrity)?.raster_bounds =
             Some(bounds);
         imported_selection::validate(&staged.document, self.quota(), control)?;
@@ -115,3 +135,6 @@ impl AccountedDocument {
 #[cfg(test)]
 #[path = "accounted_imported_translation_tests.rs"]
 mod tests;
+
+#[path = "accounted_imported_translation_bulk.rs"]
+mod bulk;

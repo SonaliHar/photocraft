@@ -33,7 +33,7 @@ impl NativePlaneStore for Store {
         Ok(())
     }
 }
-fn fixture(format: PixelFormat) -> (AccountedDocument, Arc<AtomicU64>) {
+pub(super) fn fixture(format: PixelFormat) -> (AccountedDocument, Arc<AtomicU64>) {
     let q = BackingQuota::new(QuotaLimits { resident: 64 << 20, index: 8 << 20, scratch: 0 });
     // Prospective original DTO/Arc/string capacity fees precede construction.
     let source_index = q.reserve(QuotaKind::Index, 1 << 20).unwrap();
@@ -73,7 +73,7 @@ fn fixture(format: PixelFormat) -> (AccountedDocument, Arc<AtomicU64>) {
     let owner = AccountedDocument::from_owned(doc, Arc::new((source_index, source_payload)), q, &ctl()).unwrap();
     (owner, reads)
 }
-fn leaf(owner: &AccountedDocument, index: usize) -> &crate::BackedLayer {
+pub(super) fn leaf(owner: &AccountedDocument, index: usize) -> &crate::BackedLayer {
     let LayerContent::BackedRaster(v) = &owner.document().layers[index].content else { panic!("fixture") };
     v
 }
@@ -182,5 +182,33 @@ fn malformed_current_half_context_and_filtered_or_selected_models_refuse_even_ze
         }
         let owner = AccountedDocument::from_owned(doc, Arc::new((original.clone(), index, payload)), q, &ctl()).unwrap();
         assert!(owner.try_with_imported_layer_translation(id, 0, 0, &ctl()).is_err());
+    }
+}
+
+#[test]
+fn scalar_reference_matches_upstream_axis_addition_and_zero_preserves_raw_words() {
+    let (original, _) = fixture(PixelFormat::RGBA64F);
+    for reference in [(-0.0, -0.0), (1.25, -2.5), (f64::INFINITY, f64::from_bits(0x7ff8_0000_0000_0017))] {
+        let fee = original.quota().reserve(QuotaKind::Index, 1 << 20).unwrap();
+        let mut doc = original.document().clone(); // Paid synthetic CURRENT only.
+        doc.layers[0].effects.reference = Some(reference);
+        let id = doc.layers[0].id;
+        let owner = AccountedDocument::from_owned(doc, Arc::new((original.clone(), fee)), original.quota().clone(), &ctl()).unwrap();
+        let zero = owner.try_with_imported_layer_translation(id, 0, 0, &ctl()).unwrap();
+        assert!(zero.shares_model(&owner));
+        let unchanged = zero.document().layers[0].effects.reference.unwrap();
+        assert_eq!(unchanged.0.to_bits(), reference.0.to_bits());
+        assert_eq!(unchanged.1.to_bits(), reference.1.to_bits());
+        let moved = owner.try_with_imported_layer_translation(id, 0, 7, &ctl()).unwrap();
+        let actual = moved.document().layers[0].effects.reference.unwrap();
+        let expected = (reference.0 + 0.0, reference.1 + 7.0);
+        for (actual, expected) in [(actual.0, expected.0), (actual.1, expected.1)] {
+            if expected.is_nan() {
+                assert!(actual.is_nan());
+            } else {
+                assert_eq!(actual.to_bits(), expected.to_bits());
+            }
+        }
+        assert_eq!(moved.document().layers[1].effects.reference, None);
     }
 }
