@@ -2060,3 +2060,18 @@ same-process, fresh and repeated reopen controls. Effective-profile date-byte
 differences remain recorded separately from stable, distinct Babl profile bytes.
 Those observations establish implementation inputs, not PhotoCraft numerical
 or workflow acceptance. Tests and final gates remain deferred.
+
+The observed Box envelope also accepts implicit RGB Perceptual F32/675 and
+F64/775 with no original ICC, under the same radius/activity/metadata/Move and
+native continuation policy. Stored Perceptual samples pass through the existing
+Perceptual-to-Linear transfer before filtering and its inverse afterward.
+Current effective-profile bytes and marker remain independently bound; equal
+builtin transfer curves do not permit substituting nonlinear profile bytes.
+The controlled source profile factory admits only the exact sealed Linear or
+Perceptual precision pairs and retains the same prospective resident and
+cumulative work limits. Assigned Perceptual remains outside the envelope.
+
+Independent Perceptual source/projection/merged captures are bit-exact across
+the live/same/fresh/repeat controls at both depths. Their effective ICC date-byte
+HOLD and distinct Babl profile remain explicit. PhotoCraft regression drafts,
+runtime, numerical, visual and performance acceptance remain deferred.

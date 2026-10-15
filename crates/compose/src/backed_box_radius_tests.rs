@@ -6,6 +6,8 @@ mod assigned_f64;
 mod layer_activity;
 #[path = "backed_box_linear_tests.rs"]
 mod linear;
+#[path = "backed_box_perceptual_tests.rs"]
+mod perceptual;
 #[path = "backed_box_move_tests.rs"]
 mod translated_input;
 use super::*;

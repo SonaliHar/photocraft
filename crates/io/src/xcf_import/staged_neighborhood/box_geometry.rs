@@ -1,9 +1,16 @@
 //! Explicit observational Box geometry source. Opaque Replace fields are retained, never resolved.
 use super::*;
-// Encoding and original-profile roles are exact pairs; assigned Linear is closed.
+// Encoding and original-profile roles are exact pairs; assigned transfer overrides are closed.
 fn role<P>(f: &XcfFile<P>) -> bool {
     matches!((f.sample, f.precision, f.encoding), (Sample::F32, 650, Encoding::NonlinearProfile) | (Sample::F64, 750, Encoding::NonlinearProfile))
-        || (f.icc.is_empty() && matches!((f.sample, f.precision, f.encoding), (Sample::F32, 600, Encoding::Linear) | (Sample::F64, 700, Encoding::Linear)))
+        || (f.icc.is_empty()
+            && matches!(
+                (f.sample, f.precision, f.encoding),
+                (Sample::F32, 600, Encoding::Linear)
+                    | (Sample::F64, 700, Encoding::Linear)
+                    | (Sample::F32, 675, Encoding::Perceptual)
+                    | (Sample::F64, 775, Encoding::Perceptual)
+            ))
 }
 pub(super) fn hint<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
     let Some(d) = f.layers.first() else { return false };
@@ -206,3 +213,7 @@ mod assigned_f64_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "box_geometry_linear_tests.rs"]
 mod linear_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "box_geometry_perceptual_tests.rs"]
+mod perceptual_tests;

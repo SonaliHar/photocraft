@@ -27,6 +27,9 @@ pub(crate) fn observed_encoding(doc: &Document) -> Result<SampleEncoding, E> {
             Ok(SampleEncoding::NonlinearProfile)
         }
         (Some(SampleEncoding::Linear), SampleType::F32, 600, false) | (Some(SampleEncoding::Linear), SampleType::F64, 700, false) => Ok(SampleEncoding::Linear),
+        (Some(SampleEncoding::Perceptual), SampleType::F32, 675, false) | (Some(SampleEncoding::Perceptual), SampleType::F64, 775, false) => {
+            Ok(SampleEncoding::Perceptual)
+        }
         _ => Err(scope()),
     }
 }

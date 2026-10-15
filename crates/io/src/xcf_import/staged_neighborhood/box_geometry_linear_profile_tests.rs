@@ -10,10 +10,10 @@ fn controlled_linear_profile_work_and_peak() {
     let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
     let small = limits.lowered(&[("sampleWorkUnits", 32)]).unwrap();
     let b = photocraft_xcf::Budget::new_persistent(small, None).unwrap();
-    assert!(linear_box_effective(&f, photocraft_cms::ColorSpace::Rgb, photocraft_cms::xcf_color::Encoding::Linear, &Interrupt::NONE, &b).is_err());
+    assert!(implicit_box_effective(&f, photocraft_cms::ColorSpace::Rgb, photocraft_cms::xcf_color::Encoding::Linear, &Interrupt::NONE, &b).is_err());
     assert_eq!(b.used(BudgetKind::Resident), 0);
     let b = photocraft_xcf::Budget::new_persistent(limits, None).unwrap();
-    let effective = linear_box_effective(&f, photocraft_cms::ColorSpace::Rgb, photocraft_cms::xcf_color::Encoding::Linear, &Interrupt::NONE, &b).unwrap();
+    let effective = implicit_box_effective(&f, photocraft_cms::ColorSpace::Rgb, photocraft_cms::xcf_color::Encoding::Linear, &Interrupt::NONE, &b).unwrap();
     assert!(b.used(BudgetKind::Work) >= 65536 * 64);
     assert_eq!(b.used(BudgetKind::Resident), 0);
     assert_eq!(
@@ -22,7 +22,7 @@ fn controlled_linear_profile_work_and_peak() {
     );
     let stop = || true;
     assert!(matches!(
-        linear_box_effective(&f, photocraft_cms::ColorSpace::Rgb, photocraft_cms::xcf_color::Encoding::Linear, &Interrupt::cancel_only(&stop), &b),
+        implicit_box_effective(&f, photocraft_cms::ColorSpace::Rgb, photocraft_cms::xcf_color::Encoding::Linear, &Interrupt::cancel_only(&stop), &b),
         Err(IoError::Cancelled)
     ));
 }

@@ -316,3 +316,6 @@ fn repeated_titles_keep_flat_original_retention_without_enrolling_an_operation()
 
 #[path = "accounted_point_readonly/implicit_linear_tests.rs"]
 mod implicit_linear;
+
+#[path = "accounted_point_readonly/implicit_perceptual_tests.rs"]
+mod implicit_perceptual;

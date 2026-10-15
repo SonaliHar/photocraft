@@ -64,7 +64,7 @@ pub fn is_candidate(doc: &Document, c: &ReadControl<'_>) -> Result<bool, Backing
     }
     match doc.sample_encoding {
         Some(SampleEncoding::NonlinearProfile) => Ok(true),
-        Some(SampleEncoding::Linear) => {
+        Some(SampleEncoding::Linear | SampleEncoding::Perceptual) => {
             if node.operation.schema_epoch.len() > 128 {
                 return Ok(false);
             }
