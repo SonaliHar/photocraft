@@ -58,7 +58,7 @@ pub(super) fn walk(layer: &BackedLayer, rect: Rect, kernel: KernelRef<'_>, mut o
                         }
                     }
                     KernelRef::Stock(pipeline) => {
-                        let pixel = pipeline.evaluate_native(source, format, control).map_err(WalkError::Stock)?;
+                        let pixel = pipeline.evaluate_native_at(source, format, (x, y), control).map_err(WalkError::Stock)?;
                         if let OutputRef::Stock(Some(pixels)) = &mut output {
                             *pixels.get_mut(index(rect, x, y).map_err(WalkError::Point)?).ok_or_else(|| WalkError::Point(length()))? = pixel;
                         }

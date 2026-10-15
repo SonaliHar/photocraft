@@ -70,17 +70,17 @@ fn poll(control: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>, by
     Ok(())
 }
 
-/// No allocation, profile substitution, enum normalization or source recoding.
-/// Typed parameters are subsequently checked by the unchanged base mapper.
-pub(crate) fn classify<P: ExactParsedPlane>(
-    file: &XcfFile<P>,
-    control: &Interrupt<'_>,
-    shared: Option<&photocraft_xcf::Budget<'_>>,
-) -> Result<Option<NeighborhoodDomain>, IoError> {
-    poll(control, shared, 0)?;
-    let Some(owner) = file.layers.first() else { return Ok(None) };
-    let Some(effect) = owner.effects.first() else { return Ok(None) };
-    let family = match effect.operation.as_str() {
+/// Bounded route hint only; it never supplies whole-file source authority.
+/// The selector and classifier both cap the flat original argument list before
+/// invoking the exact existing family discriminator. Full classify + canonical
+/// qualified_stack remain mandatory before any successful selected completion.
+pub(crate) fn classify_family_hint<P>(file: &XcfFile<P>) -> Option<PointReplaceFamily> {
+    let owner = file.layers.first()?;
+    let effect = owner.effects.first()?;
+    if effect.arguments.len() > 10 {
+        return None;
+    }
+    Some(match effect.operation.as_str() {
         "gegl:video-degradation" if video_degradation_source::observed_epoch(effect).is_some() => PointReplaceFamily::VideoDegradation,
         "gegl:absolute" if absolute_source::observed_envelope(effect) && file.encoding == Encoding::Linear => PointReplaceFamily::AbsoluteLinear,
         "gegl:invert-linear" => PointReplaceFamily::InvertLinear,
@@ -102,7 +102,7 @@ pub(crate) fn classify<P: ExactParsedPlane>(
             Some(ArgumentValue::Enum(0 | 1 | 2 | 20)) => PointReplaceFamily::ComponentExtract,
             Some(ArgumentValue::Enum(8..=11)) => PointReplaceFamily::ComponentExtractCmyk,
             Some(ArgumentValue::Enum(12..=14)) => PointReplaceFamily::ComponentExtractYcbcr,
-            _ => return Ok(None),
+            _ => return None,
         },
         "gegl:alpha-clip" => {
             match (effect.state.blend_space, effect.state.composite_space, effect.state.composite_mode) {
@@ -111,7 +111,7 @@ pub(crate) fn classify<P: ExactParsedPlane>(
                 }
                 (Some(-1710980527), Some(-1710980527), Some(-1710980527)) => PointReplaceFamily::AlphaClip,
                 // A failed newer envelope must never gain another epoch's authority.
-                _ => return Ok(None),
+                _ => return None,
             }
         }
         "gegl:brightness-contrast" => PointReplaceFamily::Brightness,
@@ -122,10 +122,23 @@ pub(crate) fn classify<P: ExactParsedPlane>(
         "gegl:alien-map" => match effect.arguments.iter().find(|argument| argument.name == "color-model").map(|argument| &argument.value) {
             Some(ArgumentValue::Enum(0)) => PointReplaceFamily::AlienRgb,
             Some(ArgumentValue::Enum(1)) => PointReplaceFamily::AlienHsl,
-            _ => return Ok(None),
+            _ => return None,
         },
-        _ => return Ok(None),
-    };
+        _ => return None,
+    })
+}
+
+/// No allocation, profile substitution, enum normalization or source recoding.
+/// Typed parameters are subsequently checked by the unchanged base mapper.
+pub(crate) fn classify<P: ExactParsedPlane>(
+    file: &XcfFile<P>,
+    control: &Interrupt<'_>,
+    shared: Option<&photocraft_xcf::Budget<'_>>,
+) -> Result<Option<NeighborhoodDomain>, IoError> {
+    poll(control, shared, 0)?;
+    let Some(owner) = file.layers.first() else { return Ok(None) };
+    let Some(effect) = owner.effects.first() else { return Ok(None) };
+    let Some(family) = classify_family_hint(file) else { return Ok(None) };
     if matches!(family, PointReplaceFamily::ComponentExtractCmyk | PointReplaceFamily::ComponentExtractYcbcr)
         && (effect.state.blend_space, effect.state.composite_space, effect.state.composite_mode) != (Some(-305954223), Some(-305954223), Some(-305954223))
     {

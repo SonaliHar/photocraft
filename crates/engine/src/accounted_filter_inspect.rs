@@ -130,6 +130,14 @@ fn point_metadata(node: &FilterNode, control: &ReadControl<'_>) -> Result<usize>
         match &argument.value {
             FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Float32Bits(_)) | FilterValue::Bool(_) => {}
             FilterValue::Enum { domain, .. } => text(&mut total, domain, 256, control)?,
+            FilterValue::Color { components, encoding: photocraft_doc::SampleEncoding::NonlinearProfile, profile: None } if components.len() == 4 => {
+                // Exact bounded storage metadata only. Preserve raw words,
+                // including nonfinite values; this grants no evaluation/edit.
+                control.check(4)?;
+                if components.iter().any(|value| !matches!(value, photocraft_doc::xcf_filters::ExactNumber::Float32Bits(_))) {
+                    return Err(BackingError::Unsupported.into());
+                }
+            }
             _ => return Err(BackingError::Unsupported.into()),
         }
     }
@@ -255,7 +263,7 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
         let text = point_metadata(node, control)?;
         let planned = point_envelope(text)?;
         return paid_reply(owner.quota(), ReplyKind::Filter, POINT_FILTER_BOUNDS, planned, text, control, || {
-            crate::xcf_filter_cmds::build_inspect_reply(id, stack, node)
+            crate::xcf_filter_cmds::build_point_storage_inspect_reply(id, stack, node)
         });
     }
     let text = metadata(node, control)?;

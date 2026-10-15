@@ -473,8 +473,14 @@ fn threshold_storage(state: &photocraft_doc::XcfState, w: &mut Walk<'_, '_>, con
                 if let photocraft_doc::xcf_filters::FilterValue::Enum { domain, value: _ } = value {
                     w.string(domain)?;
                 }
+                if let photocraft_doc::xcf_filters::FilterValue::Color { components, .. } = value {
+                    // Only the separate Point shape admits Color here: exactly
+                    // four inline Float32 words, nonlinear and no profile owner.
+                    // Original Threshold shape gates still reject every Color.
+                    w.vector(components)?;
+                }
             }
-            // Closed shapes admit only inline numeric/enum values and zero aux.
+            // Closed shapes admit inline values, bounded Point Color components, and zero aux.
             w.vector(auxiliary)?;
             w.composition(composition)?;
         }

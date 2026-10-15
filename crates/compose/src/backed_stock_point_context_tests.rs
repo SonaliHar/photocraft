@@ -1,6 +1,7 @@
 //! UNRUN synthetic CURRENT storage/recipe drafts. These exercise real paid
 //! native backing and the runtime class, not GIMP source qualification.
 use super::*;
+use crate::gimp_filters::PointStack;
 use photocraft_doc::xcf_filters::{ExactNumber, FilterArgument, OperationIdentity};
 use photocraft_raster::Interrupt;
 use std::{

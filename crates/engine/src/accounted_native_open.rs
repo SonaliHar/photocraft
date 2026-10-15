@@ -27,7 +27,28 @@ pub fn is_current_point_candidate(document: &photocraft_doc::Document, control: 
             control.check(1)?;
             for node in &stack.nodes {
                 control.check(1)?;
-                if matches!(node.operation.name.as_str(), "gegl:brightness-contrast" | "gegl:levels" | "gegl:exposure" | "gegl:color-temperature" | "gegl:sepia" | "gegl:alien-map" | "gegl:invert-linear" | "gegl:invert-gamma") {
+                if matches!(
+                    node.operation.name.as_str(),
+                    "gegl:brightness-contrast"
+                        | "gegl:levels"
+                        | "gegl:exposure"
+                        | "gegl:color-temperature"
+                        | "gegl:sepia"
+                        | "gegl:alien-map"
+                        | "gegl:invert-linear"
+                        | "gegl:invert-gamma"
+                        | "gegl:absolute"
+                        | "gegl:color-exchange"
+                        | "gegl:color-overlay"
+                        | "gegl:channel-mixer"
+                        | "gegl:mono-mixer"
+                        | "gegl:red-eye-removal"
+                        | "gegl:color-rotate"
+                        | "gegl:video-degradation"
+                        | "gegl:color-to-alpha"
+                        | "gegl:component-extract"
+                        | "gegl:alpha-clip"
+                ) {
                     return Ok(true);
                 }
             }

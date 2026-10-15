@@ -23,6 +23,7 @@ mod filter_readonly;
 mod threshold_readonly;
 #[path = "accounted_point_readonly.rs"]
 mod point_readonly;
+pub use point_readonly::{PointArgumentPatch, PointArgumentValue, PointFilterPatch};
 pub use filter_readonly::ThresholdAlphaPatch;
 pub use threshold_readonly::ThresholdPatch;
 #[path = "accounted_readonly_layer_name.rs"]

@@ -36,7 +36,7 @@ fn hint(name: &str) -> Document {
     doc
 }
 #[test]
-fn exact_eight_names_hint_only_stricter_route_and_propagate_actual_control() {
+fn exact_point_names_hint_only_stricter_route_and_propagate_actual_control() {
     for name in [
         "gegl:brightness-contrast",
         "gegl:levels",
@@ -46,6 +46,17 @@ fn exact_eight_names_hint_only_stricter_route_and_propagate_actual_control() {
         "gegl:alien-map",
         "gegl:invert-linear",
         "gegl:invert-gamma",
+        "gegl:absolute",
+        "gegl:color-exchange",
+        "gegl:color-overlay",
+        "gegl:channel-mixer",
+        "gegl:mono-mixer",
+        "gegl:red-eye-removal",
+        "gegl:color-rotate",
+        "gegl:video-degradation",
+        "gegl:color-to-alpha",
+        "gegl:component-extract",
+        "gegl:alpha-clip",
     ] {
         let document = hint(name);
         let work = AtomicU64::new(0);

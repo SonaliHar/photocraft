@@ -6,7 +6,8 @@ use crate::gimp_render::PreparationBudget;
 use crate::{
     backed_normal::{BackedNormalError, NormalBandLimits},
     gimp_composite::CompositionError,
-    gimp_filters::{self, PointStack},
+    gimp_filters::{self},
+    gimp_neighborhood::OrderedStack,
 };
 use photocraft_cms::{Builtin, Profile, WideWork};
 use photocraft_color::{ColorMode, PixelFormat, SampleType, try_read_sample_f64};
@@ -85,7 +86,7 @@ fn bytes_equal(a: &[u8], b: &[u8], budget: &mut impl PlanBudget, interrupt: &Int
     Ok(true)
 }
 
-/// Existing first-nine-family identity boundary. This does not replace the
+/// Existing source-qualified Point family identity boundary. This does not replace the
 /// authoritative PointStack version/argument/domain/Replace checks below.
 fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &Interrupt<'_>) -> Result<(), BackedNormalError> {
     for text in [&node.operation.name, &node.operation.stored_version, &node.operation.schema_epoch] {
@@ -94,24 +95,54 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
         }
         work(budget, interrupt, text.len() as u64)?;
     }
-    let epoch = match node.operation.name.as_str() {
-        "gegl:brightness-contrast" => gimp_filters::BRIGHTNESS_CONTRAST_PRECISION_EPOCH,
-        "gegl:levels" => gimp_filters::GEGL_LEVELS_PRECISION_EPOCH,
-        "gegl:exposure" => gimp_filters::EXPOSURE_BLACK_PRECISION_EPOCH,
-        "gegl:color-temperature" => gimp_filters::COLOR_TEMPERATURE_PRECISION_EPOCH,
-        "gegl:sepia" => gimp_filters::SEPIA_PRECISION_EPOCH,
-        "gegl:alien-map" if node.operation.schema_epoch == gimp_filters::ALIEN_MAP_HSL_PRECISION_EPOCH => gimp_filters::ALIEN_MAP_HSL_PRECISION_EPOCH,
-        "gegl:alien-map" => gimp_filters::ALIEN_MAP_PRECISION_EPOCH,
-        "gegl:invert-linear" => gimp_filters::INVERT_LINEAR_PRECISION_EPOCH,
-        "gegl:invert-gamma" => gimp_filters::INVERT_GAMMA_PRECISION_EPOCH,
-        _ => return Err(scope()),
+    let epoch_ok = match node.operation.name.as_str() {
+        "gegl:brightness-contrast" => node.operation.schema_epoch == gimp_filters::BRIGHTNESS_CONTRAST_PRECISION_EPOCH,
+        "gegl:levels" => node.operation.schema_epoch == gimp_filters::GEGL_LEVELS_PRECISION_EPOCH,
+        "gegl:exposure" => node.operation.schema_epoch == gimp_filters::EXPOSURE_BLACK_PRECISION_EPOCH,
+        "gegl:color-temperature" => node.operation.schema_epoch == gimp_filters::COLOR_TEMPERATURE_PRECISION_EPOCH,
+        "gegl:sepia" => node.operation.schema_epoch == gimp_filters::SEPIA_PRECISION_EPOCH,
+        "gegl:alien-map" => {
+            matches!(node.operation.schema_epoch.as_str(), gimp_filters::ALIEN_MAP_PRECISION_EPOCH | gimp_filters::ALIEN_MAP_HSL_PRECISION_EPOCH)
+        }
+        "gegl:invert-linear" => node.operation.schema_epoch == gimp_filters::INVERT_LINEAR_PRECISION_EPOCH,
+        "gegl:invert-gamma" => node.operation.schema_epoch == gimp_filters::INVERT_GAMMA_PRECISION_EPOCH,
+        "gegl:absolute" => node.operation.schema_epoch == gimp_filters::ABSOLUTE_LINEAR_PRECISION_EPOCH,
+        "gegl:color-exchange" => node.operation.schema_epoch == gimp_filters::COLOR_EXCHANGE_PRECISION_EPOCH,
+        "gegl:color-overlay" => node.operation.schema_epoch == gimp_filters::COLOR_OVERLAY_PRECISION_EPOCH,
+        "gegl:channel-mixer" => node.operation.schema_epoch == gimp_filters::CHANNEL_MIXER_PRECISION_EPOCH,
+        "gegl:mono-mixer" => node.operation.schema_epoch == gimp_filters::MONO_MIXER_SIGNED_PRECISION_EPOCH,
+        "gegl:red-eye-removal" => {
+            matches!(node.operation.schema_epoch.as_str(), gimp_filters::RED_EYE_PRECISION_EPOCH | crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH)
+        }
+        "gegl:color-rotate" => node.operation.schema_epoch == crate::gimp_color_rotate::COLOR_ROTATE_PERCEPTUAL_EPOCH,
+        "gegl:video-degradation" => matches!(
+            node.operation.schema_epoch.as_str(),
+            crate::gimp_video_degradation::VIDEO_DEGRADATION_EPOCH | crate::gimp_video_degradation::VIDEO_DEGRADATION_OPTIONS_EPOCH
+        ),
+        "gegl:color-to-alpha" => node.operation.schema_epoch == gimp_filters::COLOR_TO_ALPHA_PRECISION_EPOCH,
+        "gegl:component-extract" => matches!(
+            node.operation.schema_epoch.as_str(),
+            gimp_filters::COMPONENT_EXTRACT_PRECISION_EPOCH
+                | gimp_filters::COMPONENT_EXTRACT_CMYK_PRECISION_EPOCH
+                | gimp_filters::COMPONENT_EXTRACT_YCBCR_PRECISION_EPOCH
+                | gimp_filters::COMPONENT_EXTRACT_GEOMETRY_EPOCH
+        ),
+        "gegl:alpha-clip" => {
+            matches!(node.operation.schema_epoch.as_str(), gimp_filters::ALPHA_CLIP_PRECISION_EPOCH | gimp_filters::ALPHA_CLIP_FINITE_PRECISION_EPOCH)
+        }
+        _ => false,
     };
     let policy = node.composition.as_ref().ok_or_else(scope)?;
     if policy.compatibility_epoch.len() > 4096 || node.arguments.len() > 10 {
         return Err(scope());
     }
     work(budget, interrupt, policy.compatibility_epoch.len() as u64)?;
-    if node.operation.schema_epoch != epoch || policy.compatibility_epoch != gimp_filters::POINT_REPLACE_COMPATIBILITY_EPOCH {
+    let compatibility = match node.operation.schema_epoch.as_str() {
+        crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH => crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH,
+        crate::gimp_video_degradation::VIDEO_DEGRADATION_OPTIONS_EPOCH => crate::gimp_video_degradation::VIDEO_DEGRADATION_OPTIONS_EPOCH,
+        _ => gimp_filters::POINT_REPLACE_COMPATIBILITY_EPOCH,
+    };
+    if !epoch_ok || policy.compatibility_epoch != compatibility {
         return Err(scope());
     }
     for argument in &node.arguments {
@@ -122,6 +153,11 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
         match &argument.value {
             FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Float32Bits(_)) | FilterValue::Bool(_) => {}
             FilterValue::Enum { domain, .. } if domain.len() <= 4096 => work(budget, interrupt, domain.len() as u64)?,
+            FilterValue::Color { components, encoding: SampleEncoding::NonlinearProfile, profile: None }
+                if components.len() == 4 && components.iter().all(|v| matches!(v, photocraft_doc::xcf_filters::ExactNumber::Float32Bits(_))) =>
+            {
+                work(budget, interrupt, 4)?
+            }
             _ => return Err(scope()),
         }
     }
@@ -206,10 +242,9 @@ fn bound_profile(
 /// complete model/source/native backing and their independent original proof.
 /// All heaps are destroyed before their real same-ledger preparation charge.
 struct StockPointPlan {
-    stack: PointStack,
+    stack: OrderedStack,
     _current_profile: Profile,
     format: PixelFormat,
-    enabled: bool,
 }
 pub struct PreparedStockPointPipeline {
     plan: StockPointPlan,
@@ -265,8 +300,31 @@ fn prepare_plan<B: PlanBudget>(
     // PointNode/argument storage and two 64KiB implicit analytic profile
     // envelopes (one WorkingSpace and the retained effective-profile preparation).
     // Header slack is explicit; it is not a replacement source/model fee.
-    let scalar = gimp_filters::scalar_preparation_bytes(1, node.arguments.len()).map_err(BackedNormalError::Color)?;
-    let envelope = scalar.checked_add(2 * 65536).and_then(|n| n.checked_add(header)).ok_or_else(length)?;
+    let scalar = gimp_filters::scalar_preparation_bytes(1, node.arguments.len())
+        .and_then(|n| n.checked_add(crate::gimp_neighborhood::scalar_preparation_bytes(1)?).ok_or(CompositionError::Invalid("stock stage preparation")))
+        .map_err(BackedNormalError::Color)?;
+    // Four additional existing analytic-space envelopes cover the scoped
+    // candidate's cloned profile/effective-profile/paired transform preparation.
+    // This is the same bounded implicit candidate class used by accounted
+    // Overlay/Rotate preparation; arbitrary profiles/LUTs remain excluded.
+    let extra_spaces = if matches!(
+        node.operation.name.as_str(),
+        "gegl:absolute"
+            | "gegl:channel-mixer"
+            | "gegl:mono-mixer"
+            | "gegl:red-eye-removal"
+            | "gegl:color-exchange"
+            | "gegl:color-to-alpha"
+            | "gegl:component-extract"
+            | "gegl:alpha-clip"
+            | "gegl:color-overlay"
+            | "gegl:color-rotate"
+    ) {
+        4
+    } else {
+        0
+    };
+    let envelope = scalar.checked_add((2 + extra_spaces) * 65536).and_then(|n| n.checked_add(header)).ok_or_else(length)?;
     let lease = budget.reserve(envelope)?;
     let (current_profile, known) = bound_profile(doc, supplied, budget, interrupt)?;
     // Price bounded repeated string/registry comparisons and the admitted
@@ -307,17 +365,18 @@ fn prepare_plan<B: PlanBudget>(
     let valid_mask = crate::gimp_neighborhood::qualify_selection_mask_with_interrupt(state, node, layer.id, doc.bounds(), interrupt);
     work(budget, interrupt, 0)?;
     valid_mask.map_err(BackedNormalError::Color)?;
-    let mut stack = PointStack::from_nodes_at_with_interrupt(&filters.nodes, known, stored, state.provenance.format_version, extent, interrupt)
-        .map_err(BackedNormalError::Color)?;
-    stack.set_current_sample(Some(format.sample));
-    let retained =
-        stack.scalar_retained_bytes().map_err(BackedNormalError::Color)?.checked_add(header).and_then(|n| n.checked_add(65536)).ok_or_else(length)?;
+    crate::gimp_render::qualify_point_family_context(doc, layer, state, filters, extent, known, stored, interrupt).map_err(BackedNormalError::Color)?;
+    let stack = OrderedStack::new_for_stock(filters, known, stored, state.provenance.format_version, extent, interrupt)
+        .map_err(BackedNormalError::Color)?
+        .with_current_point_storage(Some(format.sample))
+        .with_filter_output_precision(state.current_filter_output_precision);
+    let retained = stack.stock_retained_bytes().map_err(BackedNormalError::Color)?.checked_add(header).and_then(|n| n.checked_add(65536)).ok_or_else(length)?;
     if retained > envelope {
         return Err(BackedNormalError::Allocation);
     }
     // Keep the entire admitted peak for the pipeline lifetime; no phase
     // refund can expose headroom while this owned plan remains live.
-    let plan = StockPointPlan { stack, _current_profile: current_profile, format, enabled: node.enabled };
+    let plan = StockPointPlan { stack, _current_profile: current_profile, format };
     work(budget, interrupt, 0)?;
     Ok((plan, lease))
 }
@@ -370,7 +429,17 @@ impl PreparedStockPointPipeline {
     /// Exact input decode + existing PointStack wide current-buffer schedule.
     /// The shared sealed native-input executor invokes this with its actual
     /// request control; no callback or fresh work allowance is retained here.
+    #[cfg(test)]
     pub(crate) fn evaluate_native(&self, raw: &[u8], format: PixelFormat, control: &ReadControl<'_>) -> Result<[f64; 4], BackedNormalError> {
+        self.evaluate_native_at(raw, format, (0, 0), control)
+    }
+    pub(crate) fn evaluate_native_at(
+        &self,
+        raw: &[u8],
+        format: PixelFormat,
+        position: (i32, i32),
+        control: &ReadControl<'_>,
+    ) -> Result<[f64; 4], BackedNormalError> {
         control.check(format.bytes_per_pixel() as u64 + 1).map_err(BackedNormalError::Backing)?;
         if format != self.plan.format || raw.len() != format.bytes_per_pixel() {
             return Err(scope());
@@ -378,12 +447,6 @@ impl PreparedStockPointPipeline {
         let read = |channel| try_read_sample_f64(raw, format.sample, channel).map_err(|_| length());
         let rgb = if format.mode == ColorMode::Grayscale { [read(0)?; 3] } else { [read(0)?, read(1)?, read(2)?] };
         let input = [rgb[0], rgb[1], rgb[2], read(format.mode.color_channels())?];
-        if input.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
-            return Err(BackedNormalError::Unsupported("stock Point current source outside finite unit domain"));
-        }
-        if !self.plan.enabled {
-            return Ok(input);
-        }
         let mut failed = None;
         let mut temporary: Option<QuotaLease> = None;
         let mut poll = |event| {
@@ -404,24 +467,20 @@ impl PreparedStockPointPipeline {
             }
             Ok(())
         };
-        let evaluated = self.plan.stack.apply_current(input, format.sample == SampleType::U32, &mut poll);
+        let validated = self.plan.stack.validate_stock_input(position, input, control.interrupt, &mut poll);
+        let evaluated = match validated {
+            Ok(()) => self.plan.stack.point_at(input, position, &mut poll),
+            Err(error) => Err(error),
+        };
         if let Some(error) = failed {
             return Err(error);
         }
-        let mut output = evaluated.map_err(BackedNormalError::Color)?;
+        let output = evaluated.map_err(BackedNormalError::Color)?;
         if temporary.is_some() {
             return Err(BackedNormalError::Invalid("stock Point temporary owner retained"));
         }
-        // This is exactly NeighborhoodStack's existing current-buffer boundary:
-        // U8/U32 colors round here; U16/F32/F64 remain wide until composition.
-        let denominator = match format.sample {
-            SampleType::U8 => Some(255),
-            SampleType::U32 => Some(4294967295),
-            _ => None,
-        };
-        output = gimp_filters::current_point_storage_result(output, denominator, false);
-        if output.iter().any(|v| !v.is_finite()) || output[3].to_bits() != input[3].to_bits() {
-            return Err(BackedNormalError::Invalid("stock Point generated color or alpha identity"));
+        if output.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&output[3]) {
+            return Err(BackedNormalError::Invalid("stock Point generated finite color/unit alpha"));
         }
         control.check(0).map_err(BackedNormalError::Backing)?;
         Ok(output)
@@ -553,3 +612,7 @@ impl<'a> PreparedBackedStockPointContext<'a> {
 #[cfg(test)]
 #[path = "backed_stock_point_context_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "backed_stock_point_general_tests.rs"]
+mod general_tests;

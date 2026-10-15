@@ -171,6 +171,24 @@ pub(crate) fn build_inspect_reply(
     stack: &photocraft_doc::xcf_filters::FilterStack,
     node: &FilterNode,
 ) -> Result<Value> {
+    build_inspect_reply_with_point_colors(id, stack, node, false)
+}
+/// Exact bounded Point storage metadata only. Its paid caller must validate the
+/// real owner, ten-argument shape and response fees first. Color words convey
+/// neither an evaluator qualification nor permission to replace an argument.
+pub(crate) fn build_point_storage_inspect_reply(
+    id: FilterId,
+    stack: &photocraft_doc::xcf_filters::FilterStack,
+    node: &FilterNode,
+) -> Result<Value> {
+    build_inspect_reply_with_point_colors(id, stack, node, true)
+}
+fn build_inspect_reply_with_point_colors(
+    id: FilterId,
+    stack: &photocraft_doc::xcf_filters::FilterStack,
+    node: &FilterNode,
+    point_colors: bool,
+) -> Result<Value> {
     if [&node.operation.name, &node.operation.stored_version, &node.operation.schema_epoch].iter().any(|text| text.len() > 4096)
         || node.composition.as_ref().is_some_and(|policy| policy.compatibility_epoch.len() > 4096)
         || node.arguments.iter().take(64).any(|argument| argument.name.len() > 128)
@@ -206,6 +224,9 @@ pub(crate) fn build_inspect_reply(
             let value = match &argument.value {
                 FilterValue::StoredColor(storage) => json!({"value":crate::inspect_xcf_typed::stored_color_inspection(&storage.layout,&storage.samples,&storage.opaque_tail,&Interrupt::NONE)?,"editable":false}),
                 FilterValue::Number(_) | FilterValue::Bool(_) => json!({"value":argument.value}),
+                FilterValue::Color { components, encoding: photocraft_doc::SampleEncoding::NonlinearProfile, profile: None }
+                    if point_colors && components.len() == 4
+                        && components.iter().all(|component| matches!(component, ExactNumber::Float32Bits(_))) => json!({"value":argument.value}),
                 FilterValue::Color { components, encoding: photocraft_doc::SampleEncoding::NonlinearProfile, profile: None }
                     if matches!(node.operation.name.as_str(), "gegl:color-exchange" | "gegl:color-to-alpha") && components.len() == 4
                         && components.iter().all(|component| matches!(component, ExactNumber::Float32Bits(bits) if f32::from_bits(*bits).is_finite() && (0.0..=1.0).contains(&f32::from_bits(*bits)))) => json!({"value":argument.value}),

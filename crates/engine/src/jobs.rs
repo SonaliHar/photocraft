@@ -741,11 +741,15 @@ impl Session {
         }
         if id == "layer.setProps"
             && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
-                owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage()
+                owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage()
             })
             && (background || self.jobs.spawn)
         {
-            return Err(EngineError::BadParams { cmd: id.into(), msg: "owned Threshold layer properties require synchronous dispatch".into() });
+            let point = self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_point_storage());
+            return Err(EngineError::BadParams {
+                cmd: id.into(),
+                msg: if point { "owned Point layer properties require synchronous dispatch" } else { "owned Threshold layer properties require synchronous dispatch" }.into(),
+            });
         }
         crate::brush_cmds::advanced_dispatch_preflight(self, id, &params)?;
         crate::xcf_composition_cmds::dispatch_preflight(self, id, &params)?;
@@ -1121,15 +1125,17 @@ impl Session {
                 }))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
             }
-            // Bounded native pixel, Threshold properties and Histogram preparation share one
+            // Bounded native pixel, filter properties and Histogram/Point preparation share one
             // immutable registered work ledger; no per-cell allowance reset.
             let bounded_work = matches!(id, "edit.clear" | "edit.fill")
                 || id == "layer.setProps"
                     && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
-                        owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage()
+                        owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage()
                     })
                 || matches!(id, "xcf.filter.set" | "xcf.filter.enable")
-                    && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_threshold_storage());
+                    && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
+                        owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage()
+                    });
             let registered_work = std::sync::atomic::AtomicU64::new(crate::accounted_clear::REGISTERED_WORK_LIMIT);
             let debit = |units| {
                 if !bounded_work { return Ok(()); }
@@ -1464,6 +1470,10 @@ mod destination_bookkeeping_tests {
 #[cfg(test)]
 #[path = "jobs_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "corpus"))]
+#[path = "jobs_point_tests.rs"]
+mod point_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod native_path_stream_drafts {

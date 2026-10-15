@@ -54,6 +54,7 @@ use photocraft_doc::{
 };
 
 struct PointNode {
+    enabled: bool,
     working: WorkingSpace,
     operation: PointOperation,
     prepared: PreparedPointOperation,
@@ -199,9 +200,12 @@ impl PointStack {
         Self::from_nodes_at_with_interrupt(source, profile, stored, version, owner, &photocraft_raster::Interrupt::NONE)
     }
     pub(crate) fn from_nodes_at_with_interrupt(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, owner: photocraft_geom::Rect, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
-        controlled::preparation(control, |control| Self::prepare_nodes_at(source, profile, stored, version, owner, control))
+        controlled::preparation(control, |control| Self::prepare_nodes_at(source, profile, stored, version, owner, control, false))
     }
-    fn prepare_nodes_at(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, owner: photocraft_geom::Rect, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+    pub(crate) fn from_nodes_at_for_stock(source:&[FilterNode],profile:&Profile,stored:SampleEncoding,version:u32,owner:photocraft_geom::Rect,control:&photocraft_raster::Interrupt<'_>)->Result<Self> {
+        controlled::preparation(control,|control|Self::prepare_nodes_at(source,profile,stored,version,owner,control,true))
+    }
+    fn prepare_nodes_at(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, owner: photocraft_geom::Rect, control: &photocraft_raster::Interrupt<'_>, stock:bool) -> Result<Self> {
         if controlled::iter(source, control).any(crate::gimp_red_eye::claims_geometry) {
             let [node] = source else { return Err(CompositionError::Unsupported("Red Eye owner geometry singleton")); };
             crate::gimp_red_eye::canonical_geometry(node, profile, stored, version)?;
@@ -228,7 +232,8 @@ impl PointStack {
                 integer_gray_temperature_clamp: false,
             });
         }
-        Self::from_nodes_with_interrupt(source, profile, stored, version, control)
+        if stock { controlled::preparation(control,|control|Self::prepare_nodes(source,profile,stored,version,control,true)) }
+        else { Self::from_nodes_with_interrupt(source, profile, stored, version, control) }
     }
     /// Actual retained node capacity plus fixed analytic profile envelopes,
     /// including Color Overlay's bounded nested profile/transform preparation.
@@ -242,6 +247,10 @@ impl PointStack {
             .and_then(|n| n.checked_add(overlays.checked_mul(4 * 65536)?))
             .ok_or(CompositionError::Invalid("point capacity overflow"))
     }
+    pub(crate) fn stock_retained_bytes(&self)->Result<u64> {
+        let extras=self.nodes.iter().filter(|node|node.channel_mixer.is_some() || node.mono_mixer_signed.is_some() || node.absolute.is_some() || node.red_eye.is_some() || node.gray_color_exchange.is_some()).count() as u64;
+        self.scalar_retained_bytes()?.checked_add(extras.checked_mul(4*65536).ok_or(CompositionError::Invalid("stock point candidate capacity"))?).ok_or(CompositionError::Invalid("stock point candidate capacity"))
+    }
     #[cfg(test)]
     pub(crate) fn new(stack: &photocraft_doc::xcf_filters::FilterStack, profile: &Profile, stored: SampleEncoding, version: u32) -> Result<Self> {
         Self::from_nodes(&stack.nodes, profile, stored, version)
@@ -251,9 +260,9 @@ impl PointStack {
         Self::from_nodes_with_interrupt(source, profile, stored, version, &photocraft_raster::Interrupt::NONE)
     }
     pub(crate) fn from_nodes_with_interrupt(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
-        controlled::preparation(control, |control| Self::prepare_nodes(source, profile, stored, version, control))
+        controlled::preparation(control, |control| Self::prepare_nodes(source, profile, stored, version, control, false))
     }
-    fn prepare_nodes(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+    fn prepare_nodes(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, control: &photocraft_raster::Interrupt<'_>, stock:bool) -> Result<Self> {
         if controlled::iter(source, control).any(crate::gimp_red_eye::claims_geometry) {
             let [node] = source else { return Err(CompositionError::Unsupported("Red Eye owner geometry singleton")); };
             crate::gimp_red_eye::canonical_geometry(node, profile, stored, version)?;
@@ -869,7 +878,7 @@ impl PointStack {
             } else {
                 None
             };
-            if !node.enabled {
+            if !node.enabled && !stock {
                 continue;
             }
             let working = match member.encoding {
@@ -878,6 +887,7 @@ impl PointStack {
                 WorkingEncoding::Nonlinear => GimpSpace::ProfileRgb,
             };
             nodes.push(PointNode {
+                enabled:node.enabled,
                 absolute: if absolute { Some(crate::gimp_absolute::AbsoluteCandidate::new(profile, stored)?) } else { None },
                 color_rotate: if color_rotate {
                     Some(crate::gimp_color_rotate::ColorRotateCandidate::new(profile, stored, crate::gimp_color_rotate::typed_arguments(&node.arguments)?)?)
@@ -949,10 +959,10 @@ impl PointStack {
         self.current_sample = sample;
     }
     pub(crate) fn has_signed_generated_storage(&self) -> bool {
-        self.unpremultiply.is_some() || self.nodes.iter().any(|node| node.mono_mixer_signed.is_some() || node.channel_mixer.is_some() || node.absolute.is_some())
+        self.unpremultiply.is_some() || self.nodes.iter().filter(|node|node.enabled).any(|node| node.mono_mixer_signed.is_some() || node.channel_mixer.is_some() || node.absolute.is_some())
     }
     pub(crate) fn changes_alpha(&self) -> bool {
-        self.nodes.iter().any(|node| {
+        self.nodes.iter().filter(|node|node.enabled).any(|node| {
             matches!(
                 node.operation,
                 PointOperation::AlphaClipFinitePrecision { clip_low: true, .. }
@@ -969,6 +979,30 @@ impl PointStack {
                     | PointOperation::ThresholdAlpha { .. }
             )
         })
+    }
+    pub(crate) fn validate_stock_input(&self,position:(i32,i32),pixel:[f64;4],control:&photocraft_raster::Interrupt<'_>,poll:&mut impl FnMut(WideWork)->Result<()>)->Result<()> {
+        poll(WideWork::SampleUnits(128))?;
+        if pixel.iter().any(|v|!v.is_finite()) || !(0.0..=1.0).contains(&pixel[3]) { return Err(CompositionError::Unsupported("stock Point finite native colors/unit alpha")); }
+        if let Some((video,_))=&self.video {
+            return video.try_eval_at(position,&pixel,&mut[0.;4],false,control);
+        }
+        for node in &self.nodes {
+            poll(WideWork::SampleUnits(128))?;
+            let input=if self.channels==1 { [pixel[0],pixel[3],0.,0.] }else{pixel};
+            let input=input.get(..self.channels+1).ok_or(CompositionError::Invalid("stock Point input channels"))?;
+            if let Some(candidate)=&node.channel_mixer {
+                if candidate.working_input(input)?.iter().take(3).any(|v|!v.is_finite() || !(0.0..=1.0).contains(v)) { return Err(CompositionError::Unsupported("Channel Mixer current linear Float unit input")); }
+            }else if let Some(candidate)=&node.mono_mixer_signed {
+                if candidate.working_input(input)?.iter().take(3).any(|v|!v.is_finite() || !(0.0..=1.0).contains(v)) { return Err(CompositionError::Unsupported("Mono Mixer current linear Float unit input")); }
+            }else if let Some(candidate)=&node.color_overlay { candidate.working_input(input)?; }
+            else if let Some(candidate)=&node.color_rotate { candidate.working_input(input)?; }
+            else if let Some(candidate)=&node.absolute { candidate.working_input(input)?; }
+            else if let Some(candidate)=&node.red_eye { candidate.working_input(input)?; }
+            else if node.gray_color_exchange.is_some() || matches!(node.operation,PointOperation::AlphaClipPrecision{..}|PointOperation::AlphaClipFinitePrecision{..}|PointOperation::ColorExchange{..}|PointOperation::ColorToAlpha{..}|PointOperation::ComponentExtract{..}) {
+                if node.working.convert([pixel[0],pixel[1],pixel[2]],true)?.iter().any(|v|!(*v as f32).is_finite() || !(0.0..=1.0).contains(&(*v as f32))) { return Err(CompositionError::Unsupported("literal-color working samples outside unit domain")); }
+            }else if pixel.iter().any(|v|!(0.0..=1.0).contains(v)) { return Err(CompositionError::Unsupported("generic point source unit samples")); }
+        }
+        Ok(())
     }
     pub(crate) fn apply_current_at(
         &self,
@@ -1001,6 +1035,7 @@ impl PointStack {
             return Err(CompositionError::Unsupported("Video Degradation requires coordinates"));
         }
         for node in &self.nodes {
+            if !node.enabled { continue; }
             poll(WideWork::SampleUnits(128))?;
             if let Some(absolute) = &node.absolute {
                 pixel = if self.channels == 1 {

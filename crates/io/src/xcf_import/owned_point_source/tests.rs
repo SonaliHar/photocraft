@@ -269,3 +269,154 @@ fn point_name_is_not_authority_and_refusal_never_retries_or_resets_catalog() {
     assert_eq!(q.usage().unwrap(), baseline);
     drop(outside);
 }
+
+#[test]
+fn exact_color_capacity_is_paid_but_profile_encoding_and_word_shape_are_not_inferred() {
+    let budget = Budget::new(limits(), None);
+    let mut doc = census_fixture();
+    let color = || FilterValue::Color {
+        components: [0.125f32, -0.0, 0.75, 1.0].map(|v| ExactNumber::Float32Bits(v.to_bits())).to_vec(),
+        encoding: SampleEncoding::NonlinearProfile,
+        profile: None,
+    };
+    doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].arguments = vec![FilterArgument { name: "value".into(), value: color() }];
+    let first = census::measure(&doc, &budget, &Interrupt::NONE).unwrap();
+    let FilterValue::Color { components, .. } = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].arguments[0].value else { panic!() };
+    components.reserve_exact(4096);
+    let extra = components.capacity() * std::mem::size_of::<ExactNumber>();
+    let next = census::measure(&doc, &budget, &Interrupt::NONE).unwrap();
+    assert!(next.model >= first.model + (extra - 4 * std::mem::size_of::<ExactNumber>()) as u64);
+    for malformed in 0..5 {
+        let mut doc = census_fixture();
+        let mut value = color();
+        let FilterValue::Color { components, encoding, profile } = &mut value else { panic!() };
+        match malformed {
+            0 => {
+                components.pop();
+            }
+            1 => components[0] = ExactNumber::Float64Bits(0.125f64.to_bits()),
+            2 => *encoding = SampleEncoding::Linear,
+            3 => *profile = Some(photocraft_doc::item_identity::ResourceId(1)),
+            _ => components[0] = ExactNumber::Float32Bits(f32::NAN.to_bits()),
+        }
+        doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].arguments[0].value = value;
+        assert!(census::measure(&doc, &budget, &Interrupt::NONE).is_err());
+    }
+}
+
+#[cfg(feature = "corpus")]
+#[test]
+#[ignore = "UNRUN: pinned existing remaining15 Point branches; source/native/custody integration, not a new numeric source grant"]
+fn remaining_fifteen_existing_source_families_promote_once_with_unchanged_native_and_canonical_state() {
+    use sha2::{Digest, Sha256};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let hash = |b: &[u8]| Sha256::digest(b).iter().map(|v| format!("{v:02x}")).collect::<String>();
+    let base = std::path::PathBuf::from(std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS").unwrap());
+    let q = quota();
+    let outside = q.reserve(QuotaKind::Index, 4096).unwrap();
+    let baseline = q.usage().unwrap();
+    let mut seen = std::collections::BTreeSet::new();
+    for (folder, pin) in [
+        ("point-absolute-evidence", "00689e14034ac9fc1753c426650213353035307b271c4bbe3279ab1b1172c3bf"),
+        ("channel-mixer-precision-evidence", "91be8128c1d351336cd7ef304dd81d42b010aedba1610384aed9526a7ca04f20"),
+        ("mono-mixer-signed-precision-evidence", "e63618b1a99e38852cd35207e9120e2c6e3a2700433b2a7e281683650155e194"),
+        ("red-eye-removal-precision-evidence", "821fad4b046cae0174291934fa61b01f5fc966cd4d612e4ec77eeb0cb6fb6e5f"),
+        ("color-rotate-perceptual-evidence", "8b338d140af0add90f7390e7fc2db4f0adef9dac24f45151ff50140dd66bb59c"),
+        ("video-degradation-edit-evidence", "66b79eb3f7d4cc71f25320950bd5d921ddb54268755e8249ef6c65f66748e1a1"),
+        ("point-color-exchange-evidence", "a1b7d90229b4fa98587fc1155352c356bf94086465d6a3152dffb05ef13e0e2a"),
+        ("point-color-overlay-evidence", "828c1da757d0706cd6eb502699c74c0c2856745d3603c6ab6d1dd56d70df9831"),
+        ("point-color-to-alpha-evidence", "91f8d0974d0e122641fb15c7b40b1165b157b599a9bdb17c4776fa3d5b5171dd"),
+        ("point-component-extract-evidence", "6b8e14eb4367f101dd65d072c3daa17c6f2577a4ccd1e9a1030289ebc7b231b8"),
+        ("point-component-extract-cmyk-evidence", "ed5791616c890aeed174d57b086a104e79179b098a62e4335c7b86236bd9d163"),
+        ("point-component-extract-ycbcr-evidence", "6bb9b502dd09dcffa69d717f871bc91678acfa26fea1e3c345176722112d4623"),
+        ("point-component-extract-geometry-evidence", "fe13672593245e18d8224faec99c18a3bfcd10cd5860427f60494e5d29396e88"),
+        ("point-alpha-clip-evidence", "54e7058bbbb97c7fbfe189cce0dbcf6d23c91be0022c35f6cc59183ae6a1c19d"),
+        ("point-alpha-clip-value-domain-evidence", "f2086a1aa7289d539eafc88267100904f63af8dc2acd882a032923b5f14b6ab4"),
+    ] {
+        let root = base.join(folder);
+        assert!(std::fs::metadata(root.join("batch-manifest.json")).unwrap().len() <= 16 << 20);
+        let manifest = std::fs::read(root.join("batch-manifest.json")).unwrap();
+        assert_eq!(hash(&manifest), pin);
+        let manifest: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        let assets = manifest.get("artifacts").or_else(|| manifest.get("files")).or_else(|| manifest.get("assets")).unwrap().as_array().unwrap();
+        assert!(assets.len() <= 20000);
+        for asset in assets {
+            let named = asset.get("path").or_else(|| asset.get("file")).unwrap().as_str().unwrap();
+            if !named.ends_with(".xcf") {
+                continue;
+            }
+            let prefix = format!("xcf/full/{folder}/");
+            let path = named.strip_prefix(&prefix).unwrap_or(named);
+            assert!(!path.contains("..") && !std::path::Path::new(path).is_absolute());
+            assert!(std::fs::metadata(root.join(path)).unwrap().len() <= 16 << 20);
+            let bytes = Arc::new(std::fs::read(root.join(path)).unwrap());
+            assert_eq!(hash(&bytes), asset["sha256"].as_str().unwrap());
+            let raw = photocraft_xcf::decode(&bytes, &Default::default()).unwrap();
+            let Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(family)) =
+                crate::xcf_point_replace_source::classify(&raw, &Interrupt::NONE, None).unwrap()
+            else {
+                continue;
+            };
+            use crate::xcf_filters::PointReplaceFamily::*;
+            if matches!(family, Brightness | Levels | Exposure | Temperature | Sepia | AlienRgb | AlienHsl | InvertLinear | InvertGamma)
+                || seen.contains(&(family as u8))
+            {
+                continue;
+            }
+            assert!(crate::xcf_point_replace_source::classify_family_hint(&raw) == Some(family));
+            let starts = AtomicU64::new(0);
+            let progress = |v: f32| {
+                if v.to_bits() == 0.05f32.to_bits() {
+                    starts.fetch_add(1, Ordering::Relaxed);
+                }
+            };
+            let options = DecodeOptions { progress: Some(&progress), ..Default::default() };
+            let owned =
+                super::super::owned_xcf_source::import_owned_xcf_bytes_in_quota(path, bytes.clone(), &options, &limits(), q.clone(), &control()).unwrap();
+            assert_eq!(starts.load(Ordering::Relaxed), 1);
+            assert!(matches!(&owned, super::super::owned_xcf_source::OwnedXcfImport::Point(_)));
+            assert!(owned.document().quota().shares_ledger(&q));
+            owned.document().validate_readonly_point_storage(&control()).unwrap();
+            let doc = owned.document().document();
+            let original = &raw.layers[0];
+            let source = original.plane.as_ref().unwrap();
+            let rect = Rect::from_xywh(original.offset.0, original.offset.1, original.width, original.height);
+            let LayerContent::BackedRaster(backed) = &doc.layers[0].content else { panic!() };
+            assert_eq!(backed.operative_bounds(), rect);
+            let bpp = backed.format().bytes_per_pixel();
+            let mut native = vec![0; source.bytes.len()];
+            for y in 0..original.height {
+                for x in 0..original.width {
+                    let at = ((y * original.width + x) as usize) * bpp;
+                    backed
+                        .checked_view()
+                        .read_logical_pixel_native_into(rect.x0 + x as i32, rect.y0 + y as i32, &mut native[at..at + bpp], &control())
+                        .unwrap();
+                }
+            }
+            assert_eq!(native, source.bytes);
+            let state = doc.xcf_state.as_ref().unwrap();
+            assert_eq!(
+                state.filter_masks[0].surface.try_read_interleaved(doc.bounds()).unwrap(),
+                original.effects[0].mask.as_ref().unwrap().plane.as_ref().unwrap().bytes
+            );
+            // Old eager import is a test-only canonical reference, never a
+            // product fallback. Both retain the exact already-qualified words.
+            let eager = crate::import(path, &bytes).unwrap().document;
+            let expected = &eager.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0];
+            let actual = &state.filter_stacks[0].nodes[0];
+            assert_eq!(actual.operation, expected.operation);
+            assert_eq!(actual.arguments, expected.arguments);
+            assert_eq!(actual.enabled, expected.enabled);
+            assert_eq!(actual.composition, expected.composition);
+            assert_eq!(state.current_filter_output_precision, eager.xcf_state.as_ref().unwrap().current_filter_output_precision);
+            assert!(owned.source_read_only());
+            drop(owned);
+            assert_eq!(q.usage().unwrap(), baseline);
+            assert_eq!(hash(&bytes), asset["sha256"].as_str().unwrap());
+            seen.insert(family as u8);
+        }
+    }
+    assert_eq!(seen.len(), 15);
+    drop(outside);
+}

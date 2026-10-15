@@ -20,6 +20,7 @@ pub(crate) use save_journal::PreparedSaveJournalWitness;
 mod imported_metadata;
 mod threshold_alpha;
 mod threshold;
+mod point;
 mod readonly_layer_name;
 #[cfg(test)]
 mod threshold_alpha_journal_tests;
@@ -60,6 +61,8 @@ enum Request<'a> {
     PreparedThresholdAlpha(threshold_alpha::Prepared<'a>),
     ReadonlyLayerName(readonly_layer_name::Request<'a>),
     PreparedReadonlyLayerName(readonly_layer_name::Prepared<'a>),
+    Point(point::Request<'a>),
+    PreparedPoint(point::Prepared<'a>),
     Threshold(threshold::Request<'a>),
     PreparedThreshold(threshold::Prepared<'a>),
     Clear(&'a Value),
@@ -97,6 +100,9 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
         return Ok(Request::Clear(params));
     }
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable") {
+        if session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_point_storage()) {
+            return Ok(Request::Point(point::Request::parse(session, id, params, control)?));
+        }
         if session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_threshold_storage()) {
             return Ok(Request::Threshold(threshold::Request::parse(session, id, params, control)?));
         }
@@ -233,7 +239,7 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     if id == "history.selectState" && history_selection_disabled(session)? {
         return Ok(Some("the history holds only one state"));
     }
-    if matches!(id, "xcf.filter.set" | "xcf.filter.enable") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage()) {
+    if matches!(id, "xcf.filter.set" | "xcf.filter.enable") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage()) {
         return Ok(Some("this accounted filter storage has no qualified editing recipe"));
     }
     if id == "edit.clear" && (state.doc.xcf_state.is_none() || state.doc.accounted().is_none_or(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage())) {
@@ -269,19 +275,19 @@ struct Census {
     payload: usize,
     nodes: usize,
     envelope: u64,
-    // Only the exact closed scalar filter wire needs one extra JSON level.
-    // This is set per command entry; all other journal values retain depth4.
+    // Only exact closed filter wires gain their own bounded depth: scalar5
+    // or literal Point Color7. All unrelated journal values retain depth4.
     depth_extra: usize,
 }
 impl Census {
     fn command_value(&mut self, id: &str, value: &Value, control: &ReadControl<'_>) -> Result<()> {
-        self.depth_extra = usize::from(threshold_alpha::journal_depth(id, value).max(threshold::journal_depth(id, value)) == MAX_DEPTH + 1);
+        self.depth_extra = threshold_alpha::journal_depth(id, value).max(threshold::journal_depth(id, value)).max(point::journal_depth(id, value)).saturating_sub(MAX_DEPTH);
         let result = self.value(value, 0, control);
         self.depth_extra = 0;
         result
     }
     fn retained_command_value(&mut self, id: &str, value: &Value, control: &ReadControl<'_>) -> Result<()> {
-        self.depth_extra = usize::from(threshold_alpha::journal_depth(id, value).max(threshold::journal_depth(id, value)) == MAX_DEPTH + 1);
+        self.depth_extra = threshold_alpha::journal_depth(id, value).max(threshold::journal_depth(id, value)).max(point::journal_depth(id, value)).saturating_sub(MAX_DEPTH);
         let result = self.retained_value(value, 0, control);
         self.depth_extra = 0;
         result
@@ -521,6 +527,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::ImportedMetadata(request) => Request::PreparedMetadata(request.prepare(session, control)?),
             Request::ThresholdAlpha(request) => Request::PreparedThresholdAlpha(request.prepare(session, control)?),
             Request::Threshold(request) => Request::PreparedThreshold(request.prepare(session, control)?),
+            Request::Point(request) => Request::PreparedPoint(request.prepare(session, control)?),
             Request::ReadonlyLayerName(request) => Request::PreparedReadonlyLayerName(request.prepare(session, control)?),
             Request::Clear(params) => Request::PreparedClear(crate::accounted_clear::Prepared::prepare(session, params, control)?),
             Request::Fill(params) => Request::PreparedFill(crate::accounted_fill::Prepared::prepare(session, params, control)?),
@@ -584,6 +591,9 @@ impl<'a> PreparedAccountedCommand<'a> {
             // and covers the synchronous returned reply after that stage drops.
             census.add(0, usize::try_from(threshold_alpha::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
         }
+        if matches!(&request, Request::PreparedPoint(_)) {
+            census.add(0, usize::try_from(point::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
+        }
         if matches!(&request, Request::PreparedThreshold(_)) {
             census.add(0, usize::try_from(threshold::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
         }
@@ -628,7 +638,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             }
             None => CommandLease::Journal(lease),
         };
-        let history = if matches!(&request, Request::HistorySelect(_) | Request::PreparedThresholdAlpha(_) | Request::PreparedThreshold(_) | Request::PreparedReadonlyLayerName(_) | Request::PreparedClear(_) | Request::PreparedFill(_)) { Some(state.history.clone()) } else { None };
+        let history = if matches!(&request, Request::HistorySelect(_) | Request::PreparedPoint(_) | Request::PreparedThresholdAlpha(_) | Request::PreparedThreshold(_) | Request::PreparedReadonlyLayerName(_) | Request::PreparedClear(_) | Request::PreparedFill(_)) { Some(state.history.clone()) } else { None };
         Ok(Self { request, snapshot: state.doc.clone(), revision: state.revision, view_revision: state.view_revision, history, journal, lease, overlap, quota })
     }
     pub fn execute(self, session: &mut Session, control: &ReadControl<'_>) -> Result<Value> {
@@ -660,6 +670,7 @@ impl<'a> PreparedAccountedCommand<'a> {
                 | Request::PreparedThresholdAlpha(_)
                 | Request::PreparedReadonlyLayerName(_)
                 | Request::PreparedThreshold(_)
+                | Request::PreparedPoint(_)
                 | Request::PreparedClear(_)
                 | Request::PreparedFill(_)
                 | Request::HistorySelect(_)
@@ -693,6 +704,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::PreparedMetadata(prepared) => prepared.execute(session, control)?,
             Request::PreparedThresholdAlpha(prepared) => prepared.execute(session, control)?,
             Request::PreparedThreshold(prepared) => prepared.execute(session, control)?,
+            Request::PreparedPoint(prepared) => prepared.execute(session, control)?,
             Request::PreparedReadonlyLayerName(prepared) => prepared.execute(session, control)?,
             Request::PreparedClear(prepared) => prepared.execute(session, control)?,
             Request::PreparedFill(prepared) => prepared.execute(session, control)?,
@@ -700,6 +712,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::Fill(_) => return Err(BackingError::Integrity.into()),
             Request::ThresholdAlpha(_) => return Err(BackingError::Integrity.into()),
             Request::Threshold(_) => return Err(BackingError::Integrity.into()),
+            Request::Point(_) => return Err(BackingError::Integrity.into()),
             Request::ReadonlyLayerName(_) => return Err(BackingError::Integrity.into()),
             Request::ImportedMetadata(_) => return Err(BackingError::Integrity.into()),
             Request::Select(layer) => {

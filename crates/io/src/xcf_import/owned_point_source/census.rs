@@ -74,7 +74,12 @@ pub(super) fn shape(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control
         match &argument.value {
             FilterValue::Number(ExactNumber::Float32Bits(bits)) if f32::from_bits(*bits).is_finite() => {}
             FilterValue::Bool(_) | FilterValue::Enum { .. } => {}
-            _ => return Err(invalid("Point inline argument storage")),
+            FilterValue::Color { components, encoding: photocraft_doc::SampleEncoding::NonlinearProfile, profile: None }
+                if components.len() == 4
+                    && components.iter().all(
+                        |v| matches!(v, ExactNumber::Float32Bits(bits) if f32::from_bits(*bits).is_finite() && (0.0..=1.0).contains(&f32::from_bits(*bits))),
+                    ) => {}
+            _ => return Err(invalid("Point bounded argument storage")),
         }
     }
     Ok(())

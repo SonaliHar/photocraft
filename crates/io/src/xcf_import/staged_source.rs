@@ -50,23 +50,7 @@ impl StagePolicy for SourceSelectedPolicy {
             // This chooses a strict validator only. admissions() must obtain
             // the SAME family from the original whole-file classifier before
             // mapping; completion cannot return this route after a refusal.
-            use crate::xcf_filters::PointReplaceFamily as F;
-            let effect = file.layers.first().and_then(|layer| layer.effects.first());
-            let point = effect.and_then(|effect| match effect.operation.as_str() {
-                "gegl:brightness-contrast" => Some(F::Brightness),
-                "gegl:levels" => Some(F::Levels),
-                "gegl:exposure" => Some(F::Exposure),
-                "gegl:color-temperature" => Some(F::Temperature),
-                "gegl:sepia" => Some(F::Sepia),
-                "gegl:invert-linear" => Some(F::InvertLinear),
-                "gegl:invert-gamma" => Some(F::InvertGamma),
-                "gegl:alien-map" if effect.arguments.len() <= 10 => effect.arguments.iter().find(|a| a.name == "color-model").and_then(|a| match &a.value {
-                    photocraft_xcf::ArgumentValue::Enum(0) => Some(F::AlienRgb),
-                    photocraft_xcf::ArgumentValue::Enum(1) => Some(F::AlienHsl),
-                    _ => None,
-                }),
-                _ => None,
-            });
+            let point = crate::xcf_point_replace_source::classify_family_hint(file);
             if let Some(family) = point {
                 return SelectedStagedFamily::Point(family);
             }

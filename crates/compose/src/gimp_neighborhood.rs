@@ -90,11 +90,17 @@ impl OrderedStack {
     }
     pub(crate) fn new_with_interrupt(source: &FilterStack, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, qualified: [bool; 3], control: &Interrupt<'_>) -> Result<Self> {
         control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
-        let result = Self::prepare_with_interrupt(source, profile, stored, version, extent, qualified, control);
+        let result = Self::prepare_with_interrupt(source, profile, stored, version, extent, qualified, control, false);
         control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
         result
     }
-    fn prepare_with_interrupt(source: &FilterStack, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, qualified: [bool; 3], control: &Interrupt<'_>) -> Result<Self> {
+    pub(crate) fn new_for_stock(source:&FilterStack,profile:&Profile,stored:SampleEncoding,version:u32,extent:Rect,control:&Interrupt<'_>)->Result<Self> {
+        control.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
+        let result=Self::prepare_with_interrupt(source,profile,stored,version,extent,[false;3],control,true);
+        control.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
+        result
+    }
+    fn prepare_with_interrupt(source: &FilterStack, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, qualified: [bool; 3], control: &Interrupt<'_>, stock:bool) -> Result<Self> {
         if source.nodes.len() > 256 {
             return Err(CompositionError::Invalid("ordered filter stack limit"));
         }
@@ -121,7 +127,8 @@ impl OrderedStack {
         {
             // Disabled current nodes still require their closed typed schema;
             // activation must not be an escape from source-state validation.
-            stages.push(Stage::Point(PointStack::from_nodes_at_with_interrupt(&source.nodes, profile, stored, version, extent, control)?));
+            stages.push(Stage::Point(if stock { PointStack::from_nodes_at_for_stock(&source.nodes,profile,stored,version,extent,control)? }
+                else { PointStack::from_nodes_at_with_interrupt(&source.nodes, profile, stored, version, extent, control)? }));
             return Ok(Self {
                 stages,
                 extent,
@@ -233,6 +240,15 @@ impl OrderedStack {
             current_point_sample: None,
             filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical,
         })
+    }
+    pub(crate) fn stock_retained_bytes(&self)->Result<u64> {
+        let own=self.stages.capacity().checked_mul(std::mem::size_of::<Stage>()).and_then(|n|self.spaces.capacity().checked_mul(std::mem::size_of::<WorkingSpace>()).and_then(|v|n.checked_add(v))).ok_or(CompositionError::Invalid("stock ordered capacity"))? as u64;
+        let [Stage::Point(point)]=self.stages.as_slice() else { return Err(CompositionError::Unsupported("stock singleton point stage")); };
+        own.checked_add(point.stock_retained_bytes()?).ok_or(CompositionError::Invalid("stock ordered capacity"))
+    }
+    pub(crate) fn validate_stock_input(&self,position:(i32,i32),pixel:[f64;4],control:&Interrupt<'_>,poll:&mut impl FnMut(WideWork)->Result<()>)->Result<()> {
+        let [Stage::Point(point)]=self.stages.as_slice() else { return Err(CompositionError::Unsupported("stock singleton point stage")); };
+        point.validate_stock_input(position,pixel,control,poll)
     }
     /// The qualified U8/U32 point source writes an integer drawable buffer before
     /// layer composition. Round stored colors at that boundary, preserving

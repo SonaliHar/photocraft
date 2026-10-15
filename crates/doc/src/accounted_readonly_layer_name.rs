@@ -18,7 +18,8 @@ impl AccountedDocument {
         match self.owner._storage_class {
             StorageClass::ReadonlyThresholdAlpha => filter_readonly::layer_named(self, patch, control),
             StorageClass::ReadonlyHistogramThreshold => threshold_readonly::layer_named(self, patch, control),
-            StorageClass::Legacy | StorageClass::ReadonlyPoint => Err(BackingError::Unsupported),
+            StorageClass::ReadonlyPoint => point_readonly::layer_named(self, patch, control),
+            StorageClass::Legacy => Err(BackingError::Unsupported),
         }
     }
 }

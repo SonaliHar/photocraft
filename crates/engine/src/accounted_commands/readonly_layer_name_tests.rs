@@ -281,3 +281,133 @@ mod actual_source {
         }
     }
 }
+
+#[cfg(feature = "corpus")]
+mod actual_point {
+    use super::*;
+    use photocraft_raster::backing::quota::{BackingQuota, QuotaKind, QuotaLimits};
+    use sha2::{Digest, Sha256};
+    use std::{path::PathBuf, sync::Arc};
+    fn hash(bytes: &[u8]) -> String {
+        Sha256::digest(bytes).iter().map(|b| format!("{b:02x}")).collect()
+    }
+    fn session(name: &str) -> Session {
+        let root = PathBuf::from(std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS").unwrap()).join("point-replace-geometry-evidence");
+        let manifest = std::fs::read(root.join("batch-manifest.json")).unwrap();
+        assert_eq!(hash(&manifest), "e36bcddcea3021cff305175f70d1bd44f865478d8019a48dcb5c912b9f83bf72");
+        let manifest: Value = serde_json::from_slice(&manifest).unwrap();
+        let expected = manifest["artifacts"].as_array().unwrap().iter().find(|a| a["path"] == name).unwrap()["sha256"].as_str().unwrap();
+        let path = root.join(name);
+        let len = std::fs::metadata(&path).unwrap().len();
+        assert!(len <= 16 << 20);
+        let q = BackingQuota::new(QuotaLimits { resident: 512 << 20, index: 128 << 20, scratch: 0 });
+        let capture = q.reserve(QuotaKind::Resident, 2 * len + 4096).unwrap();
+        let bytes = Arc::new(std::fs::read(path).unwrap());
+        assert!(bytes.capacity() as u64 <= 2 * len);
+        assert_eq!(hash(&bytes), expected);
+        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 16 << 20), ("scratchBytes", 0)])
+            .unwrap();
+        let owned = photocraft_io::import_owned_xcf_bytes_in_quota(name, bytes, &Default::default(), &limits, q, &ctl()).unwrap();
+        let photocraft_io::OwnedXcfImport::Point(imported) = owned else { panic!("expected exact source-selected Point family") };
+        let mut s = Session::new();
+        s.add_owned_point_xcf_import(&imported, name, Some("authorized/original.xcf"), &ctl()).unwrap();
+        drop(imported);
+        drop(capture);
+        s
+    }
+    fn unchanged_payload(a: &DocumentSnapshot, b: &DocumentSnapshot) {
+        assert_eq!(a.layers[0].content, b.layers[0].content);
+        assert_eq!(a.xcf_state.as_ref().unwrap().filter_stacks, b.xcf_state.as_ref().unwrap().filter_stacks);
+        let a_mask = &a.xcf_state.as_ref().unwrap().filter_masks[0].surface;
+        let b_mask = &b.xcf_state.as_ref().unwrap().filter_masks[0].surface;
+        assert_eq!(a_mask.default_bytes(), b_mask.default_bytes());
+        for ((ca, a), (cb, b)) in a_mask.tiles().zip(b_mask.tiles()) {
+            assert_eq!(ca, cb);
+            assert!(Arc::ptr_eq(a, b));
+        }
+        assert_eq!(a.source_color_context, b.source_color_context);
+        assert_eq!(a.working_profile_interpretation, b.working_profile_interpretation);
+        assert!(Arc::ptr_eq(a.icc_profile.as_ref().unwrap(), b.icc_profile.as_ref().unwrap()));
+    }
+    #[test]
+    #[ignore = "UNRUN: pinned owned Point nonlinear/linear profiles, combined metadata and redo"]
+    fn registered_point_properties_preserve_native_owners_profile_and_single_history() {
+        for name in ["exposure-rgb-double_non_linear.one-row.source.xcf", "exposure-gray-u16_linear.negative-x.source.xcf"] {
+            let mut s = session(name);
+            let before = s.active().unwrap().doc.clone();
+            let source = s.active().unwrap().source.clone();
+            let revision = s.active().unwrap().revision;
+            let id = before.layers[0].id;
+            s.execute("layer.setProps", json!({"layer":id.0,"name":"  current Point  ","visible":false,"opacity":-0.0})).unwrap();
+            let changed = s.active().unwrap().doc.clone();
+            unchanged_payload(&before, &changed);
+            assert_eq!(changed.layers[0].name, "  current Point  ");
+            assert!(!changed.layers[0].visible);
+            assert_eq!(changed.layers[0].opacity.to_bits(), (-0f32).to_bits());
+            let item = changed.xcf_state.as_ref().unwrap().items.iter().find(|i| i.item == photocraft_doc::item_identity::ItemRef::Layer(id)).unwrap();
+            assert_eq!(item.name, "  current Point  ");
+            assert!(item.custom_name);
+            assert!(!item.visible);
+            assert_eq!(s.active().unwrap().revision, revision + 1);
+            assert_eq!(s.active().unwrap().history.past_len(), 1);
+            assert_eq!(s.active().unwrap().source, source);
+            assert!(s.undo_with_control(&ctl()).unwrap());
+            let history = s.active().unwrap().history.clone();
+            let revision = s.active().unwrap().revision;
+            s.execute("layer.setProps", json!({"name":before.layers[0].name,"visible":before.layers[0].visible,"opacity":f64::from(before.layers[0].opacity)}))
+                .unwrap();
+            assert!(history.shares_accounted_history(&s.active().unwrap().history));
+            assert_eq!(s.active().unwrap().revision, revision);
+            assert!(s.redo_with_control(&ctl()).unwrap());
+            assert!(s.active().unwrap().doc.shares_state(&changed));
+        }
+    }
+    struct CurrentGuard {
+        _original: AccountedDocument,
+        _fee: QuotaLease,
+    }
+    fn current(locked: bool, bad_recipe: bool) -> Session {
+        let original = session("exposure-rgb-double_non_linear.one-row.source.xcf").active().unwrap().doc.accounted().unwrap().clone();
+        let q = original.quota().clone();
+        let fee = q.reserve(QuotaKind::Index, 8 << 20).unwrap();
+        let mut doc = original.document().clone();
+        let id = doc.layers[0].id;
+        if locked {
+            doc.xcf_state.as_mut().unwrap().items.iter_mut().find(|i| i.item == photocraft_doc::item_identity::ItemRef::Layer(id)).unwrap().locks.visibility =
+                true;
+        }
+        if bad_recipe {
+            doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].operation.schema_epoch = "not an evaluator grant".into();
+        }
+        let guard = Arc::new(CurrentGuard { _original: original, _fee: fee });
+        let owner = AccountedDocument::new_readonly_point_storage(doc, guard, q, &ctl()).unwrap();
+        let mut result = Session::new();
+        // Test-only CURRENT model installation. Generic public adoption must
+        // keep refusing Point tags; the invalid-recipe case deliberately tests
+        // the adapter's full qualification rather than a source admission.
+        let state = crate::DocState::new_accounted(owner, None, 16, &ctl()).unwrap();
+        result.publish_document_state(state, &ctl()).unwrap();
+        result
+    }
+    #[test]
+    #[ignore = "UNRUN: Point actual visibility-lock and full recipe refusal before mutation"]
+    fn point_locked_visibility_and_structural_only_recipe_cannot_partially_publish() {
+        for bad_recipe in [false, true] {
+            let mut s = current(!bad_recipe, bad_recipe);
+            let before = s.active().unwrap().doc.clone();
+            let history = s.active().unwrap().history.clone();
+            let journal = s.journal.clone();
+            let revision = s.active().unwrap().revision;
+            assert!(s.execute("layer.setProps", json!({"name":"must not publish","visible":false,"opacity":0.5})).is_err());
+            assert!(s.active().unwrap().doc.shares_state(&before));
+            assert!(history.shares_accounted_history(&s.active().unwrap().history));
+            assert_eq!(s.journal, journal);
+            assert_eq!(s.active().unwrap().revision, revision);
+            if !bad_recipe {
+                s.execute("layer.setProps", json!({"name":"allowed locked metadata","visible":true,"opacity":0.5})).unwrap();
+            }
+        }
+    }
+}

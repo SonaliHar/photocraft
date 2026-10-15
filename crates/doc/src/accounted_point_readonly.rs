@@ -9,6 +9,21 @@ use crate::{
     xcf_filters::{ExactNumber, FilterArgument, FilterNode, FilterStack, FilterValue, OperationIdentity},
 };
 use photocraft_raster::Surface;
+#[path = "accounted_point_readonly_patch.rs"]
+mod patch;
+pub use patch::{PointArgumentPatch, PointArgumentValue, PointFilterPatch};
+#[path = "accounted_point_readonly/properties.rs"]
+mod properties;
+pub(super) fn layer_named(owner: &AccountedDocument, patch: ReadonlyLayerNamePatch<'_>, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
+    properties::layer_named(owner, patch, control)
+}
+pub(super) fn layer_properties(
+    owner: &AccountedDocument,
+    patch: ReadonlyLayerPropertiesPatch<'_>,
+    control: &ReadControl<'_>,
+) -> Result<AccountedDocument, BackingError> {
+    properties::layer_properties(owner, patch, control)
+}
 
 const SIDE: u32 = 262_144;
 const PIXELS: u64 = 1 << 30;
@@ -97,6 +112,8 @@ fn node_shape(node: &FilterNode, control: &ReadControl<'_>) -> Result<(), Backin
         match &argument.value {
             FilterValue::Number(ExactNumber::Float32Bits(_)) | FilterValue::Bool(_) => {}
             FilterValue::Enum { domain, .. } if !domain.is_empty() && domain.len() <= 4096 => {}
+            FilterValue::Color { components, encoding: crate::SampleEncoding::NonlinearProfile, profile: None }
+                if components.len() == 4 && components.iter().all(|value| matches!(value, ExactNumber::Float32Bits(_))) => {}
             _ => return refused(),
         }
     }
@@ -302,7 +319,7 @@ fn shape(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Res
     MaskPlan::new(&mask.surface, canvas, control)?;
     Ok(())
 }
-fn measured(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+pub(super) fn measured(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
     shape(doc, quota, control)?;
     // Private parent seam selects this module's mask census, with every other
     // original full capacity/payload bound and accounting rule unchanged.
@@ -372,6 +389,20 @@ fn copy_node(node: &FilterNode, control: &ReadControl<'_>) -> Result<FilterNode,
             FilterValue::Number(ExactNumber::Float32Bits(bits)) => FilterValue::Number(ExactNumber::Float32Bits(*bits)),
             FilterValue::Bool(value) => FilterValue::Bool(*value),
             FilterValue::Enum { domain, value } => FilterValue::Enum { domain: imported_edits::copy_name(domain, control)?, value: *value },
+            FilterValue::Color { components, encoding, profile } => {
+                // node_shape fixed the exact four raw words and independent
+                // encoding/profile tags. No color conversion or normalization.
+                let mut copied = Vec::new();
+                copied.try_reserve_exact(components.len()).map_err(|_| BackingError::Allocation)?;
+                if copied.capacity() > components.len().checked_mul(2).ok_or(BackingError::Length)? {
+                    return Err(BackingError::Allocation);
+                }
+                for value in components {
+                    control.check(1)?;
+                    copied.push(value.clone());
+                }
+                FilterValue::Color { components: copied, encoding: *encoding, profile: *profile }
+            }
             _ => return refused(),
         };
         arguments.push(FilterArgument { name: imported_edits::copy_name(&argument.name, control)?, value });
@@ -409,6 +440,13 @@ fn copy_node(node: &FilterNode, control: &ReadControl<'_>) -> Result<FilterNode,
 struct OriginalRetention {
     original: AccountedDocument,
 }
+#[derive(Clone, Copy)]
+pub(super) enum CopyKind<'a> {
+    Rename(&'a str),
+    LayerName(ReadonlyLayerNamePatch<'a>),
+    LayerProperties(readonly_layer_properties::Plan<'a>),
+    Filter(patch::Plan),
+}
 pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     imported_edits::validate_name(name, control)?;
     if name.len() > 4096 {
@@ -419,10 +457,26 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadContr
         control.check(1)?;
         return Ok(owner.clone());
     }
+    current_copy(owner, logical, CopyKind::Rename(name), control)
+}
+/// Only the sealed typed mutations above share this private paid copier. There
+/// is no public callback, mutable Document access or generic edit admission.
+pub(super) fn current_copy(
+    owner: &AccountedDocument,
+    logical: ModelCensus,
+    kind: CopyKind<'_>,
+    control: &ReadControl<'_>,
+) -> Result<AccountedDocument, BackingError> {
+    let replacement_name_bytes = match kind {
+        CopyKind::Rename(name) => name.len() as u64,
+        CopyKind::LayerName(patch) => (patch.name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
+        CopyKind::LayerProperties(plan) => plan.replacement_name_bytes()?,
+        CopyKind::Filter(_) => 0,
+    };
     let envelope = logical
         .index
         .checked_mul(2)
-        .and_then(|v| v.checked_add((name.len() as u64).checked_mul(2)?))
+        .and_then(|v| v.checked_add(replacement_name_bytes.checked_mul(2)?))
         .and_then(|v| v.checked_add(4096 + std::mem::size_of::<OriginalRetention>() as u64 + 128))
         .ok_or(BackingError::Length)?;
     let allocation = owner.quota().reserve(QuotaKind::Index, AccountedDocument::owned_model_reservation_bytes()).map_err(|_| BackingError::Quota)?;
@@ -449,7 +503,12 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadContr
         let plan = MaskPlan::new(&mask.surface, mask.bounds, control)?;
         destination.filter_masks.push(FilterMask { id: mask.id, owner: mask.owner, bounds: mask.bounds, surface: plan.copy(&mask.surface, control)? });
     }
-    document.name = imported_edits::copy_name(name, control)?;
+    match kind {
+        CopyKind::Rename(name) => document.name = imported_edits::copy_name(name, control)?,
+        CopyKind::LayerName(patch) => readonly_layer_name::apply(&mut document, patch, control)?,
+        CopyKind::LayerProperties(plan) => readonly_layer_properties::apply(&mut document, plan, control)?,
+        CopyKind::Filter(plan) => patch::apply(&mut document, plan, control)?,
+    }
     let actual =
         measured(&document, owner.quota(), control)?.index.checked_add(std::mem::size_of::<OriginalRetention>() as u64 + 128).ok_or(BackingError::Length)?;
     if actual > envelope {

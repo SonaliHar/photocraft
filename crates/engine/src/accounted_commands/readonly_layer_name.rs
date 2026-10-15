@@ -21,7 +21,7 @@ pub(super) struct Request<'a> {
     only_visibility: bool,
 }
 pub(super) fn applies(session: &Session) -> bool {
-    session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| o.is_readonly_threshold_alpha_storage() || o.is_readonly_threshold_storage())
+    session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| o.is_readonly_threshold_alpha_storage() || o.is_readonly_threshold_storage() || o.is_readonly_point_storage())
 }
 impl<'a> Request<'a> {
     pub(super) fn parse(params: &'a Value, ctl: &ReadControl<'_>) -> Result<Self> {
@@ -70,6 +70,8 @@ impl<'a> Request<'a> {
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
         if owner.is_readonly_threshold_storage() {
             owner.validate_readonly_threshold_storage(ctl)?;
+        } else if owner.is_readonly_point_storage() {
+            owner.validate_readonly_point_storage(ctl)?;
         } else {
             owner.validate_readonly_threshold_alpha_storage(ctl)?;
         }
@@ -258,6 +260,10 @@ fn target_access(owner: &AccountedDocument, layer: LayerId, visibility_changed: 
 fn validate_recipe(owner: &AccountedDocument, ctl: &ReadControl<'_>) -> Result<()> {
     if owner.is_readonly_threshold_storage() {
         crate::accounted_native_open::validate_current_threshold_storage(owner, ctl)
+    } else if owner.is_readonly_point_storage() {
+        // The supplied basis is nonlinear; the existing controlled context
+        // independently reconstructs/binds the actual stored-encoding profile.
+        crate::accounted_native_open::validate_current_stock_point_storage(owner, ctl)
     } else {
         validate_alpha_recipe(owner, ctl)
     }

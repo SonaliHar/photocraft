@@ -430,7 +430,7 @@ The retained JSON-lines transport keeps its paid complete reply through writing;
 raw-Value `Headless::handle`/`respond` and nested generic batches refuse this explicit policy.
 The typed Headless owned method remains available to callers that retain its reply carrier.
 
-For an active owned Threshold Alpha or Histogram Threshold document, single-command
+For an active owned Threshold Alpha, Histogram Threshold or Point document, single-command
 `engine.execute` can run `xcf.filter.inspect` with exactly
 `{"filterId":"1"}` (replace `1` with the actual canonical nonzero decimal ID).
 The reply preserves the existing exact argument, operation, owner and revision
@@ -457,7 +457,7 @@ and establishes no original-XCF lineage, profile interpretation, render support
 or edit permission. Plain documents do not enter the retained filter-inspection
 route. The same paid replies, transport boundaries and authorizers apply.
 
-Those two owned Threshold classes also accept current `layer.setProps` name,
+Those owned filter classes also accept current `layer.setProps` name,
 visibility and opacity edits, for example
 `{"layer":1,"name":"Foreground","visible":false,"opacity":0.5}`. The layer
 target may be omitted or given as the existing numeric ID or exact name.
@@ -467,6 +467,25 @@ uses the existing Normal composition math; filter opacity is a separate field.
 Other properties and coalescing remain refused for these classes; background
 starts refuse before dispatch normalization. Source/native samples, masks and
 profiles stay retained, and no new original-source eligibility follows.
+
+The Point storage path now joins the existing 24 PointReplace family variants
+(19 stored GEGL names), retaining each family's source, precision, geometry,
+profile and composition restrictions. It remains a singleton stack; ordinary
+default Open enrollment and other stock families are separate work. Paid Point
+inspection exposes bounded literal Color storage as exact words, independently
+of evaluation or editing eligibility; resident inspection is unchanged.
+
+For a qualified current Point document, existing `xcf.filter.set` and
+`xcf.filter.enable` accept activation and up to ten unique existing arguments.
+Arguments retain their exact Float32Bits, Bool, Enum or four-word Color shape;
+literal colors require `nonlinear_profile` encoding and a null profile. Unknown
+names, changed raw types or enum domains, unsupported structures and non-unit
+filter opacity refuse. The current and proposed complete operative recipes must
+both validate before one undo step is published. Exact no-ops preserve redo;
+failed preparation leaves the installed snapshot unchanged. Native continuation
+uses `.pcraft`; the original XCF stays read-only. These command paths are
+synchronous and use the existing transport authorization and cumulative work
+limit.
 
 For explicit owned native reopen, use exactly `{"path":"current.pcraft","nativeProfilePolicy":"keepCurrent"}`
 with `doc.open` or MCP `doc_open`. Exactly one profile policy is permitted; both together,

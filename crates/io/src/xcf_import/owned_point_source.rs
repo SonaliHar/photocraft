@@ -133,7 +133,7 @@ fn prepay(budget: &photocraft_xcf::Budget<'_>, units: u64) -> Result<(), IoError
     Ok(())
 }
 /// Only a sealed, successfully admitted selected completion enters this path.
-/// The selected factory must restrict its actual classified domain to the nine
+/// The selected factory must restrict its actual classified domain to the existing
 /// supported Point branches before this consuming custody handoff. This is not
 /// a caller-supplied Document or a source/renderer grant from census statistics.
 pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(

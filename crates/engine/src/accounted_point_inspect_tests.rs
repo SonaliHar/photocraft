@@ -200,6 +200,9 @@ fn fixture(
 }
 
 fn point_session(count: usize) -> (Session, BackingQuota, Arc<AtomicU64>) {
+    point_session_with_colors(count, false)
+}
+fn point_session_with_colors(count: usize, colors: bool) -> (Session, BackingQuota, Arc<AtomicU64>) {
     let (mut doc, q, guard, reads, _, _) = fixture(ColorMode::Rgb, SampleType::F64, SampleEncoding::NonlinearProfile);
     let extra = q.reserve(QuotaKind::Index, 32768).unwrap();
     let node = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
@@ -211,6 +214,11 @@ fn point_session(count: usize) -> (Session, BackingQuota, Arc<AtomicU64>) {
         .map(|i| FilterArgument {
             name: format!("field-{i}"),
             value: match i % 3 {
+                0 if colors => FilterValue::Color {
+                    components: [(-0.0f32).to_bits(), 0x7fc12345, 0.5f32.to_bits(), 1f32.to_bits()].map(ExactNumber::Float32Bits).to_vec(),
+                    encoding: SampleEncoding::NonlinearProfile,
+                    profile: None,
+                },
                 0 => FilterValue::Number(ExactNumber::Float32Bits(if i == 0 { (-0.0f32).to_bits() } else { 0x7fc12345 })),
                 1 => FilterValue::Bool(i % 2 == 0),
                 _ => FilterValue::Enum { domain: "declared-metadata-domain".into(), value: i as i32 },
@@ -219,11 +227,60 @@ fn point_session(count: usize) -> (Session, BackingQuota, Arc<AtomicU64>) {
         .collect();
     let owner = AccountedDocument::new_readonly_point_storage(doc, Arc::new((guard, extra)), q.clone(), &ctl()).unwrap();
     let mut s = Session::new();
-    s.add_accounted_document(owner, None, &ctl()).unwrap();
+    // Deliberately install metadata-only storage with test-private primitives.
+    // Public generic Point adoption correctly refuses this unqualified recipe.
+    let state = crate::DocState::new_accounted(owner, None, 16, &ctl()).unwrap();
+    s.publish_document_state(state, &ctl()).unwrap();
     (s, q, reads)
 }
 fn request(s: &Session) -> Value {
     json!({"filterId":s.active().unwrap().doc.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id.0.to_string()})
+}
+
+#[test]
+fn point_literal_color_metadata_keeps_raw_words_in_a_paid_reply_without_reading_pixels() {
+    let (s, q, reads) = point_session_with_colors(10, true);
+    let before = s.active().unwrap().doc.clone();
+    let baseline = q.usage().unwrap();
+    let reply = prepare(&s, &request(&s), &ctl()).unwrap();
+    let stack = &before.xcf_state.as_ref().unwrap().filter_stacks[0];
+    let node = &stack.nodes[0];
+    let ordinary = crate::xcf_filter_cmds::build_inspect_reply(node.id, stack, node).unwrap();
+    assert!(ordinary["arguments"][0]["state"]["unresolvedStructuredValue"].is_string());
+    assert_eq!(reply.value()["filterId"], node.id.0.to_string());
+    assert_eq!(reply.value()["argumentCount"], 10);
+    assert_eq!(reply.value()["operation"], ordinary["operation"]);
+    assert_eq!(reply.value()["arguments"][0]["state"]["value"]["Color"]["components"][0]["Float32Bits"], (-0.0f32).to_bits());
+    assert_eq!(reply.value()["arguments"][0]["state"]["value"]["Color"]["components"][1]["Float32Bits"], 0x7fc12345u32);
+    assert_eq!(reads.load(Ordering::Relaxed), 0);
+    assert!(q.usage().unwrap().index > baseline.index);
+    assert!(s.active().unwrap().doc.shares_state(&before));
+    drop(reply);
+    assert_eq!(q.usage().unwrap(), baseline);
+}
+
+#[test]
+fn point_literal_color_inspection_refuses_other_shapes_without_widening_threshold_metadata() {
+    let (s, _, _) = point_session_with_colors(1, true);
+    let mut node = s.active().unwrap().doc.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].clone();
+    assert!(point_metadata(&node, &ctl()).is_ok());
+    assert!(metadata(&node, &ctl()).is_err());
+    let original = node.arguments[0].value.clone();
+    for kind in 0..4 {
+        node.arguments[0].value = original.clone();
+        let FilterValue::Color { components, encoding, profile } = &mut node.arguments[0].value else { panic!("color fixture") };
+        match kind {
+            0 => {
+                components.pop();
+            }
+            1 => components[0] = ExactNumber::Float64Bits(0),
+            2 => *encoding = SampleEncoding::Linear,
+            _ => *profile = Some(photocraft_doc::item_identity::ResourceId(1)),
+        }
+        assert!(point_metadata(&node, &ctl()).is_err());
+    }
+    let deny = |_| Err(BackingError::Work);
+    assert!(point_metadata(&node, &ReadControl { interrupt: &Interrupt::NONE, work: &deny }).is_err());
 }
 #[test]
 fn point_filter_complete_flat_arguments_and_project_discovery_are_paid_immutable_metadata() {

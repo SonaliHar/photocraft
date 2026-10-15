@@ -1241,28 +1241,26 @@ fn qualify_point_storage_metadata(
     Ok(())
 }
 
-/// Current structural/profile semantics, independent of inert original provenance.
-fn qualify_generic_point_context(
-    doc: &Document,
-    layer: &Layer,
-    state: &photocraft_doc::XcfState,
-    stack: &photocraft_doc::xcf_filters::FilterStack,
-    context: (Rect, &Profile, SampleEncoding),
-    interrupt: &photocraft_raster::Interrupt<'_>,
-) -> Result<()> {
-    let (extent, profile, stored) = context;
-    let item = state.items.iter().find(|item| item.item == ItemRef::Layer(layer.id));
-    let Some(surface) = layer.surface() else { return Err(CompositionError::Unsupported("generic point raster owner")) };
-    let profile_kind = match doc.mode {
-        ColorMode::Rgb => photocraft_cms::Builtin::Srgb,
-        ColorMode::Grayscale => photocraft_cms::Builtin::SGray,
-        _ => return Err(CompositionError::Unsupported("generic point color model")),
-    };
-    let implicit = matches!(
-        (&doc.working_profile_interpretation, doc.mode),
-        (photocraft_doc::WorkingProfileInterpretation::ImplicitSrgb { .. }, ColorMode::Rgb)
-            | (photocraft_doc::WorkingProfileInterpretation::ImplicitSGray { .. }, ColorMode::Grayscale)
-    );
+pub(crate) struct PointCurrentFamilies {
+    channel_mixer: bool,
+    mono_signed: bool,
+    color_overlay: bool,
+    color_rotate: bool,
+    unpremultiply: bool,
+    absolute: bool,
+    red_eye: bool,
+    component_extract: bool,
+    alpha_clip: bool,
+}
+/// The exact existing current family extent/precision/output predicates. No
+/// Surface/native samples, source correspondence or runtime tag are supplied.
+/// The caller must prepay its bounded singleton metadata comparisons.
+pub(crate) fn qualify_point_family_context(
+    doc:&Document,layer:&Layer,state:&photocraft_doc::XcfState,stack:&photocraft_doc::xcf_filters::FilterStack,
+    extent:Rect,profile:&Profile,stored:SampleEncoding,interrupt:&photocraft_raster::Interrupt<'_>,
+)->Result<PointCurrentFamilies> {
+    interrupt.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
+    let item=state.items.iter().find(|item|item.item==ItemRef::Layer(layer.id));
     let channel_mixer = stack.nodes.first().is_some_and(|node| {
         node.operation.name == "gegl:channel-mixer"
             && node.operation.schema_epoch == crate::gimp_filters::CHANNEL_MIXER_PRECISION_EPOCH
@@ -1403,6 +1401,32 @@ fn qualify_generic_point_context(
     if alpha_clip && (doc.size != photocraft_doc::Size::new(8, 6) || extent != Rect::new(0, 0, 8, 6)) {
         return Err(CompositionError::Unsupported("unqualified Alpha Clip current extent"));
     }
+    interrupt.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
+    Ok(PointCurrentFamilies {channel_mixer,mono_signed,color_overlay,color_rotate,unpremultiply,absolute,red_eye,component_extract,alpha_clip})
+}
+
+/// Current structural/profile semantics, independent of inert original provenance.
+fn qualify_generic_point_context(
+    doc: &Document,
+    layer: &Layer,
+    state: &photocraft_doc::XcfState,
+    stack: &photocraft_doc::xcf_filters::FilterStack,
+    context: (Rect, &Profile, SampleEncoding),
+    interrupt: &photocraft_raster::Interrupt<'_>,
+) -> Result<()> {
+    let (extent, profile, stored) = context;
+    let Some(surface) = layer.surface() else { return Err(CompositionError::Unsupported("generic point raster owner")) };
+    let profile_kind = match doc.mode {
+        ColorMode::Rgb => photocraft_cms::Builtin::Srgb,
+        ColorMode::Grayscale => photocraft_cms::Builtin::SGray,
+        _ => return Err(CompositionError::Unsupported("generic point color model")),
+    };
+    let implicit = matches!(
+        (&doc.working_profile_interpretation, doc.mode),
+        (photocraft_doc::WorkingProfileInterpretation::ImplicitSrgb { .. }, ColorMode::Rgb)
+            | (photocraft_doc::WorkingProfileInterpretation::ImplicitSGray { .. }, ColorMode::Grayscale)
+    );
+    let PointCurrentFamilies {channel_mixer,mono_signed,color_overlay,color_rotate,unpremultiply,absolute,red_eye,component_extract,alpha_clip}=qualify_point_family_context(doc,layer,state,stack,extent,profile,stored,interrupt)?;
     qualify_generic_point_storage_metadata(doc, layer, state, stack, extent, stored, surface.format(), surface.default_bytes())?;
     if !implicit || profile.to_bytes() != profile_kind.profile().to_bytes() {
         return Err(CompositionError::Unsupported("unqualified generic point current raster context"));

@@ -161,11 +161,14 @@ fn fixture(q: &BackingQuota, sample: SampleType, encoding: SampleEncoding, sourc
     doc.xcf_state = Some(state);
     (doc, guard)
 }
-fn owned(sample: SampleType, encoding: SampleEncoding, precision: u32) -> AccountedDocument {
+pub(super) fn owned(sample: SampleType, encoding: SampleEncoding, precision: u32) -> AccountedDocument {
     let q = quota();
     let (doc, guard) = fixture(&q, sample, encoding, precision);
     AccountedDocument::new_readonly_point_storage(doc, guard, q, &ctl()).unwrap()
 }
+
+#[path = "accounted_point_readonly_patch_tests.rs"]
+mod patch_tests;
 #[test]
 fn all_canonical_depths_and_encodings_keep_literal_half_correspondence_and_distinct_bounds() {
     for (sample, precisions) in [
@@ -235,12 +238,7 @@ fn requirements_are_not_a_receipt_noop_is_shared_and_generic_mutations_stay_clos
     let id = owner.document().layers[0].id;
     assert!(owner.try_edit(AccountedEdit::LayerName { layer: id, name: "generic" }, &ctl()).is_err());
     assert!(owner.try_replace_selection(None, &ctl()).is_err());
-    assert!(owner.try_with_readonly_layer_name(ReadonlyLayerNamePatch { layer: id, name: "not yet" }, &ctl()).is_err());
-    assert!(
-        owner
-            .try_with_readonly_layer_properties(ReadonlyLayerPropertiesPatch { layer: id, name: None, visible: Some(false), opacity_f32_bits: None }, &ctl())
-            .is_err()
-    );
+    assert!(owner.try_edit(AccountedEdit::LayerMetadata { layer: id, name: None, visible: Some(false), opacity: None }, &ctl()).is_err());
     assert_eq!(q.usage().unwrap(), baseline);
 }
 #[test]
