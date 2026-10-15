@@ -67,3 +67,115 @@ fn the_window_menu_hides_and_shows_the_docked_timeline() {
     h.run_steps(6);
     assert!(h.query_by_label("Float Panel").is_some(), "it comes back docked");
 }
+
+fn anim(h: &Harness<'static, PhotocraftApp>) -> photocraft_doc::FrameAnimation {
+    h.state().session.active().unwrap().doc.frame_animation.clone().unwrap()
+}
+
+/// Puts the pointer over the panel, as the timeline's keys need.
+fn hover_panel(h: &mut Harness<'static, PhotocraftApp>) -> egui::Rect {
+    let r = h.state().ui.timeline.panel_rect.expect("the panel was drawn");
+    h.event(egui::Event::PointerMoved(r.center()));
+    h.run_steps(2);
+    r
+}
+
+#[test]
+fn space_plays_and_pauses_while_the_pointer_is_over_the_timeline() {
+    let mut h = harness();
+    h.key_press(egui::Key::Space);
+    h.run_steps(2);
+    assert!(!h.state().ui.timeline.playing, "Space elsewhere is not the timeline's");
+    hover_panel(&mut h);
+    h.key_press(egui::Key::Space);
+    h.run_steps(2);
+    assert!(h.state().ui.timeline.playing);
+    h.key_press(egui::Key::Space);
+    h.run_steps(2);
+    assert!(!h.state().ui.timeline.playing);
+}
+
+#[test]
+fn arrows_home_and_end_step_through_the_frames() {
+    let mut h = harness();
+    hover_panel(&mut h);
+    h.state_mut().run("animation.selectFrame", json!({"frame": 1})).unwrap();
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(2);
+    assert_eq!(anim(&h).current, 2);
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(2);
+    assert_eq!(anim(&h).current, 2, "stops at the last frame");
+    h.key_press(egui::Key::Home);
+    h.run_steps(2);
+    assert_eq!(anim(&h).current, 0);
+    h.key_press(egui::Key::End);
+    h.run_steps(2);
+    assert_eq!(anim(&h).current, 2);
+    h.key_press(egui::Key::ArrowLeft);
+    h.run_steps(2);
+    assert_eq!(anim(&h).current, 1);
+}
+
+#[test]
+fn copy_and_paste_duplicate_a_frame_with_its_delay_and_layers() {
+    let mut h = harness();
+    hover_panel(&mut h);
+    h.state_mut().run("animation.selectFrame", json!({"frame": 1})).unwrap();
+    h.state_mut().run("animation.setDelay", json!({"seconds": 1.5})).unwrap();
+    let copied = anim(&h).frames[1].clone();
+    h.event(egui::Event::Copy);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.timeline.clipboard, std::slice::from_ref(&copied));
+    h.state_mut().run("animation.selectFrame", json!({"frame": 2})).unwrap();
+    h.event(egui::Event::Paste(String::new()));
+    h.run_steps(3);
+    let a = anim(&h);
+    assert_eq!(a.frames.len(), 4);
+    assert_eq!(a.frames[3], copied, "pasted after the selected frame");
+    assert_eq!(a.current, 3);
+}
+
+#[test]
+fn alt_arrows_move_the_selected_frame() {
+    let mut h = harness();
+    hover_panel(&mut h);
+    h.state_mut().run("animation.selectFrame", json!({"frame": 0})).unwrap();
+    h.state_mut().run("animation.setDelay", json!({"seconds": 3})).unwrap();
+    h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::ArrowRight);
+    h.run_steps(2);
+    let a = anim(&h);
+    assert_eq!((a.current, a.frames[1].delay_ms), (1, 3000));
+    h.key_press_modifiers(egui::Modifiers::ALT, egui::Key::ArrowLeft);
+    h.run_steps(2);
+    assert_eq!(anim(&h).frames[0].delay_ms, 3000);
+}
+
+#[test]
+fn dragging_a_frame_reorders_it() {
+    let mut h = harness();
+    let r = hover_panel(&mut h);
+    h.state_mut().run("animation.setDelay", json!({"seconds": 3, "frames": [0]})).unwrap();
+    h.run_steps(2);
+    let y = r.top() + 62.0;
+    let cell = |i: usize| egui::pos2(r.left() + 42.0 + i as f32 * 90.0, y);
+    h.event(egui::Event::PointerMoved(cell(0)));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: cell(0), button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.run_steps(1);
+    for step in 1..=8 {
+        let x = cell(0).x + (cell(2).x + 30.0 - cell(0).x) * step as f32 / 8.0;
+        h.event(egui::Event::PointerMoved(egui::pos2(x, y)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton {
+        pos: egui::pos2(cell(2).x + 30.0, y),
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: Default::default(),
+    });
+    h.run_steps(3);
+    let a = anim(&h);
+    assert_eq!(a.frames.iter().map(|f| f.delay_ms).collect::<Vec<_>>(), [200, 200, 3000], "frame 1 was dropped after the last one");
+    assert_eq!(a.current, 2, "the selection travelled with it");
+}

@@ -250,6 +250,54 @@ fn move_frame(s: &mut Session, p: &Value) -> Result<Value> {
     info(s)
 }
 
+/// Paste Frames: copies of `frames` ({delayMs, hidden:[layer ids]}) inserted after frame `after`
+/// (the selected one when absent); the last pasted frame is selected. Ids of layers the document
+/// does not have are dropped, so a frame copied from another document still pastes.
+fn paste_frames(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "animation.pasteFrames";
+    let list = p.get("frames").and_then(Value::as_array).filter(|l| !l.is_empty()).ok_or_else(|| bad(CMD, "`frames` must be a non-empty list".into()))?;
+    let mut pasted = Vec::with_capacity(list.len());
+    for f in list {
+        let delay_ms = delay_param(CMD, f)?.unwrap_or(0);
+        let ids = match f.get("hidden") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(v) => v
+                .as_array()
+                .and_then(|l| l.iter().map(Value::as_u64).collect::<Option<Vec<_>>>())
+                .ok_or_else(|| bad(CMD, format!("`hidden` must be a list of layer ids, got {v}")))?,
+        };
+        pasted.push((delay_ms, ids));
+    }
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    if st.doc.frame_animation.as_ref().is_some_and(|a| a.frames.len() + pasted.len() > MAX_FRAMES) {
+        return Err(EngineError::Other(format!("an animation holds at most {MAX_FRAMES} frames")));
+    }
+    s.edit("Paste Frames", |doc, _| {
+        let known = |id: u64| doc.layer(photocraft_doc::LayerId(id)).is_some();
+        let frames: Vec<AnimFrame> = pasted
+            .iter()
+            .map(|(delay_ms, ids)| {
+                let mut hidden: Vec<_> = ids.iter().copied().filter(|id| known(*id)).map(photocraft_doc::LayerId).collect();
+                hidden.sort();
+                hidden.dedup();
+                AnimFrame { delay_ms: *delay_ms, hidden }
+            })
+            .collect();
+        let a = animation(doc, CMD)?;
+        a.clamp();
+        let after = frame_param(CMD, p, "after", a)?;
+        let at = after + 1;
+        let n = frames.len();
+        a.frames.splice(at..at, frames);
+        a.current = at + n - 1;
+        let cur = a.current;
+        let a = a.clone();
+        a.apply(cur, &mut doc.layers);
+        Ok(())
+    })?;
+    info(s)
+}
+
 fn reverse_frames(s: &mut Session, _p: &Value) -> Result<Value> {
     s.edit("Reverse Frames", |doc, _| {
         let a = animation(doc, "animation.reverseFrames")?;
@@ -300,6 +348,14 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         spec!("animation.setLoop", "Loop Count", r#"{loops:"once"|"forever"|plays} → {animation}"#, has_animation, true, |s, p| set_loop(s, p)),
         spec!("animation.moveFrame", "Move Frame", r#"{from, to} → {animation}"#, has_animation, true, |s, p| move_frame(s, p)),
+        spec!(
+            "animation.pasteFrames",
+            "Paste Frames",
+            r#"{frames:[{delayMs, hidden:[layerId]}], after?:selected} → {animation}"#,
+            has_animation,
+            true,
+            |s, p| { paste_frames(s, p) }
+        ),
         spec!("animation.reverseFrames", "Reverse Frames", "{} → {animation}", has_animation, true, |s, p| reverse_frames(s, p)),
         spec!("animation.info", "Frame Animation Info", "{} → {animation}", has_doc, false, |s, _| info(s)),
     ]
