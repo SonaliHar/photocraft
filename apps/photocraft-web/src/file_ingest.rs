@@ -95,7 +95,7 @@ impl<S: Source> Batch<S> {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
-    use std::task::{Context, Poll, Wake, Waker};
+    use std::task::{Context, Poll, Waker};
 
     struct Fake {
         size: Option<f64>,
@@ -120,13 +120,9 @@ mod tests {
     fn budget() -> Admission {
         Admission { max_files: 2, max_bytes: 4, ..Default::default() }
     }
-    struct Noop;
-    impl Wake for Noop {
-        fn wake(self: Arc<Self>) {}
-    }
     fn ready<F: Future>(f: F) -> F::Output {
-        let waker = Waker::from(Arc::new(Noop));
-        match std::pin::pin!(f).as_mut().poll(&mut Context::from_waker(&waker)) {
+        let waker = Waker::noop();
+        match std::pin::pin!(f).as_mut().poll(&mut Context::from_waker(waker)) {
             Poll::Ready(value) => value,
             Poll::Pending => panic!("fake readers must be immediately ready"),
         }
@@ -200,8 +196,8 @@ mod tests {
         let reads = Arc::new(AtomicUsize::new(0));
         let batch = budget.admit(vec![PendingSource(reads.clone()), PendingSource(reads.clone())]).unwrap();
         let mut future = Box::pin(batch.read());
-        let waker = Waker::from(Arc::new(Noop));
-        assert!(future.as_mut().poll(&mut Context::from_waker(&waker)).is_pending());
+        let waker = Waker::noop();
+        assert!(future.as_mut().poll(&mut Context::from_waker(waker)).is_pending());
         assert_eq!(reads.load(Ordering::Relaxed), 1);
         drop(future);
         assert!(budget.admit(vec![PendingSource(reads)]).is_ok());
