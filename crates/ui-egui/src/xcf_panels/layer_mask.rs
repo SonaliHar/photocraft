@@ -214,3 +214,7 @@ mod tests {
     }
 
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "layer_mask/isolated_group_tests.rs"]
+mod isolated_group_tests;

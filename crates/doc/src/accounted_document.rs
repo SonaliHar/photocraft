@@ -398,7 +398,7 @@ impl AccountedDocument {
         if self.owner._storage_class != StorageClass::Legacy || !matches!(edit, AccountedEdit::MaskEnabled { .. }) {
             return Err(BackingError::Unsupported);
         }
-        if imported_edits::validate_owner(self, edit, control)? != imported_edits::EditDomain::AssignedGeometry {
+        if !matches!(imported_edits::validate_owner(self, edit, control)?, imported_edits::EditDomain::AssignedGeometry | imported_edits::EditDomain::IsolatedGroup) {
             return Err(BackingError::Unsupported);
         }
         let layer = accounted_layer_access(self.document(), edit.layer_id(), control)?.ok_or(BackingError::Bounds)?.layer;
@@ -465,7 +465,9 @@ impl AccountedDocument {
         // The admitted Clone only duplicates the prepaid bounded tree containers and
         // strings below. Native tiles/ICC/source guards retain shared ownership.
         let view = self.owner._selection.as_ref().map(|guard| guard.clone_view(control)).transpose()?;
-        let copied = if domain == imported_edits::EditDomain::AssignedGeometry {
+        let copied = if domain == imported_edits::EditDomain::IsolatedGroup {
+            imported_selection::copy_isolated_group(doc, self.quota(), control)?
+        } else if domain == imported_edits::EditDomain::AssignedGeometry {
             imported_selection::copy_masked_normal(doc, self.quota(), control)?
         } else if imported { imported_selection::copy_document(doc, control)? } else { clone_model_without_selection(doc) };
         let mut staged = ModelStaging { document: copied, selection_view: None };

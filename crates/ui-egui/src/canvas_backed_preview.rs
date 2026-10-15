@@ -218,7 +218,7 @@ mod analytic_geometry_layer_props_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_isolated_normal_group_tests.rs"]
-mod isolated_normal_group_tests;
+pub(crate) mod isolated_normal_group_tests;
 
 #[cfg(test)]
 fn backed_display_image(

@@ -7,26 +7,50 @@ use photocraft_raster::backing::quota::{BackingQuota, QuotaLease};
 /// Constant-time routing hint over an actual owner. Full closed structural and
 /// current profile/native validation remains mandatory; this grants no authority.
 pub fn assigned_geometry_metadata_candidate(owner: &AccountedDocument) -> bool {
-    !owner.is_readonly_point_storage()
-        && !owner.is_readonly_threshold_storage()
-        && !owner.is_readonly_threshold_alpha_storage()
-        && owner.document().layers.len() == 2
-        && owner.document().layers.get(1).is_some_and(|layer| layer.mask.is_some())
-        && owner.document().xcf_state.as_ref().is_some_and(|state| state.items.len() == 3)
+    if owner.is_readonly_point_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_threshold_alpha_storage() {
+        return false;
+    }
+    isolated_normal_group_metadata_candidate(owner)
+        || (owner.document().layers.len() == 2
+            && owner.document().layers.get(1).is_some_and(|layer| layer.mask.is_some())
+            && owner.document().xcf_state.as_ref().is_some_and(|state| state.items.len() == 3))
+}
+fn isolated_normal_group_metadata_candidate(owner: &AccountedDocument) -> bool {
+    owner.document().layers.len() == 2
+        && owner.document().layers.get(1).is_some_and(|layer| matches!(&layer.content, photocraft_doc::LayerContent::Group(group) if group.children.len() == 2))
+        && owner.document().xcf_state.as_ref().is_some_and(|state| matches!(state.items.len(), 4 | 5))
 }
 #[derive(Clone, Copy)]
 pub(crate) enum MetadataPolicy {
     Plain,
     AssignedGeometry,
+    IsolatedNormalGroup,
 }
 impl MetadataPolicy {
     pub(crate) fn for_owner(owner: &AccountedDocument) -> Self {
-        if assigned_geometry_metadata_candidate(owner) { Self::AssignedGeometry } else { Self::Plain }
+        if isolated_normal_group_metadata_candidate(owner) {
+            Self::IsolatedNormalGroup
+        } else if assigned_geometry_metadata_candidate(owner) {
+            Self::AssignedGeometry
+        } else {
+            Self::Plain
+        }
+    }
+    pub(crate) fn needs_assigned_fence(self) -> bool {
+        !matches!(self, Self::Plain)
+    }
+    pub(crate) fn validate_storage(self, owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
+        match self {
+            Self::Plain => Err(BackingError::Unsupported.into()),
+            Self::AssignedGeometry => Ok(owner.validate_assigned_analytic_geometry_storage(c)?),
+            Self::IsolatedNormalGroup => Ok(owner.validate_assigned_isolated_normal_group_storage(c)?),
+        }
     }
     pub(crate) fn validate_current(self, owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
         match self {
             Self::Plain => Ok(()),
             Self::AssignedGeometry => crate::accounted_xcf_open::analytic_geometry::validate_current_analytic_geometry_storage(owner, c),
+            Self::IsolatedNormalGroup => crate::accounted_xcf_open::isolated_normal_group::validate_current_isolated_normal_group_storage(owner, c),
         }
     }
 }
@@ -89,7 +113,7 @@ impl Session {
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
         owner.validate_imported_metadata_edit(edit, c)?;
         let policy = MetadataPolicy::for_owner(owner);
-        if matches!(policy, MetadataPolicy::AssignedGeometry) && !state.history.current()?.shares_state(&state.doc) {
+        if policy.needs_assigned_fence() && !state.history.current()?.shares_state(&state.doc) {
             return Err(BackingError::Integrity.into());
         }
         policy.validate_current(owner, c)?;

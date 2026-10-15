@@ -89,6 +89,19 @@ fn booleans(values: &[bool], control: &ReadControl<'_>) -> Result<Vec<bool>> {
     }
     Ok(result)
 }
+fn same_name(left: &str, right: &str, c: &ReadControl<'_>) -> Result<bool> {
+    c.check(1)?;
+    if left.len() != right.len() {
+        return Ok(false);
+    }
+    for (a, b) in left.as_bytes().chunks(32768).zip(right.as_bytes().chunks(32768)) {
+        c.check(a.len().checked_add(b.len()).ok_or(BackingError::Length)? as u64)?;
+        if a != b {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
 // Owned channel containers precede their lease. The retained layer-view Arc is
 // an actual paid owner, not a copied list or caller-asserted selection witness.
 pub(super) struct Prepared<'a> {
@@ -114,14 +127,38 @@ impl<'a> Request<'a> {
             Target::Active => state.active_layer.ok_or(EngineError::NoDocument)?,
             Target::Id(id) => id,
             Target::Name(name) => {
-                // The closed imported class is flat; reversed declaration order
-                // is the same topmost-name policy as ordinary explicit_layer.
                 let mut found = None;
-                for layer in state.doc.layers.iter().rev() {
-                    control.check((name.len() + 1) as u64)?;
-                    if layer.name == name {
-                        found = Some(layer.id);
-                        break;
+                if matches!(MetadataPolicy::for_owner(owner), MetadataPolicy::IsolatedNormalGroup) {
+                    // Reverse depth-first order is upper child, lower child,
+                    // group, backdrop. The hint bounds this traversal to four
+                    // borrowed layers; full storage validation follows below.
+                    for (index, layer) in state.doc.layers.iter().enumerate().rev() {
+                        if index == 1
+                            && let photocraft_doc::LayerContent::Group(group) = &layer.content
+                        {
+                            for child in group.children.iter().rev() {
+                                if same_name(&child.name, name, control)? {
+                                    found = Some(child.id);
+                                    break;
+                                }
+                            }
+                        }
+                        if found.is_some() {
+                            break;
+                        }
+                        if same_name(&layer.name, name, control)? {
+                            found = Some(layer.id);
+                            break;
+                        }
+                    }
+                } else {
+                    // Preserve the original flat topmost-name policy.
+                    for layer in state.doc.layers.iter().rev() {
+                        control.check((name.len() + 1) as u64)?;
+                        if layer.name == name {
+                            found = Some(layer.id);
+                            break;
+                        }
                     }
                 }
                 found.ok_or_else(|| EngineError::Other("no layer has the requested name".into()))?
@@ -135,7 +172,7 @@ impl<'a> Request<'a> {
         policy.validate_current(owner, control)?;
         let assigned = match policy {
             MetadataPolicy::Plain => None,
-            MetadataPolicy::AssignedGeometry => Some(AssignedFence::prepare::<Prepared<'_>>(session, control)?),
+            MetadataPolicy::AssignedGeometry | MetadataPolicy::IsolatedNormalGroup => Some(AssignedFence::prepare::<Prepared<'_>>(session, control)?),
         };
         check_locks(owner.document(), edit, control)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;

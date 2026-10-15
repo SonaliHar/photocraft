@@ -1560,5 +1560,16 @@ profile relation and complete canvas before publication, including hidden and
 disabled content. Paid title changes, native continuation and `xcf.inspect`
 preserve the hierarchy and its four or five canonical items. Group rendering
 reuses the existing isolated Normal equations with paid band overlap and caller
-cancellation. Other group modes, deeper hierarchy and general group editing
-remain outside this owned family; tests and behavioral acceptance are pending.
+cancellation. Other group modes and deeper hierarchy remain outside this
+owned family; tests and behavioral acceptance are pending.
+
+Within that group family, existing `layer.setProps` supports combined name,
+visibility and opacity changes on the backdrop, group or either child, including
+reverse depth-first name selection. It shares the existing exact coalescing
+keys, first undo label, changed-visibility locks and no-op redo behavior. The
+optional group mask uses the same `xcf.mask.enabled.set` transaction and original
+reply, context, lock and journal rules. Current and staged group profiles/canvas
+are validated before publication, with unchanged native/mask/source custody.
+Typed CURRENT composition permits backdrop visibility and opacity changes;
+bare constructors and original source qualification retain their stricter gates.
+Other property, mask, geometry and group-mode edits remain outside this family.

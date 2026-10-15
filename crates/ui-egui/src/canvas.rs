@@ -8731,3 +8731,11 @@ mod native_replacement_ui_drafts {
         }
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) mod isolated_group_test_support {
+    pub(crate) use super::backed_preview::isolated_normal_group_tests::{cases, ctl};
+    pub(crate) fn display(snapshot: &photocraft_engine::DocumentSnapshot) -> Result<(egui::ColorImage, photocraft_raster::backing::quota::QuotaLease), String> {
+        super::backed_preview::backed_snapshot_display_image(snapshot, snapshot.size.width, snapshot.size.height, None, &photocraft_raster::Interrupt::NONE)
+    }
+}

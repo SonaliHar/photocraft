@@ -10,7 +10,7 @@ use photocraft_raster::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{io::Cursor, path::PathBuf};
-fn ctl() -> ReadControl<'static> {
+pub(crate) fn ctl() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
 }
 fn hash(bytes: &[u8]) -> String {
@@ -34,7 +34,7 @@ fn original_layer(root: &std::path::Path, row: &Value, depth: usize) {
         }
     }
 }
-fn cases() -> Vec<(PathBuf, Value)> {
+pub(crate) fn cases() -> Vec<(PathBuf, Value)> {
     let root = PathBuf::from(std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS").unwrap()).join("accounted-normal-group-evidence");
     let b = std::fs::read(root.join("observations.json")).unwrap();
     let pins: Value = serde_json::from_str(include_str!("../../compose/tests/gimp_accounted_group_hashes.json")).unwrap();

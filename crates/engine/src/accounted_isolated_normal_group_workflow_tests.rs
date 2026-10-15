@@ -288,3 +288,6 @@ fn malformed_selected_group_never_retries_a_generic_native_or_session_path() {
     assert!(strict.add_owned_native_isolated_normal_group_archive(archive(&bytes, &q), "strict.pcraft", None, &ctl()).is_err());
     assert!(strict.documents().is_empty());
 }
+
+#[path = "accounted_isolated_normal_group_edit_tests.rs"]
+mod edits;

@@ -51,10 +51,15 @@ fn leaf(q: &BackingQuota, mode: ColorMode, sample: SampleType, bounds: Rect, nam
     Layer::new(name, LayerContent::BackedRaster(photocraft_doc::BackedLayer::new(raster, descriptor, &ctl()).unwrap()))
 }
 fn fixture(mode: ColorMode, sample: SampleType, case: u8, defect: u8) -> AccountedDocument {
+    fixture_with_backdrop(mode, sample, case, defect, true, 1.0)
+}
+fn fixture_with_backdrop(mode: ColorMode, sample: SampleType, case: u8, defect: u8, visible: bool, opacity: f32) -> AccountedDocument {
     let (mut doc, q, guard, _, profile, _) = point_fixture(2, mode, sample, SampleEncoding::NonlinearProfile);
     let fee = q.reserve(QuotaKind::Resident, 4 << 20).unwrap();
     doc.size = photocraft_doc::Size::new(17, 13);
-    let base = leaf(&q, mode, sample, doc.bounds(), "Backdrop");
+    let mut base = leaf(&q, mode, sample, doc.bounds(), "Backdrop");
+    base.visible = visible;
+    base.opacity = opacity;
     let lower = leaf(&q, mode, sample, Rect::new(-3, -2, 8, 7), "Lower");
     let mut upper = leaf(&q, mode, sample, Rect::new(4, 3, 13, 10), "Upper");
     upper.opacity = 0.3125;
@@ -146,6 +151,16 @@ fn fixture(mode: ColorMode, sample: SampleType, case: u8, defect: u8) -> Account
         let mut surface = Surface::new(mask.surface.format());
         surface.try_write_pixel_f64(groupbounds.x1 - 1, groupbounds.y1 - 1, &[1.5]).unwrap();
         mask.surface = Arc::new(surface);
+    }
+    if defect == 3 {
+        let LayerContent::BackedRaster(v) = &base.content else { panic!("backdrop") };
+        let r = v.operative_bounds();
+        let last = Rect::new(r.x1 - 1, r.y1 - 1, r.x1, r.y1);
+        let mut bytes = [0; 32];
+        let bytes = &mut bytes[..v.format().bytes_per_pixel()];
+        v.checked_view().read_logical_pixel_native_into(last.x0, last.y0, bytes, &ctl()).unwrap();
+        try_write_sample_f64(bytes, sample, 0, 1.5).unwrap();
+        base.content = LayerContent::BackedRaster(v.try_edited_native(last, bytes, &ctl()).unwrap());
     }
     doc.layers = vec![base, group];
     AccountedDocument::from_owned(doc, Arc::new((guard, fee)), q, &ctl()).unwrap()
@@ -250,3 +265,6 @@ fn reference_layers(doc: &Document, layers: &[Layer], working: &WorkingSpace, x:
     }
     backdrop
 }
+
+#[path = "backed_group_activity_tests.rs"]
+mod activity;

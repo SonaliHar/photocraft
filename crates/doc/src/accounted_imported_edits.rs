@@ -7,11 +7,27 @@ pub(super) enum EditDomain {
     Resident,
     Plain,
     AssignedGeometry,
+    IsolatedGroup,
 }
 
 pub(super) fn validate_owner(owner: &AccountedDocument, edit: AccountedEdit<'_>, c: &ReadControl<'_>) -> Result<EditDomain, BackingError> {
     let imported = imported_selection::applies(owner.document());
     if imported {
+        // Only this exact bounded group lane can copy recursive containers;
+        // selecting it is authoritative and never falls back to the flat lane.
+        if matches!(edit, AccountedEdit::LayerMetadata { .. } | AccountedEdit::MaskEnabled { .. })
+            && owner.document().layers.len() == 2
+            && owner.document().layers.get(1).is_some_and(|layer| matches!(&layer.content, LayerContent::Group(_)))
+        {
+            if matches!(edit, AccountedEdit::MaskEnabled { .. }) {
+                c.check(1)?;
+            } else {
+                validate_parameters(edit, c)?;
+            }
+            owner.validate_assigned_isolated_normal_group_storage(c)?;
+            validate_group_items(owner.document(), c)?;
+            return Ok(EditDomain::IsolatedGroup);
+        }
         // This hint selects only a validator. It cannot grant source, pixel or
         // generic imported edit authority, and a selected refusal is final.
         if matches!(edit, AccountedEdit::LayerMetadata { .. } | AccountedEdit::MaskEnabled { .. })
@@ -96,6 +112,26 @@ fn validate_current_items(doc: &Document, allow_mask: bool, c: &ReadControl<'_>)
             if !names_equal(&item.name, &layer.name, c)? || item.visible != layer.visible {
                 return Err(BackingError::Integrity);
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_group_items(doc: &Document, c: &ReadControl<'_>) -> Result<(), BackingError> {
+    let state = doc.xcf_state.as_ref().ok_or(BackingError::Unsupported)?;
+    for item in &state.items {
+        c.check(1)?;
+        let crate::item_identity::ItemRef::Layer(id) = item.item else {
+            if matches!(item.item, crate::item_identity::ItemRef::Mask(_)) {
+                continue;
+            }
+            return Err(BackingError::Unsupported);
+        };
+        let layer = accounted_layer_access(doc, id, c)?.ok_or(BackingError::Integrity)?.layer;
+        // As for the flat imported domain, malformed canonical prestate refuses
+        // before no-op; omitted properties never repair unrelated native state.
+        if !names_equal(&item.name, &layer.name, c)? || item.visible != layer.visible {
+            return Err(BackingError::Integrity);
         }
     }
     Ok(())

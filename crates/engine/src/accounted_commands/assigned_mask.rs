@@ -22,7 +22,7 @@ enum Target {
     Layer(LayerId),
 }
 fn relation(owner: &AccountedDocument, target: Target, c: &ReadControl<'_>) -> Result<Relation> {
-    owner.validate_assigned_analytic_geometry_storage(c)?;
+    crate::accounted_session::metadata_gesture::MetadataPolicy::for_owner(owner).validate_storage(owner, c)?;
     let doc = owner.document();
     let state = doc.xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     let mut found = None;
@@ -45,11 +45,18 @@ fn relation(owner: &AccountedDocument, target: Target, c: &ReadControl<'_>) -> R
         if native.enabled != metadata.enabled {
             return Err(mask_error("unsupported-mask-domain"));
         }
-        // The admitted structure is flat and the mask has no parent. Mask
-        // effective native locks are its actual owner's; imported content is
-        // the union of that owner and this exact canonical mask item.
+        // Actual layer ancestry supplies owner native and imported locks.
+        // A canonical mask parent additionally contributes its actual ancestry;
+        // this remains a bounded borrowed traversal, without an item map.
         if access.locks.all || access.imported_locks.content || item.locks.content {
             return Err(mask_error("locked"));
+        }
+        if let Some(parent) = item.parent {
+            let ItemRef::Layer(parent) = parent else { return Err(BackingError::Integrity.into()) };
+            let parent = accounted_layer_access(doc, parent, c)?.ok_or(BackingError::Integrity)?;
+            if parent.locks.all || parent.imported_locks.content {
+                return Err(mask_error("locked"));
+            }
         }
         found = Some(Relation { mask: id, layer, previous: metadata.enabled });
     }
@@ -94,7 +101,7 @@ impl<'a> Request<'a> {
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
         let found = relation(owner, Target::Mask(self.mask), c)?;
         owner.validate_assigned_analytic_mask_edit(AccountedEdit::MaskEnabled { layer: found.layer, enabled: self.enabled }, c)?;
-        crate::accounted_xcf_open::analytic_geometry::validate_current_analytic_geometry_storage(owner, c)?;
+        crate::accounted_session::metadata_gesture::MetadataPolicy::for_owner(owner).validate_current(owner, c)?;
         let fence = AssignedFence::prepare::<Prepared<'_>>(session, c)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
         if state.active_layer != view.target().active || state.layer_anchor != view.anchor() || !state.selected_layers.is_empty() {
@@ -208,7 +215,7 @@ impl Session {
         if !state.history.current()?.shares_state(&state.doc) {
             return Err(BackingError::Integrity.into());
         }
-        crate::accounted_xcf_open::analytic_geometry::validate_current_analytic_geometry_storage(owner, c)?;
+        crate::accounted_session::metadata_gesture::MetadataPolicy::for_owner(owner).validate_current(owner, c)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
         if state.active_layer != view.target().active || state.layer_anchor != view.anchor() || !state.selected_layers.is_empty() {
             return Err(BackingError::Integrity.into());
@@ -222,7 +229,7 @@ impl Session {
             return Ok(false);
         }
         let current = snapshot.accounted().ok_or(BackingError::Integrity)?;
-        crate::accounted_xcf_open::analytic_geometry::validate_current_analytic_geometry_storage(current, c)?;
+        crate::accounted_session::metadata_gesture::MetadataPolicy::for_owner(current).validate_current(current, c)?;
         let next_view = view.try_replace(current, state.active_layer, view.selected(), state.layer_anchor, c)?;
         let revision = state.revision.checked_add(1).ok_or(BackingError::Length)?;
         c.check(1)?;

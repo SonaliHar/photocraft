@@ -916,3 +916,7 @@ fn exported(dir: &str, written: photocraft_engine::Result<Vec<String>>, outputs:
         }
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_isolated_group_props_tests.rs"]
+mod owned_isolated_group_props_tests;

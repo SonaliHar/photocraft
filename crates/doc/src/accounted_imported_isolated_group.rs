@@ -61,8 +61,6 @@ pub(super) fn validate(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) ->
     if g.children.len() != 2
         || g.artboard.is_some()
         || base.mask.is_some()
-        || !base.visible
-        || base.opacity.to_bits() != 1f32.to_bits()
         || s.items.len() != 4 + usize::from(top.mask.is_some())
         || s.provenance.format_version != if top.mask.is_some() { 13 } else { 12 }
     {
@@ -245,3 +243,7 @@ impl AccountedDocument {
 #[cfg(test)]
 #[path = "accounted_imported_isolated_group_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "accounted_imported_isolated_group_edit_tests.rs"]
+mod edit_tests;

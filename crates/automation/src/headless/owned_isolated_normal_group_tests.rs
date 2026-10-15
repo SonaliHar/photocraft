@@ -5,7 +5,7 @@ use photocraft_doc::{Document, Layer, LayerContent, SampleEncoding};
 use photocraft_raster::{Interrupt, backing::ReadControl, checked_view::NativeTileBytes};
 use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicU64, Ordering};
-fn ctl() -> ReadControl<'static> {
+pub(super) fn ctl() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
 }
 fn hash(bytes: &[u8]) -> String {
@@ -29,7 +29,7 @@ fn original_layer(root: &std::path::Path, row: &Value, depth: usize) {
         }
     }
 }
-fn cases() -> Vec<(PathBuf, Value)> {
+pub(super) fn cases() -> Vec<(PathBuf, Value)> {
     let root = PathBuf::from(std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS").unwrap()).join("accounted-normal-group-evidence");
     let b = std::fs::read(root.join("observations.json")).unwrap();
     let pins: Value = serde_json::from_str(include_str!("../../../compose/tests/gimp_accounted_group_hashes.json")).unwrap();

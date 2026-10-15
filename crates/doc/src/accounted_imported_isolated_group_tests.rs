@@ -54,7 +54,7 @@ fn item(l: &Layer, r: Rect, parent: Option<ItemRef>) -> ItemState {
         }),
     }
 }
-fn fixture(mode: ColorMode, sample: SampleType, masked: bool, visible: bool, enabled: bool) -> AccountedDocument {
+pub(super) fn fixture(mode: ColorMode, sample: SampleType, masked: bool, visible: bool, enabled: bool) -> AccountedDocument {
     let q = BackingQuota::new(QuotaLimits { resident: 64 << 20, index: 16 << 20, scratch: 0 });
     let index = q.reserve(QuotaKind::Index, 8 << 20).unwrap();
     let payload = q.reserve(QuotaKind::Resident, 8 << 20).unwrap();
@@ -186,15 +186,15 @@ fn shape_parent_profile_epoch_and_disabled_mask_contradictions_refuse_without_co
     }
 }
 #[test]
-fn generic_edits_and_selection_are_not_granted_by_group_storage() {
+fn individual_edits_and_selection_are_not_granted_by_group_storage() {
     for masked in [false, true] {
         let source = fixture(ColorMode::Grayscale, SampleType::F64, masked, true, false);
         let id = source.document().layers[1].id;
         let before = source.quota().usage().unwrap();
         for e in [
-            AccountedEdit::LayerMetadata { layer: id, name: Some("no generic edit"), visible: Some(false), opacity: Some(0.2) },
+            AccountedEdit::LayerVisibility { layer: id, visible: false },
             AccountedEdit::LayerName { layer: id, name: "closed" },
-            AccountedEdit::MaskEnabled { layer: id, enabled: true },
+            AccountedEdit::MaskLinked { layer: id, linked: false },
             AccountedEdit::NativePixels { layer: source.document().layers[0].id, rect: Rect::new(0, 0, 1, 1), bytes: &[0; 16] },
         ] {
             assert!(source.try_edit(e, &ctl()).is_err());

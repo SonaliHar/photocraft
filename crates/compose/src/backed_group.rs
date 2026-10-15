@@ -58,7 +58,7 @@ impl<'a> PreparedGroup<'a> {
     }
     fn prepare(owner: &'a AccountedDocument, profile: &Profile, limits: NormalBandLimits, control: &ReadControl<'_>, assigned: bool) -> Result<Self, Error> {
         let doc = owner.document();
-        qualify(owner, control)?;
+        qualify(owner, control, assigned)?;
         if limits.max_rows == 0 || limits.max_rows > 256 || limits.max_pixels == 0 || limits.max_pixels > 65536 {
             return Err(Error::Invalid("group band limits"));
         }
@@ -331,7 +331,7 @@ fn mask<'a>(doc: &'a Document, layer: &'a Layer, control: &ReadControl<'_>) -> R
     let view = CheckedRasterView::resident_with_control(physical.surface.as_ref(), metadata.bounds, control).map_err(Error::View)?;
     Ok(Some(ResidentNormalMask { view, enabled: physical.enabled, outside_coverage: 0. }))
 }
-fn qualify(owner: &AccountedDocument, control: &ReadControl<'_>) -> Result<(), Error> {
+fn qualify(owner: &AccountedDocument, control: &ReadControl<'_>, assigned: bool) -> Result<(), Error> {
     let doc = owner.document();
     let fail = || Error::Unsupported("isolated Normal group source context");
     let state = doc.xcf_state.as_ref().ok_or_else(fail)?;
@@ -361,8 +361,7 @@ fn qualify(owner: &AccountedDocument, control: &ReadControl<'_>) -> Result<(), E
     let top = doc.layers.get(1).ok_or_else(fail)?;
     if !matches!(bottom.content, LayerContent::BackedRaster(_))
         || bottom.mask.is_some()
-        || !bottom.visible
-        || bottom.opacity.to_bits() != 1f32.to_bits()
+        || (!assigned && (!bottom.visible || bottom.opacity.to_bits() != 1f32.to_bits()))
         || item_bounds(doc, bottom)? != doc.bounds()
     {
         return Err(fail());
