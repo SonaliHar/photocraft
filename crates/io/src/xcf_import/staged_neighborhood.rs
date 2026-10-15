@@ -5,11 +5,14 @@ use crate::xcf_filters::NeighborhoodDomain;
 mod original_gaussian;
 #[path="staged_neighborhood/assigned_box.rs"]
 mod assigned_box;
+#[path="staged_neighborhood/assigned_median.rs"]
+mod assigned_median;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::xcf_import) enum NeighborhoodSourceFamily {
     BoxOriginal,
     BoxFinite,
     BoxAssignedF32,
+    MedianAssignedF32,
     MedianOriginal,
     MedianFinite,
     MedianGray,
@@ -29,6 +32,7 @@ impl NeighborhoodSourceFamily {
             "gegl:box-blur" if file.sample==Sample::F32 && file.precision==650 && !file.icc.is_empty() => Self::BoxAssignedF32,
             "gegl:box-blur" if finite => Self::BoxFinite,
             "gegl:box-blur" => Self::BoxOriginal,
+            "gegl:median-blur" if file.model==Model::Rgb && file.sample==Sample::F32 && file.precision==650 && !file.icc.is_empty() => Self::MedianAssignedF32,
             "gegl:median-blur" if file.model == Model::Gray => Self::MedianGray,
             "gegl:median-blur" if finite => Self::MedianFinite,
             "gegl:median-blur" => Self::MedianOriginal,
@@ -48,7 +52,7 @@ impl NeighborhoodSourceFamily {
             Self::BoxOriginal => NeighborhoodDomain::BoxOriginal,
             Self::BoxFinite | Self::BoxAssignedF32 => NeighborhoodDomain::BoxFinite,
             Self::MedianOriginal => NeighborhoodDomain::MedianOriginal,
-            Self::MedianFinite => NeighborhoodDomain::MedianFinite,
+            Self::MedianFinite | Self::MedianAssignedF32 => NeighborhoodDomain::MedianFinite,
             Self::MedianGray => NeighborhoodDomain::MedianGray,
             Self::MotionOriginal => NeighborhoodDomain::MotionOriginal,
             Self::PixelizeOriginal => NeighborhoodDomain::PixelizeOriginal,
@@ -64,6 +68,7 @@ impl NeighborhoodSourceFamily {
             Self::BoxAssignedF32 => { domains.finite_box_domain=true; domains.owned_assigned_box_domain=true; },
             Self::MedianOriginal => domains.opaque_median_domain = true,
             Self::MedianFinite => domains.finite_median_domain = true,
+            Self::MedianAssignedF32 => { domains.finite_median_domain=true; domains.owned_assigned_median_domain=true; },
             Self::MedianGray => domains.gray_median_domain = true,
             Self::MotionOriginal => domains.opaque_motion_domain = true,
             Self::PixelizeOriginal => domains.opaque_pixelize_domain = true,
@@ -82,6 +87,7 @@ impl NeighborhoodSourceFamily {
         }
         match self {
             Self::BoxAssignedF32 => assigned_box::qualify(file,ctl,budget),
+            Self::MedianAssignedF32 => assigned_median::qualify(file,ctl,budget),
             Self::BoxOriginal => residual::opaque_original(file, "gegl:box-blur", ctl, budget),
             Self::MedianOriginal => residual::opaque_original(file, "gegl:median-blur", ctl, budget),
             Self::MotionOriginal => residual::opaque_original(file, "gegl:motion-blur-linear", ctl, budget),

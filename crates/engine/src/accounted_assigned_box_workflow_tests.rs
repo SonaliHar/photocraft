@@ -134,8 +134,8 @@ fn assigned_readonly_and_failed_publication() {
     for (cmd, p) in [
         ("layer.setProps", json!({"name":"denied"})),
         ("layer.translate", json!({"dx":1})),
-        ("xcf.filter.set", json!({"filterId":id,"enabled":true})),
-        ("xcf.filter.enable", json!({"filterId":id,"enabled":false})),
+        ("xcf.filter.set", json!({"filterId":id,"enabled":true,"arguments":[]})),
+        ("xcf.filter.move", json!({"filterId":id,"index":0})),
         ("select.all", Value::Null),
         ("edit.clear", Value::Null),
     ] {

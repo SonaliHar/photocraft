@@ -203,14 +203,56 @@ fn pre_dispatch(session: &Session, id: &str, params: &Value) -> Result<()> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum EditStorage {
+    ImplicitPoint,
+    AssignedBox,
+}
+/// Routing hint only. Full assigned storage/profile/native qualification still
+/// runs before either equal or changed activation can be accepted.
+pub(super) fn assigned_enabled_candidate(owner: &AccountedDocument) -> bool {
+    owner.is_readonly_assigned_point_storage()
+        && owner.document().xcf_state.as_ref().is_some_and(|state| {
+            matches!(state.filter_stacks.as_slice(), [stack] if matches!(stack.nodes.as_slice(), [node] if node.operation.name == "gegl:box-blur"))
+        })
+}
+fn assigned_enabled_fields<'a>(id: &str, params: &'a Value) -> Option<Fields<'a>> {
+    if !matches!(id,"xcf.filter.set"|"xcf.filter.enable") { return None; }
+    let object=params.as_object()?;
+    if object.len()!=2 || object.keys().any(|key| !matches!(key.as_str(),"filterId"|"enabled")) { return None; }
+    wire(id,params).filter(|fields|fields.enabled.is_some())
+}
+/// Cheap borrowed eligibility; never invokes upstream helpers with an unpaid
+/// work control. Actual parse and preparation repeat it under the real ledger.
+pub(super) fn assigned_enabled_wire_valid(id: &str, params: &Value) -> bool {
+    assigned_enabled_fields(id,params).is_some()
+}
 pub(super) struct Request<'a> {
     id: &'static str,
     params: &'a Value,
     fields: Fields<'a>,
     structured: Option<structured::Plan>,
     move_to: Option<usize>,
+    storage: EditStorage,
 }
 impl<'a> Request<'a> {
+    /// Assigned storage does not inherit the implicit Point patch parser.
+    /// Only the existing two-field activation wire is admitted here.
+    pub(super) fn parse_assigned_enabled(session: &Session, id: &str, params: &'a Value, ctl: &ReadControl<'_>) -> Result<Self> {
+        ctl.check(32768)?;
+        let id = match id {
+            "xcf.filter.set" => "xcf.filter.set",
+            "xcf.filter.enable" => "xcf.filter.enable",
+            _ => return Err(BackingError::Unsupported.into()),
+        };
+        let fields=assigned_enabled_fields(id,params).ok_or_else(||bad(id,"assigned activation requires only canonical filterId and boolean enabled"))?;
+        let owner=session.active().and_then(|state|state.doc.accounted()).ok_or(BackingError::Unsupported)?;
+        if !assigned_enabled_candidate(owner) { return Err(BackingError::Unsupported.into()); }
+        ctl.check(32768)?;
+        pre_dispatch(session,id,params)?;
+        if crate::xcf_filter_cmds::id(id,params)? != fields.filter { return Err(BackingError::Integrity.into()); }
+        Ok(Self { id,params,fields,structured:None,move_to:None,storage:EditStorage::AssignedBox })
+    }
     pub(super) fn parse(session: &Session, id: &str, params: &'a Value, ctl: &ReadControl<'_>) -> Result<Self> {
         ctl.check(32768)?;
         let id = match id {
@@ -240,12 +282,20 @@ impl<'a> Request<'a> {
         if crate::xcf_filter_cmds::id(id, params)? != fields.filter {
             return Err(BackingError::Integrity.into());
         }
-        Ok(Self { id, params, fields, structured, move_to })
+        Ok(Self { id, params, fields, structured, move_to, storage:EditStorage::ImplicitPoint })
     }
     pub(super) fn prepare(self, session: &Session, ctl: &ReadControl<'_>) -> Result<Prepared<'a>> {
         let state = session.active().ok_or(EngineError::NoDocument)?;
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
-        owner.validate_readonly_point_storage(ctl)?;
+        match self.storage {
+            EditStorage::ImplicitPoint => owner.validate_readonly_point_storage(ctl)?,
+            EditStorage::AssignedBox => {
+                owner.validate_readonly_assigned_point_storage(ctl)?;
+                ctl.check(1)?;
+                if !state.history.current()?.shares_state(&state.doc) { return Err(BackingError::Integrity.into()); }
+                if !assigned_enabled_candidate(owner) { return Err(BackingError::Unsupported.into()); }
+            }
+        }
         let xcf = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
         let stack = xcf.filter_stacks.first().ok_or(BackingError::Integrity)?;
         if stack.nodes.is_empty() || stack.nodes.len() > 2 {
@@ -336,7 +386,14 @@ impl<'a> Request<'a> {
         validate_recipe(owner, ctl)?;
         // Fixed stack storage retains the original argument names and enum domains.
         // No parser proxy or per-operation arithmetic is reconstructed here.
-        let staged = if let Some(index) = self.move_to {
+        let staged = if matches!(self.storage,EditStorage::AssignedBox) {
+            owner.try_with_readonly_assigned_point_enabled(
+                photocraft_doc::accounted_document::AssignedPointEnabledPatch {
+                    layer,filter:self.fields.filter,expected_stack_revision:stack.revision,
+                    enabled:self.fields.enabled.ok_or(BackingError::Integrity)?,
+                },ctl,
+            )?
+        } else if let Some(index) = self.move_to {
             owner.try_move_readonly_point_filter(
                 photocraft_doc::accounted_document::PointFilterMovePatch { layer, filter: self.fields.filter, expected_stack_revision: stack.revision, index },
                 ctl,
@@ -596,3 +653,7 @@ mod remove_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "point_empty_lifecycle_tests.rs"]
 mod empty_lifecycle_tests;
+
+#[cfg(all(test, feature="corpus", not(target_arch="wasm32")))]
+#[path="point_assigned_enabled_tests.rs"]
+mod assigned_enabled_tests;

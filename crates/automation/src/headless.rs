@@ -1010,3 +1010,10 @@ mod owned_lch_flat_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_assigned_box_tests.rs"]
 mod owned_assigned_box_tests;
+
+#[cfg(all(test, not(target_arch="wasm32")))]
+#[path="headless/owned_assigned_box_enabled_tests.rs"]
+mod owned_assigned_box_enabled_tests;
+#[cfg(all(test, not(target_arch="wasm32")))]
+#[path="headless/owned_assigned_median_tests.rs"]
+mod owned_assigned_median_tests;

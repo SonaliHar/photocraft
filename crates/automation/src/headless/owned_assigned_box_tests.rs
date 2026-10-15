@@ -64,7 +64,7 @@ fn assigned_box_headless_remains_read_only_across_paid_native_continuation() {
         for (command, params) in [
             ("layer.setProps", json!({"name":"closed"})),
             ("layer.translate", json!({"dx":1})),
-            ("xcf.filter.enable", json!({"filterId":id,"enabled":false})),
+            ("xcf.filter.move", json!({"filterId":id,"index":0})),
             ("xcf.filter.set", json!({"filterId":id,"arguments":[{"name":"radius","value":{"Number":{"Signed":{"value":5,"width":32}}}}]})),
             ("select.all", Value::Null),
             ("edit.clear", Value::Null),

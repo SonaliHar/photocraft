@@ -1,5 +1,8 @@
 //! Explicit assigned-profile custody; no profile, operation or source proof.
 use super::*;
+#[path = "assigned_enabled.rs"]
+pub(super) mod enabled;
+pub use enabled::AssignedPointEnabledPatch;
 impl AccountedDocument {
     /// Extra owner/header only. Existing model, both ICC owners and native
     /// allocations must already be paid on this actual ledger by retention.

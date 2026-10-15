@@ -93,6 +93,19 @@ impl<L> ProfileBinding<L> {
         }
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AssignedRecipe {
+    Box,
+    Median,
+}
+impl AssignedRecipe {
+    fn operation(self) -> &'static str {
+        match self {
+            Self::Box => "gegl:box-blur",
+            Self::Median => "gegl:median-blur",
+        }
+    }
+}
 struct Plan<L> {
     stack: OrderedStack,
     _profile: ProfileBinding<L>,
@@ -121,6 +134,18 @@ fn prepare_mode<B: PlanBudget>(
     assigned: bool,
     current: bool,
 ) -> Result<(Plan<B::Lease>, B::Lease), E> {
+    prepare_recipe(doc, supplied, header, interrupt, b, if assigned { Some(AssignedRecipe::Box) } else { None }, current)
+}
+fn prepare_recipe<B: PlanBudget>(
+    doc: &Document,
+    supplied: Option<&Profile>,
+    header: u64,
+    interrupt: &Interrupt<'_>,
+    b: &mut B,
+    recipe: Option<AssignedRecipe>,
+    current: bool,
+) -> Result<(Plan<B::Lease>, B::Lease), E> {
+    let assigned = recipe.is_some();
     b.check(32768)?;
     interrupt.check().map_err(|_| E::Backing(BackingError::Cancelled))?;
     let [layer] = doc.layers.as_slice() else { return Err(scope()) };
@@ -158,10 +183,13 @@ fn prepare_mode<B: PlanBudget>(
             || doc.mode != ColorMode::Rgb
             || doc.depth != SampleType::F32
             || source.source_precision != 650
-            || node.operation.name != "gegl:box-blur"
+            || recipe.is_none_or(|recipe| node.operation.name != recipe.operation())
             || node.mask.is_none()
             || state.filter_masks.len() != 1)
     {
+        return Err(scope());
+    }
+    if recipe == Some(AssignedRecipe::Median) && node.composition.as_ref().is_none_or(|policy| policy.compatibility_epoch != "xcf22-rgb-alpha-median-v1") {
         return Err(scope());
     }
     if finite {
@@ -251,7 +279,7 @@ fn prepare_mode<B: PlanBudget>(
         Some(basis) => basis,
         None => profile.profile(),
     };
-    if assigned {
+    if recipe == Some(AssignedRecipe::Box) {
         let semantic = photocraft_cms::xcf_color::assigned_effective_planning_work_ceiling(basis, photocraft_cms::xcf_color::Encoding::NonlinearProfile)
             .map_err(|e| match e {
                 photocraft_cms::control::Error::Cancelled => E::Backing(BackingError::Cancelled),
@@ -308,6 +336,23 @@ impl<S, L> LeasedStockNeighborhoodPipeline<S, L> {
             })?;
         Ok(Self { _plan: plan, _source: source_lease, _lease: lease })
     }
+    /// Exact assigned Median source preparation, without evaluating native pixels.
+    /// Original admission remains sealed in the source mapper.
+    pub fn new_assigned_median_budgeted<B: PreparationBudget<Lease = L>>(
+        doc: &Document,
+        interrupt: &Interrupt<'_>,
+        budget: &mut B,
+        source_lease: S,
+    ) -> Result<Self, CompositionError> {
+        let (plan, lease) =
+            prepare_recipe(doc, None, std::mem::size_of::<Self>() as u64 + 128, interrupt, &mut Shared { budget }, Some(AssignedRecipe::Median), false)
+                .map_err(|e| match e {
+                    E::Color(e) => e,
+                    E::Backing(BackingError::Cancelled) => photocraft_raster::RasterInputError::Cancelled.into(),
+                    _ => CompositionError::Unsupported("assigned Median preparation"),
+                })?;
+        Ok(Self { _plan: plan, _source: source_lease, _lease: lease })
+    }
 }
 pub struct PreparedBackedNeighborhoodContext<'a> {
     derived: OwnedNeighborhoodSurface,
@@ -330,7 +375,41 @@ impl<'a> PreparedBackedNeighborhoodContext<'a> {
     pub fn new_assigned_box(owner: &'a AccountedDocument, limits: NormalBandLimits, c: &ReadControl<'_>) -> Result<Self, E> {
         Self::new_mode(owner, None, limits, c, true)
     }
+    /// Exact assigned Median CURRENT context. It shares profile custody with
+    /// Box but keeps its six-field encoded-pixel recipe independent.
+    pub fn new_assigned_median(owner: &'a AccountedDocument, limits: NormalBandLimits, c: &ReadControl<'_>) -> Result<Self, E> {
+        Self::new_recipe(owner, None, limits, c, Some(AssignedRecipe::Median))
+    }
+    /// Actual assigned-class dispatcher. A selected recipe failure is final;
+    /// unknown operations never retry the implicit or another assigned lane.
+    pub fn new_assigned(owner: &'a AccountedDocument, limits: NormalBandLimits, c: &ReadControl<'_>) -> Result<Self, E> {
+        c.check(1).map_err(E::Backing)?;
+        owner.validate_readonly_assigned_point_storage(c).map_err(E::Backing)?;
+        let state = owner.document().xcf_state.as_ref().ok_or_else(scope)?;
+        let [stack] = state.filter_stacks.as_slice() else { return Err(scope()) };
+        let [node] = stack.nodes.as_slice() else { return Err(scope()) };
+        if node.operation.name.len() > 128 {
+            return Err(scope());
+        }
+        c.check(128).map_err(E::Backing)?;
+        let recipe = match node.operation.name.as_str() {
+            "gegl:box-blur" => AssignedRecipe::Box,
+            "gegl:median-blur" => AssignedRecipe::Median,
+            _ => return Err(scope()),
+        };
+        Self::new_recipe(owner, None, limits, c, Some(recipe))
+    }
     fn new_mode(owner: &'a AccountedDocument, profile: Option<&Profile>, limits: NormalBandLimits, c: &ReadControl<'_>, assigned: bool) -> Result<Self, E> {
+        Self::new_recipe(owner, profile, limits, c, if assigned { Some(AssignedRecipe::Box) } else { None })
+    }
+    fn new_recipe(
+        owner: &'a AccountedDocument,
+        profile: Option<&Profile>,
+        limits: NormalBandLimits,
+        c: &ReadControl<'_>,
+        recipe: Option<AssignedRecipe>,
+    ) -> Result<Self, E> {
+        let assigned = recipe.is_some();
         c.check(1).map_err(E::Backing)?;
         let max = NormalBandLimits::default();
         if limits.max_rows == 0 || limits.max_rows > max.max_rows || limits.max_pixels == 0 || limits.max_pixels > max.max_pixels {
@@ -339,13 +418,13 @@ impl<'a> PreparedBackedNeighborhoodContext<'a> {
         if assigned { owner.validate_readonly_assigned_point_storage(c) } else { owner.validate_readonly_point_storage(c) }.map_err(E::Backing)?;
         let header = std::mem::size_of::<Self>() as u64 + 128;
         let lease = owner.quota().reserve(QuotaKind::Index, header).map_err(E::Quota)?;
-        let (plan, plan_lease) = prepare_mode(
+        let (plan, plan_lease) = prepare_recipe(
             owner.document(),
             profile,
             std::mem::size_of::<Plan<QuotaLease>>() as u64 + 128,
             c.interrupt,
             &mut NativeBudget { q: owner.quota(), c },
-            assigned,
+            recipe,
             true,
         )?;
         let prepared = RetainedPlan { plan, _lease: plan_lease };

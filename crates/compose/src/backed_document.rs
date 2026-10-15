@@ -118,7 +118,7 @@ impl<'a> PreparedBackedDocument<'a> {
             return Ok(Self { stack: DocumentCompositor::GaussianGroup(prepared), limits, quota: owner.quota().clone(), bounds: owner.document().bounds(), _index: index });
         }
         if owner.is_readonly_assigned_point_storage() {
-            let prepared = crate::backed_neighborhood_document::PreparedBackedNeighborhoodDocument::new_assigned_box(owner, limits, control)?;
+            let prepared = crate::backed_neighborhood_document::PreparedBackedNeighborhoodDocument::new_assigned(owner, limits, control)?;
             let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
             let bounds = prepared.bounds();
             control.check(1).map_err(BackedNormalError::Backing)?;

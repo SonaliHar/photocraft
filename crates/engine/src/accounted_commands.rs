@@ -134,6 +134,9 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
         return Ok(Request::Clear(params));
     }
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove") {
+        if session.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_assigned_point_storage()) {
+            return Ok(Request::Point(point::Request::parse_assigned_enabled(session,id,params,control)?));
+        }
         if session.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_gaussian_group_storage()) {
             return Ok(Request::GaussianGroup(gaussian_group::Request::parse(session,id,params,control)?));
         }
@@ -295,7 +298,7 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
         && !state
             .doc
             .accounted()
-            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_gaussian_group_storage())
+            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_gaussian_group_storage() || point::assigned_enabled_candidate(owner))
     {
         return Ok(Some("this accounted filter storage has no qualified editing recipe"));
     }
@@ -317,7 +320,11 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     // Null is the existing enabled-query shape, not a layer-property call.
     // Do not disable a menu because its eventual call parameters are absent.
     if !params.is_null() {
-        request(session, id, params, &crate::read_control_none())?;
+        if matches!(id,"xcf.filter.set"|"xcf.filter.enable") && state.doc.accounted().is_some_and(|owner|owner.is_readonly_assigned_point_storage()) {
+            if !point::assigned_enabled_wire_valid(id,params) { return Err(bad(id,"assigned activation requires only filterId and enabled")); }
+        } else {
+            request(session, id, params, &crate::read_control_none())?;
+        }
     }
     Ok(match id {
         "select.deselect" if state.doc.selection.is_none() => Some("no selection"),

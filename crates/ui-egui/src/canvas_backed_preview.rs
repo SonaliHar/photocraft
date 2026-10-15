@@ -293,3 +293,10 @@ mod lch_flat_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_assigned_box_tests.rs"]
 mod assigned_box_tests;
+
+#[cfg(all(test, not(target_arch="wasm32")))]
+#[path="canvas_backed_assigned_box_enabled_tests.rs"]
+mod assigned_box_enabled_tests;
+#[cfg(all(test, not(target_arch="wasm32")))]
+#[path="canvas_backed_assigned_median_tests.rs"]
+mod assigned_median_tests;

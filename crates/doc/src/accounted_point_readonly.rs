@@ -410,6 +410,7 @@ fn measured_owner(owner: &AccountedDocument, doc: &Document, control: &ReadContr
 }
 #[path = "accounted_point_readonly/assigned.rs"]
 mod assigned;
+pub use assigned::AssignedPointEnabledPatch;
 impl AccountedDocument {
     /// Prospective additional owner metadata only. All existing model/source/
     /// native/default/map allocations must already be genuinely retained on q.
@@ -509,6 +510,7 @@ struct OriginalRetention {
 #[derive(Clone, Copy)]
 pub(super) enum CopyKind<'a> {
     Rename(&'a str),
+    AssignedEnabled(assigned::enabled::Plan),
     LayerName(ReadonlyLayerNamePatch<'a>),
     LayerProperties(readonly_layer_properties::Plan<'a>),
     Filter(patch::Plan),
@@ -536,14 +538,16 @@ pub(super) fn current_copy(
     kind: CopyKind<'_>,
     control: &ReadControl<'_>,
 ) -> Result<AccountedDocument, BackingError> {
-    if owner.is_readonly_assigned_point_storage() && !matches!(kind, CopyKind::Rename(_)) {
+    if owner.is_readonly_assigned_point_storage() && !matches!(kind, CopyKind::Rename(_) | CopyKind::AssignedEnabled(_))
+        || !owner.is_readonly_assigned_point_storage() && matches!(kind, CopyKind::AssignedEnabled(_))
+    {
         return refused();
     }
     let replacement_name_bytes = match kind {
         CopyKind::Rename(name) => name.len() as u64,
         CopyKind::LayerName(patch) => (patch.name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
         CopyKind::LayerProperties(plan) => plan.replacement_name_bytes()?,
-        CopyKind::Filter(_) | CopyKind::Structured(_) | CopyKind::Move(_) | CopyKind::Remove(_) => 0,
+        CopyKind::AssignedEnabled(_) | CopyKind::Filter(_) | CopyKind::Structured(_) | CopyKind::Move(_) | CopyKind::Remove(_) => 0,
     };
     let replacement_value_bytes = match kind {
         CopyKind::Structured(plan) => plan.copy_index_bytes(),
@@ -596,6 +600,7 @@ pub(super) fn current_copy(
     }
     match kind {
         CopyKind::Rename(name) => document.name = imported_edits::copy_name(name, control)?,
+        CopyKind::AssignedEnabled(plan) => assigned::enabled::apply(&mut document, plan, control)?,
         CopyKind::LayerName(patch) => readonly_layer_name::apply(&mut document, patch, control)?,
         CopyKind::LayerProperties(plan) => readonly_layer_properties::apply(&mut document, plan, control)?,
         CopyKind::Filter(plan) => patch::apply(&mut document, plan, control)?,

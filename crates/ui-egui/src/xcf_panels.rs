@@ -8,6 +8,7 @@ use photocraft_doc::{
 use serde_json::json;
 mod alpha_clip;
 mod alpha_clip_finite;
+mod assigned_box;
 mod channel_mixer;
 mod color_overlay;
 mod color_rotate;
@@ -327,7 +328,8 @@ pub(crate) fn filter_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, laye
             let red_eye = node.operation.name == "gegl:red-eye-removal";
             let alpha_clip_finite = alpha_clip && node.operation.schema_epoch == alpha_clip_finite::EPOCH;
             let literal_colors = color_exchange || color_to_alpha || color_overlay;
-            let editable = unlocked && photocraft_engine::xcf_filter_cmds::scalar_edit_candidate(node)
+            let assigned = document.accounted().is_some_and(|owner| owner.is_readonly_assigned_point_storage());
+            let editable = unlocked && !assigned && photocraft_engine::xcf_filter_cmds::scalar_edit_candidate(node)
                 && (!color_exchange || literal_color::valid_arguments(&node.arguments))
                 && (!red_eye || node.operation.stored_version == "0:0"
                     && matches!(node.operation.schema_epoch.as_str(), red_eye::EPOCH | photocraft_compose::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH)
@@ -342,9 +344,11 @@ pub(crate) fn filter_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, laye
             let caption: String = node.source_display_name.as_deref().filter(|name| !name.is_empty()).unwrap_or(&node.operation.name).chars().take(128).collect();
             ui.horizontal_wrapped(|ui| {
                 let mut enabled = node.enabled;
-                let activation_editable = editable || (unlocked
+                let activation_editable = if assigned {
+                    unlocked && assigned_box::candidate(&document, layer, node)
+                } else { editable || (unlocked
                     && document.layer(layer).is_some_and(|owner| matches!(owner.content, photocraft_doc::LayerContent::Group(_)))
-                    && photocraft_engine::xcf_filter_cmds::activation_edit_candidate(&document, node));
+                    && photocraft_engine::xcf_filter_cmds::activation_edit_candidate(&document, node)) };
                 if ui.add_enabled(activation_editable, egui::Checkbox::new(&mut enabled, caption)).changed() {
                     run_checked(app, &document, revision, "xcf.filter.enable", json!({"filterId":node.id.0.to_string(),"enabled":enabled}));
                 }
@@ -607,7 +611,10 @@ pub(crate) fn filter_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, laye
                 }
             }
             if !editable {
-                ui.label(egui::RichText::new(if unlocked { tl!("Filter editing is unavailable") } else { tl!("Layer content is locked") }).color(tokens.text_dim));
+                let message = if !unlocked { tl!("Layer content is locked") }
+                    else if assigned && assigned_box::candidate(&document, layer, node) { tl!("Filter parameters are read-only") }
+                    else { tl!("Filter editing is unavailable") };
+                ui.label(egui::RichText::new(message).color(tokens.text_dim));
             }
         });
     }

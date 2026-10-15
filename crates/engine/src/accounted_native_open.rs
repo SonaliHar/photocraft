@@ -194,7 +194,7 @@ pub(crate) fn validate_current_stock_point_storage(owner: &photocraft_doc::accou
 pub(crate) fn validate_current_owned_filter_storage(owner: &photocraft_doc::accounted_document::AccountedDocument, control: &ReadControl<'_>) -> Result<()> {
     control.check(1)?;
     if owner.is_readonly_assigned_point_storage() {
-        let prepared=photocraft_compose::backed_neighborhood_context::PreparedBackedNeighborhoodContext::new_assigned_box(owner,Default::default(),control).map_err(|e|point_error(e,control))?;
+        let prepared=photocraft_compose::backed_neighborhood_context::PreparedBackedNeighborhoodContext::new_assigned(owner,Default::default(),control).map_err(|e|point_error(e,control))?;
         prepared.validate_operative(control).map_err(|e|point_error(e,control))?;
         drop(prepared);control.check(1)?;return Ok(());
     }
@@ -588,3 +588,7 @@ mod separable_blend_workflow_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_assigned_box_workflow_tests.rs"]
 mod assigned_box_workflow_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_assigned_median_workflow_tests.rs"]
+mod assigned_median_workflow_tests;

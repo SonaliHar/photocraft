@@ -50,6 +50,16 @@ impl<'a> PreparedBackedNeighborhoodDocument<'a> {
         control.check(0).map_err(BackedNormalError::Backing)?;
         Ok(result)
     }
+    /// Closed assigned recipe dispatch over the actual storage owner.
+    pub fn new_assigned(owner: &'a AccountedDocument, limits: NormalBandLimits, control: &ReadControl<'_>) -> Result<Self, BackedNormalError> {
+        control.check(1).map_err(BackedNormalError::Backing)?;
+        let header = (std::mem::size_of::<Self>() as u64).checked_add(128).ok_or_else(invalid)?;
+        let lease = owner.quota().reserve(QuotaKind::Index, header).map_err(BackedNormalError::Quota)?;
+        let context = PreparedBackedNeighborhoodContext::new_assigned(owner, limits, control)?;
+        let result = Self { context, bounds: owner.document().bounds(), quota: owner.quota().clone(), limits, _lease: lease };
+        control.check(0).map_err(BackedNormalError::Backing)?;
+        Ok(result)
+    }
     pub fn bounds(&self) -> Rect {
         self.bounds
     }

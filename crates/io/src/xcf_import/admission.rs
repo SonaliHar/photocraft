@@ -4,6 +4,7 @@ use super::*;
 #[derive(Default)]
 pub(super) struct AdmissionDomains {
     pub(super) owned_assigned_box_domain: bool,
+    pub(super) owned_assigned_median_domain: bool,
     pub(super) general_separable_domain: bool,
     pub(super) legacy_separable_domain: bool,
     pub(super) component_separable_domain: bool,
@@ -76,6 +77,7 @@ pub(super) fn classify(file: &XcfFile, ctl: &Interrupt<'_>, preparation: Option<
     let composition_command_domain = qualified_composition_command(file);
     Ok(AdmissionDomains {
         owned_assigned_box_domain:false,
+        owned_assigned_median_domain:false,
         general_separable_domain: false,
         legacy_separable_domain: false,
         component_separable_domain: false,

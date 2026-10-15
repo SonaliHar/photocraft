@@ -274,3 +274,6 @@ fn original_effective_and_image_fees_overlap_and_source_current_failure_refunds_
     assert_eq!(q.usage().unwrap(), before);
     drop(guard);
 }
+
+#[path = "backed_neighborhood_assigned_median_tests.rs"]
+mod median;

@@ -175,11 +175,16 @@ fn assigned(q: &BackingQuota) -> (Document, Arc<SourceGuard>) {
     doc.working_profile_interpretation = crate::WorkingProfileInterpretation::Icc;
     (doc, guard)
 }
-fn owner() -> AccountedDocument {
+pub(super) fn owner() -> AccountedDocument {
+    owner_at_revision(u64::MAX)
+}
+pub(super) fn owner_at_revision(revision: u64) -> AccountedDocument {
     let q = quota();
-    let (doc, guard) = assigned(&q);
+    let (mut doc, guard) = assigned(&q);
+    doc.xcf_state.as_mut().unwrap().filter_stacks[0].revision = revision;
     AccountedDocument::new_readonly_assigned_point_storage(doc, guard, q, &ctl()).unwrap()
 }
+
 #[test]
 #[ignore = "UNRUN assigned Point custody; not source/profile qualification"]
 fn two_actual_profile_capacities_are_retained_and_requirements_only_add_header() {

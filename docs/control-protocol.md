@@ -1819,3 +1819,19 @@ decoded and retained without clamp. The new Box gate follows the existing finite
 RGB/unit-alpha equation domain; every other source/profile gate stays exact.
 Four missing loose producer ICC captures remain HOLD. Tests and numerical/profile
 acceptance remain deferred.
+Assigned-profile F32 Median now shares the paid original/generated-current
+profile relation with dedicated exact source/CURRENT constructors. Its existing
+encoded quantized/high-precision kernels are unchanged, with finite RGB/unit
+alpha and complete native/default/mask validation. The actual-class dispatcher
+selects Box or Median with no retry; public Box-only constructors stay exact.
+
+Assigned Box supports enable-only changes through the existing xcf.filter.set
+and xcf.filter.enable commands, each with exactly filterId/enabled. Complete old
+and staged validation, locks, captured state, actual history-current equality,
+finite work and existing paid publication fences precede commit, including no-op.
+UI exposes its activation checkbox and labels parameters read-only. Median
+activation, arguments, metadata, Move and other edits remain unsupported here.
+L1 activation patches are structural data operations; engine qualification
+supplies command authority. Save/reopen continuation uses native .pcraft files;
+XCF writing is outside this feature. Tests and visual/numerical/profile acceptance
+remain deferred, and missing producer ICC captures remain HOLD.

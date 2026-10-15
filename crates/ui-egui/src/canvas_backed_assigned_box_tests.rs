@@ -85,7 +85,7 @@ fn assigned_box_ui_uses_paid_profile_owner_and_read_only_transport() {
         for (command, params) in [
             ("layer.setProps", json!({"name":"closed"})),
             ("layer.translate", json!({"dx":1})),
-            ("xcf.filter.enable", json!({"filterId":id,"enabled":false})),
+            ("xcf.filter.set", json!({"filterId":id,"enabled":false,"arguments":[]})),
             ("select.all", Value::Null),
             ("edit.clear", Value::Null),
         ] {

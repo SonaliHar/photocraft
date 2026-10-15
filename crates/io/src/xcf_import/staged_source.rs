@@ -56,7 +56,7 @@ pub(super) enum SelectedStagedFamily {
     Neighborhood(NeighborhoodSourceFamily),
 }
 impl SelectedStagedFamily {
-    pub(super) fn assigned_point_storage(self)->bool { matches!(self,Self::Neighborhood(NeighborhoodSourceFamily::BoxAssignedF32)) }
+    pub(super) fn assigned_point_storage(self)->bool { matches!(self,Self::Neighborhood(NeighborhoodSourceFamily::BoxAssignedF32 | NeighborhoodSourceFamily::MedianAssignedF32)) }
 }
 impl std::fmt::Debug for SelectedStagedFamily {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -450,6 +450,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         P::SOURCE_SELECTED && point_domain
     }
     fn requires_budgeted_assigned_box_preparation(domain: bool) -> bool {P::SOURCE_SELECTED && domain}
+    fn requires_budgeted_assigned_median_preparation(domain: bool) -> bool {P::SOURCE_SELECTED && domain}
     fn requires_budgeted_neighborhood_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn requires_budgeted_gaussian_group_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn requires_budgeted_lab_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
@@ -459,7 +460,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn requires_budgeted_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn requires_budgeted_general_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn effective_profile(file: &XcfFile<Self>, space: photocraft_cms::ColorSpace, ce: photocraft_cms::xcf_color::Encoding, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<photocraft_cms::Profile, IoError> {
-        if matches!(P::family(file), SelectedStagedFamily::AnalyticGeometry | SelectedStagedFamily::IsolatedNormalGroup | SelectedStagedFamily::Neighborhood(NeighborhoodSourceFamily::BoxAssignedF32)) {
+        if matches!(P::family(file), SelectedStagedFamily::AnalyticGeometry | SelectedStagedFamily::IsolatedNormalGroup | SelectedStagedFamily::Neighborhood(NeighborhoodSourceFamily::BoxAssignedF32 | NeighborhoodSourceFamily::MedianAssignedF32)) {
             analytic_geometry::effective(file,space,ce,ctl,shared.ok_or_else(||IoError::Unsupported("geometry profile needs accounting".into()))?)
         }else{
             photocraft_cms::xcf_color::effective_profile(if file.icc.is_empty(){None}else{Some(&file.icc)},space,ce).map_err(|e|IoError::Unsupported(format!("XCF source profile/encoding: {e}")))

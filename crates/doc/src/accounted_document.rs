@@ -33,7 +33,7 @@ mod gaussian_group_readonly;
 mod flat_composite_readonly;
 pub use flat_composite_readonly::FlatCompositeCompositionPatch;
 pub use gaussian_group_readonly::{GaussianGroupEnabledPatch, GaussianGroupPatch};
-pub use point_readonly::{PointArgumentPatch, PointArgumentValue, PointFilterMovePatch, PointFilterPatch, PointFilterRemovePatch};
+pub use point_readonly::{AssignedPointEnabledPatch, PointArgumentPatch, PointArgumentValue, PointFilterMovePatch, PointFilterPatch, PointFilterRemovePatch};
 pub use point_readonly::{
     PointArgumentShape, PointStructuredArgumentPatch, PointStructuredFilterPatch,
     point_argument_shape, point_argument_shape_with, point_value_shape, point_values_equal, point_values_same_shape,
