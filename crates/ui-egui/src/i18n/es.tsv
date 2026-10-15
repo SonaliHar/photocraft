@@ -2786,3 +2786,23 @@ curves	Smooth	Suavizar
 	Step {step} is waiting for its dialog	El paso {step} está esperando su cuadro de diálogo
 @plural	{n} action|{n} actions	{n} acción|{n} acciones
 	Auto Add/Delete	Añadir/eliminar automáticamente
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Texto alternativo de la imagen
+	Ask anything	Pregunte lo que quiera
+	Ask in any language	Pregunte en cualquier idioma
+	Assistant	Asistente
+	Best for: a step up in quality, still light	Ideal para: un escalón más de calidad, sin dejar de ser ligero
+	Best for: balanced everyday and technical work	Ideal para: equilibrar lo cotidiano y lo técnico
+	Best for: everyday help on the lightest machines	Ideal para: ayuda cotidiana en las máquinas más ligeras
+	Best for: near-flagship answers at MoE speed	Ideal para: respuestas casi de gama alta a la velocidad de MoE
+	Best for: the deepest reasoning this family has	Ideal para: el razonamiento más profundo de esta familia
+	Export recipe	Receta de exportación
+	Layers and masks strategy	Estrategia de capas y máscaras
+	Menu path finder	Buscador de rutas de menú
+	Retouch plan	Plan de retoque
+	The flaws to fix — spots, wrinkles, objects, noise	Los defectos a corregir — manchas, arrugas, objetos, ruido
+	What the image is made of, and what should change	De qué está hecha la imagen y qué debe cambiar
+	The image and who the text is for	La imagen y para quién es el texto
+	What you want to do, in your own words	Lo que quieres hacer, en tus palabras
+	Where the file goes and what matters (size, quality, format)	A dónde va el archivo y qué importa (tamaño, calidad, formato)

@@ -3894,3 +3894,23 @@ layerLabel	No Color	Sem cor
 	Step {step} is waiting for its dialog	A etapa {step} está aguardando sua caixa de diálogo
 @plural	{n} action|{n} actions	{n} ação|{n} ações
 	Auto Add/Delete	Adicionar/excluir automaticamente
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Texto alternativo da imagem
+	Ask anything	Pergunte qualquer coisa
+	Ask in any language	Pergunte em qualquer idioma
+	Assistant	Assistente
+	Best for: a step up in quality, still light	Melhor para: um degrau a mais de qualidade, ainda leve
+	Best for: balanced everyday and technical work	Melhor para: equilibrar o cotidiano e o técnico
+	Best for: everyday help on the lightest machines	Melhor para: ajuda do dia a dia nas máquinas mais leves
+	Best for: near-flagship answers at MoE speed	Melhor para: respostas quase topo de linha na velocidade do MoE
+	Best for: the deepest reasoning this family has	Melhor para: o raciocínio mais profundo que esta família tem
+	Export recipe	Receita de exportação
+	Layers and masks strategy	Estratégia de camadas e máscaras
+	Menu path finder	Localizador de caminhos de menu
+	Retouch plan	Plano de retoque
+	The flaws to fix — spots, wrinkles, objects, noise	Os defeitos a corrigir — manchas, rugas, objetos, ruído
+	What the image is made of, and what should change	Do que a imagem é feita e o que deve mudar
+	The image and who the text is for	A imagem e para quem é o texto
+	What you want to do, in your own words	O que você quer fazer, com suas palavras
+	Where the file goes and what matters (size, quality, format)	Para onde o arquivo vai e o que importa (tamanho, qualidade, formato)

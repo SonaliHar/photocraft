@@ -3196,6 +3196,23 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+/// Craft AI: the ArtCraft family's built-in local assistant — a local Gemma model of the user's
+/// choosing, never a cloud service (Window › Craft AI). See `crate::craft_ai`.
+pub fn craft_ai_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let mut open = app.ui.panels.craft_ai;
+    if !open {
+        return;
+    }
+    egui::Window::new(tl!("Craft AI"))
+        .id(egui::Id::new(crate::craft_ai::ID))
+        .open(&mut open)
+        .default_size(egui::vec2(380.0, 520.0))
+        .show(ctx, |ui| crate::craft_ai::show(app, ui));
+    if !open {
+        app.ui.panels.craft_ai = false;
+    }
+}
+
 fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &photocraft_doc::Adjustment) {
     crate::adjust_editors::layer_editor(app, ui, id, adj);
     ui.add_space(6.0);

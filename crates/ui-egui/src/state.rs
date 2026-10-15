@@ -413,6 +413,10 @@ pub struct Panels {
     /// floating window rather than a modal so the canvas stays usable while a gradient is edited.
     #[serde(default)]
     pub gradient_editor: bool,
+    /// Window › Craft AI: the ArtCraft family's built-in local assistant, floating like Photoshop's
+    /// other studio windows (`craft_ai`).
+    #[serde(default)]
+    pub craft_ai: bool,
 }
 
 impl Default for Panels {
@@ -434,6 +438,7 @@ impl Default for Panels {
             rail: true,
             menu_bar: true,
             gradient_editor: false,
+            craft_ai: false,
         }
     }
 }

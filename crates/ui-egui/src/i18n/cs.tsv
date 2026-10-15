@@ -3712,3 +3712,23 @@ navigator	Zoom	Zvětšení
 	Step {step} is waiting for its dialog	Krok {step} čeká na svůj dialog
 @plural	{n} action|{n} actions	{n} akce|{n} akce|{n} akcí
 	Auto Add/Delete	Automaticky přidat/odstranit
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Alternativní text obrázku
+	Ask anything	Zeptejte se na cokoliv
+	Ask in any language	Ptejte se v jakémkoli jazyce
+	Assistant	Asistent
+	Best for: a step up in quality, still light	Nejlepší pro: o stuňek lepší kvalitu, pořád lehčí
+	Best for: balanced everyday and technical work	Nejlepší pro: vyváženou všední i technickou práci
+	Best for: everyday help on the lightest machines	Nejlepší pro: všední pomoc na nejlehčích strojích
+	Best for: near-flagship answers at MoE speed	Nejlepší pro: odpovědi těsně pod vlajkovou lodí, rychlostí MoE
+	Best for: the deepest reasoning this family has	Nejlepší pro: nejhlubší uvažování, jaké tato rodina má
+	Export recipe	Recept exportu
+	Layers and masks strategy	Strategie vrstev a masek
+	Menu path finder	Vyhledávač cest v nabídkách
+	Retouch plan	Plán retuše
+	The flaws to fix — spots, wrinkles, objects, noise	Vady k opravě — skvrny, vrásky, objekty, šum
+	What the image is made of, and what should change	Z čeho se obrázek skládá a co se má změnit
+	The image and who the text is for	Obrázek a pro koho text je
+	What you want to do, in your own words	Co chcete udělat, vlastními slovy
+	Where the file goes and what matters (size, quality, format)	Kam soubor jde a co záleží (velikost, kvalita, formát)

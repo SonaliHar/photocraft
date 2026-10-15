@@ -3803,3 +3803,23 @@ curves	Smooth	Згладити
 	Step {step} is waiting for its dialog	Крок {step} очікує на свій діалог
 @plural	{n} action|{n} actions	{n} операція|{n} операції|{n} операцій
 	Auto Add/Delete	Автододавання/видалення
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Альтернативний текст зображення
+	Ask anything	Питайте про що завгодно
+	Ask in any language	Питайте будь-якою мовою
+	Assistant	Асистент
+	Best for: a step up in quality, still light	Найкращий для: якість на сходинку вище, досі легкий
+	Best for: balanced everyday and technical work	Найкращий для: балансу повсякденного й технічного
+	Best for: everyday help on the lightest machines	Найкращий для: повсякменної допомоги на найлегших машинах
+	Best for: near-flagship answers at MoE speed	Найкращий для: відповідей майже флагманського рівня зі швидкістю MoE
+	Best for: the deepest reasoning this family has	Найкращий для: найглибшого міркування в цьому сімействі
+	Export recipe	Рецепт експорту
+	Layers and masks strategy	Стратегія шарів і масок
+	Menu path finder	Пошук шляху в меню
+	Retouch plan	План ретушування
+	The flaws to fix — spots, wrinkles, objects, noise	Вади, які треба виправити — плями, зморшки, обʼєкти, шум
+	What the image is made of, and what should change	З чого складається зображення і що має змінитися
+	The image and who the text is for	Зображення і для кого цей текст
+	What you want to do, in your own words	Що ви хочете зробити, своїми словами
+	Where the file goes and what matters (size, quality, format)	Куди йде файл і що важливо (розмір, якість, формат)

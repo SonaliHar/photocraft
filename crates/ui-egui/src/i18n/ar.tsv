@@ -2601,3 +2601,23 @@ curves	Smooth	تنعيم
 	Remove after each stroke	إزالة بعد كل ضربة
 	Apply the removal ({key})	تطبيق الإزالة ({key})
 	Strokes to remove: {n} (Enter applies, Esc cancels)	ضربات مراد إزالتها: {n} (Enter يطبق، Esc يلغي)
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	نص بديل للصورة
+	Ask anything	اسأل عن أي شيء
+	Ask in any language	اسأل بأي لغة
+	Assistant	المساعد
+	Best for: a step up in quality, still light	الأفضل لـ: درجة أعلى في الجودة مع بقائه خفيفًا
+	Best for: balanced everyday and technical work	الأفضل لـ: التوازن بين العمل اليومي والعمل التقني
+	Best for: everyday help on the lightest machines	الأفضل لـ: العون اليومي على أخفّ الأجهزة
+	Best for: near-flagship answers at MoE speed	الأفضل لـ: إجابات قريبة من الرائدة بسرعة خليط الخبراء (MoE)
+	Best for: the deepest reasoning this family has	الأفضل لـ: أعمق استدلال تملكه هذه العائلة
+	Export recipe	وصفة التصدير
+	Layers and masks strategy	استراتيجية الطبقات والأقنعة
+	Menu path finder	باحث مسار القوائم
+	Retouch plan	خطة الترقيم
+	The flaws to fix — spots, wrinkles, objects, noise	العيوب التي ستصلحها — بقع، تجاعيد، عناصر، تشويش
+	What the image is made of, and what should change	مم تتكون الصورة، وما يجب أن يتغير
+	The image and who the text is for	الصورة ولمن هذا النص
+	What you want to do, in your own words	ما تريد فعله، بكلماتك
+	Where the file goes and what matters (size, quality, format)	إلى أين يذهب الملف وما يهم (الحجم، الجودة، الصيغة)

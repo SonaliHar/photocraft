@@ -3275,3 +3275,23 @@ curves	Smooth	매끄럽게
 	Step {step} is waiting for its dialog	{step}단계가 대화 상자를 기다리고 있습니다
 @plural	{n} action|{n} actions	액션 {n}개
 	Auto Add/Delete	자동 추가/삭제
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	이미지 대체 텍스트
+	Ask anything	무엇이든 물어보기
+	Ask in any language	어느 언어로든 물어보세요
+	Assistant	어시스턴트
+	Best for: a step up in quality, still light	이런 용도에 최적: 한 단계 나은 품질, 여전히 가벼움
+	Best for: balanced everyday and technical work	이런 용도에 최적: 일상과 기술 작업의 균형
+	Best for: everyday help on the lightest machines	이런 용도에 최적: 가장 가벼운 컴퓨터에서의 일상적인 도움
+	Best for: near-flagship answers at MoE speed	이런 용도에 최적: MoE 속도로 기함급에 가까운 답변
+	Best for: the deepest reasoning this family has	이런 용도에 최적: 이 패밀리에서 가장 깊은 추론
+	Export recipe	내보내기 요령
+	Layers and masks strategy	레이어와 마스크 전략
+	Menu path finder	메뉴 경로 찾기
+	Retouch plan	보정 계획
+	The flaws to fix — spots, wrinkles, objects, noise	고칠 결함 — 반점, 주름, 사물, 노이즈
+	What the image is made of, and what should change	이미지의 구성과 바꿔야 할 것
+	The image and who the text is for	이미지와 텍스트를 읽을 사람
+	What you want to do, in your own words	하고 싶은 일을 직접 쓰기
+	Where the file goes and what matters (size, quality, format)	파일의 행선지와 중요점(크기·품질·형식)

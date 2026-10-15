@@ -3802,3 +3802,23 @@ curves	Smooth	Εξομάλυνση
 	Step {step} is waiting for its dialog	Το βήμα {step} περιμένει το παράθυρο διαλόγου του
 @plural	{n} action|{n} actions	{n} ενέργεια|{n} ενέργειες
 	Auto Add/Delete	Αυτόματη προσθήκη/διαγραφή
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Εναλλακτικό κείμενο εικόνας
+	Ask anything	Ρωτήστε ό,τι θέλετε
+	Ask in any language	Ρωτήστε σε οποιαδήποτε γλώσσα
+	Assistant	Βοηθός
+	Best for: a step up in quality, still light	Καλύτερο για: ένα επίπεδο πάνω σε ποιότητα, ακόμα ελαφρύ
+	Best for: balanced everyday and technical work	Καλύτερο για: ισορροπημένη καθημερινή και τεχνική δουλειά
+	Best for: everyday help on the lightest machines	Καλύτερο για: καθημερινή βοήθεια στους πιο ελαφριούς υπολογιστές
+	Best for: near-flagship answers at MoE speed	Καλύτερο για: σχεδόν κορυφαίες απαντήσεις με ταχύτητα MoE
+	Best for: the deepest reasoning this family has	Καλύτερο για: τη βαθύτερη συλλογιστική της οικογένειας
+	Export recipe	Συνταγή εξαγωγής
+	Layers and masks strategy	Στρατηγική στρωμάτων και μάσκων
+	Menu path finder	Εύρεση διαδρομής μενού
+	Retouch plan	Σχέδιο διόρθωσης
+	The flaws to fix — spots, wrinkles, objects, noise	Τα ελαττώματα προς διόρθωση — κηλίδες, ρυτίδες, αντικείμενα, θόρυβος
+	What the image is made of, and what should change	Από τι αποτελείται η εικόνα και τι πρέπει να αλλάξει
+	The image and who the text is for	Η εικόνα και για ποιον είναι το κείμενο
+	What you want to do, in your own words	Τι θέλετε να κάνετε, με δικά σας λόγια
+	Where the file goes and what matters (size, quality, format)	Πού πηγαίνει το αρχείο και τι μετράει (μέγεθος, ποιότητα, μορφή)

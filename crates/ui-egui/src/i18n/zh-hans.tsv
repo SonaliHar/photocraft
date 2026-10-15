@@ -2710,3 +2710,23 @@ curves	Smooth	平滑
 	Step {step} is waiting for its dialog	步骤 {step} 正在等待其对话框
 @plural	{n} action|{n} actions	{n} 个动作
 	Auto Add/Delete	自动添加/删除
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	图像替代文字
+	Ask anything	什么都可以问
+	Ask in any language	可以用任何语言提问
+	Assistant	助手
+	Best for: a step up in quality, still light	最适合：品质再上一阶，依然轻巧
+	Best for: balanced everyday and technical work	最适合：日常与技术工作并重
+	Best for: everyday help on the lightest machines	最适合：在最轻量的机器上处理日常事务
+	Best for: near-flagship answers at MoE speed	最适合：以 MoE 速度给出接近旗舰级的回答
+	Best for: the deepest reasoning this family has	最适合：这个系列中最深入的推理
+	Export recipe	导出方案
+	Layers and masks strategy	图层与蒙版策略
+	Menu path finder	菜单路径查找
+	Retouch plan	修饰方案
+	The flaws to fix — spots, wrinkles, objects, noise	要修复的瑕疵——斑点、皱纹、杂物、噪点
+	What the image is made of, and what should change	图像由什么构成、哪些要变
+	The image and who the text is for	图像与这段文字的读者
+	What you want to do, in your own words	想做什么，用自己的话
+	Where the file goes and what matters (size, quality, format)	文件去向与要点（大小、质量、格式）

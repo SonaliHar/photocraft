@@ -3702,3 +3702,23 @@ curves	Smooth	Wygładź
 	Step {step} is waiting for its dialog	Krok {step} czeka na swoje okno dialogowe
 @plural	{n} action|{n} actions	{n} operacja|{n} operacje|{n} operacji
 	Auto Add/Delete	Automatyczne dodawanie/usuwanie
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Tekst alternatywny obrazu
+	Ask anything	Zapytaj o cokolwiek
+	Ask in any language	Pytaj w dowolnym języku
+	Assistant	Asystent
+	Best for: a step up in quality, still light	Najlepszy do: o stopień lepszej jakości, wciąż lekki
+	Best for: balanced everyday and technical work	Najlepszy do: równowagi codziennej i technicznej pracy
+	Best for: everyday help on the lightest machines	Najlepszy do: codziennej pomocy na najlżejszych maszynach
+	Best for: near-flagship answers at MoE speed	Najlepszy do: odpowiedzi blisko flagowych z prędkością MoE
+	Best for: the deepest reasoning this family has	Najlepszy do: najgłębszego rozumowania w tej rodzinie
+	Export recipe	Recepta eksportu
+	Layers and masks strategy	Strategia warstw i masek
+	Menu path finder	Wyszukiwarka ścieżek menu
+	Retouch plan	Plan retuszu
+	The flaws to fix — spots, wrinkles, objects, noise	Wady do poprawienia — plamy, zmarszczki, obiekty, szum
+	What the image is made of, and what should change	Z czego składa się obraz i co ma się zmienić
+	The image and who the text is for	Obraz i dla kogo jest ten tekst
+	What you want to do, in your own words	Co chcesz zrobić, własnymi słowami
+	Where the file goes and what matters (size, quality, format)	Dokąd idzie plik i co ważne (rozmiar, jakość, format)

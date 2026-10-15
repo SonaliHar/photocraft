@@ -4025,3 +4025,23 @@ cameraRaw	Yellow	Sárga
 	Loaded Camera Raw settings from {file}	Camera Raw-beállítások betöltve innen: {file}
 	Loaded Camera Raw settings from {file} ({n} not supported)	Camera Raw-beállítások betöltve innen: {file} ({n} nem támogatott)
 	Auto Add/Delete	Automatikus hozzáadás/törlés
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Alt-szöveg a képhez
+	Ask anything	Kérdezzen bármit
+	Ask in any language	Kérdezzen bármely nyelven
+	Assistant	Asszisztens
+	Best for: a step up in quality, still light	Erre való a leginkább: egy fokkal jobb minőség, még mindig könnyű
+	Best for: balanced everyday and technical work	Erre való a leginkább: hétköznapi és szakmai munka egyensúlyban
+	Best for: everyday help on the lightest machines	Erre való a leginkább: hétköznapi segítség a legkönnyebb gépeken
+	Best for: near-flagship answers at MoE speed	Erre való a leginkább: zászlóshajó közeli válaszok MoE-sebességgel
+	Best for: the deepest reasoning this family has	Erre való a leginkább: a legmélyebb gondolkodás ebben a családban
+	Export recipe	Exportrecept
+	Layers and masks strategy	Réteg- és maszkstratégia
+	Menu path finder	Menüútvonal-kereső
+	Retouch plan	Retusálási terv
+	The flaws to fix — spots, wrinkles, objects, noise	A javítandó hibák — foltok, ráncok, objektumok, zaj
+	What the image is made of, and what should change	Miből áll a kép, és mi változzon
+	The image and who the text is for	A kép és kinek szól a szöveg
+	What you want to do, in your own words	Amit tenni szeretne, saját szavaival
+	Where the file goes and what matters (size, quality, format)	Hová megy a fájl és mi számít (méret, minőség, formátum)

@@ -2745,3 +2745,23 @@ curves	Smooth	Glätten
 	Step {step} is waiting for its dialog	Schritt {step} wartet auf seinen Dialog
 @plural	{n} action|{n} actions	{n} Aktion|{n} Aktionen
 	Auto Add/Delete	Autom. hinzuf./löschen
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Alt-Text für das Bild
+	Ask anything	Fragen Sie alles
+	Ask in any language	Fragen Sie in jeder Sprache
+	Assistant	Assistent
+	Best for: a step up in quality, still light	Am besten für: eine Stufe mehr Qualität, weiterhin leicht
+	Best for: balanced everyday and technical work	Am besten für: die Balance aus Alltäglichem und Technischem
+	Best for: everyday help on the lightest machines	Am besten für: alltägliche Hilfe auf den leichtesten Rechnern
+	Best for: near-flagship answers at MoE speed	Am besten für: Antworten nahe der Spitzenklasse, mit MoE-Tempo
+	Best for: the deepest reasoning this family has	Am besten für: das tiefste Abwägen, das diese Familie hat
+	Export recipe	Export-Rezept
+	Layers and masks strategy	Ebenen- und Maskenstrategie
+	Menu path finder	Menüpfad-Finder
+	Retouch plan	Retusche-Plan
+	The flaws to fix — spots, wrinkles, objects, noise	Die Mängel — Flecken, Falten, Objekte, Rauschen
+	What the image is made of, and what should change	Woraus das Bild besteht und was sich ändern soll
+	The image and who the text is for	Das Bild und für wen der Text ist
+	What you want to do, in your own words	Was Sie tun wollen, in eigenen Worten
+	Where the file goes and what matters (size, quality, format)	Wohin die Datei geht und was zählt (Größe, Qualität, Format)

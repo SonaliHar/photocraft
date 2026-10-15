@@ -20,7 +20,9 @@
 //! - [`trn`]: plural-aware (`{n}` is filled in). [`fmt`]: fill `{name}` placeholders after [`tr`];
 //!   translators may reorder placeholders freely.
 
-mod bidi;
+// The Craft AI pane draws model answers (text no catalog holds) in visual order for a
+// right-to-left interface, the same pass the catalog rows get at lookup below.
+pub(crate) mod bidi;
 mod catalog;
 mod system;
 

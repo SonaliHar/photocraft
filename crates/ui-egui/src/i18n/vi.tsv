@@ -3590,3 +3590,23 @@ curves	Smooth	Làm mượt
 	Import .GRD	Nhập .GRD
 	Choose a gradient file (.grd).	Chọn tệp chuyển sắc (.grd).
 	Auto Add/Delete	Tự động thêm/xóa
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Văn bản thay thế cho ảnh
+	Ask anything	Hỏi bất cứ điều gì
+	Ask in any language	Hỏi bằng bất kỳ ngôn ngữ nào
+	Assistant	Trợ lý
+	Best for: a step up in quality, still light	Phù hợp nhất: chất lượng nhích thêm một bậc, vẫn nhẹ
+	Best for: balanced everyday and technical work	Phù hợp nhất: cân bằng việc hằng ngày và việc kỹ thuật
+	Best for: everyday help on the lightest machines	Phù hợp nhất: trợ giúp hằng ngày trên những máy nhẹ nhất
+	Best for: near-flagship answers at MoE speed	Phù hợp nhất: câu trả lời gần hàng đầu với tốc độ MoE
+	Best for: the deepest reasoning this family has	Phù hợp nhất: suy luận sâu nhất mà dòng này có
+	Export recipe	Công thức xuất
+	Layers and masks strategy	Chiến lược lớp và mặt nạ
+	Menu path finder	Tìm đường dẫn menu
+	Retouch plan	Kế hoạch retouch
+	The flaws to fix — spots, wrinkles, objects, noise	Khiếm khuyết cần sửa — đốm, nếp nhăn, vật thể, nhiễu
+	What the image is made of, and what should change	Ảnh gồm những gì và cần thay đổi gì
+	The image and who the text is for	Ảnh và văn bản dành cho ai
+	What you want to do, in your own words	Điều bạn muốn làm, bằng lời của bạn
+	Where the file goes and what matters (size, quality, format)	Tệp đi đâu và điều gì quan trọng (kích thước, chất lượng, định dạng)

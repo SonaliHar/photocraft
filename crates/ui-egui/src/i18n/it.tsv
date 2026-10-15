@@ -4068,3 +4068,23 @@ navigator	Zoom	Zoom
 	Step {step} is waiting for its dialog	Il passaggio {step} attende la sua finestra di dialogo
 @plural	{n} action|{n} actions	{n} azione|{n} azioni
 	Auto Add/Delete	Aggiungi/elimina automaticamente
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Testo alternativo dell’immagine
+	Ask anything	Chiedi qualsiasi cosa
+	Ask in any language	Chiedi in qualsiasi lingua
+	Assistant	Assistente
+	Best for: a step up in quality, still light	Ideale per: un gradino di qualità in più, ancora leggero
+	Best for: balanced everyday and technical work	Ideale per: equilibrare il quotidiano e il tecnico
+	Best for: everyday help on the lightest machines	Ideale per: l'aiuto quotidiano sulle macchine più leggere
+	Best for: near-flagship answers at MoE speed	Ideale per: risposte quasi di punta alla velocità MoE
+	Best for: the deepest reasoning this family has	Ideale per: il ragionamento più profondo di questa famiglia
+	Export recipe	Ricetta di esportazione
+	Layers and masks strategy	Strategia di livelli e maschere
+	Menu path finder	Cerca nei menu
+	Retouch plan	Piano di ritocco
+	The flaws to fix — spots, wrinkles, objects, noise	I difetti da correggere — macchie, rughe, oggetti, rumore
+	What the image is made of, and what should change	Di che è fatta l’immagine e cosa deve cambiare
+	The image and who the text is for	L’immagine e per chi è il testo
+	What you want to do, in your own words	Cosa vuoi fare, a parole tue
+	Where the file goes and what matters (size, quality, format)	Dove va il file e cosa conta (dimensione, qualità, formato)

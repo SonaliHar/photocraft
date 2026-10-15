@@ -3093,3 +3093,23 @@ curves	Smooth	Haluskan
 	Step {step} is waiting for its dialog	Langkah {step} menunggu dialognya
 @plural	{n} action|{n} actions	{n} tindakan
 	Auto Add/Delete	Tambah/Hapus Otomatis
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Teks alternatif untuk gambar
+	Ask anything	Tanya apa saja
+	Ask in any language	Tanya dalam bahasa apa pun
+	Assistant	Asisten
+	Best for: a step up in quality, still light	Terbaik untuk: kualitas satu tingkat lebih tinggi, tetap ringan
+	Best for: balanced everyday and technical work	Terbaik untuk: kerja harian dan teknis yang seimbang
+	Best for: everyday help on the lightest machines	Terbaik untuk: bantuan harian di mesin paling ringan
+	Best for: near-flagship answers at MoE speed	Terbaik untuk: jawaban nyaris kelas atas dengan kecepatan MoE
+	Best for: the deepest reasoning this family has	Terbaik untuk: penalaran terdalam di keluarga ini
+	Export recipe	Resep ekspor
+	Layers and masks strategy	Strategi lapisan dan masker
+	Menu path finder	Pencari jalur menu
+	Retouch plan	Rencana retas
+	The flaws to fix — spots, wrinkles, objects, noise	Cacat yang akan diperbaiki — noda, kerutan, objek, derau
+	What the image is made of, and what should change	Dari apa gambar tersusun, dan apa yang harus berubah
+	The image and who the text is for	Gambar dan untuk siapa teks itu
+	What you want to do, in your own words	Apa yang ingin Anda lakukan, dengan kata-kata Anda sendiri
+	Where the file goes and what matters (size, quality, format)	Ke mana berkas pergi dan apa yang penting (ukuran, kualitas, format)

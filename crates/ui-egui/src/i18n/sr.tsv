@@ -4180,3 +4180,23 @@ shape	Appearance	Izgled
 	Import .GRD	Uvezi .GRD
 	Choose a gradient file (.grd).	Izaberite datoteku gradijenta (.grd).
 	Auto Add/Delete	Automatsko dodavanje/brisanje
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Алтернативни текст слике
+	Ask anything	Питајте било шта
+	Ask in any language	Питајте на било ком језику
+	Assistant	Помоћник
+	Best for: a step up in quality, still light	Најбоље за: корак више у квалитету, и даље лако
+	Best for: balanced everyday and technical work	Најбоље за: уравнотежен свакодневни и технички рад
+	Best for: everyday help on the lightest machines	Најбоље за: свакодневну помоћ на најлакшим рачунарима
+	Best for: near-flagship answers at MoE speed	Најбоље за: готово водеће одговоре брзином MoE
+	Best for: the deepest reasoning this family has	Најбоље за: најдубље закључивање у овој породици
+	Export recipe	Рецепт за извоз
+	Layers and masks strategy	Стратегија слојева и маски
+	Menu path finder	Тражење путање у менију
+	Retouch plan	План за ретуширање
+	The flaws to fix — spots, wrinkles, objects, noise	Мане за исправку — пеге, боре, објекти, шум
+	What the image is made of, and what should change	Од чега се слика састоји и шта треба да се промени
+	The image and who the text is for	Слика и за кога је текст
+	What you want to do, in your own words	Шта желите да урадите, својим речима
+	Where the file goes and what matters (size, quality, format)	Куда иде датотека и шта је важно (величина, квалитет, формат)

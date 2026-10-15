@@ -3106,3 +3106,23 @@ curves	Smooth	Lisser
 	Step {step} is waiting for its dialog	L’étape {step} attend sa boîte de dialogue
 @plural	{n} action|{n} actions	{n} action|{n} actions
 	Auto Add/Delete	Ajout/suppr. auto
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Texte alternatif de l’image
+	Ask anything	Posez n'importe quelle question
+	Ask in any language	Posez vos questions dans n'importe quelle langue
+	Assistant	Assistant
+	Best for: a step up in quality, still light	Idéal pour : un cran de plus en qualité, toujours léger
+	Best for: balanced everyday and technical work	Idéal pour : l'équilibre du quotidien et du technique
+	Best for: everyday help on the lightest machines	Idéal pour : l'aide quotidienne sur les machines les plus légères
+	Best for: near-flagship answers at MoE speed	Idéal pour : des réponses presque de pointe à la vitesse MoE
+	Best for: the deepest reasoning this family has	Idéal pour : le raisonnement le plus profond de cette famille
+	Export recipe	Recette d’exportation
+	Layers and masks strategy	Stratégie de calques et masques
+	Menu path finder	Chercheur de chemins de menu
+	Retouch plan	Plan de retouche
+	The flaws to fix — spots, wrinkles, objects, noise	Les défauts à corriger — taches, rides, objets, bruit
+	What the image is made of, and what should change	De quoi l’image est faite et ce qui doit changer
+	The image and who the text is for	L’image et pour qui est le texte
+	What you want to do, in your own words	Ce que vous voulez faire, en vos mots
+	Where the file goes and what matters (size, quality, format)	Où va le fichier et ce qui compte (taille, qualité, format)

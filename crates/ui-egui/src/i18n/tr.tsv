@@ -3837,3 +3837,23 @@ cameraData	Lens	Lens
 	Loaded Camera Raw settings from {file}	Camera Raw ayarları {file} dosyasından yüklendi
 	Loaded Camera Raw settings from {file} ({n} not supported)	Camera Raw ayarları {file} dosyasından yüklendi ({n} desteklenmiyor)
 	Auto Add/Delete	Otomatik Ekle/Sil
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Görüntü için alternatif metin
+	Ask anything	Her şeyi sorun
+	Ask in any language	Herhangi bir dilde sorun
+	Assistant	Yardımcı
+	Best for: a step up in quality, still light	Şunun için en iyisi: kalitede bir adım yukarı, yine de hafif
+	Best for: balanced everyday and technical work	Şunun için en iyisi: dengeli günlük ve teknik iş
+	Best for: everyday help on the lightest machines	Şunun için en iyisi: en hafif makinelerde günlük yardım
+	Best for: near-flagship answers at MoE speed	Şunun için en iyisi: MoE hızıyla amiral gemisine yakın yanıtlar
+	Best for: the deepest reasoning this family has	Şunun için en iyisi: bu ailenin en derin akıl yürütmesi
+	Export recipe	Dışa aktarma tarifı
+	Layers and masks strategy	Katman ve maske stratejisi
+	Menu path finder	Menü yolu bulucu
+	Retouch plan	Rötuş planı
+	The flaws to fix — spots, wrinkles, objects, noise	Düzeltilmesi gereken kusurlar — lekeler, kırışıklıklar, nesneler, gürültü
+	What the image is made of, and what should change	Görüntü neden oluşuyor ve ne değişmeli
+	The image and who the text is for	Görüntü ve metin kime yönelik
+	What you want to do, in your own words	Ne yapmak istediğiniz, kendi kelimelerinizle
+	Where the file goes and what matters (size, quality, format)	Dosya nereye gidiyor ve ne önemli (boyut, kalite, biçim)

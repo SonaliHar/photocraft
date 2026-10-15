@@ -3864,3 +3864,23 @@ curves	Smooth	Vloeiend maken
 	Step {step} is waiting for its dialog	Stap {step} wacht op zijn dialoogvenster
 @plural	{n} action|{n} actions	{n} handeling|{n} handelingen
 	Auto Add/Delete	Automatisch toevoegen/verwijderen
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	Alt-tekst voor het beeld
+	Ask anything	Vraag wat u maar wilt
+	Ask in any language	Vraag in elke gewenste taal
+	Assistant	Assistent
+	Best for: a step up in quality, still light	Het best voor: een stapje hoger in kwaliteit, nog altijd licht
+	Best for: balanced everyday and technical work	Het best voor: evenwichtig dagelijks en technisch werk
+	Best for: everyday help on the lightest machines	Het best voor: alledaagse hulp op de lichtste machines
+	Best for: near-flagship answers at MoE speed	Het best voor: bijna topprestaties op MoE-snelheid
+	Best for: the deepest reasoning this family has	Het best voor: het diepste redeneervermogen van deze familie
+	Export recipe	Exportrecept
+	Layers and masks strategy	Strategie voor lagen en maskers
+	Menu path finder	Menupad-vinder
+	Retouch plan	Retucheplan
+	The flaws to fix — spots, wrinkles, objects, noise	De gebreken om te fixen — vlekken, rimpels, objecten, ruis
+	What the image is made of, and what should change	Waaruit het beeld bestaat en wat er moet veranderen
+	The image and who the text is for	Het beeld en voor wie de tekst is
+	What you want to do, in your own words	Wat je wilt doen, in eigen woorden
+	Where the file goes and what matters (size, quality, format)	Waar het bestand heen gaat en wat telt (grootte, kwaliteit, formaat)

@@ -3715,3 +3715,23 @@ curves	Smooth	スムーズ
 	Step {step} is waiting for its dialog	ステップ {step} はダイアログを待っています
 @plural	{n} action|{n} actions	アクション {n} 個
 	Auto Add/Delete	自動追加・削除
+
+# Craft AI: the built-in local assistant window, its models and tasks.
+	Alt text for the image	画像の代替テキスト
+	Ask anything	何でも質問
+	Ask in any language	どの言語でも質問できます
+	Assistant	アシスタント
+	Best for: a step up in quality, still light	最適な用途: 品質を一段上げたいが、軽さはそのまま
+	Best for: balanced everyday and technical work	最適な用途: 日常と技術的な作業のバランス
+	Best for: everyday help on the lightest machines	最適な用途: 最も軽いマシンでの日常的な助け
+	Best for: near-flagship answers at MoE speed	最適な用途: MoE の速さで旗艦に迫る回答
+	Best for: the deepest reasoning this family has	最適な用途: このファミリーで最も深い推論
+	Export recipe	書き出しレシピ
+	Layers and masks strategy	レイヤーとマスクの戦略
+	Menu path finder	メニューの探し方
+	Retouch plan	レタッチ計画
+	The flaws to fix — spots, wrinkles, objects, noise	直すべき欠陥 — シミ、しわ、物、ノイズ
+	What the image is made of, and what should change	画像の中身と、変えるべきこと
+	The image and who the text is for	画像と、そのテキストの読み手
+	What you want to do, in your own words	やりたいことを自分の言葉で
+	Where the file goes and what matters (size, quality, format)	ファイルの行き先と重視点（サイズ・品質・形式）
