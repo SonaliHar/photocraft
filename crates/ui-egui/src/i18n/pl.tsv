@@ -3806,3 +3806,13 @@ curves	Smooth	Wygładź
 	This document's layers: {needed} of {budget} for layers	Warstwy tego dokumentu: {needed} z {budget} na warstwy
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Warstwy tego dokumentu potrzebują {needed}, ale mogą zająć {budget}: odświeżanie całego dokumentu używa CPU
 	GPU Memory (MB, 0 = Automatic)	Pamięć GPU (MB, 0 = Automatycznie)
+	Create Frame Animation	Utwórz animację klatek
+	Make Frames From Layers	Utwórz klatki z warstw
+	Forever	Zawsze
+	Once	Raz
+	No delay	Bez opóźnienia
+	First frame	Pierwsza klatka
+	Duplicate Selected Frame	Duplikuj zaznaczoną klatkę
+	Delete Selected Frame	Usuń zaznaczoną klatkę
+	{seconds} sec.	{seconds} s
+	{count} times	{count} razy

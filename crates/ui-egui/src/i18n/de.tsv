@@ -3210,3 +3210,13 @@ curves	Smooth	Glätten
 	This document's layers: {needed} of {budget} for layers	Ebenen dieses Dokuments: {needed} von {budget} für Ebenen
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Die Ebenen dieses Dokuments brauchen {needed}, dürfen aber {budget} belegen: Das ganze Dokument wird auf der CPU neu gezeichnet
 	GPU Memory (MB, 0 = Automatic)	GPU-Speicher (MB, 0 = Automatisch)
+	Create Frame Animation	Frame-Animation erstellen
+	Make Frames From Layers	Frames aus Ebenen erstellen
+	Forever	Endlos
+	Once	Einmal
+	No delay	Keine Verzögerung
+	First frame	Erster Frame
+	Duplicate Selected Frame	Ausgewählten Frame duplizieren
+	Delete Selected Frame	Ausgewählten Frame löschen
+	{seconds} sec.	{seconds} Sek.
+	{count} times	{count}-mal

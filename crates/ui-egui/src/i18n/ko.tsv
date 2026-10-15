@@ -3386,3 +3386,13 @@ curves	Smooth	매끄럽게
 	This document's layers: {needed} of {budget} for layers	이 문서의 레이어: 레이어용 {budget} 중 {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	이 문서의 레이어에 {needed}가 필요하지만 {budget}만 사용할 수 있습니다: 문서 전체 다시 그리기는 CPU를 사용합니다
 	GPU Memory (MB, 0 = Automatic)	GPU 메모리(MB, 0 = 자동)
+	Create Frame Animation	프레임 애니메이션 만들기
+	Make Frames From Layers	레이어에서 프레임 만들기
+	Forever	무한
+	Once	한 번
+	No delay	지연 없음
+	First frame	첫 프레임
+	Duplicate Selected Frame	선택한 프레임 복제
+	Delete Selected Frame	선택한 프레임 삭제
+	{seconds} sec.	{seconds}초
+	{count} times	{count}회

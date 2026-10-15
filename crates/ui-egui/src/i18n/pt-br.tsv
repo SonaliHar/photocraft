@@ -3998,3 +3998,13 @@ layerLabel	No Color	Sem cor
 	This document's layers: {needed} of {budget} for layers	Camadas deste documento: {needed} de {budget} para camadas
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	As camadas deste documento precisam de {needed} mas podem ocupar {budget}: o documento inteiro é redesenhado na CPU
 	GPU Memory (MB, 0 = Automatic)	Memória da GPU (MB, 0 = Automático)
+	Create Frame Animation	Criar animação de quadros
+	Make Frames From Layers	Criar quadros a partir de camadas
+	Forever	Sempre
+	Once	Uma vez
+	No delay	Sem atraso
+	First frame	Primeiro quadro
+	Duplicate Selected Frame	Duplicar quadro selecionado
+	Delete Selected Frame	Excluir quadro selecionado
+	{seconds} sec.	{seconds} s
+	{count} times	{count} vezes

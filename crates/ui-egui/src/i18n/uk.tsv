@@ -3907,3 +3907,13 @@ curves	Smooth	Згладити
 	This document's layers: {needed} of {budget} for layers	Шари цього документа: {needed} з {budget} для шарів
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Шарам цього документа потрібно {needed}, але займати вони можуть {budget}: увесь документ перемальовується на CPU
 	GPU Memory (MB, 0 = Automatic)	Пам'ять GPU (МБ, 0 = автоматично)
+	Create Frame Animation	Створити покадрову анімацію
+	Make Frames From Layers	Створити кадри із шарів
+	Forever	Постійно
+	Once	Один раз
+	No delay	Без затримки
+	First frame	Перший кадр
+	Duplicate Selected Frame	Дублювати вибраний кадр
+	Delete Selected Frame	Видалити вибраний кадр
+	{seconds} sec.	{seconds} с
+	{count} times	{count} разів
