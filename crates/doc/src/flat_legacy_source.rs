@@ -17,11 +17,11 @@ impl FlatLegacySourceRule {
         ResolvedGimpComposition { blend_space: self.blend_space, composite_space: self.composite_space, operator: self.operator }
     }
 }
-/// Only the fourteen independently observed channel-separable legacy modes.
+/// Only the eighteen independently observed legacy RGB modes.
 /// Their endpoint handling is distinct from modern Divide/Dodge/Burn domains.
-/// Normal0, requested Overlay5, legacy components and unknown tuples stay closed.
+/// Normal0, requested Overlay5 and unknown tuples stay closed.
 pub fn flat_legacy_source_rule(version: u32, mode: i32, blend_raw: i32, composite_raw: i32, operator_raw: i32) -> Option<FlatLegacySourceRule> {
-    if version != 12 || !matches!(mode, 3 | 4 | 6..=10 | 15..=21) || (blend_raw, composite_raw, operator_raw) != (-2, -2, -2) {
+    if version != 12 || !matches!(mode, 3 | 4 | 6..=21) || (blend_raw, composite_raw, operator_raw) != (-2, -2, -2) {
         return None;
     }
     Some(FlatLegacySourceRule {

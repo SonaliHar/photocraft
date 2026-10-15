@@ -25,7 +25,11 @@ pub fn is_supported_mode(mode: i32) -> bool {
 }
 /// Separate legacy inventory; this never changes modern source selection.
 pub fn is_supported_legacy_mode(mode: i32) -> bool {
-    matches!(mode, 3 | 4 | 6..=10 | 15..=21)
+    matches!(mode, 3 | 4 | 6..=21)
+}
+/// Separate component/luminance inventory; no modern-source alias follows.
+pub fn is_supported_component_mode(mode: i32) -> bool {
+    matches!(mode, 37..=40 | 54..=56)
 }
 pub(crate) fn error() -> E {
     E::Unsupported("bounded modern separable RGB transfer stack")
@@ -172,7 +176,10 @@ impl<'a> PreparedBackedSeparableStack<'a> {
                 || !(0.0..=1.0).contains(&input.opacity)
                 || !matches!(input.layer.format().mode, ColorMode::Rgb | ColorMode::Grayscale)
                 || input.layer.format().mode.color_channels() != profile.channels()
-                || !(input.source_mode == 28 || is_supported_mode(input.source_mode) || is_supported_legacy_mode(input.source_mode))
+                || !(input.source_mode == 28
+                    || is_supported_mode(input.source_mode)
+                    || is_supported_legacy_mode(input.source_mode)
+                    || is_supported_component_mode(input.source_mode))
             {
                 return Err(error());
             }
@@ -215,7 +222,9 @@ impl<'a> PreparedBackedSeparableStack<'a> {
             let format = view.format();
             c.check(format.channels() as u64).map_err(E::Backing)?;
             let default = decode(view.default_bytes(), format)?;
-            if is_supported_legacy_mode(entry.input.source_mode) && default.iter().any(|v| !(0.0..=1.0).contains(v)) {
+            if (is_supported_legacy_mode(entry.input.source_mode) || is_supported_component_mode(entry.input.source_mode))
+                && default.iter().any(|v| !(0.0..=1.0).contains(v))
+            {
                 return Err(error());
             }
             for coord in view.logical_bounds().tiles() {
@@ -228,7 +237,9 @@ impl<'a> PreparedBackedSeparableStack<'a> {
                         let raw = bytes.get_mut(..format.bytes_per_pixel()).ok_or_else(error)?;
                         pin.read_pixel_native_into(x, y, raw, c).map_err(E::View)?;
                         let pixel = decode(raw, format)?;
-                        if is_supported_legacy_mode(entry.input.source_mode) && pixel.iter().any(|v| !(0.0..=1.0).contains(v)) {
+                        if (is_supported_legacy_mode(entry.input.source_mode) || is_supported_component_mode(entry.input.source_mode))
+                            && pixel.iter().any(|v| !(0.0..=1.0).contains(v))
+                        {
                             return Err(error());
                         }
                     }

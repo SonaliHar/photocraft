@@ -28,7 +28,10 @@ fn policy(policy: &GimpComposition, version: u32, c: &ReadControl<'_>) -> Result
     if policy.compatibility_epoch.is_empty()
         || policy.compatibility_epoch.len() > 128
         || policy.pass_through
-        || !(policy.source_mode == 28 || lower::is_supported_mode(policy.source_mode) || lower::is_supported_legacy_mode(policy.source_mode))
+        || !(policy.source_mode == 28
+            || lower::is_supported_mode(policy.source_mode)
+            || lower::is_supported_legacy_mode(policy.source_mode)
+            || lower::is_supported_component_mode(policy.source_mode))
     {
         return Err(scope());
     }
@@ -47,6 +50,18 @@ fn policy(policy: &GimpComposition, version: u32, c: &ReadControl<'_>) -> Result
     }
     if lower::is_supported_legacy_mode(policy.source_mode) {
         return Err(scope());
+    }
+    if lower::is_supported_component_mode(policy.source_mode) {
+        use photocraft_doc::import_compositing::{XCF12_FLAT_COMPONENT_SOURCE_EPOCH, flat_component_source_rule};
+        if policy.compatibility_epoch != XCF12_FLAT_COMPONENT_SOURCE_EPOCH {
+            return Err(scope());
+        }
+        let rule = flat_component_source_rule(version, policy.source_mode, policy.stored_blend_space, policy.stored_composite_space, policy.stored_operator)
+            .ok_or_else(scope)?;
+        if policy.checked_resolved().map_err(|_| scope())? != &rule.resolved() {
+            return Err(scope());
+        }
+        return Ok(Recipe { mode: policy.source_mode, blend: rule.blend_space, composite: rule.composite_space, operator: rule.operator });
     }
     // These existing epochs select separate assigned-profile or signed-alpha
     // recipes in the resident renderer. Fully explicit fields do not erase

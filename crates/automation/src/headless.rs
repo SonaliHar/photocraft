@@ -994,3 +994,7 @@ mod owned_flat_translate_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_legacy_flat_tests.rs"]
 mod owned_legacy_flat_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_component_flat_tests.rs"]
+mod owned_component_flat_tests;

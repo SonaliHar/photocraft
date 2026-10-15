@@ -121,7 +121,7 @@ pub fn is_current_separable_blend_candidate(document:&photocraft_doc::Document,c
  let mut all_normal=true;
  for item in &state.items {control.check(1)?;
   if let Some(policy)=&item.composition {
-   if matches!(policy.source_mode,3|4|6..=10|15..=21|23|30..=36|41..=53) {return Ok(true)}
+   if matches!(policy.source_mode,3|4|6..=21|23|30..=56) {return Ok(true)}
    all_normal &= policy.source_mode==28;
    explicit_normal |= policy.source_mode==28 && (policy.stored_blend_space>0 || policy.stored_composite_space>0 || policy.stored_operator>0);
   } else {all_normal=false;}

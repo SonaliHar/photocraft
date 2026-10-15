@@ -80,7 +80,7 @@ fn legacy_kernel_and_resident_reference() {
             assert!(PreparedBackedSeparableDocument::new(&endpoint_owner, Default::default(), &ctl()).is_ok());
         }
     }
-    for mode in [0, 1, 11, 12, 13, 14, 22, 61] {
+    for mode in [0, 1, 5, 22, 61] {
         assert!(!lower::is_supported_legacy_mode(mode));
     }
 }

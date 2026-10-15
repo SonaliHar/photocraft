@@ -7,6 +7,9 @@ pub use flat_modern_source::{FlatModernSourceRule, FlatSourceRgbDomain, XCF_FLAT
 #[path = "flat_legacy_source.rs"]
 mod flat_legacy_source;
 pub use flat_legacy_source::{FlatLegacySourceRule, XCF12_FLAT_LEGACY_SOURCE_EPOCH, flat_legacy_source_rule};
+#[path = "flat_component_source.rs"]
+mod flat_component_source;
+pub use flat_component_source::{FlatComponentSourceRule, XCF12_FLAT_COMPONENT_SOURCE_EPOCH, flat_component_source_rule};
 /// Explicit structural behavior identity, independent of current profile assignment.
 pub const XCF13_ISOLATED_MULTIPLY_SEED_EPOCH: &str = "xcf13-isolated-multiply-seed-v1";
 /// Finite signed/over-one source alpha over an empty or opaque backdrop only.

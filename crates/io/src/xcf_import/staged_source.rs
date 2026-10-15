@@ -448,6 +448,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     }
     fn requires_budgeted_neighborhood_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn requires_budgeted_gaussian_group_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
+    fn requires_budgeted_component_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn requires_budgeted_legacy_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn requires_budgeted_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn requires_budgeted_general_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
@@ -595,6 +596,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             validate_drawable_alpha(d, point.is_some(), false, ctl, 0)?;
         }
         let mut domains = admission::AdmissionDomains {
+            component_separable_domain: separable_domain == Some(separable_blend::SourceKind::ComponentStrict),
             legacy_separable_domain: separable_domain == Some(separable_blend::SourceKind::LegacyStrict),
             general_separable_domain: separable_domain == Some(separable_blend::SourceKind::General),
             composition_command_domain: separable_domain == Some(separable_blend::SourceKind::General),
@@ -619,7 +621,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         // type, and its admissions above propagate the shared exact predicate.
         let mut domains = admission::LateAdmissionDomains::default();
         if P::family(file) == SelectedStagedFamily::SeparableBlend {
-            if separable_blend::legacy_domain(file) { domains.basic_blend_domain = true; }
+            if separable_blend::legacy_domain(file) || separable_blend::component_domain(file) { domains.basic_blend_domain = true; }
             match separable_blend::domain(file) {
                 Some(separable_blend::Domain::Basic) => domains.basic_blend_domain=true,
                 Some(separable_blend::Domain::MultiplyAuto) => domains.multiply_domain=true,

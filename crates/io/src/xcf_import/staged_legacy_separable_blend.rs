@@ -1,9 +1,9 @@
 //! Exact existing two-plane legacy source intersection; never a general retry.
 use super::*;
 pub(super) fn mode(value: i32) -> bool {
-    matches!(value,3|4|6..=10|15..=21)
+    matches!(value, 3 | 4 | 6..=21)
 }
-pub(super) fn domain<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
+pub(super) fn geometry<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
     if f.version != 12
         || f.model != Model::Rgb
         || f.sample != Sample::F32
@@ -36,8 +36,7 @@ pub(super) fn domain<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
         return false;
     }
     let (Some(top), Some(base)) = (f.layers.first(), f.layers.get(1)) else { return false };
-    photocraft_doc::import_compositing::flat_legacy_source_rule(f.version, top.mode, top.blend_space, top.composite_space, top.composite_mode).is_some()
-        && top.width == 10
+    top.width == 10
         && top.height == 9
         && ((top.offset == (2, -1) && top.opacity.to_bits() == 0.7125f32.to_bits()) || (top.offset == (-1, 2) && top.opacity.to_bits() == 0.4375f32.to_bits()))
         && base.mode == 28
@@ -49,10 +48,21 @@ pub(super) fn domain<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
         && base.composite_space == -1
         && base.composite_mode == -1
 }
+pub(super) fn domain<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
+    geometry(f)
+        && f.layers.first().is_some_and(|top| {
+            photocraft_doc::import_compositing::flat_legacy_source_rule(f.version, top.mode, top.blend_space, top.composite_space, top.composite_mode).is_some()
+        })
+}
 pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, budget: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
     if !domain(f) {
         return Ok(false);
     }
+    native(f, ctl, budget)
+}
+// Caller has selected an exact bounded two-plane metadata domain before this
+// common unit visitor. Source activity never skips operative native words.
+pub(super) fn native<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, budget: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
     let mut valid = true;
     for d in &f.layers {
         pay(ctl, budget, 1)?;

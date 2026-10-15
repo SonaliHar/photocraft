@@ -1761,3 +1761,15 @@ off-canvas content. Existing legacy min-alpha coverage, ratio endpoints and
 128/255 grain behavior remain the evaluation authority. This adds no legacy
 composition mutation wire; explicit composition edits keep their existing
 modern20 subset. Behavioral and numerical acceptance remain deferred.
+Additional owned RGB blend paths cover legacy HSV/HSL11..14, modern HSV/HSL37..40,
+and luminance modes54..56. Exact v12 raw tuples retain Profile/Profile legacy
+coverage, Profile/Linear modern component coverage, and Linear/Linear luminance
+coverage. Original source admission retains the established strict two-plane
+geometry and both-plane finite-unit checks; the new Component route cannot
+retry refusal through General or Plain. CURRENT retains dynamic bounded geometry
+and checks affected native/default inputs even hidden or off-canvas. Existing
+D50 profile luminance weights, equal-Y/different-RGB tie refusals, zero-backdrop-Y
+refusal and finite HDR Luminance results remain unchanged, with no new clamp.
+The existing modern20 composition mutation wire remains the available explicit
+transition path; these additions do not add component or legacy mutation modes.
+Tests and numerical acceptance remain deferred.
