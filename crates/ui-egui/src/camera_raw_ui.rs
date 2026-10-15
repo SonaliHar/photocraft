@@ -88,7 +88,7 @@ impl CameraRawDialog {
             Target::SmartFilter(index) => Some(index),
             Target::NewFilter | Target::OpenRaw => None,
         });
-        result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path})));
+        result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path, "profile": r.profile})));
         result["view"] = json!(navigation);
         result["sourceSize"] = json!([self.full_w, self.full_h]);
         result["previewApproximate"] = json!(!self.detail.ready && (self.pw != self.full_w || self.ph != self.full_h));
@@ -205,6 +205,7 @@ pub struct RawOpen {
     pub path: Option<String>,
     /// The file, when it was opened from bytes (no path to read it again from).
     pub bytes: Option<std::sync::Arc<Vec<u8>>>,
+    pub profile: Option<Value>,
 }
 
 /// Should an interactive open of `name` show the open-time Camera Raw dialog? `warnings` are
@@ -227,6 +228,7 @@ pub fn queue_open_dialog(app: &mut PhotocraftApp, name: &str, path: Option<&str>
             name: name.to_string(),
             path: path.map(str::to_string),
             bytes: bytes.map(|b| std::sync::Arc::new(b.to_vec())),
+            profile: photocraft_io::raw::profile_info(&st.doc),
         });
     }
 }
@@ -1138,6 +1140,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         // This header is outside the settings scroll area and follows the same Before/After
         // selector as the texture. Both derive from the same completed preview revision.
         super::camera_raw_scope_ui::header(&mut props, d, scope);
+        if let Some(profile) = d.raw_open.as_ref().and_then(|r| r.profile.as_ref()).and_then(|p| p.get("profile")).and_then(Value::as_str) {
+            props.label(format!("{}: {profile}", tl!("Profile")));
+        }
         d.scope.alt_tone = None;
         let mut dirty = false;
         egui::ScrollArea::vertical().id_salt("camera-raw-props").show(&mut props, |ui| {
@@ -1507,6 +1512,20 @@ mod tests {
         (0..8).map(|i| s.rgba(4 + i * 4, 16)[0]).sum::<f32>() / 8.0
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn raw_dialog_exposes_the_applied_cc0_profile() {
+        let (mut app, _) = raw_app();
+        let mut spec = photocraft_raw::testgen::DngSpec::cfa(32, 24, vec![512; 32 * 24]);
+        spec.model = "Canon EOS RP".into();
+        app.open_bytes("synthetic.dng", &spec.build()).unwrap();
+        let raw = app.pending_raw_open.take().unwrap();
+        assert_eq!(raw.profile.as_ref().unwrap()["license"], "CC0-1.0");
+        open_raw(&mut app, &egui::Context::default(), raw).unwrap();
+        let described = app.camera_raw.as_ref().unwrap().describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview);
+        assert_eq!(described["openingRaw"]["profile"]["profile"], "Canon EOS RP");
+    }
+
     #[test]
     fn raw_opens_in_camera_raw_and_open_redevelops() {
         let (mut app, dng) = raw_app();
@@ -1634,7 +1653,9 @@ mod tests {
         app.open_bytes("c.dng", &dng).unwrap();
         assert!(app.pending_raw_open.is_none());
         // A non-raw never queues the dialog; a closed document is an error, not a panic.
-        assert!(open_raw(&mut app, &ctx, RawOpen { document: photocraft_doc::DocId(u64::MAX), name: "x".into(), path: None, bytes: None }).is_err());
+        assert!(
+            open_raw(&mut app, &ctx, RawOpen { document: photocraft_doc::DocId(u64::MAX), name: "x".into(), path: None, bytes: None, profile: None }).is_err()
+        );
     }
 
     #[test]
