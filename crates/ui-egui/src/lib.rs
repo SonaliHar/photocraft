@@ -260,6 +260,8 @@ pub struct ExportSettings {
     pub webp_lossless: bool,
     /// Lossy WebP quality 1–100 (None = codec default).
     pub webp_quality: Option<u8>,
+    /// PNG zlib effort (None = codec default).
+    pub png_compression: Option<photocraft_codecs::PngCompression>,
     /// TIFF: keep the layers (Photoshop layer data); `false` is "Discard Layers and Save a Copy".
     pub tiff_layers: bool,
     /// Embed the document's whole XMP packet. `true` by default (Save As keeps the metadata);
@@ -289,6 +291,7 @@ impl Default for ExportSettings {
             jpeg_quality: None,
             webp_lossless: true,
             webp_quality: None,
+            png_compression: None,
             tiff_layers: true,
             xmp_all: true,
             tga_bits: None,
@@ -311,6 +314,9 @@ impl ExportSettings {
         opts.encode.webp_lossless = self.webp_lossless;
         if let Some(q) = self.webp_quality {
             opts.encode.webp_quality = q;
+        }
+        if let Some(c) = self.png_compression {
+            opts.encode.png_compression = c;
         }
         opts.encode.embed_icc = self.embed_icc;
         opts.encode.embed_metadata = self.embed_metadata;

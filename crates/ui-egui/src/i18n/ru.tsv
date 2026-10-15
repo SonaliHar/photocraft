@@ -3159,3 +3159,7 @@ curves	Smooth	Сгладить
 	set name	имя набора
 	{set} (modified)	{set} (изменён)
 	Random	Случайно
+
+# PNG export compression (#5409)
+	Compression	Сжатие
+	Best	Наилучшее
