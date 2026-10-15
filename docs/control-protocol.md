@@ -449,6 +449,14 @@ Stack revisions remain decimal strings in project discovery. Typed callers use
 the returned carrier. Resident inspection keeps its existing behavior. Inspection
 of other owned classes remains separate work.
 
+Those two owned Threshold classes also accept name-only `layer.setProps`, for
+example `{"layer":1,"name":"Foreground"}`. The layer target may be omitted or
+given as the existing numeric ID or exact name. The command preserves upstream
+canonical-name/custom-name behavior and uses the shared undo/redo history.
+Other properties and coalescing remain refused for these classes; background
+starts refuse before dispatch normalization. Renaming grants no new source,
+profile or rendering eligibility.
+
 For explicit owned native reopen, use exactly `{"path":"current.pcraft","nativeProfilePolicy":"keepCurrent"}`
 with `doc.open` or MCP `doc_open`. Exactly one profile policy is permitted; both together,
 null/unknown values, extra explicit fields and mismatched suffixes refuse before job

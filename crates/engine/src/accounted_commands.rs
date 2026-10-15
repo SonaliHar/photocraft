@@ -20,6 +20,7 @@ pub(crate) use save_journal::PreparedSaveJournalWitness;
 mod imported_metadata;
 mod threshold_alpha;
 mod threshold;
+mod readonly_layer_name;
 #[cfg(test)]
 mod threshold_alpha_journal_tests;
 pub(crate) use job_journal::PreparedAccountedJobJournal;
@@ -57,6 +58,8 @@ enum Request<'a> {
     PreparedMetadata(imported_metadata::Prepared<'a>),
     ThresholdAlpha(threshold_alpha::Request<'a>),
     PreparedThresholdAlpha(threshold_alpha::Prepared<'a>),
+    ReadonlyLayerName(readonly_layer_name::Request<'a>),
+    PreparedReadonlyLayerName(readonly_layer_name::Prepared<'a>),
     Threshold(threshold::Request<'a>),
     PreparedThreshold(threshold::Prepared<'a>),
     Clear(&'a Value),
@@ -105,6 +108,9 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
         // admits their actual retained payload before any journal copies.
         params.as_object().ok_or_else(|| bad(id, "parameters must be an object"))?;
         return Ok(Request::HistorySelect(crate::history_select_cmds::validate_request(session, params, control)?));
+    }
+    if id == "layer.setProps" && readonly_layer_name::applies(session) {
+        return Ok(Request::ReadonlyLayerName(readonly_layer_name::Request::parse(params, control)?));
     }
     if id == "layer.setProps" && imported_metadata::applies(session) {
         return Ok(Request::ImportedMetadata(imported_metadata::parse(params)?));
@@ -515,6 +521,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::ImportedMetadata(request) => Request::PreparedMetadata(request.prepare(session, control)?),
             Request::ThresholdAlpha(request) => Request::PreparedThresholdAlpha(request.prepare(session, control)?),
             Request::Threshold(request) => Request::PreparedThreshold(request.prepare(session, control)?),
+            Request::ReadonlyLayerName(request) => Request::PreparedReadonlyLayerName(request.prepare(session, control)?),
             Request::Clear(params) => Request::PreparedClear(crate::accounted_clear::Prepared::prepare(session, params, control)?),
             Request::Fill(params) => Request::PreparedFill(crate::accounted_fill::Prepared::prepare(session, params, control)?),
             other => other,
@@ -580,6 +587,9 @@ impl<'a> PreparedAccountedCommand<'a> {
         if matches!(&request, Request::PreparedThreshold(_)) {
             census.add(0, usize::try_from(threshold::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
         }
+        if matches!(&request, Request::PreparedReadonlyLayerName(_)) {
+            census.add(0, usize::try_from(readonly_layer_name::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
+        }
         if matches!(&request, Request::PreparedFill(_)) {
             // The temporary native transaction pays its prepared reply until
             // publication; the retained journal covers the returned value.
@@ -618,7 +628,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             }
             None => CommandLease::Journal(lease),
         };
-        let history = if matches!(&request, Request::HistorySelect(_) | Request::PreparedThresholdAlpha(_) | Request::PreparedThreshold(_) | Request::PreparedClear(_) | Request::PreparedFill(_)) { Some(state.history.clone()) } else { None };
+        let history = if matches!(&request, Request::HistorySelect(_) | Request::PreparedThresholdAlpha(_) | Request::PreparedThreshold(_) | Request::PreparedReadonlyLayerName(_) | Request::PreparedClear(_) | Request::PreparedFill(_)) { Some(state.history.clone()) } else { None };
         Ok(Self { request, snapshot: state.doc.clone(), revision: state.revision, view_revision: state.view_revision, history, journal, lease, overlap, quota })
     }
     pub fn execute(self, session: &mut Session, control: &ReadControl<'_>) -> Result<Value> {
@@ -648,6 +658,7 @@ impl<'a> PreparedAccountedCommand<'a> {
                 | Request::ColorRange(_)
                 | Request::PreparedMetadata(_)
                 | Request::PreparedThresholdAlpha(_)
+                | Request::PreparedReadonlyLayerName(_)
                 | Request::PreparedThreshold(_)
                 | Request::PreparedClear(_)
                 | Request::PreparedFill(_)
@@ -682,12 +693,14 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::PreparedMetadata(prepared) => prepared.execute(session, control)?,
             Request::PreparedThresholdAlpha(prepared) => prepared.execute(session, control)?,
             Request::PreparedThreshold(prepared) => prepared.execute(session, control)?,
+            Request::PreparedReadonlyLayerName(prepared) => prepared.execute(session, control)?,
             Request::PreparedClear(prepared) => prepared.execute(session, control)?,
             Request::PreparedFill(prepared) => prepared.execute(session, control)?,
             Request::Clear(_) => return Err(BackingError::Integrity.into()),
             Request::Fill(_) => return Err(BackingError::Integrity.into()),
             Request::ThresholdAlpha(_) => return Err(BackingError::Integrity.into()),
             Request::Threshold(_) => return Err(BackingError::Integrity.into()),
+            Request::ReadonlyLayerName(_) => return Err(BackingError::Integrity.into()),
             Request::ImportedMetadata(_) => return Err(BackingError::Integrity.into()),
             Request::Select(layer) => {
                 session.select_accounted_with_control(layer, control)?;

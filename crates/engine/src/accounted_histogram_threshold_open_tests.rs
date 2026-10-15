@@ -306,7 +306,7 @@ fn generic_reopen_and_mutations_refuse_without_fallback_or_changed_history() {
     let journal = s.journal.clone();
     let revision = s.active().unwrap().revision;
     let raw = native(&before);
-    for (command, params) in [("edit.clear", json!({})), ("edit.fill", json!({"contents":"white"})), ("layer.setProps", json!({"name":"not-admitted"}))] {
+    for (command, params) in [("edit.clear", json!({})), ("edit.fill", json!({"contents":"white"})), ("layer.setProps", json!({"fill":0.5}))] {
         assert!(s.execute(command, params).is_err());
         assert!(before.shares_state(&s.active().unwrap().doc));
         assert!(history.shares_accounted_history(&s.active().unwrap().history));

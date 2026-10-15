@@ -411,7 +411,17 @@ struct OriginalRetention {
 #[derive(Clone, Copy)]
 enum CopyKind<'n> {
     Rename(&'n str),
+    LayerName(ReadonlyLayerNamePatch<'n>),
     ThresholdAlpha { value_f32_bits: Option<u32>, enabled: Option<bool>, revision: u64 },
+}
+pub(super) fn layer_named(owner: &AccountedDocument, patch: ReadonlyLayerNamePatch<'_>, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
+    imported_edits::validate_name(patch.name, control)?;
+    let logical = measured(owner.document(), owner.quota(), control)?;
+    if !readonly_layer_name::changed(owner.document(), patch, control)? {
+        control.check(1)?;
+        return Ok(owner.clone());
+    }
+    current_copy(owner, logical, CopyKind::LayerName(patch), control)
 }
 
 pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
@@ -425,11 +435,13 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadContr
     }
     current_copy(owner, logical, CopyKind::Rename(name), control)
 }
-// Both routes copy current metadata under the original paid recipe. Only the
-// Rename case includes replacement-name slack, exactly as before this split.
+// Current metadata copies retain the original paid recipe. Document Rename
+// keeps its old slack; LayerName separately admits both replacement strings.
 fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     let replacement_name_bytes = match kind {
         CopyKind::Rename(name) => name.len() as u64,
+        // Two replacement Strings may each reserve up to twice their length.
+        CopyKind::LayerName(patch) => (patch.name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
         CopyKind::ThresholdAlpha { .. } => 0,
     };
     let owner_bytes = AccountedDocument::owned_model_reservation_bytes();
@@ -465,6 +477,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     }
     match kind {
         CopyKind::Rename(name) => document.name = imported_edits::copy_name(name, control)?,
+        CopyKind::LayerName(patch) => readonly_layer_name::apply(&mut document, patch, control)?,
         CopyKind::ThresholdAlpha { value_f32_bits, enabled, revision } => {
             let state = document.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
             let stack = state.filter_stacks.first_mut().ok_or(BackingError::Integrity)?;

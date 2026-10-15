@@ -739,6 +739,14 @@ impl Session {
         if id == "document.pixel.inspect" {
             crate::inspect_pixel_cmds::dispatch_preflight(&params)?;
         }
+        if id == "layer.setProps"
+            && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
+                owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage()
+            })
+            && (background || self.jobs.spawn)
+        {
+            return Err(EngineError::BadParams { cmd: id.into(), msg: "owned Threshold layer naming requires synchronous dispatch".into() });
+        }
         crate::brush_cmds::advanced_dispatch_preflight(self, id, &params)?;
         crate::xcf_composition_cmds::dispatch_preflight(self, id, &params)?;
         if id == "select.object" && crate::selection_object_controlled::handles(&params) {
@@ -1113,9 +1121,13 @@ impl Session {
                 }))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
             }
-            // Bounded native pixel and Histogram Threshold preparation share one
+            // Bounded native pixel, Threshold naming and Histogram preparation share one
             // immutable registered work ledger; no per-cell allowance reset.
             let bounded_work = matches!(id, "edit.clear" | "edit.fill")
+                || id == "layer.setProps"
+                    && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
+                        owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage()
+                    })
                 || matches!(id, "xcf.filter.set" | "xcf.filter.enable")
                     && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_threshold_storage());
             let registered_work = std::sync::atomic::AtomicU64::new(crate::accounted_clear::REGISTERED_WORK_LIMIT);

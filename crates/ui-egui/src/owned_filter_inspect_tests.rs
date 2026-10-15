@@ -198,6 +198,55 @@ fn discovery_rejects_alias_mismatch_bad_pagination_and_value_only_transport() {
     assert_eq!(e.quota.usage().unwrap(), baseline);
 }
 #[test]
+#[ignore = "UNRUN: pinned originals and existing control rename/history workflow"]
+fn owned_layer_rename_uses_registered_control_then_paid_discovery_and_history() {
+    for histogram in [false, true] {
+        let (mut app, e) = app(histogram);
+        let original = app.session.active().unwrap().doc.clone();
+        let layer = app.session.active().unwrap().active_layer.unwrap();
+        let source = app.session.active().unwrap().source.clone();
+        let before_background = e.quota.usage().unwrap();
+        assert!(app.session.start("layer.setProps", json!({"layer":layer.0,"name":"background must refuse"})).is_err());
+        assert!(app.session.active().unwrap().doc.shares_state(&original));
+        assert_eq!(e.quota.usage().unwrap(), before_background);
+        let calls = Arc::new(AtomicU64::new(0));
+        let seen = calls.clone();
+        app.services.automation_command = Some(Box::new(move |id, _| {
+            assert!(matches!(id, "layer.setProps" | "xcf.inspect" | "edit.undo" | "edit.redo"));
+            seen.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }));
+        let ctx = egui::Context::default();
+        let (rename, _) = ControlRequest::new("engine.execute", json!({"command":"layer.setProps","params":{"layer":layer.0,"name":"renamed threshold"}}));
+        let Outcome::Done(result) = crate::control::handle(&mut app, &ctx, &rename) else { panic!("rename must finish synchronously") };
+        assert_eq!(result["ok"], true);
+        assert_eq!(app.session.active().unwrap().doc.layer(layer).unwrap().name, "renamed threshold");
+        let renamed = app.session.active().unwrap().doc.clone();
+        let quota_before_query = e.quota.usage().unwrap();
+        let (query, wake, wire) = ControlRequest::with_retained_query("engine.execute", json!({"command":"xcf.inspect"}), json!(9), 1 << 20);
+        assert!(matches!(crate::control::handle(&mut app, &ctx, &query), Outcome::Deferred));
+        assert!(wake.try_recv().unwrap().is_null());
+        let wire = wire.try_recv().unwrap();
+        let response: Value = serde_json::from_slice(wire.bytes()).unwrap();
+        let item = response["result"]["items"]["entries"].as_array().unwrap().iter().find(|item| item["item"]["kind"] == "layer").unwrap();
+        assert_eq!(item["name"], "renamed threshold");
+        assert_eq!(item["customName"], true);
+        drop(wire);
+        assert_eq!(e.quota.usage().unwrap(), quota_before_query);
+        for (command, expected) in [("edit.undo", &original), ("edit.redo", &renamed)] {
+            let (req, _) = ControlRequest::new("engine.execute", json!({"command":command}));
+            let Outcome::Done(result) = crate::control::handle(&mut app, &ctx, &req) else { panic!("history must finish synchronously") };
+            assert_eq!(result["ok"], true);
+            assert!(app.session.active().unwrap().doc.shares_state(expected));
+        }
+        let state = app.session.active().unwrap();
+        assert_eq!(state.source, source);
+        assert_eq!(state.doc.icc_profile, original.icc_profile);
+        assert_eq!(state.doc.xcf_state.as_ref().unwrap().filter_masks, original.xcf_state.as_ref().unwrap().filter_masks);
+        assert_eq!(calls.load(Ordering::Relaxed), 4);
+    }
+}
+#[test]
 #[ignore = "UNRUN: pinned originals; no UI/runtime or TCP execution"]
 fn real_owned_control_reply_is_queued_before_null_and_held_through_write_flush() {
     for histogram in [false, true] {

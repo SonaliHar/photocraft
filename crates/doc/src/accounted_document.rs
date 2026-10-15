@@ -23,6 +23,9 @@ mod filter_readonly;
 mod threshold_readonly;
 pub use filter_readonly::ThresholdAlphaPatch;
 pub use threshold_readonly::ThresholdPatch;
+#[path = "accounted_readonly_layer_name.rs"]
+mod readonly_layer_name;
+pub use readonly_layer_name::ReadonlyLayerNamePatch;
 #[path = "accounted_document_name.rs"]
 mod document_name;
 #[cfg(test)]
