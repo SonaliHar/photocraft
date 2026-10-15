@@ -306,14 +306,7 @@ fn generic_reopen_and_mutations_refuse_without_fallback_or_changed_history() {
     let journal = s.journal.clone();
     let revision = s.active().unwrap().revision;
     let raw = native(&before);
-    let filter = before.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id.0.to_string();
-    for (command, params) in [
-        ("xcf.filter.set", json!({"filterId":filter,"arguments":before.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].arguments})),
-        ("xcf.filter.enable", json!({"filterId":filter,"enabled":false})),
-        ("edit.clear", json!({})),
-        ("edit.fill", json!({"contents":"white"})),
-        ("layer.setProps", json!({"name":"not-admitted"})),
-    ] {
+    for (command, params) in [("edit.clear", json!({})), ("edit.fill", json!({"contents":"white"})), ("layer.setProps", json!({"name":"not-admitted"}))] {
         assert!(s.execute(command, params).is_err());
         assert!(before.shares_state(&s.active().unwrap().doc));
         assert!(history.shares_accounted_history(&s.active().unwrap().history));
@@ -378,5 +371,55 @@ fn duplicate_cancel_work_and_real_quota_failures_preserve_existing_tab_and_fees(
         assert!(current.shares_state(&s.active().unwrap().doc));
         assert_eq!(s.documents().len(), 1);
         assert_eq!(f.quota.usage().unwrap(), stable);
+    }
+}
+
+#[test]
+#[ignore = "UNRUN: requires pinned independently authored Histogram Threshold originals"]
+fn registered_current_filter_edits_history_and_native_reopen_preserve_full_source_storage() {
+    for (id, sample) in CASES {
+        let f = fixture(id, sample);
+        let mut s = session(&f);
+        let before = s.active().unwrap().doc.clone();
+        let raw = native(&before);
+        let original = before.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].clone();
+        let original_low = serde_json::to_value(original.arguments.iter().find(|a| a.name == "low").unwrap()).unwrap();
+        let low_bits = if original_low["value"]["Number"]["Float32Bits"] == 0.875f32.to_bits() { 0.625f32.to_bits() } else { 0.875f32.to_bits() };
+        let filter = original.id.0.to_string();
+        let low = json!({"filterId":filter,"arguments":[{"name":"low","value":{"Number":{"Float32Bits":low_bits}}},{"name":"high","value":{"Number":{"Float32Bits":0.125f32.to_bits()}}}]});
+        let revision = s.active().unwrap().revision;
+        assert_eq!(s.execute("xcf.filter.set", low.clone()).unwrap()["updated"], true);
+        assert_eq!(s.active().unwrap().revision, revision + 1);
+        assert_eq!(s.active().unwrap().history.past_len(), 1);
+        assert_eq!(native(&s.active().unwrap().doc), raw);
+        let changed = s.active().unwrap().doc.clone();
+        assert_eq!(changed.icc_profile, before.icc_profile);
+        assert_eq!(changed.source_color_context, before.source_color_context);
+        assert_eq!(changed.xcf_state.as_ref().unwrap().filter_stacks[0].revision, before.xcf_state.as_ref().unwrap().filter_stacks[0].revision + 1);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0], original);
+        let original_arguments = serde_json::to_value(&original.arguments).unwrap();
+        let history = s.active().unwrap().history.clone();
+        let revision = s.active().unwrap().revision;
+        assert_eq!(s.execute("xcf.filter.set", json!({"filterId":filter,"arguments":original_arguments})).unwrap()["updated"], false);
+        assert_eq!(s.active().unwrap().revision, revision);
+        assert!(s.active().unwrap().history.shares_accounted_history(&history));
+        s.execute("edit.redo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().doc.xcf_state, changed.xcf_state);
+        assert_eq!(s.execute("xcf.filter.enable", json!({"filterId":filter,"enabled":!original.enabled})).unwrap()["updated"], true);
+        let current = s.active().unwrap().doc.clone();
+        assert_eq!(native(&current), raw);
+        let canvas = scene(&current);
+        let saved = save_as(&mut s, "edited-threshold.pcraft", &f.quota);
+        let mut reopened = Session::new();
+        reopened.add_owned_native_threshold_archive(load(&saved, &f.quota), "input.pcraft", None, &ctl()).unwrap();
+        let result = &reopened.active().unwrap().doc;
+        assert_eq!(result.name, "edited-threshold.pcraft");
+        assert_eq!(result.xcf_state, current.xcf_state);
+        assert_eq!(result.icc_profile, current.icc_profile);
+        assert_eq!(native(result), raw);
+        assert_eq!(scene(result), canvas);
+        assert!(s.active().unwrap().source.as_ref().unwrap().check_destination("authorized/original.xcf").is_err());
+        assert_eq!(hash(&f.encoded), corpus().1[format!("{id}.xcf")].as_str().unwrap());
     }
 }

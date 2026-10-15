@@ -37,6 +37,8 @@ mod vector_width;
 mod underline;
 #[cfg(test)]
 mod accounted_threshold_alpha_tests;
+#[cfg(test)]
+mod accounted_threshold_tests;
 
 pub(crate) fn mask_storage_params(app:&PhotocraftApp,layer:LayerId,on_set:bool,command:&str)->Result<serde_json::Value,String> {
     layer_mask::queued_params(app,layer,on_set,command)

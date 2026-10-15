@@ -93,3 +93,6 @@ fn ordinary_open_stays_resident_and_explicit_failed_source_does_not_retry_it() {
     assert!(explicit.open_owned_xcf_keep_current(Path::new("not-xcf.png"), &ctl()).is_err());
     assert!(explicit.session.documents().is_empty());
 }
+
+#[path = "histogram_filter_tests.rs"]
+mod histogram_filter_tests;

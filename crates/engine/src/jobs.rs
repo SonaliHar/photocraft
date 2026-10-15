@@ -1113,12 +1113,15 @@ impl Session {
                 }))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
             }
-            // Bounded native pixel preparation and the final typed edit share one
+            // Bounded native pixel and Histogram Threshold preparation share one
             // immutable registered work ledger; no per-cell allowance reset.
-            let pixel_work = std::sync::atomic::AtomicU64::new(crate::accounted_clear::REGISTERED_WORK_LIMIT);
+            let bounded_work = matches!(id, "edit.clear" | "edit.fill")
+                || matches!(id, "xcf.filter.set" | "xcf.filter.enable")
+                    && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_threshold_storage());
+            let registered_work = std::sync::atomic::AtomicU64::new(crate::accounted_clear::REGISTERED_WORK_LIMIT);
             let debit = |units| {
-                if !matches!(id, "edit.clear" | "edit.fill") { return Ok(()); }
-                pixel_work.try_update(std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Relaxed, |left| left.checked_sub(units))
+                if !bounded_work { return Ok(()); }
+                registered_work.try_update(std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Relaxed, |left| left.checked_sub(units))
                     .map(|_| ()).map_err(|_| photocraft_raster::backing::BackingError::Work)
             };
             let control = photocraft_raster::backing::ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &debit };

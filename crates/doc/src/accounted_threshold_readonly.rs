@@ -6,6 +6,9 @@ use crate::{
     FilterMask,
     xcf_filters::{ExactNumber, FilterStack, FilterValue},
 };
+#[path = "accounted_threshold_readonly_patch.rs"]
+mod patch;
+pub use patch::ThresholdPatch;
 const EPOCH: &str = "xcf-22-stock-threshold-precision-v1";
 const OPAQUE: i32 = -1_565_818_287;
 fn unsupported<T>() -> Result<T, BackingError> {
@@ -208,6 +211,11 @@ fn copy_node(node: &crate::xcf_filters::FilterNode, c: &ReadControl<'_>) -> Resu
 struct OriginalRetention {
     original: AccountedDocument,
 }
+#[derive(Clone, Copy)]
+enum CopyKind<'a> {
+    Rename(&'a str),
+    Threshold { patch: ThresholdPatch, revision: u64 },
+}
 pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     imported_edits::validate_name(name, control)?;
     if name.len() > 4096 {
@@ -217,10 +225,13 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadContr
     if imported_edits::names_equal(&owner.document().name, name, control)? {
         return Ok(owner.clone());
     }
-    current_copy(owner, logical, name, control)
+    current_copy(owner, logical, CopyKind::Rename(name), control)
 }
-fn current_copy(owner: &AccountedDocument, logical: ModelCensus, name: &str, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
-    let replacement_name_bytes = name.len() as u64;
+fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
+    let replacement_name_bytes = match kind {
+        CopyKind::Rename(name) => name.len() as u64,
+        CopyKind::Threshold { .. } => 0,
+    };
     let owner_bytes = AccountedDocument::owned_model_reservation_bytes();
     let envelope = logical
         .index
@@ -252,7 +263,16 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, name: &str, con
         let plan = MaskCopyPlan::new(&mask.surface, mask.bounds, control)?;
         destination.filter_masks.push(FilterMask { id: mask.id, owner: mask.owner, bounds: mask.bounds, surface: plan.copy(&mask.surface, control)? });
     }
-    document.name = imported_edits::copy_name(name, control)?;
+    match kind {
+        CopyKind::Rename(name) => document.name = imported_edits::copy_name(name, control)?,
+        CopyKind::Threshold { patch, revision } => {
+            let state = document.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
+            let stack = state.filter_stacks.first_mut().ok_or(BackingError::Integrity)?;
+            let node = stack.nodes.first_mut().ok_or(BackingError::Integrity)?;
+            patch::apply(node, patch, control)?;
+            stack.revision = revision;
+        }
+    }
     let actual =
         measured(&document, owner.quota(), control)?.index.checked_add(std::mem::size_of::<OriginalRetention>() as u64 + 128).ok_or(BackingError::Length)?;
     if actual > envelope {
@@ -281,3 +301,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, name: &str, con
 #[cfg(test)]
 #[path = "accounted_threshold_readonly_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "accounted_threshold_readonly_patch_tests.rs"]
+mod patch_tests;

@@ -93,3 +93,6 @@ fn real_native_info_registered_edit_and_save_as_preserve_original_archive() {
     assert_eq!(code, 0, "{error}");
     assert!(!ordinary.contains("nativeProfilePolicy"));
 }
+
+#[path = "histogram_filter_tests.rs"]
+mod histogram_filter_tests;

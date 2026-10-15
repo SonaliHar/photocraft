@@ -22,6 +22,7 @@ mod filter_readonly;
 #[path = "accounted_threshold_readonly.rs"]
 mod threshold_readonly;
 pub use filter_readonly::ThresholdAlphaPatch;
+pub use threshold_readonly::ThresholdPatch;
 #[path = "accounted_document_name.rs"]
 mod document_name;
 #[cfg(test)]
