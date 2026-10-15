@@ -1886,9 +1886,8 @@ mod tests {
     }
 
     /// An edge in a row profile `(x, value)` within ±45 px of `xe`: its 10-90 % width in pixels,
-    /// between the profile's own extremes there, and its lowest value normalised so `lo` is 0 and
-    /// `hi` is 1.
-    fn edge_width(prof: &[(i32, f64)], xe: f64, lo: f64, hi: f64) -> (f64, f64) {
+    /// between the profile's own extremes there (normalised so `lo` is 0 and `hi` is 1).
+    fn edge_width(prof: &[(i32, f64)], xe: f64, lo: f64, hi: f64) -> f64 {
         let n: Vec<(i32, f64)> = prof.iter().filter(|(x, _)| (f64::from(*x) - xe).abs() <= 45.0).map(|&(x, v)| (x, (v - lo) / (hi - lo))).collect();
         let mn = n.iter().map(|p| p.1).fold(f64::MAX, f64::min);
         let mx = n.iter().map(|p| p.1).fold(f64::MIN, f64::max);
@@ -1898,21 +1897,19 @@ mod tests {
                 .find(|w| (w[0].1 - lv) * (w[1].1 - lv) <= 0.0 && w[0].1 != w[1].1)
                 .map_or(f64::NAN, |w| f64::from(w[0].0) + (lv - w[0].1) / (w[1].1 - w[0].1))
         };
-        ((cross(0.9) - cross(0.1)).abs(), mn)
+        (cross(0.9) - cross(0.1)).abs()
     }
 
     /// The edge across the row of `h`'s image of source row `v0` where source column `ue` lands:
-    /// its 10-90 % width in `bic` and in `bil`, and its lowest value in `bic`.
-    fn row_edge(h: &Homography, bic: &Surface, bil: &Surface, v0: f64, ue: f64, lo: f64, hi: f64) -> (f64, f64, f64) {
+    /// its 10-90 % width in `bic` and in `bil`.
+    fn row_edge(h: &Homography, bic: &Surface, bil: &Surface, v0: f64, ue: f64, lo: f64, hi: f64) -> (f64, f64) {
         let inv = h.inverse().unwrap();
         let (xd, yd) = h.apply(0.0, v0);
         let (y, x0) = (yd.floor() as i32, xd.floor() as i32);
         let xs = (x0 - 10)..(x0 + 400);
         let row = |s: &Surface| -> Vec<(i32, f64)> { xs.clone().map(|x| (x, f64::from(s.pixel(x, y)[0]))).collect() };
         let xe = crossing(&inv, y, xs.clone(), ue);
-        let (wb, low) = edge_width(&row(bic), xe, lo, hi);
-        let (wl, _) = edge_width(&row(bil), xe, lo, hi);
-        (wb, wl, low)
+        (edge_width(&row(bic), xe, lo, hi), edge_width(&row(bil), xe, lo, hi))
     }
 
     /// #4864: the reporter's Distort. Its long left side magnifies the source across x, so the black
@@ -1928,11 +1925,17 @@ mod tests {
         let bic = warp_surface(&card, r, &h, Interp::Bicubic).unwrap();
         let bil = warp_surface(&card, r, &h, Interp::Bilinear).unwrap();
         for v0 in [80.0, 375.0, 680.0] {
-            let (wb, wl, darkest) = row_edge(&h, &bic, &bil, v0, 4.0, 0.0, 1.0);
+            let (wb, wl) = row_edge(&h, &bic, &bil, v0, 4.0, 0.0, 1.0);
             let (xd, yd) = h.apply(0.0, v0);
             let (y, x0) = (yd.floor() as i32, xd.floor() as i32);
             let outline = crossing(&inv, y, (x0 - 10)..(x0 + 400), 0.0);
             let alpha3 = bic.pixel((outline + 3.0).floor() as i32, y)[3];
+            // The border's darkest value, over the pixels inside the outline: a transparent pixel's
+            // colour reads 0 and says nothing.
+            let darkest = ((x0 - 10)..(x0 + 400))
+                .filter(|&x| (0.0..45.0).contains(&(f64::from(x) - outline)) && bic.pixel(x, y)[3] > 0.5)
+                .map(|x| f64::from(bic.pixel(x, y)[0]))
+                .fold(1.0f64, f64::min);
             let ramp = ((x0 - 10)..(x0 + 400))
                 .filter(|&x| (f64::from(x) - outline).abs() < 40.0)
                 .filter(|&x| {
@@ -1958,7 +1961,7 @@ mod tests {
         let bic = warp_surface(&card, r, &h, Interp::Bicubic).unwrap();
         let bil = warp_surface(&card, r, &h, Interp::Bilinear).unwrap();
         for (v0, ue, lo, hi) in [(80.0, 4.0, 0.0, 1.0), (375.0, 4.0, 0.0, 1.0), (680.0, 4.0, 0.0, 1.0), (375.0, 50.0, 1.0, 0.2)] {
-            let (wb, wl, _) = row_edge(&h, &bic, &bil, v0, ue, lo, hi);
+            let (wb, wl) = row_edge(&h, &bic, &bil, v0, ue, lo, hi);
             assert!(wb <= 1.25 * wl, "edge at source u = {ue}, v = {v0}: 10-90 width {wb:.1} px (Bilinear {wl:.1})");
         }
     }
@@ -2494,5 +2497,168 @@ mod tests {
         }
         assert!(drawn > 1000 && behind == 0, "{drawn} px drawn, {behind} from behind the horizon");
         assert!(px.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
+    }
+
+    /// Every drawn pixel of `o` is finite, its alpha within 0..=1 and its colour within 2.5/255 of
+    /// `col` (alpha last).
+    fn assert_flat(o: &Surface, col: &[f32], what: &str) {
+        let b = o.content_bounds();
+        let m = o.format().channels();
+        let mut worst = 0.0f32;
+        for p in o.read_region(b).chunks_exact(m) {
+            assert!(p.iter().all(|v| v.is_finite()) && (0.0..=1.0).contains(&p[m - 1]), "{what}: {p:?}");
+            if p[m - 1] > 0.0 {
+                worst = p.iter().zip(col).take(m - 1).fold(worst, |w, (v, c)| w.max((v - c).abs()));
+            }
+        }
+        assert!(worst < 2.5 / 255.0, "{what}: colour drifts by {worst}");
+    }
+
+    /// #4864: a Distort of a layer smaller than a tile, down to 1 px, anywhere in the document (far
+    /// and negative offsets, ±1.5·10⁹), shrunk, magnified and mirrored, keeps flat colour flat in
+    /// every mode and depth. Today's path drifted at the outline, where its reduced source faded.
+    #[test]
+    fn perspective_keeps_flat_colour_on_tiny_far_and_mirrored_layers() {
+        let small = [(1, 1), (1, 2), (3, 1), (2, 2), (5, 7)];
+        let large = [(255, 3), (3, 257), (300, 40)];
+        let offsets = [(0, 0), (-37, -101), (1_000_003, 7), (1_500_000_000, 1_500_000_000), (-1_500_000_000, -64)];
+        for fmt in golden_formats() {
+            let n = fmt.channels();
+            let col: Vec<f32> = (0..n).map(|c| if fmt.alpha && c == n - 1 { 1.0 } else { 0.2 + 0.15 * c as f32 }).collect();
+            let opaque: Vec<f32> = col.iter().copied().take(fmt.mode.color_channels()).chain([1.0]).collect();
+            // Every size, offset and scale in 8-bit RGB; the small sizes at two offsets elsewhere.
+            let rgb8 = fmt.sample == SampleType::U8 && fmt.mode == ColorMode::Rgb;
+            for &(w, h) in small.iter().chain(if rgb8 { &large[..] } else { &[] }) {
+                for &(ox, oy) in if rgb8 { &offsets[..] } else { &offsets[2..4] } {
+                    let r = Rect::new(ox, oy, ox + w, oy + h);
+                    let mut s = Surface::new(fmt);
+                    s.fill_rect(r, &col);
+                    let (fw, fh) = (f64::from(w), f64::from(h));
+                    let rect = [f64::from(ox), f64::from(oy), f64::from(ox) + fw, f64::from(oy) + fh];
+                    for scale in [0.3, 4.0, if rgb8 { 200.0 / fw.max(fh) } else { 40.0 }] {
+                        for mirror in [false, true] {
+                            let q = wedge(fw * scale, fh * scale).map(|[x, y]| if mirror { [50.0 - x, y + 5.0] } else { [x + 5.0, y + 5.0] });
+                            let hm = Homography::rect_to_quad(rect, q).unwrap();
+                            let o = warp_surface(&s, r, &hm, Interp::Bicubic).unwrap();
+                            assert_flat(&o, &opaque, &format!("{fmt:?} {w}x{h} at ({ox}, {oy}), ×{scale}, mirrored {mirror}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// #4864: 32-bit colours past 0..1 and a translucent layer stay flat; today's path clamped the
+    /// reduced source's ringing alpha but not its colour, so colours drifted at the outline.
+    #[test]
+    fn perspective_keeps_hdr_and_translucent_colour_flat() {
+        let r = Rect::new(0, 0, 400, 300);
+        for col in [[3.5f32, -0.25, 12.0, 1.0], [0.5, 0.5, 0.5, 0.4]] {
+            let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true));
+            s.fill_rect(r, &col);
+            for q in [wedge as fn(f64, f64) -> [[f64; 2]; 4], q6, trapezoid] {
+                let o = warp_surface(&s, r, &map(q, 400, 300), Interp::Bicubic).unwrap();
+                let mut worst = 0.0f32;
+                for p in o.read_region(o.content_bounds()).as_chunks::<4>().0 {
+                    assert!(p[3] <= col[3] + 1e-5, "{col:?}: alpha {} past the layer's", p[3]);
+                    if p[3] > 0.0 {
+                        worst = p.iter().zip(&col).take(3).fold(worst, |w, (v, c)| w.max((v - c).abs()));
+                    }
+                }
+                assert!(worst < 1e-4, "{col:?}: colour drifts by {worst}");
+            }
+        }
+    }
+
+    /// #4864: each pixel's filter is worked out in source space, so mirroring or transposing the
+    /// destination mirrors or transposes the result (up to rounding), wherever the tiles fall.
+    #[test]
+    fn perspective_mirrored_and_transposed_quads_match() {
+        let src = paint(400, 300, SampleType::F32, |x, y| {
+            let v = ((x * 7 + y * 3) % 23) as f32 / 22.0;
+            [v, ((x / 3) & 1) as f32, ((y / 2) & 1) as f32, 1.0]
+        });
+        let r = Rect::new(0, 0, 400, 300);
+        for q in [wedge as fn(f64, f64) -> [[f64; 2]; 4], q6, trapezoid] {
+            let quad = q(400.0, 300.0);
+            let o = warp_surface(&src, r, &Homography::rect_to_quad([0.0, 0.0, 400.0, 300.0], quad).unwrap(), Interp::Bicubic).unwrap();
+            type Back = fn(i32, i32) -> (i32, i32);
+            let variants: [(&str, [[f64; 2]; 4], Back); 3] = [
+                ("mirror x", quad.map(|[x, y]| [1000.0 - x, y]), |x, y| (999 - x, y)),
+                ("mirror y", quad.map(|[x, y]| [x, 1000.0 - y]), |x, y| (x, 999 - y)),
+                ("transpose", quad.map(|[x, y]| [y, x]), |x, y| (y, x)),
+            ];
+            for (name, mq, back) in variants {
+                let m = warp_surface(&src, r, &Homography::rect_to_quad([0.0, 0.0, 400.0, 300.0], mq).unwrap(), Interp::Bicubic).unwrap();
+                let b = m.content_bounds();
+                let px = m.read_region(b);
+                let premul = |p: &[f32], k: usize| if k < 3 { p[k] * p[3] } else { p[3] };
+                let mut worst = 0.0f32;
+                for (i, p) in px.as_chunks::<4>().0.iter().enumerate() {
+                    let (x, y) = (b.x0 + (i % b.width() as usize) as i32, b.y0 + (i / b.width() as usize) as i32);
+                    let (sx, sy) = back(x, y);
+                    let t = o.pixel(sx, sy);
+                    worst = (0..4).fold(worst, |w, k| w.max((premul(p, k) - premul(&t, k)).abs()));
+                }
+                assert!(worst < 1e-6, "{name}: differs by {worst}");
+            }
+        }
+    }
+
+    /// #4864: a tile is skipped only when no source tile lies within a filter's reach, so a source
+    /// whose transparent tiles are missing draws exactly what it draws with them written.
+    #[test]
+    fn perspective_sparse_source_matches_dense() {
+        let r = Rect::new(0, 0, 800, 600);
+        let blobs = |s: &mut Surface| {
+            s.fill_rect(Rect::new(300, 220, 500, 370), &[0.9, 0.3, 0.1, 1.0]);
+            s.fill_rect(Rect::new(690, 200, 750, 400), &[0.1, 0.8, 0.4, 1.0]);
+            s.fill_rect(Rect::new(780, 590, 800, 600), &[0.2, 0.2, 0.9, 1.0]);
+        };
+        let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
+        let mut sparse = Surface::new(fmt);
+        blobs(&mut sparse);
+        let mut dense = Surface::new(fmt);
+        dense.write_region(r, &vec![0.0f32; 800 * 600 * 4]);
+        blobs(&mut dense);
+        assert!(dense.tiles().count() > sparse.tiles().count());
+        for q in [wedge as fn(f64, f64) -> [[f64; 2]; 4], q6, trapezoid] {
+            let h = map(q, 800, 600);
+            let (a, b) = (warp_surface(&sparse, r, &h, Interp::Bicubic).unwrap(), warp_surface(&dense, r, &h, Interp::Bicubic).unwrap());
+            let u = a.content_bounds().union(&b.content_bounds());
+            assert!(a.read_region(u) == b.read_region(u), "sparse and dense sources draw differently");
+        }
+    }
+
+    /// #4864 with #2271 and #4863: Distorts at the edge of what a map can do (a corner pinched to
+    /// 0.02 px, one thrown a million pixels away, a bow tie, quads past the horizon, a 2000 × 3 px
+    /// sliver) stay finite and flat at every depth, and any clip keeps the pixels of a larger one.
+    #[test]
+    fn perspective_extreme_maps_stay_flat_and_clip_consistently() {
+        let r = Rect::new(0, 0, 200, 150);
+        let col = [0.3f32, 0.6, 0.9, 1.0];
+        let quads: [[[f64; 2]; 4]; 6] = [
+            [[0.0, 0.0], [200.0, 0.0], [100.01, 150.0], [99.99, 150.0]],
+            [[0.0, 0.0], [200.0, 0.0], [1e6, 1e6], [0.0, 150.0]],
+            [[0.0, 0.0], [200.0, 0.0], [0.0, 150.0], [200.0, 150.0]],
+            [[0.0, 0.0], [600.0, 0.0], [120.0, 120.0], [0.0, 600.0]],
+            [[0.0, 0.0], [600.0, 0.0], [310.0, 310.0], [0.0, 600.0]],
+            [[0.0, 0.0], [2000.0, 0.0], [2000.0, 3.0], [0.0, 1.0]],
+        ];
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
+            s.fill_rect(r, &col);
+            for q in quads {
+                let h = Homography::rect_to_quad([0.0, 0.0, 200.0, 150.0], q).unwrap();
+                let big = Rect::new(-700, -700, 2100, 1300);
+                let whole = warp_surface_clipped(&s, r, &h, Interp::Bicubic, big).unwrap();
+                assert!(!whole.content_bounds().is_empty(), "{sample:?} {q:?}: nothing drawn");
+                assert_flat(&whole, &col, &format!("{sample:?} {q:?}"));
+                for clip in [Rect::new(-50, -40, 230, 260), Rect::new(90, 60, 130, 160), Rect::new(1500, -3, 2050, 9)] {
+                    let part = warp_surface_clipped(&s, r, &h, Interp::Bicubic, clip).unwrap();
+                    assert!(whole.read_region(clip) == part.read_region(clip), "{sample:?} {q:?} {clip:?}");
+                }
+            }
+        }
     }
 }
