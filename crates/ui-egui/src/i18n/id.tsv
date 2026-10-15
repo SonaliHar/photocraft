@@ -3181,3 +3181,19 @@ curves	Smooth	Haluskan
 	set name	nama set
 	{set} (modified)	{set} (diubah)
 	Random	Acak
+
+# Window › Timelapse
+	Timelapse	Timelapse
+	Frames	Bingkai
+	State	Status
+	no session	tidak ada sesi
+	capturing…	menangkap…
+	recording	merekam
+	stopped	berhenti
+	Start Recording	Mulai Merekam
+	Stop Recording	Hentikan Merekam
+	Capture Frame Now	Tangkap Bingkai Sekarang
+	Min seconds between frames	Min. detik antar bingkai
+	Reference layer prefix (not recorded)	Awalan layer referensi (tidak direkam)
+	Export Video (MP4 + 30 s)	Ekspor Video (MP4 + 30 dtk)
+	Open Frames Folder	Buka Folder Bingkai

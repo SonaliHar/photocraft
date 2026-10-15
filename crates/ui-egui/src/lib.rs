@@ -208,6 +208,8 @@ pub mod text_field_menu;
 pub mod theme;
 pub mod tiff_options_ui;
 mod tile_overlay;
+#[cfg(not(target_arch = "wasm32"))]
+mod timelapse;
 mod timeline_ui;
 mod titlebar;
 pub use titlebar::{Caption, CaptionFamily, CaptionIcon, CaptionIcons, CaptionStyle, RenderIconFn};
@@ -1956,6 +1958,8 @@ impl eframe::App for PhotocraftApp {
         type_panels_ui::windows(self, &ctx);
         analysis_ui::windows(self, &ctx);
         timeline_ui::windows(self, &ctx);
+        #[cfg(not(target_arch = "wasm32"))]
+        timelapse::windows(self, &ctx);
         workspace_ui::windows(self, &ctx);
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);

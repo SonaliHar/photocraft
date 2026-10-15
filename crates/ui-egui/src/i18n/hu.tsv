@@ -4108,3 +4108,19 @@ cameraRaw	Yellow	Sárga
 	There are too many sets: delete one first.	Túl sok készlet van: előbb töröljön egyet.
 	set name	készlet neve
 	{set} (modified)	{set} (módosítva)
+
+# Window › Timelapse
+	Timelapse	Időzített felvétel
+	Frames	Képkockák
+	State	Állapot
+	no session	nincs munkamenet
+	capturing…	rögzítés…
+	recording	felvétel
+	stopped	leállítva
+	Start Recording	Felvétel indítása
+	Stop Recording	Felvétel leállítása
+	Capture Frame Now	Képkocka rögzítése most
+	Min seconds between frames	Min. másodperc képkockák között
+	Reference layer prefix (not recorded)	Referenciaréteg-előtag (nem kerül rögzítésre)
+	Export Video (MP4 + 30 s)	Videó exportálása (MP4 + 30 mp)
+	Open Frames Folder	Képkockák mappájának megnyitása

@@ -3191,3 +3191,19 @@ curves	Smooth	Glätten
 	There are too many sets: delete one first.	Zu viele Sätze: Löschen Sie zuerst einen.
 	set name	Name des Satzes
 	{set} (modified)	{set} (geändert)
+
+# Window › Timelapse
+	Timelapse	Zeitraffer
+	Frames	Frames
+	State	Status
+	no session	keine Sitzung
+	capturing…	wird aufgenommen…
+	recording	Aufnahme läuft
+	stopped	angehalten
+	Start Recording	Aufnahme starten
+	Stop Recording	Aufnahme beenden
+	Capture Frame Now	Frame jetzt aufnehmen
+	Min seconds between frames	Min. Sekunden zwischen Frames
+	Reference layer prefix (not recorded)	Präfix für Referenzebenen (nicht aufgenommen)
+	Export Video (MP4 + 30 s)	Video exportieren (MP4 + 30 s)
+	Open Frames Folder	Frame-Ordner öffnen

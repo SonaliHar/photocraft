@@ -3194,3 +3194,19 @@ curves	Smooth	Lisser
 	set name	nom du jeu
 	{set} (modified)	{set} (modifié)
 	Random	Aléatoire
+
+# Window › Timelapse
+	Timelapse	Timelapse
+	Frames	Images
+	State	État
+	no session	aucune session
+	capturing…	capture…
+	recording	enregistrement
+	stopped	arrêté
+	Start Recording	Démarrer l’enregistrement
+	Stop Recording	Arrêter l’enregistrement
+	Capture Frame Now	Capturer une image maintenant
+	Min seconds between frames	Secondes min. entre les images
+	Reference layer prefix (not recorded)	Préfixe des calques de référence (non enregistrés)
+	Export Video (MP4 + 30 s)	Exporter la vidéo (MP4 + 30 s)
+	Open Frames Folder	Ouvrir le dossier des images

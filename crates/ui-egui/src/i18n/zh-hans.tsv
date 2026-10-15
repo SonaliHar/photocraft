@@ -2805,3 +2805,19 @@ curves	Smooth	平滑
 	set name	组名称
 	{set} (modified)	{set}（已修改）
 	Random	随机
+
+# Window › Timelapse
+	Timelapse	延时摄影
+	Frames	帧
+	State	状态
+	no session	无会话
+	capturing…	正在捕获…
+	recording	正在录制
+	stopped	已停止
+	Start Recording	开始录制
+	Stop Recording	停止录制
+	Capture Frame Now	立即捕获帧
+	Min seconds between frames	帧间最少秒数
+	Reference layer prefix (not recorded)	参考图层前缀（不录制）
+	Export Video (MP4 + 30 s)	导出视频（MP4 + 30 秒）
+	Open Frames Folder	打开帧文件夹

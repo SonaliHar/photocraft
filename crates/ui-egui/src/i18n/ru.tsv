@@ -3159,3 +3159,19 @@ curves	Smooth	Сгладить
 	set name	имя набора
 	{set} (modified)	{set} (изменён)
 	Random	Случайно
+
+# Window › Timelapse
+	Timelapse	Таймлапс
+	Frames	Кадры
+	State	Состояние
+	no session	нет сеанса
+	capturing…	захват…
+	recording	запись
+	stopped	остановлено
+	Start Recording	Начать запись
+	Stop Recording	Остановить запись
+	Capture Frame Now	Захватить кадр сейчас
+	Min seconds between frames	Мин. секунд между кадрами
+	Reference layer prefix (not recorded)	Префикс опорного слоя (не записывается)
+	Export Video (MP4 + 30 s)	Экспорт видео (MP4 + 30 с)
+	Open Frames Folder	Открыть папку кадров
