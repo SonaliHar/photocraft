@@ -675,13 +675,13 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
         app.hover_doc = None;
-        app.guide_drag = Some(GuideDrag { vertical: true, index: None, pos: 42.0 });
+        app.guide_drag = Some(GuideDrag { vertical: true, index: None, pos: 42.0, press: 42.0 });
         let mut h = egui_kittest::Harness::builder()
             .with_size(vec2(260.0, 240.0))
             .build_ui_state(|ui, app| crate::panels::dock_body(app, ui, crate::dock::Group::Navigator, 2), app);
         h.run_steps(2);
         assert!(h.query_by_label("42").is_some(), "vertical guide: X readout");
-        h.state_mut().guide_drag = Some(GuideDrag { vertical: false, index: None, pos: 17.0 });
+        h.state_mut().guide_drag = Some(GuideDrag { vertical: false, index: None, pos: 17.0, press: 17.0 });
         h.run_steps(2);
         assert!(h.query_by_label("17").is_some(), "horizontal guide: Y readout");
     }

@@ -1834,22 +1834,8 @@ fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.columns(2, |cols| {
         let dash = || "—".to_string();
         // Measured from the rulers' zero point (#2955).
-        row(
-            &mut cols[0],
-            "X:",
-            guide_x
-                .map(|p| fx(p - origin[0]))
-                .or_else(|| pos.map(|p| fx(p.0 as f64 - origin[0])))
-                .unwrap_or_else(dash),
-        );
-        row(
-            &mut cols[0],
-            "Y:",
-            guide_y
-                .map(|p| fy(p - origin[1]))
-                .or_else(|| pos.map(|p| fy(p.1 as f64 - origin[1])))
-                .unwrap_or_else(dash),
-        );
+        row(&mut cols[0], "X:", guide_x.map(|p| fx(p - origin[0])).or_else(|| pos.map(|p| fx(p.0 as f64 - origin[0]))).unwrap_or_else(dash));
+        row(&mut cols[0], "Y:", guide_y.map(|p| fy(p - origin[1])).or_else(|| pos.map(|p| fy(p.1 as f64 - origin[1]))).unwrap_or_else(dash));
         row(&mut cols[1], "W:", sel.map_or_else(dash, |r| fx(r.width() as f64)));
         row(&mut cols[1], "H:", sel.map_or_else(dash, |r| fy(r.height() as f64)));
     });
