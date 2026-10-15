@@ -3181,3 +3181,6 @@ curves	Smooth	Haluskan
 	set name	nama set
 	{set} (modified)	{set} (diubah)
 	Random	Acak
+	Photo Filter Color	Warna Filter Foto
+	Stop Color	Warna stop
+	Tint Color	Warna Tint

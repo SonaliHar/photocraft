@@ -97,7 +97,7 @@ impl Pick {
     pub fn title(self) -> String {
         let name = match self {
             Pick::Key("tintColor") => tl!("Tint Color"),
-            Pick::Key(_) => tl!("Filter Color"),
+            Pick::Key(_) => tl!("Photo Filter Color"),
             Pick::Stop(_) => tl!("Stop Color"),
         };
         crate::color_picker_ui::title_for(name)

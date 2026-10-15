@@ -874,7 +874,7 @@ fn picker_field(h: &Harness<'_, PhotocraftApp>, id: u64, key: &str) -> serde_jso
 fn adjustment_colour_swatches_open_the_color_picker() {
     let cases: [(&str, &str, &str); 3] = [
         ("blackWhite", "Color Picker (Tint Color)", "/tintColor"),
-        ("photoFilter", "Color Picker (Filter Color)", "/color"),
+        ("photoFilter", "Color Picker (Photo Filter Color)", "/color"),
         ("gradientMap", "Color Picker (Stop Color)", "/stops/1/1"),
     ];
     for (kind, title, at) in cases {
@@ -928,7 +928,7 @@ fn the_adjustment_dialog_picks_its_colour_in_the_color_picker() {
     h.state_mut().run("edit.fill", json!({"color": "#808080"})).unwrap();
     let dialog = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.photoFilter").expect("dialog");
     h.run_steps(4);
-    let swatch = h.get_by_label("Color Picker (Filter Color)").rect().center();
+    let swatch = h.get_by_label("Color Picker (Photo Filter Color)").rect().center();
     let color = h.get_by_label("Color:").rect().center();
     click(&mut h, color);
     click(&mut h, swatch);

@@ -2805,3 +2805,6 @@ curves	Smooth	平滑
 	set name	组名称
 	{set} (modified)	{set}（已修改）
 	Random	随机
+	Photo Filter Color	照片滤镜颜色
+	Stop Color	色标颜色
+	Tint Color	色调颜色
