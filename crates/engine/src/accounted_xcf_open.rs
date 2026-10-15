@@ -114,6 +114,25 @@ impl Session {
         )
     }
 
+    /// Publish a sealed source-selected Point import only after the separate
+    /// current profile, mask and complete operative recipe have succeeded.
+    pub fn add_owned_point_xcf_import(
+        &mut self,
+        imported: &photocraft_io::OwnedPointXcfImport,
+        label: &str,
+        source_path: Option<&str>,
+        control: &ReadControl<'_>,
+    ) -> Result<usize> {
+        let owner = imported.document();
+        crate::accounted_native_open::validate_current_stock_point_storage(owner, control)?;
+        self.add_owned_xcf_model(
+            ImportedModel { document: owner, origin: imported.origin(), source_read_only: imported.source_read_only(), preview_only: imported.preview_only() },
+            label,
+            source_path,
+            control,
+        )
+    }
+
     fn add_owned_xcf_model(&mut self, imported: ImportedModel<'_>, label: &str, source_path: Option<&str>, control: &ReadControl<'_>) -> Result<usize> {
         control.check(1)?;
         if imported.origin != photocraft_io::ImportOrigin::xcf() || imported.preview_only {

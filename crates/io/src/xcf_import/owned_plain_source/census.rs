@@ -85,6 +85,10 @@ pub(in crate::xcf_import) fn measure_histogram_threshold(
     histogram_threshold_shape(doc)?;
     measure_inner(doc, budget, control, true)
 }
+/// Storage-only shared walker, reached after the sealed Point shape gate.
+pub(in crate::xcf_import) fn measure_point_storage(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>) -> Result<Census, IoError> {
+    measure_inner(doc, budget, control, true)
+}
 fn measure_inner(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>, threshold: bool) -> Result<Census, IoError> {
     use photocraft_doc::{WorkingProfileInterpretation, physical_resolution::PhysicalUnit, xcf_editing::ItemSetRule};
     control.check().map_err(|_| IoError::Cancelled)?;

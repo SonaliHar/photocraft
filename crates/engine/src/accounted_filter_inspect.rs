@@ -1,4 +1,4 @@
-//! Paid metadata-only inspection of actual readonly Threshold storage owners.
+//! Paid metadata-only inspection of actual readonly Threshold and Point storage owners.
 //! No source, profile, renderer or editing authority follows. This additive API
 //! does not enroll generic Session commands: a typed caller MUST retain the
 //! returned carrier through serialization and the complete output operation.
@@ -40,6 +40,10 @@ pub(crate) struct ReplyBounds {
     pub(crate) max_string: usize,
 }
 const FILTER_BOUNDS: ReplyBounds = ReplyBounds { nodes: MAX_NODES, objects: MAX_OBJECTS, members: MAX_MEMBERS, depth: MAX_DEPTH, max_string: MAX_TEXT };
+// Separate Point-only envelope: <=10 FLAT scalar/bool/enum arguments. Existing
+// Alpha/Histogram constants and envelope remain unchanged. These cover each
+// typed argument's serde enum/state/row maps plus complete original metadata.
+const POINT_FILTER_BOUNDS: ReplyBounds = ReplyBounds { nodes: 512, objects: 128, members: 512, depth: 8, max_string: MAX_TEXT };
 
 /// The copied Value drops before its actual quota reservation. There is no raw
 /// Value extractor: callers retain this owner until their output is complete.
@@ -106,6 +110,41 @@ fn metadata(node: &FilterNode, control: &ReadControl<'_>) -> Result<usize> {
         }
     }
     Ok(total)
+}
+fn point_metadata(node: &FilterNode, control: &ReadControl<'_>) -> Result<usize> {
+    let mut total = 0;
+    for value in [&node.operation.name, &node.operation.stored_version, &node.operation.schema_epoch] {
+        text(&mut total, value, MAX_TEXT, control)?;
+    }
+    if let Some(policy) = &node.composition {
+        text(&mut total, &policy.compatibility_epoch, MAX_TEXT, control)?;
+    }
+    for value in [&node.source_display_name, &node.source_icon].into_iter().flatten() {
+        text(&mut total, value, MAX_TEXT, control)?;
+    }
+    if node.arguments.len() > 10 || !node.auxiliary.is_empty() {
+        return Err(BackingError::Unsupported.into());
+    }
+    for argument in &node.arguments {
+        text(&mut total, &argument.name, 128, control)?;
+        match &argument.value {
+            FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Float32Bits(_)) | FilterValue::Bool(_) => {}
+            FilterValue::Enum { domain, .. } => text(&mut total, domain, 256, control)?,
+            _ => return Err(BackingError::Unsupported.into()),
+        }
+    }
+    Ok(total)
+}
+fn point_envelope(text: usize) -> Result<u64> {
+    let bytes = POINT_FILTER_BOUNDS
+        .nodes
+        .checked_mul(std::mem::size_of::<Value>())
+        .and_then(|n| n.checked_add(POINT_FILTER_BOUNDS.objects.checked_mul(MAP_HEADER)?))
+        .and_then(|n| n.checked_add(POINT_FILTER_BOUNDS.members.checked_mul(MAP_ENTRY)?))
+        .and_then(|n| n.checked_add(text.checked_add(FIXED_TEXT)?.checked_mul(2)?))
+        .and_then(|n| n.checked_add(std::mem::size_of::<OwnedFilterInspectReply>() + 128))
+        .ok_or(BackingError::Length)?;
+    u64::try_from(bytes).map_err(|_| BackingError::Length.into())
 }
 fn envelope(text: usize) -> Result<u64> {
     let bytes = MAX_NODES
@@ -176,7 +215,8 @@ impl Census {
 }
 /// Inspect exactly one canonical nonzero decimal filterId, with the unchanged
 /// registered resident response fields. Only genuine Alpha/Histogram readonly
-/// runtime classes are admitted; neither a stored name nor a schema grants it.
+/// runtime classes plus the explicit Point class are admitted; neither a stored
+/// name nor a schema grants it.
 /// The immutable Session borrow precludes intervening publication. No model,
 /// view, history, redo, coalescing marker, source identity or journal is mutated.
 /// This is not an authorization bypass: typed frontends must apply their existing
@@ -189,13 +229,18 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     let id = crate::xcf_filter_cmds::id(COMMAND, params)?;
     let active = session.active().ok_or(EngineError::NoDocument)?;
     let owner = active.doc.accounted().ok_or(BackingError::Unsupported)?;
-    if owner.is_readonly_threshold_alpha_storage() {
+    let point = if owner.is_readonly_threshold_alpha_storage() {
         owner.validate_readonly_threshold_alpha_storage(control)?;
+        false
     } else if owner.is_readonly_threshold_storage() {
         owner.validate_readonly_threshold_storage(control)?;
+        false
+    } else if owner.is_readonly_point_storage() {
+        owner.validate_readonly_point_storage(control)?;
+        true
     } else {
         return Err(BackingError::Unsupported.into());
-    }
+    };
     let state = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     let [stack] = state.filter_stacks.as_slice() else {
         return Err(BackingError::Integrity.into());
@@ -205,6 +250,13 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     };
     if node.id != id {
         return Err(bad("unknown filterId"));
+    }
+    if point {
+        let text = point_metadata(node, control)?;
+        let planned = point_envelope(text)?;
+        return paid_reply(owner.quota(), ReplyKind::Filter, POINT_FILTER_BOUNDS, planned, text, control, || {
+            crate::xcf_filter_cmds::build_inspect_reply(id, stack, node)
+        });
     }
     let text = metadata(node, control)?;
     let planned = envelope(text)?;
@@ -247,3 +299,7 @@ pub(crate) fn paid_reply(
 #[cfg(test)]
 #[path = "accounted_filter_inspect_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "accounted_point_inspect_tests.rs"]
+mod point_tests;

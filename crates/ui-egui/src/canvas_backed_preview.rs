@@ -24,9 +24,10 @@ fn backed_display_image_with_owner(
     interrupt: &Interrupt<'_>,
 ) -> Result<(egui::ColorImage, QuotaLease), String> {
     let render = || -> Result<_, String> {
-        let threshold = owner.is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage());
+        let builtin_basis = owner
+            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage());
         // Current bytes alone supply interpretation; import provenance is inert.
-        if !threshold && !matches!(doc.working_profile_interpretation, WorkingProfileInterpretation::Icc) {
+        if !builtin_basis && !matches!(doc.working_profile_interpretation, WorkingProfileInterpretation::Icc) {
             return Err("backed canvas requires explicit current ICC".into());
         }
         let bytes = doc.icc_profile.as_deref().ok_or("backed canvas current ICC is missing")?;
@@ -47,12 +48,12 @@ fn backed_display_image_with_owner(
             .map_err(|_| BackingError::Work)
         };
         let control = ReadControl { interrupt, work: &charge };
-        // The explicit runtime class uses an actual builtin byte witness. Its
-        // compositor validates current bytes and the implicit marker again;
+        // Explicit runtime classes use an actual nonlinear builtin basis. Their
+        // compositors validate current effective bytes and the implicit marker;
         // no source epoch or supplied profile name substitutes for that check.
         // The ordinary ICC parser and its existing envelope stay unchanged.
         let mut profile_lease = None;
-        let parsed = if threshold {
+        let parsed = if builtin_basis {
             None
         } else {
             if bytes.len() > 64 << 10 {
@@ -175,6 +176,10 @@ mod mask_tests;
 #[cfg(test)]
 #[path = "canvas_backed_threshold_tests.rs"]
 mod threshold_tests;
+
+#[cfg(test)]
+#[path = "canvas_backed_stock_point_tests.rs"]
+mod stock_point_tests;
 
 #[cfg(test)]
 fn backed_display_image(

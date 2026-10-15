@@ -179,6 +179,20 @@ pub(crate) fn scalar_preparation_bytes(nodes: usize, max_args: usize) -> Result<
         .ok_or(CompositionError::Invalid("scalar preparation size overflow"))?;
     u64::try_from(bytes).map_err(|_| CompositionError::Invalid("scalar preparation size overflow"))
 }
+/// Existing current integer point buffer boundary, shared by resident and
+/// owned-backed callers. Other current precisions deliberately stay wide.
+pub(crate) fn current_point_storage_result(mut pixel:[f64;4], integer_storage:Option<u64>, changes_alpha:bool)->[f64;4] {
+        if let Some(denominator) = integer_storage {
+            let denominator = denominator as f64;
+            // Public Color to Alpha U8 projection independently proves the
+            // same current storage boundary applies to generated coverage.
+            let count = if changes_alpha { 4 } else { 3 };
+            for component in pixel.iter_mut().take(count) {
+                *component = (component.clamp(0.0, 1.0) * denominator).round() / denominator;
+            }
+        }
+        pixel
+}
 impl PointStack {
     #[cfg(test)]
     pub(crate) fn from_nodes_at(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, owner: photocraft_geom::Rect) -> Result<Self> {

@@ -1,5 +1,5 @@
 //! Paid discovery of canonical metadata and stable filter IDs for genuine
-//! readonly Alpha/Histogram storage. No source, render or editing grant follows.
+//! readonly Alpha/Histogram/Point storage. No source, render or editing grant follows.
 //! The returned carrier MUST remain held through encoding and transport output.
 use crate::{
     EngineError, Result, Session,
@@ -94,6 +94,8 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
         owner.validate_readonly_threshold_alpha_storage(control)?;
     } else if owner.is_readonly_threshold_storage() {
         owner.validate_readonly_threshold_storage(control)?;
+    } else if owner.is_readonly_point_storage() {
+        owner.validate_readonly_point_storage(control)?;
     } else {
         return Err(BackingError::Unsupported.into());
     }

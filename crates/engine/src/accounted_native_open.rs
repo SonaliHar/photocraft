@@ -15,6 +15,58 @@ enum NativeHandoff {
     Document,
     CurrentThresholdAlpha,
     CurrentHistogramThreshold,
+    CurrentPoint,
+}
+
+/// Allocation-free name hint selecting the stricter current Point endpoint.
+/// Version, arguments, profile and storage still require the typed handoff;
+/// a refusal must never retry through the generic archive endpoint.
+pub fn is_current_point_candidate(document: &photocraft_doc::Document, control: &ReadControl<'_>) -> std::result::Result<bool, BackingError> {
+    if let Some(state) = &document.xcf_state {
+        for stack in &state.filter_stacks {
+            control.check(1)?;
+            for node in &stack.nodes {
+                control.check(1)?;
+                if matches!(node.operation.name.as_str(), "gegl:brightness-contrast" | "gegl:levels" | "gegl:exposure" | "gegl:color-temperature" | "gegl:sepia" | "gegl:alien-map" | "gegl:invert-linear" | "gegl:invert-gamma") {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn point_error(error: photocraft_compose::backed_normal::BackedNormalError, control: &ReadControl<'_>) -> EngineError {
+    use photocraft_compose::backed_normal::BackedNormalError;
+    use photocraft_raster::checked_view::RasterViewError;
+    match error {
+        BackedNormalError::Backing(error)
+        | BackedNormalError::View(RasterViewError::Backed(error) | RasterViewError::Control(error) | RasterViewError::Descriptor(error)) => error.into(),
+        BackedNormalError::Quota(_) => BackingError::Quota.into(),
+        BackedNormalError::Allocation => BackingError::Allocation.into(),
+        _ if control.interrupt.cancelled() => EngineError::Cancelled,
+        other => EngineError::Other(format!("owned stock Point current recipe: {other}")),
+    }
+}
+
+/// Independently qualify and visit the complete current operative drawable,
+/// using its genuine model quota and the caller's cumulative control.
+pub(crate) fn validate_current_stock_point_storage(owner: &photocraft_doc::accounted_document::AccountedDocument, control: &ReadControl<'_>) -> Result<()> {
+    control.check(1)?;
+    let profile = match owner.document().mode {
+        photocraft_doc::ColorMode::Rgb => photocraft_cms::Builtin::Srgb.profile(),
+        photocraft_doc::ColorMode::Grayscale => photocraft_cms::Builtin::SGray.profile(),
+        _ => return Err(BackingError::Unsupported.into()),
+    };
+    control.check(1)?;
+    // Nonlinear builtin basis only. The context independently binds and owns
+    // the actual stored-encoding effective current profile on the same quota.
+    let prepared = photocraft_compose::backed_stock_point_context::PreparedBackedStockPointContext::new(owner, profile, Default::default(), control)
+        .map_err(|error| point_error(error, control))?;
+    prepared.validate_operative(control).map_err(|error| point_error(error, control))?;
+    drop(prepared);
+    control.check(1)?;
+    Ok(())
 }
 
 /// Stored operation names select a stricter current-storage validator only.
@@ -144,6 +196,18 @@ impl Session {
         self.add_owned_native_with(archive, label, authorized_native_path, control, NativeHandoff::CurrentHistogramThreshold)
     }
 
+    /// Strict current Point native continuation. Stored source locators remain
+    /// inert; the full current recipe must succeed before publishing any state.
+    pub fn add_owned_native_point_archive(
+        &mut self,
+        archive: OwnedDocumentArchive,
+        label: &str,
+        authorized_native_path: Option<&str>,
+        control: &ReadControl<'_>,
+    ) -> Result<usize> {
+        self.add_owned_native_with(archive, label, authorized_native_path, control, NativeHandoff::CurrentPoint)
+    }
+
     fn add_owned_native_with(
         &mut self,
         archive: OwnedDocumentArchive,
@@ -168,12 +232,23 @@ impl Session {
                 return Err(EngineError::Other("an open document already owns this accounted identity".into()));
             }
         }
+        if matches!(handoff, NativeHandoff::Document) && is_current_point_candidate(archive.document(), control)? {
+            return Err(BackingError::Unsupported.into());
+        }
         let document = match handoff {
             NativeHandoff::Document => archive.into_accounted_document(control),
             NativeHandoff::CurrentThresholdAlpha => archive.into_accounted_readonly_threshold_alpha_storage(control),
             NativeHandoff::CurrentHistogramThreshold => archive.into_accounted_readonly_threshold_storage(control),
+            NativeHandoff::CurrentPoint => archive.into_accounted_readonly_point_storage(control),
         }
         .map_err(|error| {
+            if matches!(handoff, NativeHandoff::CurrentPoint) {
+                if let photocraft_format::FormatError::Io(io) = &error {
+                    if let Some(backing) = io.get_ref().and_then(|source| source.downcast_ref::<BackingError>()) {
+                        return EngineError::from(*backing);
+                    }
+                }
+            }
             if matches!(error, photocraft_format::FormatError::Cancelled) {
                 EngineError::Cancelled
             } else {
@@ -214,6 +289,9 @@ impl Session {
         }
         if let NativeHandoff::CurrentHistogramThreshold = handoff {
             validate_current_threshold_storage(&document, control)?;
+        }
+        if let NativeHandoff::CurrentPoint = handoff {
+            validate_current_stock_point_storage(&document, control)?;
         }
         let history_states = self.prefs.get().performance.history_states.max(1) as usize;
         let mut state = DocState::new_accounted(document, None, history_states, control)?;
@@ -259,3 +337,7 @@ mod hint_tests;
 #[cfg(all(test, feature = "corpus"))]
 #[path = "accounted_histogram_threshold_open_tests.rs"]
 mod histogram_threshold_integration_tests;
+
+#[cfg(test)]
+#[path = "accounted_point_handoff_tests.rs"]
+mod point_handoff_tests;

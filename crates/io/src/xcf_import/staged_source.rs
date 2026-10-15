@@ -17,11 +17,22 @@ trait StagePolicy {
     }
 }
 /// Internal successful source-route identity, never persisted or caller-set.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SelectedStagedFamily {
     Plain,
     ThresholdAlpha,
     Threshold,
+    Point(crate::xcf_filters::PointReplaceFamily),
+}
+impl std::fmt::Debug for SelectedStagedFamily {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Plain => "Plain",
+            Self::ThresholdAlpha => "ThresholdAlpha",
+            Self::Threshold => "Threshold",
+            Self::Point(_) => "Point",
+        })
+    }
 }
 struct PlainPolicy;
 struct ThresholdAlphaPolicy;
@@ -30,12 +41,35 @@ impl StagePolicy for SourceSelectedPolicy {
     const THRESHOLD_ALPHA: bool = false;
     const SOURCE_SELECTED: bool = true;
     fn accepts(d: &PlaneDescriptor) -> bool {
-        PlainPolicy::accepts(d) || ThresholdAlphaPolicy::accepts(d)
+        PlainPolicy::accepts(d) || ThresholdAlphaPolicy::accepts(d) || point_plane(d)
     }
     fn family<Q: ExactParsedPlane>(file: &XcfFile<Q>) -> SelectedStagedFamily {
         // Select exactly one old gate, before mapping or mutation. A refusal
         // never retries the other gate. This is not eligibility by name/epoch.
         if file.layers.len() == 1 && file.layers.first().is_some_and(|layer| !layer.effects.is_empty()) {
+            // This chooses a strict validator only. admissions() must obtain
+            // the SAME family from the original whole-file classifier before
+            // mapping; completion cannot return this route after a refusal.
+            use crate::xcf_filters::PointReplaceFamily as F;
+            let effect = file.layers.first().and_then(|layer| layer.effects.first());
+            let point = effect.and_then(|effect| match effect.operation.as_str() {
+                "gegl:brightness-contrast" => Some(F::Brightness),
+                "gegl:levels" => Some(F::Levels),
+                "gegl:exposure" => Some(F::Exposure),
+                "gegl:color-temperature" => Some(F::Temperature),
+                "gegl:sepia" => Some(F::Sepia),
+                "gegl:invert-linear" => Some(F::InvertLinear),
+                "gegl:invert-gamma" => Some(F::InvertGamma),
+                "gegl:alien-map" if effect.arguments.len() <= 10 => effect.arguments.iter().find(|a| a.name == "color-model").and_then(|a| match &a.value {
+                    photocraft_xcf::ArgumentValue::Enum(0) => Some(F::AlienRgb),
+                    photocraft_xcf::ArgumentValue::Enum(1) => Some(F::AlienHsl),
+                    _ => None,
+                }),
+                _ => None,
+            });
+            if let Some(family) = point {
+                return SelectedStagedFamily::Point(family);
+            }
             if file.layers.first().and_then(|layer| layer.effects.first()).is_some_and(|effect| effect.operation == "gimp:threshold") {
                 SelectedStagedFamily::Threshold
             } else {
@@ -67,6 +101,18 @@ impl StagePolicy for ThresholdAlphaPolicy {
                 PlaneRole::Channel => false,
             }
     }
+}
+
+// Source-selected sink storage acceptance is broader than source authority.
+// Only admissions() can enroll the supported Point intersection after decode.
+fn point_plane(d: &PlaneDescriptor) -> bool {
+    d.sample == decoded_sample(d.source_sample)
+        && matches!(d.source_sample, Sample::U8 | Sample::U16 | Sample::U32 | Sample::F16 | Sample::F32 | Sample::F64)
+        && match d.role {
+            PlaneRole::Raster => d.alpha && matches!(d.model, Model::Rgb | Model::Gray) && d.channels == if d.model == Model::Gray { 2 } else { 4 },
+            PlaneRole::Mask => !d.alpha && d.model == Model::Gray && d.channels == 1,
+            PlaneRole::Channel => false,
+        }
 }
 
 type Token<'b, 'a> = Rc<LeaseToken<'b, 'a>>;
@@ -348,11 +394,26 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn requires_budgeted_rendering_preparation_for(threshold_alpha_domain: bool) -> bool {
         if P::SOURCE_SELECTED { threshold_alpha_domain } else { Self::requires_budgeted_rendering_preparation() }
     }
+    fn requires_budgeted_point_preparation(point_domain: bool) -> bool {
+        P::SOURCE_SELECTED && point_domain
+    }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
         let family = P::family(file);
         let histogram = family == SelectedStagedFamily::Threshold;
         let threshold = family == SelectedStagedFamily::ThresholdAlpha || histogram;
-        if histogram {
+        let point = if let SelectedStagedFamily::Point(expected) = family {
+            let actual = crate::xcf_point_replace_source::classify(file, ctl, shared)?;
+            if actual != Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(expected)) {
+                return Err(IoError::Unsupported("staged Point source is outside its exact whole-file predicate".into()));
+            }
+            actual
+        } else {
+            None
+        };
+        if point.is_some() {
+            // Full original source, precision, geometry, mask flags and unit
+            // domains were just checked by the unchanged classifier policy.
+        } else if histogram {
             if file.model != Model::Rgb
                 || file.encoding != Encoding::NonlinearProfile
                 || (file.width, file.height) != (8, 6)
@@ -379,6 +440,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         for d in &file.layers {
             ctl.check().map_err(|_| IoError::Cancelled)?;
             if !threshold
+                && point.is_none()
                 && (d.group
                     || d.path.len() > 1
                     || d.model != file.model
@@ -411,9 +473,9 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
                 }
                 Ok(())
             })?;
-            validate_drawable_alpha(d, false, false, ctl, 0)?;
+            validate_drawable_alpha(d, point.is_some(), false, ctl, 0)?;
         }
-        Ok(admission::AdmissionDomains::default())
+        Ok(admission::AdmissionDomains { point_replace_domain: point, ..Default::default() })
     }
     fn late_admissions(file: &XcfFile<Self>) -> admission::LateAdmissionDomains {
         // Generic mapping always runs admissions before this side-effect-free
@@ -437,7 +499,10 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn current_filter_mask_surface(&mut self, rect: Rect, _: &mut Budget<'_>, ctl: &Interrupt<'_>) -> Result<Surface, IoError> {
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let d = &self.descriptor;
-        if !(P::THRESHOLD_ALPHA || P::SOURCE_SELECTED) || d.role != PlaneRole::Mask || !ThresholdAlphaPolicy::accepts(d) {
+        if !(P::THRESHOLD_ALPHA || P::SOURCE_SELECTED)
+            || d.role != PlaneRole::Mask
+            || !(ThresholdAlphaPolicy::accepts(d) || P::SOURCE_SELECTED && point_plane(d))
+        {
             return Err(IoError::Unsupported("plain staged endpoint has no filter-mask transfer".into()));
         }
         let width = i32::try_from(d.width).map_err(|_| IoError::Unsupported("staged mask width".into()))?;
@@ -816,3 +881,7 @@ mod tests {
         assert_eq!(budget.used(BudgetKind::Encoded), 0);
     }
 }
+
+#[cfg(test)]
+#[path = "staged_point_source_tests.rs"]
+mod point_source_tests;

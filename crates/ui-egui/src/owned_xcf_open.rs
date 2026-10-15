@@ -120,6 +120,7 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
     let prepared = PreparedReply::new(&imported, path, name, authority, &control)?;
     control.check(1).map_err(|e| e.to_string())?;
     match &imported {
+        photocraft_io::OwnedXcfImport::Point(imported) => app.session.add_owned_point_xcf_import(imported, name, Some(path), &control),
         photocraft_io::OwnedXcfImport::Plain(imported) => app.session.add_owned_plain_xcf_import(imported, name, Some(path), &control),
         photocraft_io::OwnedXcfImport::ThresholdAlpha(imported) => app.session.add_owned_threshold_alpha_xcf_import(imported, name, Some(path), &control),
         photocraft_io::OwnedXcfImport::HistogramThreshold(imported) => {
@@ -336,6 +337,7 @@ pub(crate) fn adopt_bytes(app: &mut PhotocraftApp, name: &str, imported: &photoc
     let prepared = PreparedReply::new(imported, "", name, Authority::Interactive, control)?;
     control.check(1).map_err(|e| e.to_string())?;
     match imported {
+        photocraft_io::OwnedXcfImport::Point(value) => app.session.add_owned_point_xcf_import(value, name, None, control),
         photocraft_io::OwnedXcfImport::Plain(value) => app.session.add_owned_plain_xcf_import(value, name, None, control),
         photocraft_io::OwnedXcfImport::ThresholdAlpha(value) => app.session.add_owned_threshold_alpha_xcf_import(value, name, None, control),
         photocraft_io::OwnedXcfImport::HistogramThreshold(value) => app.session.add_owned_histogram_threshold_xcf_import(value, name, None, control),

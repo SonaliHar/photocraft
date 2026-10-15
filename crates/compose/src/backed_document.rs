@@ -25,6 +25,7 @@ enum DocumentCompositor<'a> {
     Group(group::PreparedGroup<'a>),
     Threshold(crate::backed_threshold_document::PreparedBackedThresholdDocument<'a>),
     ThresholdAlpha(crate::backed_threshold_alpha_document::PreparedBackedThresholdAlphaDocument<'a>),
+    Point(crate::backed_stock_point_document::PreparedBackedStockPointDocument<'a>),
 }
 
 pub struct PreparedBackedDocument<'a> {
@@ -69,14 +70,23 @@ impl<'a> PreparedBackedDocument<'a> {
     pub fn new(doc: &'a Document, profile: &Profile, limits: NormalBandLimits, control: &ReadControl<'_>) -> Result<Self, BackedNormalError> {
         Self::new_internal(doc, profile, limits, control, None)
     }
-    /// Qualified resident masks and closed plain imports require the actual paid
-    /// model/source guard. This does not extend ordinary bare-Document admission.
+    /// Qualified resident masks and closed imports require the actual paid
+    /// model/source guard. Point storage takes an explicit nonlinear builtin
+    /// basis; its context separately binds the actual current effective profile.
+    /// This does not extend ordinary bare-Document admission.
     pub fn new_accounted(
         owner: &'a photocraft_doc::accounted_document::AccountedDocument,
         profile: &Profile,
         limits: NormalBandLimits,
         control: &ReadControl<'_>,
     ) -> Result<Self, BackedNormalError> {
+        if owner.is_readonly_point_storage() {
+            let prepared = crate::backed_stock_point_document::PreparedBackedStockPointDocument::new(owner, profile, limits, control)?;
+            let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
+            let bounds = prepared.bounds();
+            control.check(1).map_err(BackedNormalError::Backing)?;
+            return Ok(Self { stack: DocumentCompositor::Point(prepared), limits, quota: owner.quota().clone(), bounds, _index: index });
+        }
         if owner.is_readonly_threshold_storage() {
             let prepared = crate::backed_threshold_document::PreparedBackedThresholdDocument::new(owner, profile, limits, control)?;
             let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
@@ -95,7 +105,13 @@ impl<'a> PreparedBackedDocument<'a> {
             let prepared = group::PreparedGroup::new(owner, profile, limits, control)?;
             let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
             control.check(1).map_err(BackedNormalError::Backing)?;
-            return Ok(Self { stack: DocumentCompositor::Group(prepared), limits, quota: owner.quota().clone(), bounds: owner.document().bounds(), _index: index });
+            return Ok(Self {
+                stack: DocumentCompositor::Group(prepared),
+                limits,
+                quota: owner.quota().clone(),
+                bounds: owner.document().bounds(),
+                _index: index,
+            });
         }
         Self::new_internal(owner.document(), profile, limits, control, Some(owner))
     }
@@ -255,6 +271,7 @@ impl<'a> PreparedBackedDocument<'a> {
             DocumentCompositor::Group(group) => group.render_band(rect, control),
             DocumentCompositor::Threshold(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::ThresholdAlpha(prepared) => prepared.render_band(rect, control),
+            DocumentCompositor::Point(prepared) => prepared.render_band(rect, control),
         }
     }
 

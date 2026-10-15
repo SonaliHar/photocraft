@@ -280,17 +280,8 @@ impl OrderedStack {
         }
         Ok(output)
     }
-    fn stored_point_result(&self, mut pixel: [f64; 4], changes_alpha: bool) -> [f64; 4] {
-        if let Some(denominator) = self.integer_point_storage {
-            let denominator = denominator as f64;
-            // Public Color to Alpha U8 projection independently proves the
-            // same current storage boundary applies to generated coverage.
-            let count = if changes_alpha { 4 } else { 3 };
-            for component in pixel.iter_mut().take(count) {
-                *component = (component.clamp(0.0, 1.0) * denominator).round() / denominator;
-            }
-        }
-        pixel
+    fn stored_point_result(&self, pixel: [f64; 4], changes_alpha: bool) -> [f64; 4] {
+        crate::gimp_filters::current_point_storage_result(pixel, self.integer_point_storage, changes_alpha)
     }
     pub(crate) fn has_neighborhood(&self) -> bool {
         self.stages.iter().any(|n| {

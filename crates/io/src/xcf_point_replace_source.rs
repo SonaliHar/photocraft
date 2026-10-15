@@ -1,4 +1,5 @@
 //! Measured singleton Replace compatibility with opaque stored fields preserved.
+use crate::xcf_import::plane::ExactParsedPlane;
 use crate::{
     IoError,
     xcf_filters::{NeighborhoodDomain, PointReplaceFamily},
@@ -71,7 +72,11 @@ fn poll(control: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>, by
 
 /// No allocation, profile substitution, enum normalization or source recoding.
 /// Typed parameters are subsequently checked by the unchanged base mapper.
-pub(crate) fn classify(file: &XcfFile, control: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<Option<NeighborhoodDomain>, IoError> {
+pub(crate) fn classify<P: ExactParsedPlane>(
+    file: &XcfFile<P>,
+    control: &Interrupt<'_>,
+    shared: Option<&photocraft_xcf::Budget<'_>>,
+) -> Result<Option<NeighborhoodDomain>, IoError> {
     poll(control, shared, 0)?;
     let Some(owner) = file.layers.first() else { return Ok(None) };
     let Some(effect) = owner.effects.first() else { return Ok(None) };
@@ -254,11 +259,13 @@ pub(crate) fn classify(file: &XcfFile, control: &Interrupt<'_>, shared: Option<&
     }
     let Some(plane) = owner.plane.as_ref() else { return Ok(None) };
     let owner_bytes = u64::from(owner.width).checked_mul(u64::from(owner.height)).and_then(|v| v.checked_mul(channels as u64 * width as u64));
-    if plane.sample != canonical_sample
-        || plane.width != owner.width
-        || plane.height != owner.height
-        || plane.channels != channels
-        || owner_bytes != Some(plane.bytes.len() as u64)
+    let descriptor = plane.descriptor();
+    if descriptor.sample != canonical_sample
+        || descriptor.width != owner.width
+        || descriptor.height != owner.height
+        || descriptor.channels != channels
+        || owner_bytes.is_none()
+        || owner_bytes != plane.native_byte_len()
     {
         return Ok(None);
     }
@@ -278,161 +285,193 @@ pub(crate) fn classify(file: &XcfFile, control: &Interrupt<'_>, shared: Option<&
             | PointReplaceFamily::AlphaClip
             | PointReplaceFamily::AlphaClipFinite
     );
-    for chunk in plane.bytes.chunks(64 * channels * width) {
+    let mut admitted = true;
+    let mut visited = 0u64;
+    plane.visit_native(control, &mut |chunk| {
+        visited = visited.checked_add(chunk.len() as u64).ok_or_else(|| IoError::Unsupported("point Replace native length overflow".into()))?;
+        // The visitor may finish its bounded traversal after a predicate has
+        // refused a previous block. Every actual read still pays shared work.
         poll(control, shared, chunk.len())?;
-        if typed_color {
-            let profile = if file.model == Model::Gray { photocraft_cms::Builtin::SGray.profile() } else { photocraft_cms::Builtin::Srgb.profile() };
-            let encoding = match file.encoding {
-                Encoding::Linear => photocraft_cms::xcf_color::Encoding::Linear,
-                Encoding::NonlinearProfile => photocraft_cms::xcf_color::Encoding::NonlinearProfile,
-                Encoding::Perceptual => photocraft_cms::xcf_color::Encoding::Perceptual,
-            };
-            for pixel in chunk.chunks_exact(channels * width) {
-                let mut values = [0f64; 4];
-                for (target, value) in values.iter_mut().zip(pixel.chunks_exact(width)) {
-                    *target = match canonical_sample {
-                        Sample::U8 => f64::from(*value.first().ok_or_else(|| IoError::Unsupported("Color Exchange native sample".into()))?) / 255.,
-                        Sample::U16 => {
-                            f64::from(u16::from_ne_bytes(value.try_into().map_err(|_| IoError::Unsupported("Color Exchange native sample".into()))?)) / 65535.
-                        }
-                        Sample::U32 => {
-                            f64::from(u32::from_ne_bytes(value.try_into().map_err(|_| IoError::Unsupported("Color Exchange native sample".into()))?))
-                                / 4294967295.
-                        }
-                        Sample::F32 => {
-                            f64::from(f32::from_ne_bytes(value.try_into().map_err(|_| IoError::Unsupported("Color Exchange native sample".into()))?))
-                        }
-                        Sample::F64 => f64::from_ne_bytes(value.try_into().map_err(|_| IoError::Unsupported("Color Exchange native sample".into()))?),
-                        Sample::F16 => return Ok(None),
-                    };
-                }
-                let color_count = channels - 1;
-                if values.iter().take(channels).any(|value| !value.is_finite()) || !values.get(color_count).is_some_and(|alpha| (0.0..=1.0).contains(alpha)) {
-                    return Ok(None);
-                }
-                if file.sample == Sample::F16
-                    && values.iter().take(channels).any(|value| {
-                        let value = *value as f32;
-                        !photocraft_color::try_round_f32_to_f16_bits(value).is_ok_and(|bits| photocraft_color::widen_f16_to_f32_bits(bits) == value.to_bits())
-                    })
-                {
-                    return Ok(None);
-                }
-                let mut working = [0f64; 3];
-                poll(control, shared, 128)?;
-                let working_encoding = if absolute
-                    || channel_mixer
-                    || mono_signed
-                    || overlay.is_some_and(|(_, srgb)| !srgb)
-                    || alpha_clip && (file.model == Model::Gray || file.encoding != Encoding::NonlinearProfile)
-                {
-                    photocraft_cms::xcf_color::Encoding::Linear
-                } else {
-                    photocraft_cms::xcf_color::Encoding::NonlinearProfile
+        if chunk.len() % (channels * width) != 0 || chunk.len() > 64 * channels * width {
+            admitted = false;
+        }
+        if !admitted {
+            return Ok(());
+        }
+        let validate = || -> Result<bool, IoError> {
+            if typed_color {
+                let profile = if file.model == Model::Gray { photocraft_cms::Builtin::SGray.profile() } else { photocraft_cms::Builtin::Srgb.profile() };
+                let encoding = match file.encoding {
+                    Encoding::Linear => photocraft_cms::xcf_color::Encoding::Linear,
+                    Encoding::NonlinearProfile => photocraft_cms::xcf_color::Encoding::NonlinearProfile,
+                    Encoding::Perceptual => photocraft_cms::xcf_color::Encoding::Perceptual,
                 };
-                photocraft_cms::xcf_color::convert_encoding_f64(
-                    profile,
-                    encoding,
-                    working_encoding,
-                    values.get(..color_count).ok_or_else(|| IoError::Unsupported("Color Exchange source channels".into()))?,
-                    working.get_mut(..color_count).ok_or_else(|| IoError::Unsupported("Color Exchange working channels".into()))?,
-                )
-                .map_err(|_| IoError::Unsupported("Color Exchange source transfer".into()))?;
-                if working.iter().take(color_count).any(|value| {
-                    let value = *value as f32;
-                    !value.is_finite() || (!absolute && !(0.0..=1.0).contains(&value))
-                }) {
-                    return Ok(None);
-                }
-                if channel_mixer && source.enabled == Some(true) {
-                    let Some(operation) = channel_mixer_source::parameters(effect) else { return Ok(None) };
-                    let red = *working.first().ok_or_else(|| IoError::Unsupported("Channel Mixer working color".into()))?;
-                    let alpha = *values.get(color_count).ok_or_else(|| IoError::Unsupported("Channel Mixer alpha".into()))?;
-                    let input = if file.model == Model::Gray {
-                        [red as f32, red as f32, red as f32, alpha as f32]
+                for pixel in chunk.chunks_exact(channels * width) {
+                    let mut values = [0f64; 4];
+                    for (target, value) in values.iter_mut().zip(pixel.chunks_exact(width)) {
+                        *target = match canonical_sample {
+                            Sample::U8 => f64::from(*value.first().ok_or_else(|| IoError::Unsupported("Color Exchange native sample".into()))?) / 255.,
+                            Sample::U16 => {
+                                f64::from(u16::from_ne_bytes(value.try_into().map_err(|_| IoError::Unsupported("Color Exchange native sample".into()))?))
+                                    / 65535.
+                            }
+                            Sample::U32 => {
+                                f64::from(u32::from_ne_bytes(value.try_into().map_err(|_| IoError::Unsupported("Color Exchange native sample".into()))?))
+                                    / 4294967295.
+                            }
+                            Sample::F32 => {
+                                f64::from(f32::from_ne_bytes(value.try_into().map_err(|_| IoError::Unsupported("Color Exchange native sample".into()))?))
+                            }
+                            Sample::F64 => f64::from_ne_bytes(value.try_into().map_err(|_| IoError::Unsupported("Color Exchange native sample".into()))?),
+                            Sample::F16 => return Ok(false),
+                        };
+                    }
+                    let color_count = channels - 1;
+                    if values.iter().take(channels).any(|value| !value.is_finite()) || !values.get(color_count).is_some_and(|alpha| (0.0..=1.0).contains(alpha))
+                    {
+                        return Ok(false);
+                    }
+                    if file.sample == Sample::F16
+                        && values.iter().take(channels).any(|value| {
+                            let value = *value as f32;
+                            !photocraft_color::try_round_f32_to_f16_bits(value)
+                                .is_ok_and(|bits| photocraft_color::widen_f16_to_f32_bits(bits) == value.to_bits())
+                        })
+                    {
+                        return Ok(false);
+                    }
+                    let mut working = [0f64; 3];
+                    poll(control, shared, 128)?;
+                    let working_encoding = if absolute
+                        || channel_mixer
+                        || mono_signed
+                        || overlay.is_some_and(|(_, srgb)| !srgb)
+                        || alpha_clip && (file.model == Model::Gray || file.encoding != Encoding::NonlinearProfile)
+                    {
+                        photocraft_cms::xcf_color::Encoding::Linear
                     } else {
-                        [
-                            red as f32,
-                            *working.get(1).ok_or_else(|| IoError::Unsupported("Channel Mixer green".into()))? as f32,
-                            *working.get(2).ok_or_else(|| IoError::Unsupported("Channel Mixer blue".into()))? as f32,
-                            alpha as f32,
-                        ]
+                        photocraft_cms::xcf_color::Encoding::NonlinearProfile
                     };
-                    poll(control, shared, 96)?;
-                    if operation.try_eval_linear_float(&input, &mut [0.; 4]).is_err() {
-                        return Ok(None);
+                    photocraft_cms::xcf_color::convert_encoding_f64(
+                        profile,
+                        encoding,
+                        working_encoding,
+                        values.get(..color_count).ok_or_else(|| IoError::Unsupported("Color Exchange source channels".into()))?,
+                        working.get_mut(..color_count).ok_or_else(|| IoError::Unsupported("Color Exchange working channels".into()))?,
+                    )
+                    .map_err(|_| IoError::Unsupported("Color Exchange source transfer".into()))?;
+                    if working.iter().take(color_count).any(|value| {
+                        let value = *value as f32;
+                        !value.is_finite() || (!absolute && !(0.0..=1.0).contains(&value))
+                    }) {
+                        return Ok(false);
+                    }
+                    if channel_mixer && source.enabled == Some(true) {
+                        let Some(operation) = channel_mixer_source::parameters(effect) else { return Ok(false) };
+                        let red = *working.first().ok_or_else(|| IoError::Unsupported("Channel Mixer working color".into()))?;
+                        let alpha = *values.get(color_count).ok_or_else(|| IoError::Unsupported("Channel Mixer alpha".into()))?;
+                        let input = if file.model == Model::Gray {
+                            [red as f32, red as f32, red as f32, alpha as f32]
+                        } else {
+                            [
+                                red as f32,
+                                *working.get(1).ok_or_else(|| IoError::Unsupported("Channel Mixer green".into()))? as f32,
+                                *working.get(2).ok_or_else(|| IoError::Unsupported("Channel Mixer blue".into()))? as f32,
+                                alpha as f32,
+                            ]
+                        };
+                        poll(control, shared, 96)?;
+                        if operation.try_eval_linear_float(&input, &mut [0.; 4]).is_err() {
+                            return Ok(false);
+                        }
+                    }
+                    if mono_signed {
+                        let Some(operation) = mono_mixer_source::parameters(effect) else { return Ok(false) };
+                        let red = *working.first().ok_or_else(|| IoError::Unsupported("Mono Mixer working red".into()))?;
+                        let input =
+                            if file.model == Model::Gray { [red, red, red, values[color_count]] } else { [red, working[1], working[2], values[color_count]] };
+                        let mut output = [0.; 4];
+                        poll(control, shared, 96)?;
+                        if let Err(error) = operation.try_eval_pixel_with(&input, &mut output, source.enabled == Some(true), control, &|_| Ok(())) {
+                            return if error == photocraft_raster::RasterInputError::Cancelled { Err(IoError::Cancelled) } else { Ok(false) };
+                        }
+                    }
+                    if let Some(operation) = finite_alpha {
+                        // Admission includes the current Normal owner's unit-alpha
+                        // postcondition. Finite thresholds may otherwise create
+                        // coverage which this ordinary document domain cannot retain.
+                        let red = *working.first().ok_or_else(|| IoError::Unsupported("Alpha Clip working color".into()))?;
+                        let input = if file.model == Model::Gray {
+                            [red, red, red, *values.get(color_count).ok_or_else(|| IoError::Unsupported("Alpha Clip source alpha".into()))?]
+                        } else {
+                            [
+                                red,
+                                *working.get(1).ok_or_else(|| IoError::Unsupported("Alpha Clip working green".into()))?,
+                                *working.get(2).ok_or_else(|| IoError::Unsupported("Alpha Clip working blue".into()))?,
+                                *values.get(color_count).ok_or_else(|| IoError::Unsupported("Alpha Clip source alpha".into()))?,
+                            ]
+                        };
+                        let mut output = [0.; 4];
+                        // Prepay the kernel's eight scalar sample units on the shared
+                        // source ledger, retaining the caller's cancellation checks.
+                        poll(control, shared, 64)?;
+                        if let Err(error) = operation.try_eval_pixel_with(&input, &mut output, source.enabled == Some(true), control, &|_| Ok(())) {
+                            return if error == photocraft_raster::RasterInputError::Cancelled { Err(IoError::Cancelled) } else { Ok(false) };
+                        }
+                        if !output.get(3).is_some_and(|alpha| alpha.is_finite() && (0.0..=1.0).contains(alpha)) {
+                            return Ok(false);
+                        }
                     }
                 }
-                if mono_signed {
-                    let Some(operation) = mono_mixer_source::parameters(effect) else { return Ok(None) };
-                    let red = *working.first().ok_or_else(|| IoError::Unsupported("Mono Mixer working red".into()))?;
-                    let input =
-                        if file.model == Model::Gray { [red, red, red, values[color_count]] } else { [red, working[1], working[2], values[color_count]] };
-                    let mut output = [0.; 4];
-                    poll(control, shared, 96)?;
-                    if let Err(error) = operation.try_eval_pixel_with(&input, &mut output, source.enabled == Some(true), control, &|_| Ok(())) {
-                        return if error == photocraft_raster::RasterInputError::Cancelled { Err(IoError::Cancelled) } else { Ok(None) };
-                    }
-                }
-                if let Some(operation) = finite_alpha {
-                    // Admission includes the current Normal owner's unit-alpha
-                    // postcondition. Finite thresholds may otherwise create
-                    // coverage which this ordinary document domain cannot retain.
-                    let red = *working.first().ok_or_else(|| IoError::Unsupported("Alpha Clip working color".into()))?;
-                    let input = if file.model == Model::Gray {
-                        [red, red, red, *values.get(color_count).ok_or_else(|| IoError::Unsupported("Alpha Clip source alpha".into()))?]
-                    } else {
-                        [
-                            red,
-                            *working.get(1).ok_or_else(|| IoError::Unsupported("Alpha Clip working green".into()))?,
-                            *working.get(2).ok_or_else(|| IoError::Unsupported("Alpha Clip working blue".into()))?,
-                            *values.get(color_count).ok_or_else(|| IoError::Unsupported("Alpha Clip source alpha".into()))?,
-                        ]
-                    };
-                    let mut output = [0.; 4];
-                    // Prepay the kernel's eight scalar sample units on the shared
-                    // source ledger, retaining the caller's cancellation checks.
-                    poll(control, shared, 64)?;
-                    if let Err(error) = operation.try_eval_pixel_with(&input, &mut output, source.enabled == Some(true), control, &|_| Ok(())) {
-                        return if error == photocraft_raster::RasterInputError::Cancelled { Err(IoError::Cancelled) } else { Ok(None) };
-                    }
-                    if !output.get(3).is_some_and(|alpha| alpha.is_finite() && (0.0..=1.0).contains(alpha)) {
-                        return Ok(None);
-                    }
+                return Ok(true);
+            }
+            for value in chunk.chunks_exact(width) {
+                let finite_unit = match file.sample {
+                    Sample::U8 => true,
+                    Sample::U16 => true,
+                    Sample::U32 => true,
+                    Sample::F16 => <[u8; 4]>::try_from(value).is_ok_and(|raw| {
+                        let v = f32::from_ne_bytes(raw);
+                        v.is_finite()
+                            && (0.0..=1.0).contains(&v)
+                            && photocraft_color::try_round_f32_to_f16_bits(v).is_ok_and(|bits| photocraft_color::widen_f16_to_f32_bits(bits) == v.to_bits())
+                    }),
+                    Sample::F32 => <[u8; 4]>::try_from(value).is_ok_and(|raw| {
+                        let v = f32::from_ne_bytes(raw);
+                        v.is_finite() && (0.0..=1.0).contains(&v)
+                    }),
+                    Sample::F64 => <[u8; 8]>::try_from(value).is_ok_and(|raw| {
+                        let v = f64::from_ne_bytes(raw);
+                        v.is_finite() && (0.0..=1.0).contains(&v)
+                    }),
+                };
+                if !finite_unit {
+                    return Ok(false);
                 }
             }
-            continue;
-        }
-        for value in chunk.chunks_exact(width) {
-            let finite_unit = match file.sample {
-                Sample::U8 => true,
-                Sample::U16 => true,
-                Sample::U32 => true,
-                Sample::F16 => <[u8; 4]>::try_from(value).is_ok_and(|raw| {
-                    let v = f32::from_ne_bytes(raw);
-                    v.is_finite()
-                        && (0.0..=1.0).contains(&v)
-                        && photocraft_color::try_round_f32_to_f16_bits(v).is_ok_and(|bits| photocraft_color::widen_f16_to_f32_bits(bits) == v.to_bits())
-                }),
-                Sample::F32 => <[u8; 4]>::try_from(value).is_ok_and(|raw| {
-                    let v = f32::from_ne_bytes(raw);
-                    v.is_finite() && (0.0..=1.0).contains(&v)
-                }),
-                Sample::F64 => <[u8; 8]>::try_from(value).is_ok_and(|raw| {
-                    let v = f64::from_ne_bytes(raw);
-                    v.is_finite() && (0.0..=1.0).contains(&v)
-                }),
-            };
-            if !finite_unit {
-                return Ok(None);
-            }
-        }
+
+            Ok(true)
+        };
+        admitted = validate()?;
+        Ok(())
+    })?;
+    if !admitted || Some(visited) != owner_bytes {
+        return Ok(None);
     }
     let Some(mask) = effect.mask.as_ref() else { return Ok(None) };
     if red_eye_geometry
-        && (owner.text_flags != 0 || owner.group_flags != 0 || mask.group_flags != 0
-            || owner.unsupported.iter().any(|reason| reason != "GEGL layer effects") || !mask.path.is_empty() || mask.mask.is_some() || mask.text.is_some() || mask.text_flags != 0
-            || mask.vector.is_some() || mask.link.is_some() || mask.transform.is_some() || mask.floating_attachment.is_some()
+        && (owner.text_flags != 0
+            || owner.group_flags != 0
+            || mask.group_flags != 0
+            || owner.unsupported.iter().any(|reason| reason != "GEGL layer effects")
+            || !mask.path.is_empty()
+            || mask.mask.is_some()
+            || mask.text.is_some()
+            || mask.text_flags != 0
+            || mask.vector.is_some()
+            || mask.link.is_some()
+            || mask.transform.is_some()
+            || mask.floating_attachment.is_some()
             || !matches!(mask.opacity.to_bits(), 0x3f000000 | 0x3f008081))
     {
         return Ok(None);
@@ -452,6 +491,7 @@ pub(crate) fn classify(file: &XcfFile, control: &Interrupt<'_>, shared: Option<&
     }
     let Some(plane) = mask.plane.as_ref() else { return Ok(None) };
     let expected = u64::from(file.width).checked_mul(u64::from(file.height)).and_then(|v| v.checked_mul(width as u64));
+    let descriptor = plane.descriptor();
     if mask.group
         || mask.alpha
         || mask.model != Model::Gray
@@ -466,18 +506,24 @@ pub(crate) fn classify(file: &XcfFile, control: &Interrupt<'_>, shared: Option<&
         || (mask.width, mask.height) != (file.width, file.height)
         || !mask.effects.is_empty()
         || !mask.unsupported.is_empty()
-        || plane.sample != canonical_sample
-        || plane.channels != 1
-        || (plane.width, plane.height) != (file.width, file.height)
-        || expected != Some(plane.bytes.len() as u64)
+        || descriptor.sample != canonical_sample
+        || descriptor.channels != 1
+        || (descriptor.width, descriptor.height) != (file.width, file.height)
+        || expected.is_none()
+        || expected != plane.native_byte_len()
     {
         return Ok(None);
     }
-    for chunk in plane.bytes.chunks(64 * width) {
+    let mut zero = true;
+    let mut visited = 0u64;
+    plane.visit_native(control, &mut |chunk| {
         poll(control, shared, chunk.len())?;
-        if chunk.iter().any(|byte| *byte != 0) {
-            return Ok(None);
-        }
+        visited = visited.checked_add(chunk.len() as u64).ok_or_else(|| IoError::Unsupported("point Replace mask length overflow".into()))?;
+        zero &= chunk.len() % width == 0 && chunk.len() <= 64 * width && chunk.iter().all(|byte| *byte == 0);
+        Ok(())
+    })?;
+    if !zero || Some(visited) != expected {
+        return Ok(None);
     }
     Ok(Some(NeighborhoodDomain::PointReplace(family)))
 }

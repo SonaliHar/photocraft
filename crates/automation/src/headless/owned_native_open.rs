@@ -90,6 +90,10 @@ impl Headless {
                 .map_err(photocraft_engine::EngineError::from)?
             {
                 self.session.add_owned_native_threshold_archive(archive, label, Some(path), control)?;
+            } else if photocraft_engine::accounted_native_open::is_current_point_candidate(archive.document(), control)
+                .map_err(photocraft_engine::EngineError::from)?
+            {
+                self.session.add_owned_native_point_archive(archive, label, Some(path), control)?;
             } else {
                 self.session.add_owned_native_archive(
                     archive,

@@ -68,6 +68,7 @@ enum AccountedHandoff {
     Document,
     ReadonlyThresholdAlphaStorage,
     ReadonlyHistogramThresholdStorage,
+    ReadonlyPointStorage,
 }
 impl OwnedDocumentArchive {
     /// The actual ledger retaining this archive's model and encoded storage.
@@ -102,6 +103,13 @@ impl OwnedDocumentArchive {
         self.into_accounted_with(control, AccountedHandoff::ReadonlyHistogramThresholdStorage)
     }
 
+    /// Consume into structural Point custody on the actual archive/model quota.
+    /// This confers no operation, profile, source or rendering eligibility; the
+    /// application must validate its complete current recipe before publication.
+    pub fn into_accounted_readonly_point_storage(self, control: &ReadControl<'_>) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
+        self.into_accounted_with(control, AccountedHandoff::ReadonlyPointStorage)
+    }
+
     fn into_accounted_with(self, control: &ReadControl<'_>, handoff: AccountedHandoff) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
         struct NativeRetention {
             _archive: Arc<dyn ImmutableCanonicalArchive>,
@@ -121,6 +129,7 @@ impl OwnedDocumentArchive {
             AccountedHandoff::Document => photocraft_doc::accounted_document::AccountedDocument::from_owned_rehydrating_selection(document, retention, quota, control),
             AccountedHandoff::ReadonlyThresholdAlphaStorage => photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_threshold_alpha_storage(document, retention, quota, control),
             AccountedHandoff::ReadonlyHistogramThresholdStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_threshold_storage(document, retention, quota, control),
+            AccountedHandoff::ReadonlyPointStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_point_storage(document, retention, quota, control),
         }.map_err(error)
     }
 

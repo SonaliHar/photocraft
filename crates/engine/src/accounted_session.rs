@@ -193,6 +193,11 @@ impl Session {
 
     pub fn add_accounted_document(&mut self, document: AccountedDocument, path: Option<String>, control: &ReadControl<'_>) -> Result<usize> {
         control.check(1)?;
+        // A structural Point owner is not a current semantic/render receipt.
+        // Only the typed source/native handoffs validate its operative recipe.
+        if document.is_readonly_point_storage() {
+            return Err(BackingError::Unsupported.into());
+        }
         if self.docs.iter().any(|st| st.doc.id == document.document().id) {
             return Err(EngineError::Other("an open document already owns this accounted identity".into()));
         }

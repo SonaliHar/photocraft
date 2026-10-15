@@ -16,7 +16,7 @@ mod text_preparation;
 mod authorized_font_tests;
 
 #[path = "xcf_import/plane.rs"]
-mod plane;
+pub(crate) mod plane;
 #[path = "xcf_import/effect_mask_mapping.rs"]
 mod effect_mask_mapping;
 use plane::{ExactParsedPlane, MappingPlane};
@@ -62,6 +62,9 @@ pub use owned_plain_source::{OwnedPlainXcfImport, import_owned_staged_plain_byte
 mod owned_threshold_source;
 #[path = "xcf_import/owned_histogram_threshold_source.rs"]
 mod owned_histogram_threshold_source;
+#[path = "xcf_import/owned_point_source.rs"]
+mod owned_point_source;
+pub use owned_point_source::OwnedPointXcfImport;
 pub use owned_histogram_threshold_source::OwnedHistogramThresholdXcfImport;
 pub use owned_threshold_source::{OwnedThresholdAlphaXcfImport, import_owned_staged_threshold_alpha_bytes_in_quota};
 
@@ -2539,6 +2542,18 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 .failure
                 .map(accounting_error)
                 .unwrap_or_else(|| if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF rendering consumer: {error}")) }));
+        }
+    } else if P::requires_budgeted_point_preparation(point_replace_domain.is_some()) {
+        // The original exact classifier and qualified_stack already succeeded.
+        // This sealed path must also hold the actual controlled source->working
+        // ->source PointStack preparation before any owned storage publication.
+        let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("staged Point scene requires transaction accounting".into()))?;
+        let mut adapter = SharedPreparation { shared, failure: None };
+        let checked = photocraft_compose::backed_stock_point_context::PreparedStockPointPipeline::new_budgeted(&doc, ctl, &mut adapter, source_lease);
+        if let Err(error) = checked {
+            return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
+                if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF staged Point rendering consumer: {error}")) }
+            }));
         }
     } else if P::requires_budgeted_rendering_preparation_for(threshold_alpha_domain || threshold_domain) {
         // A sealed staged family must qualify the actual current scene while

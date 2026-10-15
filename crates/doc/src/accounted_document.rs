@@ -21,6 +21,8 @@ mod selection_rehydrate;
 mod filter_readonly;
 #[path = "accounted_threshold_readonly.rs"]
 mod threshold_readonly;
+#[path = "accounted_point_readonly.rs"]
+mod point_readonly;
 pub use filter_readonly::ThresholdAlphaPatch;
 pub use threshold_readonly::ThresholdPatch;
 #[path = "accounted_readonly_layer_name.rs"]
@@ -63,6 +65,7 @@ enum StorageClass {
     Legacy,
     ReadonlyThresholdAlpha,
     ReadonlyHistogramThreshold,
+    ReadonlyPoint,
 }
 struct ModelOwner {
     _storage_class: StorageClass,
@@ -755,6 +758,21 @@ fn census_inner(
     control: &ReadControl<'_>,
     readonly_filter_masks: bool,
 ) -> Result<ModelCensus, BackingError> {
+    census_with_mask_policy(doc, actual, imported_selection, selection_guard, expected_quota, control,
+        if readonly_filter_masks { ReadonlyMaskPolicy::Threshold } else { ReadonlyMaskPolicy::None })
+}
+fn point_readonly_census(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+    census_with_mask_policy(doc, true, true, None, quota, control, ReadonlyMaskPolicy::Point)
+}
+fn census_with_mask_policy(
+    doc: &Document,
+    actual: bool,
+    imported_selection: bool,
+    selection_guard: Option<&AccountedSelection>,
+    expected_quota: &BackingQuota,
+    control: &ReadControl<'_>,
+    readonly_masks: ReadonlyMaskPolicy,
+) -> Result<ModelCensus, BackingError> {
     let crate::Metadata { xmp: _, exif: _, psd_resources: _, psd_global_blocks: _, text: _ } = &doc.metadata;
     let crate::Guides { horizontal: _, vertical: _, colors: _ } = &doc.guides;
     let crate::text_styles::TextStyles { character: _, paragraph: _, basic: _, psd_raw: _ } = &doc.text_styles;
@@ -894,7 +912,7 @@ fn census_inner(
         return Err(BackingError::Length);
     }
     let mut canonical = CanonicalCensus::new(size, actual, control);
-    canonical.readonly_filter_masks = readonly_filter_masks;
+    canonical.readonly_masks = readonly_masks;
     if imported_selection {
         imported_selection::shared_payloads(doc, &mut canonical, control)?;
     }
@@ -1077,8 +1095,10 @@ fn sync_current_item(document: &mut Document, edit: AccountedEdit<'_>) -> Result
 /// Capacity accounting only: this neither validates relationships nor qualifies
 /// an evaluator. The codec/importer retains the original source and validation
 /// evidence; clones copy owned buffers and share immutable Arc payloads.
+#[derive(Clone, Copy)]
+enum ReadonlyMaskPolicy { None, Threshold, Point }
 struct CanonicalCensus<'a, 'i> {
-    readonly_filter_masks: bool,
+    readonly_masks: ReadonlyMaskPolicy,
     counted: ModelCensus,
     text: u64,
     resources: u64,
@@ -1088,7 +1108,7 @@ struct CanonicalCensus<'a, 'i> {
 }
 impl<'a, 'i> CanonicalCensus<'a, 'i> {
     fn new(index: u64, actual: bool, control: &'a ReadControl<'i>) -> Self {
-        Self { readonly_filter_masks: false, counted: ModelCensus { index, payload: 0 }, text: 0, resources: 0, visits: 0, actual, control }
+        Self { readonly_masks: ReadonlyMaskPolicy::None, counted: ModelCensus { index, payload: 0 }, text: 0, resources: 0, visits: 0, actual, control }
     }
     fn visit(&mut self) -> Result<(), BackingError> {
         self.visits = self.visits.checked_add(1).ok_or(BackingError::Length)?;
@@ -1228,10 +1248,15 @@ impl<'a, 'i> CanonicalCensus<'a, 'i> {
         } = state;
         // These contain independent Surface/private-map payloads not yet covered
         // by this ownership contract. Refuse them before Document::clone.
-        if !editable_indexed.is_empty() || (!self.readonly_filter_masks && !filter_masks.is_empty()) {
+        if !editable_indexed.is_empty() {
             return Err(BackingError::Unsupported);
         }
-        if self.readonly_filter_masks { filter_readonly::mask_census(filter_masks, self)?; }
+        match self.readonly_masks {
+            ReadonlyMaskPolicy::None if !filter_masks.is_empty() => return Err(BackingError::Unsupported),
+            ReadonlyMaskPolicy::None => {},
+            ReadonlyMaskPolicy::Threshold => filter_readonly::mask_census(filter_masks, self)?,
+            ReadonlyMaskPolicy::Point => point_readonly::mask_census(filter_masks, self)?,
+        }
         let ProjectProvenance {
             format,
             format_version: _,

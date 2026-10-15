@@ -5,6 +5,8 @@
 //! in their enclosing caller. This bridge supports the existing Surface point
 //! pixel contract, not every candidate kernel or PointStack precision policy.
 use crate::backed_normal::NormalBandLimits;
+#[path = "backed_point/stock_wide.rs"]
+mod stock_wide;
 use photocraft_algo::gimp::point::{PointOperation, PreparedPointOperation};
 use photocraft_color::PixelFormat;
 use photocraft_doc::{BackedLayer, SampleEncoding};
@@ -17,6 +19,7 @@ use photocraft_raster::{
     },
     checked_view::{CheckedTilePin, RasterViewError},
 };
+pub(crate) use stock_wide::render_stock_wide_band;
 /// Explicit caller-established operation working interpretation. Equality binds
 /// its identity only; no ICC bytes, native stock transfer or CMS is inferred.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -209,37 +212,18 @@ impl<'a> PreparedBackedPoint<'a> {
         control.check(0).map_err(Error::Backing)?;
         Ok(result)
     }
-    fn walk(&self, rect: Rect, mut output: Option<&mut [u8]>, control: &ReadControl<'_>) -> Result<(), Error> {
-        let view = self.layer.checked_view();
-        let bpp = self.context.format.bytes_per_pixel();
-        for coord in rect.tiles() {
-            control.check(0).map_err(Error::Backing)?;
-            let overlap = tile_rect(coord)?.intersect(&rect);
-            let pin = view.pin_tile(coord, control).map_err(Error::View)?;
-            for y in overlap.y0..overlap.y1 {
-                for x in overlap.x0..overlap.x1 {
-                    control.check(0).map_err(Error::Backing)?;
-                    let mut raw = [0u8; 40];
-                    let source = raw.get_mut(..bpp).ok_or_else(length)?;
-                    pin.read_pixel_native_into(x, y, source, control).map_err(Error::View)?;
-                    let mut evaluated = [0u8; 40];
-                    let pixel = evaluated.get_mut(..bpp).ok_or_else(length)?;
-                    if self.enabled {
-                        self.kernel.evaluate(source, self.context.format, pixel).map_err(Error::Operation)?;
-                    } else {
-                        pixel.copy_from_slice(source);
-                    }
-                    if let Some(bytes) = output.as_deref_mut() {
-                        let row = usize::try_from(i64::from(y) - i64::from(rect.y0)).map_err(|_| length())?;
-                        let col = usize::try_from(i64::from(x) - i64::from(rect.x0)).map_err(|_| length())?;
-                        let start =
-                            row.checked_mul(rect.width() as usize).and_then(|v| v.checked_add(col)).and_then(|v| v.checked_mul(bpp)).ok_or_else(length)?;
-                        bytes.get_mut(start..add(start, bpp)?).ok_or_else(length)?.copy_from_slice(pixel);
-                    }
-                }
-            }
-        }
-        Ok(())
+    fn walk(&self, rect: Rect, output: Option<&mut [u8]>, control: &ReadControl<'_>) -> Result<(), Error> {
+        stock_wide::walk(
+            self.layer,
+            rect,
+            stock_wide::KernelRef::Native { kernel: &self.kernel, enabled: self.enabled },
+            stock_wide::OutputRef::Native(output),
+            control,
+        )
+        .map_err(|error| match error {
+            stock_wide::WalkError::Point(error) => error,
+            stock_wide::WalkError::Stock(_) => Error::Invalid("stock kernel selected for native point output"),
+        })
     }
 }
 #[cfg(test)]

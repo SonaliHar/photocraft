@@ -128,6 +128,8 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
         app.session.add_owned_native_threshold_alpha_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_threshold_candidate(archive.document(), &control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_threshold_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
+    } else if photocraft_engine::accounted_native_open::is_current_point_candidate(archive.document(), &control).map_err(|e| e.to_string())? {
+        app.session.add_owned_native_point_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
     } else {
         app.session
             .add_owned_native_archive(archive, AccountedNativeOpenPolicy::KeepCurrentInterpretation, name, Some(path), &control)
@@ -166,6 +168,8 @@ pub(crate) fn adopt_bytes(
         app.session.add_owned_native_threshold_alpha_archive(archive, name, None, control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_threshold_candidate(archive.document(), control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_threshold_archive(archive, name, None, control).map_err(|e| e.to_string())?;
+    } else if photocraft_engine::accounted_native_open::is_current_point_candidate(archive.document(), control).map_err(|e| e.to_string())? {
+        app.session.add_owned_native_point_archive(archive, name, None, control).map_err(|e| e.to_string())?;
     } else {
         app.session.add_owned_native_archive(archive, AccountedNativeOpenPolicy::KeepCurrentInterpretation, name, None, control).map_err(|e| e.to_string())?;
     }

@@ -26,7 +26,7 @@ impl Headless {
         self.session
             .active()
             .and_then(|state| state.doc.accounted())
-            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage())
+            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage())
     }
     /// Routing hint only: CURRENT XCF metadata is not original-source proof.
     /// The selected paid factory must still validate its exact runtime class.
@@ -119,3 +119,7 @@ impl Headless {
 #[cfg(test)]
 #[path = "owned_filter_inspect_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "owned_point_inspect_tests.rs"]
+mod point_tests;

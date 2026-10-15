@@ -2,21 +2,29 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ParsedPlaneDescriptor {
+pub(crate) struct ParsedPlaneDescriptor {
     pub width: u32,
     pub height: u32,
     pub channels: usize,
     pub sample: Sample,
 }
 
-pub(super) trait ExactParsedPlane {
+pub(crate) trait ExactParsedPlane {
     fn descriptor(&self) -> ParsedPlaneDescriptor;
+    /// Exact retained declared native byte count, without visiting samples.
+    /// Staged producers have already checked this shape before construction.
+    fn native_byte_len(&self) -> Option<u64> {
+        let d = self.descriptor();
+        u64::from(d.width).checked_mul(u64::from(d.height))?.checked_mul(d.channels as u64)?.checked_mul(d.sample.source_bytes() as u64)
+    }
+
     /// Declared pixels in row-major order, at most 64 pixels per callback.
     /// No conversion or default substitution is allowed on a failed read.
     fn visit_native(&self, ctl: &Interrupt<'_>, visit: &mut dyn FnMut(&[u8]) -> Result<(), IoError>) -> Result<(), IoError>;
 }
 
 impl ExactParsedPlane for Plane {
+    fn native_byte_len(&self) -> Option<u64> { Some(self.bytes.len() as u64) }
     fn descriptor(&self) -> ParsedPlaneDescriptor {
         ParsedPlaneDescriptor { width: self.width, height: self.height, channels: self.channels, sample: self.sample }
     }
@@ -53,6 +61,8 @@ pub(super) trait MappingPlane: ExactParsedPlane + Sized {
     fn requires_budgeted_rendering_preparation_for(_threshold_alpha_domain: bool) -> bool {
         Self::requires_budgeted_rendering_preparation()
     }
+    /// Only an already admitted original Point domain can select this paid path.
+    fn requires_budgeted_point_preparation(_point_domain: bool) -> bool { false }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, budget: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError>;
     fn late_admissions(file: &XcfFile<Self>) -> admission::LateAdmissionDomains;
     fn eager_original(&self) -> Result<&Plane, IoError>;
