@@ -267,3 +267,6 @@ fn shared_validator_rejects_f64_storage_and_preserves_disabled_pointstack_behavi
 
 #[path = "backed_threshold_alpha_disabled_tests.rs"]
 mod disabled;
+
+#[path = "backed_threshold_alpha_operative_tests.rs"]
+mod operative;

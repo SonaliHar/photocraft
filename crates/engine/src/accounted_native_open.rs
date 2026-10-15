@@ -117,15 +117,14 @@ impl Session {
                 _ if control.interrupt.cancelled() => EngineError::Cancelled,
                 other => EngineError::Other(format!("owned native current Threshold Alpha: {other}")),
             })?;
-            // The closed canvas is 8x6. Validate its operative native values on
+            // The closed canvas remains 8x6. Validate bounded operative bands on
             // the same quota/control before publishing a tab; physical backing
             // padding and original-source correspondence remain separate.
-            let band = prepared.render_band(document.document().bounds(), control).map_err(|error| match error {
+            prepared.validate_operative(control).map_err(|error| match error {
                 photocraft_compose::backed_point_filter::BackedPointError::Backing(error) => EngineError::from(error),
                 _ if control.interrupt.cancelled() => EngineError::Cancelled,
                 other => EngineError::Other(format!("owned native current Threshold Alpha band: {other}")),
             })?;
-            drop(band);
             // This borrowed preparation is not a persistent rendering grant.
             // A future render job must prepare/pay against its own held snapshot.
             drop(prepared);

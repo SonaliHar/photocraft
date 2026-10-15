@@ -33,6 +33,7 @@ pub struct PreparedBackedThresholdAlphaContext<'a> {
     layer: LayerId,
     node: FilterId,
     descriptor: NativePlaneDescriptor,
+    limits: NormalBandLimits,
     _lease: QuotaLease,
 }
 fn scope() -> BackedNormalError {
@@ -151,8 +152,9 @@ impl<'a> PreparedBackedThresholdAlphaContext<'a> {
         }
         // This shared pure validator is also called by PointStack's enabled
         // Threshold Alpha branch. Alpha-only execution needs no color transfer.
-        let (operation, enabled) = crate::gimp_filters::validated_current_threshold_alpha(&stack.nodes, known.channels(), stored, state.provenance.format_version)
-            .map_err(BackedNormalError::Color)?;
+        let (operation, enabled) =
+            crate::gimp_filters::validated_current_threshold_alpha(&stack.nodes, known.channels(), stored, state.provenance.format_version)
+                .map_err(BackedNormalError::Color)?;
         let mask = state.filter_masks.first().ok_or_else(scope)?;
         if node.mask != Some(ItemRef::Mask(mask.id)) || mask.owner != node.id {
             return Err(scope());
@@ -186,7 +188,7 @@ impl<'a> PreparedBackedThresholdAlphaContext<'a> {
             BackedPointError::Backing(e) => BackedNormalError::Backing(e),
             _ => scope(),
         })?;
-        let prepared = Self { native, _owner: owner, layer: layer.id, node: node.id, descriptor, _lease: lease };
+        let prepared = Self { native, _owner: owner, layer: layer.id, node: node.id, descriptor, limits, _lease: lease };
         control.check(0).map_err(BackedNormalError::Backing)?;
         Ok(prepared)
     }
@@ -199,11 +201,80 @@ impl<'a> PreparedBackedThresholdAlphaContext<'a> {
     pub fn descriptor(&self) -> NativePlaneDescriptor {
         self.descriptor
     }
+    /// Validate the complete operative extent using one same-ledger native band
+    /// at a time. The exact caller-lowered limits are retained from preparation;
+    /// there is no full-image output, new work budget or retained rendering grant.
+    /// Only operative samples are inspected: backing padding remains uncertified.
+    pub fn validate_operative(&self, control: &ReadControl<'_>) -> Result<(), BackedPointError> {
+        visit_operative_bands(self.descriptor.bounds(), self.limits, control, |rect| {
+            let band = self.render_band(rect, control)?;
+            drop(band);
+            Ok(())
+        })
+    }
     /// Reads/validates only the requested contained operative band. It neither
     /// scans nor certifies raw backing padding/default extension beyond that ROI.
     pub fn render_band(&self, rect: Rect, control: &ReadControl<'_>) -> Result<OwnedNativePointBand, BackedPointError> {
         self.native.render_band(rect, control)
     }
+}
+
+// Allocation-free scheduling only. This private helper supplies neither storage
+// admission nor source authority; the context's immutable owner supplies both
+// the operative bounds and already-validated lower limits.
+fn visit_operative_bands(
+    rect: Rect,
+    limits: NormalBandLimits,
+    control: &ReadControl<'_>,
+    mut visit: impl FnMut(Rect) -> Result<(), BackedPointError>,
+) -> Result<(), BackedPointError> {
+    control.check(1).map_err(BackedPointError::Backing)?;
+    let maximum = NormalBandLimits::default();
+    if rect.is_empty()
+        || rect.x1 < rect.x0
+        || rect.y1 < rect.y0
+        || limits.max_rows == 0
+        || limits.max_rows > maximum.max_rows
+        || limits.max_pixels == 0
+        || limits.max_pixels > maximum.max_pixels
+    {
+        return Err(BackedPointError::Invalid("operative validation bounds or limits"));
+    }
+    let width = u64::try_from(i64::from(rect.x1) - i64::from(rect.x0)).map_err(|_| BackedPointError::Invalid("operative validation width"))?;
+    let columns = width.min(limits.max_pixels).min(TILE_SIZE as u64);
+    let rows = limits.max_pixels.checked_div(columns).ok_or(BackedPointError::Invalid("operative validation columns"))?.min(u64::from(limits.max_rows));
+    let columns = i64::try_from(columns).map_err(|_| BackedPointError::Invalid("operative validation columns"))?;
+    let rows = i64::try_from(rows).map_err(|_| BackedPointError::Invalid("operative validation rows"))?;
+    if columns == 0 || rows == 0 {
+        return Err(BackedPointError::Invalid("operative validation progress"));
+    }
+    let mut y = rect.y0;
+    while y < rect.y1 {
+        let tile_rows = i64::from(TILE_SIZE - y.rem_euclid(TILE_SIZE));
+        let end_y =
+            i64::from(y).checked_add(rows.min(tile_rows)).ok_or(BackedPointError::Invalid("operative validation row overflow"))?.min(i64::from(rect.y1));
+        let end_y = i32::try_from(end_y).map_err(|_| BackedPointError::Invalid("operative validation row range"))?;
+        let mut x = rect.x0;
+        while x < rect.x1 {
+            control.check(1).map_err(BackedPointError::Backing)?;
+            let tile_columns = i64::from(TILE_SIZE - x.rem_euclid(TILE_SIZE));
+            let end_x = i64::from(x)
+                .checked_add(columns.min(tile_columns))
+                .ok_or(BackedPointError::Invalid("operative validation column overflow"))?
+                .min(i64::from(rect.x1));
+            let end_x = i32::try_from(end_x).map_err(|_| BackedPointError::Invalid("operative validation column range"))?;
+            if end_x <= x || end_y <= y {
+                return Err(BackedPointError::Invalid("operative validation progress"));
+            }
+            visit(Rect::new(x, y, end_x, end_y))?;
+            // The validation caller has destroyed the band before this poll.
+            control.check(1).map_err(BackedPointError::Backing)?;
+            x = end_x;
+        }
+        y = end_y;
+    }
+    control.check(1).map_err(BackedPointError::Backing)?;
+    Ok(())
 }
 
 #[cfg(test)]

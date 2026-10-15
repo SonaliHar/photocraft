@@ -82,11 +82,10 @@ impl Session {
                     other => EngineError::Other(format!("owned Threshold Alpha current recipe: {other}")),
                 },
             )?;
-        let band = prepared.render_band(owner.document().bounds(), control).map_err(|error| match error {
+        prepared.validate_operative(control).map_err(|error| match error {
             photocraft_compose::backed_point_filter::BackedPointError::Backing(error) => EngineError::from(error),
             other => EngineError::Other(format!("owned Threshold Alpha operative band: {other}")),
         })?;
-        drop(band);
         drop(prepared);
         self.add_owned_xcf_model(
             ImportedModel { document: owner, origin: imported.origin(), source_read_only: imported.source_read_only(), preview_only: imported.preview_only() },

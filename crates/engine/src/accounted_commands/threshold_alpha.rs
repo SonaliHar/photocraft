@@ -284,11 +284,10 @@ fn validate_recipe(owner: &AccountedDocument, ctl: &ReadControl<'_>) -> Result<(
             photocraft_compose::backed_normal::BackedNormalError::Backing(e) => EngineError::from(e),
             e => EngineError::Other(format!("current Threshold Alpha recipe: {e}")),
         })?;
-    let band = prepared.render_band(owner.document().bounds(), ctl).map_err(|e| match e {
+    prepared.validate_operative(ctl).map_err(|e| match e {
         photocraft_compose::backed_point_filter::BackedPointError::Backing(e) => EngineError::from(e),
         e => EngineError::Other(format!("current Threshold Alpha band: {e}")),
     })?;
-    drop(band);
     ctl.check(1)?;
     Ok(())
 }
