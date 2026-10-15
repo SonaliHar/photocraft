@@ -800,6 +800,14 @@ impl Headless {
             }
             return Ok(self.session.execute(id, params)?);
         }
+        if id == "xcf.composition.set"
+            && self.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_flat_composite_storage())
+        {
+            if !wait {
+                return Err(AutomationError::BadRequest(format!("{id}.context: synchronous dispatch is required")));
+            }
+            return Ok(self.session.execute(id, params)?);
+        }
         if id == "layer.translate" && self.session.active().is_some_and(|state| state.doc.accounted().is_some()) {
             if !wait {
                 return Err(AutomationError::BadRequest(format!("{id}.context: synchronous dispatch is required")));
@@ -970,3 +978,7 @@ mod owned_separable_metadata_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_flat_current_tests.rs"]
 mod owned_flat_current_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_flat_composition_tests.rs"]
+mod owned_flat_composition_tests;

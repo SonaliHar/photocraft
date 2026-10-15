@@ -195,3 +195,6 @@ fn generic_adoption_and_failure_have_no_prefix() {
 
 #[path = "accounted_flat_composite_metadata_tests.rs"]
 mod metadata_tests;
+
+#[path = "accounted_flat_composition_tests.rs"]
+mod composition_tests;

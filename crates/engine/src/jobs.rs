@@ -760,8 +760,16 @@ impl Session {
                     else { "owned Threshold layer properties require synchronous dispatch" }.into(),
             });
         }
+        if id=="xcf.composition.set" && self.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_flat_composite_storage()) && (background||self.jobs.spawn) {
+            return Err(EngineError::BadParams{cmd:id.into(),msg:"owned flat composition requires synchronous dispatch".into()});
+        }
         crate::brush_cmds::advanced_dispatch_preflight(self, id, &params)?;
-        crate::xcf_composition_cmds::dispatch_preflight(self, id, &params)?;
+        // The actual readonly-flat adapter runs the same parser below under
+        // its real temporary fee and finite registered control, before clone,
+        // journal or publication. Keep resident preflight/order unchanged.
+        if id!="xcf.composition.set" || !self.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_flat_composite_storage()) {
+            crate::xcf_composition_cmds::dispatch_preflight(self, id, &params)?;
+        }
         if id == "select.object" && crate::selection_object_controlled::handles(&params) {
             crate::selection_object_controlled::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
@@ -1130,7 +1138,11 @@ impl Session {
             if id == "edit.fill" && (background || self.jobs.spawn) {
                 return Err(EngineError::BadParams { cmd: id.into(), msg: "accounted Fill requires synchronous dispatch".into() });
             }
-            if let Some(why) = crate::accounted_commands::disabled_reason(self, id, &params)? {
+            // The new flat composition parser is paid below on the registered
+            // cumulative control. Eligibility here checks class/global context
+            // only, without an unmetered duplicate parse.
+            let enabled_params=if id=="xcf.composition.set" && self.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_flat_composite_storage()) {&Value::Null}else{&params};
+            if let Some(why) = crate::accounted_commands::disabled_reason(self, id, enabled_params)? {
                 return Err(EngineError::Disabled(id.to_string(), why.into()));
             }
             if let Some(why) = self.job_conflict(id, spec.journal) {
@@ -1145,6 +1157,7 @@ impl Session {
             // Bounded native pixel, filter and assigned-geometry property preparation share one
             // immutable registered work ledger; no per-cell allowance reset.
             let bounded_work = matches!(id, "edit.clear" | "edit.fill" | "layer.translate")
+                || id=="xcf.composition.set" && self.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_flat_composite_storage())
                 || id == "xcf.mask.enabled.set"
                     && self.active().and_then(|state| state.doc.accounted()).is_some_and(crate::assigned_geometry_metadata_candidate)
                 || id == "layer.setProps"

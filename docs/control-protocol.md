@@ -1711,3 +1711,21 @@ still charged. Explicit all-Normal modern flat native stacks select the strict
 CURRENT endpoint; ordinary Auto Normal and mixed legacy Normal keep their prior
 route. These additions do not enable composition mutation or expand source
 import rules. Behavioral tests remain deferred.
+For owned flat-composite documents, `xcf.composition.set` uses the same existing
+wire and mode subset as resident composition editing: one of20 modern ordinary
+mode equivalents, `legacy:false`, explicit RGB blend/composite spaces, and one
+of the four operators. It retains the compatibility epoch and original source
+records while synchronizing current physical and canonical policy. Grain modes
+46/47 have no invented ordinary alias; an existing grain layer may explicitly
+transition to a supported mode. The owned composition panel offers these modes;
+ordinary resident mode presentation stays unchanged.
+
+Optional `documentId` and `expectedRevision` remain a paired captured-target
+fence using canonical decimal strings. Revision exhaustion and content locks
+refuse even a no-op. An Auto-to-explicit transition creates one undo step even
+when effective math agrees; repeating exact explicit policy preserves model,
+revision and redo, while the existing reply still reports `updated:true`.
+Full current/staged native/profile/canvas checks, prospective copy/history/view,
+retained reply/journal fees and final source/state fences precede publication.
+UI and Headless use synchronous dispatch for this actual class. Source import
+rules are unchanged; behavior and UI visual checks remain deferred.

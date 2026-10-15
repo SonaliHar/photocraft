@@ -31,6 +31,7 @@ mod point_readonly;
 mod gaussian_group_readonly;
 #[path = "accounted_flat_composite_readonly.rs"]
 mod flat_composite_readonly;
+pub use flat_composite_readonly::FlatCompositeCompositionPatch;
 pub use gaussian_group_readonly::{GaussianGroupEnabledPatch, GaussianGroupPatch};
 pub use point_readonly::{PointArgumentPatch, PointArgumentValue, PointFilterMovePatch, PointFilterPatch, PointFilterRemovePatch};
 pub use point_readonly::{

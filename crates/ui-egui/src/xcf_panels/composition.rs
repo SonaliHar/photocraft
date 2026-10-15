@@ -11,6 +11,7 @@ pub struct CompositionDraft {
     pub document: u64, pub revision: u64, pub layer: u64, pub source_mode: i32,
     pub blend_space: Option<u8>, pub composite_space: Option<u8>, pub operator: Option<u8>,
 }
+
 #[derive(Clone, Debug)]
 pub(crate) struct CompositionOrigin {
     document: DocId, revision: u64, layer: LayerId, snapshot: WeakDocumentSnapshot,
@@ -43,6 +44,10 @@ fn mode_label(mode: i32) -> Option<&'static str> {
         52 => "Exclusion", 53 => "Linear Burn", _ => return None,
     })
 }
+const EDITABLE_MODES: [i32;20] = [23,28,30,31,32,33,34,35,36,41,42,43,44,45,48,49,50,51,52,53];
+fn owned_flat(app: &PhotocraftApp) -> bool {
+    app.session.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_flat_composite_storage())
+}
 fn idle(app: &PhotocraftApp) -> Result<(), String> {
     let active = app.session.active().ok_or_else(stale)?;
     if active.revision == u64::MAX || app.session.has_jobs() || app.ui.transform.is_some() || active.floating.is_some()
@@ -53,14 +58,19 @@ fn idle(app: &PhotocraftApp) -> Result<(), String> {
 }
 fn eligibility(app: &PhotocraftApp, layer: LayerId, current: &Current) -> Result<(), String> {
     idle(app)?;
-    if current.legacy || current.pass_through || mode_label(current.mode).is_none() {
+    let flat = owned_flat(app);
+    if current.legacy || current.pass_through || (mode_label(current.mode).is_none() && !(flat && matches!(current.mode,46|47))) {
         return Err(tl!("Editing this legacy or source-specific composition mode is unavailable.").to_owned());
     }
     let active = app.session.active().ok_or_else(stale)?;
     let state = active.doc.xcf_state.as_ref().ok_or_else(stale)?;
     photocraft_engine::xcf_item_locks::effective_layer_locks(&active.doc, layer)
         .and_then(|locks| locks.require(photocraft_engine::xcf_item_locks::EditKind::Content)).map_err(|error| error.to_string())?;
-    if !active.doc.layer(layer).is_some_and(|layer| matches!(layer.content, LayerContent::Raster(_))) {
+    if !active.doc.layer(layer).is_some_and(|layer| match &layer.content {
+        LayerContent::Raster(_) => true,
+        LayerContent::BackedRaster(backed) if flat => active.doc.accounted().is_some_and(|owner|owner.quota().shares_ledger(backed.quota())),
+        _ => false,
+    }) {
         return Err(tl!("Composition editing requires a pixel layer.").to_owned());
     }
     if state.source_items.iter().any(|source| source.owner == ItemRef::Layer(layer)) || state.editable_indexed.iter().any(|raster| raster.owner == layer) {
@@ -99,13 +109,14 @@ fn resolved_operator(operator: GimpOperator) -> &'static str { match operator { 
 fn request(app: &PhotocraftApp, origin: &CompositionOrigin, draft: &CompositionDraft) -> Result<Value, String> {
     if !stable(app, origin) || draft.document != origin.document.0 || draft.revision != origin.revision || draft.layer != origin.layer.0 { return Err(stale()); }
     let metadata = current(app, origin.layer).ok_or_else(stale)?; eligibility(app, origin.layer, &metadata)?;
-    if draft.source_mode != metadata.mode { return Err(stale()); }
+    if draft.source_mode != metadata.mode && !owned_flat(app) { return Err(stale()); }
+    if mode_label(draft.source_mode).is_none() { return Err(tl!("Choose an explicit supported mode before applying.").to_owned()); }
     let missing = || tl!("Choose explicit spaces and an operator before applying.").to_owned();
     let blend = space_wire(draft.blend_space).ok_or_else(missing)?;
     let composite = space_wire(draft.composite_space).ok_or_else(missing)?;
     let operator = operator_wire(draft.operator).ok_or_else(missing)?;
     Ok(json!({"layerId": origin.layer.0.to_string(), "documentId": origin.document.0.to_string(), "expectedRevision": origin.revision.to_string(),
-        "sourceMode": metadata.mode, "legacy":false, "blendSpace":blend, "compositeSpace":composite, "operator":operator}))
+        "sourceMode": draft.source_mode, "legacy":false, "blendSpace":blend, "compositeSpace":composite, "operator":operator}))
 }
 fn space_choice(ui: &mut egui::Ui, key: &'static str, label: &'static str, value: &mut Option<u8>) {
     ui.horizontal(|ui| { ui.label(label); egui::ComboBox::from_id_salt(key).selected_text(space_label(*value)).show_ui(ui, |ui| {
@@ -116,14 +127,15 @@ pub(crate) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: Laye
     let Some(metadata) = current(app, layer) else { return; };
     let Some(active) = app.session.active() else { return; };
     let stamp = (active.doc.id.0, active.revision, layer.0);
+    let flat = owned_flat(app);
     let permission = eligibility(app, layer, &metadata);
-    let mut draft = app.ui.xcf_composition_draft.take().filter(|draft| (draft.document, draft.revision, draft.layer) == stamp && draft.source_mode == metadata.mode);
+    let mut draft = app.ui.xcf_composition_draft.take().filter(|draft| (draft.document, draft.revision, draft.layer) == stamp && (flat || draft.source_mode == metadata.mode));
     if app.ui.xcf_composition_origin.as_ref().is_some_and(|origin| origin.layer != layer || !stable(app, origin)) { app.ui.xcf_composition_origin = None; }
     let witnessed = app.ui.xcf_composition_origin.as_ref().is_some_and(|origin| stable(app, origin));
     let mut edit = false; let mut apply = false; let mut reset = false;
     ui.push_id(("xcf_composition", stamp.0, layer.0), |ui| { ui.collapsing(tl!("GIMP Composition"), |ui| {
         ui.label(egui::RichText::new(tl!("Current mode")).color(Tokens::get(ui.ctx()).text));
-        ui.label(mode_label(metadata.mode).map(crate::i18n::t).unwrap_or(tl!("Source-specific mode")));
+        ui.label(if flat && metadata.mode == 46 { tl!("Grain Extract") } else if flat && metadata.mode == 47 { tl!("Grain Merge") } else { mode_label(metadata.mode).map(crate::i18n::t).unwrap_or(tl!("Source-specific mode")) });
         if metadata.legacy { ui.label(tl!("Legacy")); }
         for (label, value) in [(tl!("Blend space"), stored_space(metadata.blend)), (tl!("Composite space"), stored_space(metadata.composite)), (tl!("Operator"), stored_operator(metadata.operator))] {
             ui.horizontal(|ui| { ui.label(label); ui.label(value); });
@@ -138,13 +150,18 @@ pub(crate) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: Laye
         if let Some(value) = draft.as_mut() {
             if !witnessed { ui.label(tl!("Choose Edit to capture the current layer before applying.")); }
             ui.add_enabled_ui(witnessed && permission.is_ok(), |ui| {
+                if flat {
+                    ui.horizontal(|ui| { ui.label(tl!("Mode")); egui::ComboBox::from_id_salt("source_mode").selected_text(mode_label(value.source_mode).map(crate::i18n::t).unwrap_or(tl!("Choose explicit mode"))).show_ui(ui, |ui| {
+                        for mode in EDITABLE_MODES { if let Some(label)=mode_label(mode) { ui.selectable_value(&mut value.source_mode,mode,crate::i18n::t(label)); } }
+                    }); });
+                }
                 space_choice(ui, "blend_space", tl!("Blend space"), &mut value.blend_space);
                 space_choice(ui, "composite_space", tl!("Composite space"), &mut value.composite_space);
                 ui.horizontal(|ui| { ui.label(tl!("Operator")); egui::ComboBox::from_id_salt("operator").selected_text(operator_label(value.operator)).show_ui(ui, |ui| {
                     for code in 1..=4 { ui.selectable_value(&mut value.operator, Some(code), operator_label(Some(code))); }
                 }); });
-                let complete = space_wire(value.blend_space).is_some() && space_wire(value.composite_space).is_some() && operator_wire(value.operator).is_some();
-                let changed = value.blend_space.map(i32::from) != Some(metadata.blend) || value.composite_space.map(i32::from) != Some(metadata.composite) || value.operator.map(i32::from) != Some(metadata.operator);
+                let complete = mode_label(value.source_mode).is_some() && space_wire(value.blend_space).is_some() && space_wire(value.composite_space).is_some() && operator_wire(value.operator).is_some();
+                let changed = value.source_mode != metadata.mode || value.blend_space.map(i32::from) != Some(metadata.blend) || value.composite_space.map(i32::from) != Some(metadata.composite) || value.operator.map(i32::from) != Some(metadata.operator);
                 ui.horizontal(|ui| { apply = ui.add_enabled(complete && changed, egui::Button::new(tl!("Apply"))).clicked(); reset = ui.button(tl!("Reset")).clicked(); });
             });
         }
@@ -243,3 +260,7 @@ mod tests {
         app.session.execute("edit.redo", json!({})).unwrap(); assert_eq!(*app.session.active().unwrap().doc, *edited);
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "composition/flat_current_tests.rs"]
+mod flat_current_tests;

@@ -23,6 +23,7 @@ mod imported_metadata;
 mod imported_translate;
 mod point;
 mod gaussian_group;
+mod flat_composition;
 mod readonly_layer_name;
 mod threshold;
 mod threshold_alpha;
@@ -62,6 +63,7 @@ pub fn supports(id: &str) -> bool {
             | "xcf.filter.move"
             | "xcf.filter.remove"
             | "xcf.mask.enabled.set"
+            | "xcf.composition.set"
     )
 }
 
@@ -70,6 +72,8 @@ fn bad(id: &str, message: &str) -> EngineError {
 }
 
 enum Request<'a> {
+    FlatComposition(flat_composition::Request<'a>),
+    PreparedFlatComposition(flat_composition::Prepared<'a>),
     ImportedTranslate(imported_translate::Request<'a>),
     PreparedImportedTranslate(imported_translate::Prepared<'a>),
     AssignedMask(assigned_mask::Request<'a>),
@@ -112,6 +116,9 @@ fn require_history_selection_enabled(session: &Session) -> Result<()> {
 }
 
 fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadControl<'_>) -> Result<Request<'a>> {
+    if id == "xcf.composition.set" {
+        return Ok(Request::FlatComposition(flat_composition::Request::parse(session,params,control)?));
+    }
     if id == "layer.translate" {
         return Ok(Request::ImportedTranslate(imported_translate::Request::parse(session, params, control)?));
     }
@@ -268,6 +275,9 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     let state = session.active().ok_or(EngineError::NoDocument)?;
     if let Some(reason) = global_refusal(session) {
         return Ok(Some(reason));
+    }
+    if id == "xcf.composition.set" && !state.doc.accounted().is_some_and(|owner|owner.is_readonly_flat_composite_storage()) {
+        return Ok(Some("this accounted storage has no qualified explicit composition transaction"));
     }
     if id == "layer.translate" && !state.doc.accounted().is_some_and(imported_translate::candidate) {
         return Ok(Some("this accounted storage has no qualified plain Move transaction"));
@@ -590,6 +600,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             return Err(EngineError::Other(reason.into()));
         }
         let request = match request {
+            Request::FlatComposition(request)=>Request::PreparedFlatComposition(request.prepare(session,control)?),
             Request::ImportedTranslate(request) => Request::PreparedImportedTranslate(request.prepare(session, control)?),
             Request::AssignedMask(request) => Request::PreparedAssignedMask(request.prepare(session, control)?),
             Request::ImportedMetadata(request) => Request::PreparedMetadata(request.prepare(session, control)?),
@@ -668,6 +679,9 @@ impl<'a> PreparedAccountedCommand<'a> {
             // and covers the synchronous returned reply after that stage drops.
             census.add(0, usize::try_from(threshold_alpha::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
         }
+        if matches!(&request, Request::PreparedFlatComposition(_)) {
+            census.add(0,usize::try_from(flat_composition::REPLY_ENVELOPE).map_err(|_|BackingError::Length)?)?;
+        }
         if matches!(&request, Request::PreparedGaussianGroup(_)) {
             census.add(0,usize::try_from(gaussian_group::REPLY_ENVELOPE).map_err(|_|BackingError::Length)?)?;
         }
@@ -726,6 +740,7 @@ impl<'a> PreparedAccountedCommand<'a> {
                 | Request::PreparedImportedTranslate(_)
                 | Request::PreparedPoint(_)
                 | Request::PreparedGaussianGroup(_)
+                | Request::PreparedFlatComposition(_)
                 | Request::PreparedThresholdAlpha(_)
                 | Request::PreparedThreshold(_)
                 | Request::PreparedReadonlyLayerName(_)
@@ -783,6 +798,7 @@ impl<'a> PreparedAccountedCommand<'a> {
                 | Request::PreparedThreshold(_)
                 | Request::PreparedPoint(_)
                 | Request::PreparedGaussianGroup(_)
+                | Request::PreparedFlatComposition(_)
                 | Request::PreparedClear(_)
                 | Request::PreparedFill(_)
                 | Request::HistorySelect(_)
@@ -816,6 +832,8 @@ impl<'a> PreparedAccountedCommand<'a> {
             return Err(BackingError::Integrity.into());
         }
         let result = match self.request {
+            Request::PreparedFlatComposition(prepared)=>prepared.execute(session,control)?,
+            Request::FlatComposition(_)=>return Err(BackingError::Integrity.into()),
             Request::PreparedImportedTranslate(prepared) => prepared.execute(session, control)?,
             Request::ImportedTranslate(_) => return Err(BackingError::Integrity.into()),
             Request::PreparedAssignedMask(prepared) => prepared.execute(session, control)?,
