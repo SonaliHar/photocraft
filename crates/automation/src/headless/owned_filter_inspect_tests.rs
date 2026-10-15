@@ -350,3 +350,80 @@ fn hostile_rpc_id_is_null_error_without_copy_or_query() {
     assert_eq!(q.usage().unwrap(), before);
     assert_eq!(reads.load(Ordering::Relaxed), 0);
 }
+
+#[test]
+fn owned_project_discovery_supplies_actual_filter_id_for_inspection_and_registered_edit() {
+    for histogram in [false, true] {
+        let (mut h, q, reads) = headless(histogram);
+        let before = h.session.active().unwrap().doc.clone();
+        let revision = h.session.active().unwrap().revision;
+        let journal = h.session.journal.clone();
+        let baseline = q.usage().unwrap();
+        let discovered = h.inspect_owned_command_bounded("xcf.inspect", &Value::Null, false).unwrap();
+        assert_eq!(discovered.command(), "xcf.inspect");
+        let identity = discovered.value()["filters"]["entries"][0]["id"].as_str().unwrap().to_owned();
+        assert_eq!(discovered.value()["filters"]["total"], 1);
+        assert_eq!(reads.load(Ordering::Relaxed), 0);
+        assert_eq!(h.session.active().unwrap().revision, revision);
+        assert!(h.session.active().unwrap().doc.shares_state(&before));
+        assert_eq!(h.session.journal, journal);
+        drop(discovered);
+        assert_eq!(q.usage().unwrap(), baseline);
+        let inspected = h.inspect_owned_command_bounded("xcf.filter.inspect", &serde_json::json!({"filterId":identity}), true).unwrap();
+        assert_eq!(inspected.command(), "xcf.filter.inspect");
+        assert_eq!(inspected.value()["filterId"], identity);
+        drop(inspected);
+        h.command_run("xcf.filter.enable", serde_json::json!({"filterId":identity,"enabled":false})).unwrap();
+        assert_eq!(h.session.active().unwrap().revision, revision + 1);
+        h.command_run("edit.undo", serde_json::json!({})).unwrap();
+        assert!(h.session.active().unwrap().history.can_redo());
+        let page =
+            h.inspect_owned_command_cli_bounded("xcf.inspect", &serde_json::json!({"offset":1,"limit":1}), true, crate::budgets::MAX_RESPONSE_BYTES).unwrap();
+        let page: Value = serde_json::from_slice(page.bytes()).unwrap();
+        assert_eq!(page["command"], "xcf.inspect");
+        assert!(page["result"]["filters"]["entries"].as_array().unwrap().is_empty());
+        assert!(h.session.active().unwrap().history.can_redo());
+    }
+}
+#[test]
+fn discovery_uses_original_authorization_id_and_only_two_typed_commands() {
+    let (mut h, q, _) = headless(true);
+    fn deny(command: &str, _: &Value) -> photocraft_engine::Result<()> {
+        assert_eq!(command, "xcf.inspect");
+        Err(photocraft_engine::EngineError::Other("discovery denied".into()))
+    }
+    let baseline = q.usage().unwrap();
+    h.session.authorize = Some(deny);
+    assert!(h.inspect_owned_command_bounded("xcf.inspect", &Value::Null, true).is_err());
+    h.session.authorize = None;
+    assert!(h.inspect_owned_command_bounded("xcf.assess", &Value::Null, true).is_err());
+    for value in [
+        serde_json::json!({"limit":0}),
+        serde_json::json!({"limit":129}),
+        serde_json::json!({"offset":100001}),
+        serde_json::json!({"other":1}),
+        serde_json::json!({"limit":null}),
+    ] {
+        assert!(h.inspect_owned_command_bounded("xcf.inspect", &value, true).is_err());
+    }
+    assert!(h.command_run("xcf.inspect", Value::Null).is_err());
+    assert!(h.handle("engine.execute", serde_json::json!({"command":"xcf.inspect"})).is_err());
+    assert_eq!(h.batch(&serde_json::json!({"steps":[{"command":"xcf.inspect"}]})).unwrap()["failed"], 1);
+    assert_eq!(q.usage().unwrap(), baseline);
+}
+#[test]
+fn retained_rpc_discovery_accepts_missing_params_and_keeps_legacy_envelope() {
+    use std::sync::Mutex;
+    let (h, q, reads) = headless(true);
+    let baseline = q.usage().unwrap();
+    let h = Mutex::new(h);
+    let mut bytes = Vec::new();
+    crate::rpc::serve_lines(&h, std::io::Cursor::new(b"{\"id\":5,\"method\":\"engine.execute\",\"params\":{\"command\":\"xcf.inspect\"}}\n"), &mut bytes)
+        .unwrap();
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(value["id"], 5);
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["result"]["filters"]["total"], 1);
+    assert_eq!(reads.load(Ordering::Relaxed), 0);
+    assert_eq!(q.usage().unwrap(), baseline);
+}

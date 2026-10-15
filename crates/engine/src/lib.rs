@@ -9,6 +9,7 @@
 
 pub mod accounted_commands;
 pub mod accounted_filter_inspect;
+pub mod accounted_xcf_inspect;
 pub mod accounted_native_open;
 pub mod accounted_native_save;
 pub(crate) mod accounted_color_range;

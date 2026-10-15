@@ -21,7 +21,10 @@ pub(crate) struct RetainedQuery {
     pub(crate) reply: Sender<OwnedFilterInspectWire>,
 }
 
-pub(crate) fn handle(app: &mut PhotocraftApp, request: &ControlRequest) -> Option<Outcome> {
+pub(crate) fn handle(app: &mut PhotocraftApp, request: &ControlRequest, command: &str) -> Option<Outcome> {
+    if !matches!(command, "xcf.inspect" | "xcf.filter.inspect") {
+        return None;
+    }
     let owner = app.session.active()?.doc.accounted()?;
     if !owner.is_readonly_threshold_alpha_storage() && !owner.is_readonly_threshold_storage() {
         return None;
@@ -34,8 +37,8 @@ pub(crate) fn handle(app: &mut PhotocraftApp, request: &ControlRequest) -> Optio
             return Err("accounted filter inspection accepts command, params and wait only".into());
         }
         if fields.get("wait").is_some_and(|value| !value.is_boolean())
-            || fields.get("command").is_some_and(|value| value.as_str() != Some("xcf.filter.inspect"))
-            || fields.get("id").is_some_and(|value| value.as_str() != Some("xcf.filter.inspect"))
+            || fields.get("command").is_some_and(|value| value.as_str() != Some(command))
+            || fields.get("id").is_some_and(|value| value.as_str() != Some(command))
         {
             return Err("invalid accounted filter inspection command or wait".into());
         }
@@ -55,12 +58,17 @@ pub(crate) fn handle(app: &mut PhotocraftApp, request: &ControlRequest) -> Optio
             return Err("retained inspection request ID or control limit rejected".into());
         }
         if let Some(authorize) = app.services.automation_command.as_ref() {
-            authorize("xcf.filter.inspect", params)?;
+            authorize(command, params)?;
         }
         if let Some(authorize) = app.session.authorize {
-            authorize("xcf.filter.inspect", params).map_err(|error| error.to_string())?;
+            authorize(command, params).map_err(|error| error.to_string())?;
         }
-        let reply = prepare(&app.session, params, &control).map_err(|error| error.to_string())?;
+        let reply = if command == "xcf.inspect" {
+            photocraft_engine::accounted_xcf_inspect::prepare(&app.session, params, &control)
+        } else {
+            prepare(&app.session, params, &control)
+        }
+        .map_err(|error| error.to_string())?;
         let wire = encode_rpc(reply, &retained.id, retained.limit, &control).map_err(|error| error.to_string())?;
         // Queue the actual paid carrier BEFORE waking the ordinary receiver.
         // A timeout/disconnect drops it without changing installed state.

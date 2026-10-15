@@ -92,7 +92,7 @@ fn serve(stream: TcpStream, token: &str, tx: Sender<ControlRequest>, ctx: egui::
                 let params = msg.get("params").cloned().unwrap_or(json!({}));
                 let deadline = Instant::now() + REPLY_DEADLINE;
                 let retained =
-                    method == "engine.execute" && params.get("command").or_else(|| params.get("id")).and_then(Value::as_str) == Some("xcf.filter.inspect");
+                    method == "engine.execute" && matches!(params.get("command").or_else(|| params.get("id")).and_then(Value::as_str), Some("xcf.inspect" | "xcf.filter.inspect"));
                 let (mut req, rrx, wire) = if retained {
                     let (request, response, wire) = ControlRequest::with_retained_query(method, params, id.clone(), MAX_RESPONSE_BYTES - 1);
                     (request, response, Some(wire))

@@ -1175,8 +1175,8 @@ fn bridge_only_headless(name: &str) -> Result<CallToolResult, McpError> {
 
 impl PhotocraftMcp {
     async fn run_command(&self, id: String, params: Value, wait: bool) -> Result<CallToolResult, McpError> {
-        if id == "xcf.filter.inspect" {
-            return owned_filter_inspect::run(self, params, wait).await;
+        if matches!(id.as_str(), "xcf.filter.inspect" | "xcf.inspect") {
+            return owned_filter_inspect::run(self, id, params, wait).await;
         }
         if matches!(id.as_str(), "xcf.link.substitute" | "xcf.link.recover") {
             return match &*self.backend {

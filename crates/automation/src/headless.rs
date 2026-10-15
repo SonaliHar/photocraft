@@ -738,7 +738,7 @@ impl Headless {
     /// Photomerge, â€¦) runs in the background and this returns `{"job": id}` at once (poll with
     /// `jobs.list`, stop with `jobs.cancel`). Other commands finish before returning either way.
     pub fn command_start(&mut self, id: &str, params: Value, wait: bool) -> Result<Value, AutomationError> {
-        if id == "xcf.filter.inspect" && self.session.active().is_some_and(|state| state.doc.accounted().is_some()) {
+        if matches!(id,"xcf.filter.inspect"|"xcf.inspect") && self.session.active().is_some_and(|state| state.doc.accounted().is_some()) {
             return Err(AutomationError::BadRequest("accounted filter inspection requires a retained reply transport or typed Headless API".into()));
         }
         if id == "select.loadSelection" && params.get("originalPath").is_some() {

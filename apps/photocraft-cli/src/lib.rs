@@ -424,7 +424,7 @@ fn run_cmds(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
     }
     for (id, params) in cmds {
         if owned_filter_inspect::handles(&h, &id) {
-            owned_filter_inspect::write(&mut h, &params, out)
+            owned_filter_inspect::write(&mut h, &id, &params, out)
                 .map_err(|e| format!("`{id}`: {}", automation_error(a, e)))?;
             // Both admitted classes contain no text layers, so the ordinary
             // missing-font walk cannot add warnings to this exact reply.

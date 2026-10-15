@@ -50,10 +50,42 @@ fn inspect(session: &mut Session, params: &Value) -> Result<Value> {
     let state = doc.xcf_state.as_ref().ok_or_else(|| bad("missing imported XCF state"))?;
     let resolution = doc.effective_resolution();
     resolution.validate().map_err(|error| bad(error.to_string()))?;
+    build_inspect_reply(doc, state, &resolution, offset, limit, None)
+}
+#[derive(Clone, Copy)]
+pub(crate) struct ItemTextFacts<'a> {
+    pub(crate) item: &'a photocraft_doc::xcf_state::ItemState,
+    pub(crate) name_truncated: bool,
+    pub(crate) epoch_truncated: bool,
+}
+fn truncated(item: &photocraft_doc::xcf_state::ItemState, epoch: bool, facts: Option<&[Option<ItemTextFacts<'_>>]>) -> bool {
+    if let Some(fact) = facts.and_then(|facts| facts.iter().flatten().find(|fact| std::ptr::eq(fact.item, item))) {
+        return if epoch { fact.epoch_truncated } else { fact.name_truncated };
+    }
+    // The resident caller supplies no facts, retaining its original full scan.
+    // A paid caller's complete page coverage is checked before any reply copy.
+    if epoch { item.composition.as_ref().is_some_and(|policy|policy.compatibility_epoch.chars().count()>256) }
+    else { item.name.chars().count()>256 }
+}
+/// Exact canonical metadata response; callers independently validate the model.
+/// Paid accounted callers must reserve/census all reply and serde temporaries.
+pub(crate) fn build_inspect_reply(
+    doc: &photocraft_doc::Document,
+    state: &photocraft_doc::XcfState,
+    resolution: &photocraft_doc::PhysicalResolution,
+    offset: usize,
+    limit: usize,
+    facts: Option<&[Option<ItemTextFacts<'_>>]>,
+) -> Result<Value> {
+    if let Some(facts) = facts {
+        for item in state.items.iter().skip(offset).take(limit) {
+            if !facts.iter().flatten().any(|fact|std::ptr::eq(fact.item,item)) { return Err(bad("missing controlled item text facts")); }
+        }
+    }
     let items = page(&state.items, offset, limit, |item| {
-        let composition=item.composition.as_ref().map(|policy|json!({"compatibilityEpoch":short(&policy.compatibility_epoch),"epochTruncated":policy.compatibility_epoch.chars().count()>256,"sourceMode":policy.source_mode,"legacy":policy.legacy,"storedBlendSpace":policy.stored_blend_space,"storedCompositeSpace":policy.stored_composite_space,"storedOperator":policy.stored_operator,"resolved":policy.resolved,"passThrough":policy.pass_through}));
+        let composition=item.composition.as_ref().map(|policy|json!({"compatibilityEpoch":short(&policy.compatibility_epoch),"epochTruncated":truncated(item,true,facts),"sourceMode":policy.source_mode,"legacy":policy.legacy,"storedBlendSpace":policy.stored_blend_space,"storedCompositeSpace":policy.stored_composite_space,"storedOperator":policy.stored_operator,"resolved":policy.resolved,"passThrough":policy.pass_through}));
         let mask=item.mask.as_ref().map(|mask|json!({"owner":reference(mask.owner),"bounds":mask.bounds,"offset":mask.offset,"outsideFloat64Bits":format!("0x{:016x}",mask.outside_f64_bits),"enabled":mask.enabled,"shown":mask.shown,"editing":mask.editing,"linked":mask.linked}));
-        json!({"item":reference(item.item),"name":short(&item.name),"nameTruncated":item.name.chars().count()>256,"customName":item.custom_name,"visible":item.visible,"locks":item.locks,"parent":item.parent.map(reference),"sourceTattoo":item.source_tattoo,"sourceFlags":item.source_flags,"rasterBounds":item.raster_bounds,"hasComposition":item.composition.is_some(),"hasMask":item.mask.is_some(),"composition":composition,"mask":mask})
+        json!({"item":reference(item.item),"name":short(&item.name),"nameTruncated":truncated(item,false,facts),"customName":item.custom_name,"visible":item.visible,"locks":item.locks,"parent":item.parent.map(reference),"sourceTattoo":item.source_tattoo,"sourceFlags":item.source_flags,"rasterBounds":item.raster_bounds,"hasComposition":item.composition.is_some(),"hasMask":item.mask.is_some(),"composition":composition,"mask":mask})
     });
     let paths =
         page(&doc.paths, offset, limit, |path| json!({"item":reference(ItemRef::Path(path.id)),"name":short(&path.name),"subpaths":path.path.subpaths.len()}));

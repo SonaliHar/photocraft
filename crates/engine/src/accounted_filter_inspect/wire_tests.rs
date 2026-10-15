@@ -16,6 +16,7 @@ fn quota() -> BackingQuota {
 fn reply(q: &BackingQuota) -> OwnedFilterInspectReply {
     let lease = q.reserve(QuotaKind::Index, 8192).unwrap();
     OwnedFilterInspectReply {
+        kind: super::super::ReplyKind::Filter,
         value: json!({"filterId":"17","enabled":true,"name":"quote\" slash\\ newline\n λ","arguments":[{"name":"low","value":{"Number":{"Float32Bits":2147483648u32}}}]}),
         quota: q.clone(),
         _lease: lease,
@@ -115,4 +116,17 @@ fn input_escaping_scans_are_paid_before_serde_output_callbacks() {
     assert_eq!(q.usage().unwrap(), QuotaUsage::default());
     drop(encode_rpc(reply(&q), &json!("\"".repeat(32)), 65536, &ctl()).unwrap());
     assert_eq!(q.usage().unwrap(), QuotaUsage::default());
+}
+
+#[test]
+fn cli_command_identity_comes_from_private_reply_kind_not_result_fields() {
+    let q = quota();
+    let mut input = reply(&q);
+    input.kind = super::super::ReplyKind::Project;
+    input.value = serde_json::json!({"command":"xcf.filter.inspect","filters":{"total":1,"entries":[{"id":"17"}]}});
+    assert_eq!(input.command(), "xcf.inspect");
+    let wire = encode_cli(input, true, 65536, &ctl()).unwrap();
+    let value: Value = serde_json::from_slice(wire.bytes()).unwrap();
+    assert_eq!(value["command"], "xcf.inspect");
+    assert_eq!(value["result"]["command"], "xcf.filter.inspect");
 }

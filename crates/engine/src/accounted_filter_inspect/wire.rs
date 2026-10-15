@@ -136,7 +136,7 @@ fn encoded(reply: OwnedFilterInspectReply, id: Option<&Value>, pretty: bool, lim
     // bytes below; this conservative fixed multiple is not a CPU-cycle claim.
     control.check(reply.charged_index_bytes().checked_mul(8).ok_or(BackingError::Length)?)?;
     let rpc = id.map(|id| Rpc { id, ok: true, result: reply.value() });
-    let cli = Cli { command: "xcf.filter.inspect", result: reply.value() };
+    let cli = Cli { command: reply.command(), result: reply.value() };
     let mut count = Counter { length: 0, limit, control, failure: None };
     let counted = match &rpc {
         Some(value) => serialize(value, pretty, &mut count),

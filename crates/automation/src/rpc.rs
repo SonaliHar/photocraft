@@ -82,7 +82,7 @@ fn str_of<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
 impl Headless {
     /// Dispatch one request. Unknown methods and bad params are errors, never panics.
     pub fn handle(&mut self, method: &str, params: Value) -> Result<Value, AutomationError> {
-        if method == "engine.execute" && params.get("command").and_then(Value::as_str) == Some("xcf.filter.inspect")
+        if method == "engine.execute" && params.get("command").and_then(Value::as_str).is_some_and(|command|matches!(command,"xcf.filter.inspect"|"xcf.inspect"))
             && self.session.active().is_some_and(|state| state.doc.accounted().is_some()) {
             return Err(bad("accounted filter inspection requires the retained RPC transport or typed Headless API"));
         }
@@ -309,7 +309,7 @@ fn respond_retained(h: &Mutex<Headless>, line: &str, allow_owned:bool) -> Routed
         }
         // Intercept the paid installed-snapshot query before parameter cloning
         // or the legacy handle's job synchronization. Resident behavior is unchanged.
-        if method == "engine.execute" && req.get("params").and_then(|p|p.get("command")).and_then(Value::as_str) == Some("xcf.filter.inspect") {
+        if method == "engine.execute" && req.get("params").and_then(|p|p.get("command")).and_then(Value::as_str).is_some_and(|command|matches!(command,"xcf.filter.inspect"|"xcf.inspect")) {
             let mut headless=h.lock().unwrap_or_else(PoisonError::into_inner);
             if headless.has_owned_filter_inspection() {
                 if let Err(error)=owned_xcf_open::validate_id_shape(id) {
@@ -319,8 +319,13 @@ fn respond_retained(h: &Mutex<Headless>, line: &str, allow_owned:bool) -> Routed
                 let params=req.get("params").and_then(Value::as_object).ok_or_else(||bad("engine.execute requires an object"))?;
                 if params.len()>3 || params.keys().any(|key|!matches!(key.as_str(),"command"|"params"|"wait")) { return Err(bad("unknown owned inspection engine.execute field")); }
                 let wait=match params.get("wait") {None=>true,Some(Value::Bool(wait))=>*wait,_=>return Err(bad("owned inspection wait must be boolean"))};
-                let query=params.get("params").ok_or_else(||bad("owned inspection params required"))?;
-                return headless.inspect_owned_filter_rpc_bounded(query,wait,id).map(RoutedReply::FilterInspect);
+                let command=params.get("command").and_then(Value::as_str).ok_or_else(||bad("owned inspection command required"))?;
+                let query=params.get("params").unwrap_or(&Value::Null);
+                return if command=="xcf.filter.inspect" {
+                    headless.inspect_owned_filter_rpc_bounded(query,wait,id)
+                } else {
+                    headless.inspect_owned_command_rpc_bounded(command,query,wait,id)
+                }.map(RoutedReply::FilterInspect);
             }
         }
         let params=req.get("params").cloned().unwrap_or(Value::Null);

@@ -123,6 +123,81 @@ fn denied(outcome: Outcome) {
     assert_eq!(value["ok"], false);
 }
 #[test]
+#[ignore = "UNRUN: pinned original discovery and retained UI control"]
+fn project_discovery_retains_pages_and_original_authorization_before_filter_query() {
+    for histogram in [false, true] {
+        let (mut app, e) = app(histogram);
+        let model = app.session.active().unwrap().doc.clone();
+        let history = app.session.active().unwrap().history.clone();
+        let baseline = e.quota.usage().unwrap();
+        let calls = Arc::new(AtomicU64::new(0));
+        let seen = calls.clone();
+        app.services.automation_command = Some(Box::new(move |id, params| {
+            assert!(matches!(id, "xcf.inspect" | "xcf.filter.inspect"));
+            assert!(params.is_null() || params.is_object());
+            seen.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }));
+        let mut discovered = None;
+        for params in [Value::Null, json!({}), json!({"offset":0,"limit":128}), json!({"offset":100000,"limit":1})] {
+            let (req, wake, wire) = ControlRequest::with_retained_query("engine.execute", json!({"command":"xcf.inspect","params":params}), json!(7), 1 << 20);
+            assert!(matches!(crate::control::handle(&mut app, &egui::Context::default(), &req), Outcome::Deferred));
+            assert!(wake.try_recv().unwrap().is_null());
+            let wire = wire.try_recv().unwrap();
+            let value: Value = serde_json::from_slice(wire.bytes()).unwrap();
+            assert_eq!(value["id"], 7);
+            assert_eq!(value["ok"], true);
+            let entries = value["result"]["filters"]["entries"].as_array().unwrap();
+            if params.get("offset").and_then(Value::as_u64) == Some(100000) {
+                assert!(entries.is_empty());
+            } else {
+                assert_eq!(entries.len(), 1);
+                let id = entries[0]["id"].as_str().unwrap().to_owned();
+                assert_eq!(id, request(&app.session)["filterId"].as_str().unwrap());
+                discovered = Some(id);
+            }
+            assert!(e.quota.usage().unwrap().index > baseline.index);
+            drop(wire);
+            assert_eq!(e.quota.usage().unwrap(), baseline);
+        }
+        let (req, wake, wire) = ControlRequest::with_retained_query(
+            "engine.execute",
+            json!({"command":"xcf.filter.inspect","params":{"filterId":discovered.unwrap()}}),
+            json!(8),
+            1 << 20,
+        );
+        assert!(matches!(crate::control::handle(&mut app, &egui::Context::default(), &req), Outcome::Deferred));
+        assert!(wake.try_recv().unwrap().is_null());
+        drop(wire.try_recv().unwrap());
+        assert_eq!(calls.load(Ordering::Relaxed), 5);
+        assert_eq!(e.quota.usage().unwrap(), baseline);
+        assert!(app.session.active().unwrap().doc.shares_state(&model));
+        assert!(app.session.active().unwrap().history.shares_accounted_history(&history));
+    }
+}
+#[test]
+#[ignore = "UNRUN: pinned original project discovery refusals"]
+fn discovery_rejects_alias_mismatch_bad_pagination_and_value_only_transport() {
+    let (mut app, e) = app(true);
+    let model = app.session.active().unwrap().doc.clone();
+    let baseline = e.quota.usage().unwrap();
+    for params in [
+        json!({"command":"xcf.inspect","id":"xcf.filter.inspect"}),
+        json!({"command":"xcf.inspect","params":{"limit":0}}),
+        json!({"command":"xcf.inspect","params":{"offset":100001}}),
+        json!({"command":"xcf.inspect","params":{"unknown":true}}),
+    ] {
+        let (req, _, wire) = ControlRequest::with_retained_query("engine.execute", params, Value::Null, 1 << 20);
+        denied(crate::control::handle(&mut app, &egui::Context::default(), &req));
+        assert!(wire.try_recv().is_err());
+        assert_eq!(e.quota.usage().unwrap(), baseline);
+    }
+    let (req, _) = ControlRequest::new("engine.execute", json!({"command":"xcf.inspect"}));
+    denied(crate::control::handle(&mut app, &egui::Context::default(), &req));
+    assert!(app.session.active().unwrap().doc.shares_state(&model));
+    assert_eq!(e.quota.usage().unwrap(), baseline);
+}
+#[test]
 #[ignore = "UNRUN: pinned originals; no UI/runtime or TCP execution"]
 fn real_owned_control_reply_is_queued_before_null_and_held_through_write_flush() {
     for histogram in [false, true] {

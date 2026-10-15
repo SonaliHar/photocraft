@@ -26,14 +26,35 @@ const FIXED_TEXT: usize = 8192;
 const MAP_HEADER: usize = 4096;
 const MAP_ENTRY: usize = 256;
 
+#[derive(Clone, Copy)]
+pub(crate) enum ReplyKind {
+    Filter,
+    Project,
+}
+#[derive(Clone, Copy)]
+pub(crate) struct ReplyBounds {
+    pub(crate) nodes: usize,
+    pub(crate) objects: usize,
+    pub(crate) members: usize,
+    pub(crate) depth: usize,
+}
+const FILTER_BOUNDS: ReplyBounds = ReplyBounds { nodes: MAX_NODES, objects: MAX_OBJECTS, members: MAX_MEMBERS, depth: MAX_DEPTH };
+
 /// The copied Value drops before its actual quota reservation. There is no raw
 /// Value extractor: callers retain this owner until their output is complete.
 pub struct OwnedFilterInspectReply {
     value: Value,
+    kind: ReplyKind,
     quota: BackingQuota,
     _lease: QuotaLease,
 }
 impl OwnedFilterInspectReply {
+    pub fn command(&self) -> &'static str {
+        match self.kind {
+            ReplyKind::Filter => "xcf.filter.inspect",
+            ReplyKind::Project => "xcf.inspect",
+        }
+    }
     pub fn value(&self) -> &Value {
         &self.value
     }
@@ -110,28 +131,28 @@ impl Census {
         control.check(value.len() as u64 + 1)?;
         checked_add(&mut self.bytes, value.capacity())
     }
-    fn value(&mut self, value: &Value, depth: usize, control: &ReadControl<'_>) -> Result<()> {
+    fn value(&mut self, value: &Value, depth: usize, bounds: ReplyBounds, control: &ReadControl<'_>) -> Result<()> {
         control.check(1)?;
         self.nodes = self.nodes.checked_add(1).ok_or(BackingError::Length)?;
-        if self.nodes > MAX_NODES || depth > MAX_DEPTH {
+        if self.nodes > bounds.nodes || depth > bounds.depth {
             return Err(BackingError::Length.into());
         }
         checked_add(&mut self.bytes, std::mem::size_of::<Value>())?;
         match value {
             Value::String(value) => self.string(value, control)?,
             Value::Array(values) => {
-                if values.capacity() > 2 * MAX_NODES {
+                if values.capacity() > 2 * bounds.nodes {
                     return Err(BackingError::Length.into());
                 }
                 checked_add(&mut self.bytes, values.capacity().checked_mul(std::mem::size_of::<Value>()).ok_or(BackingError::Length)?)?;
                 for value in values {
-                    self.value(value, depth + 1, control)?;
+                    self.value(value, depth + 1, bounds, control)?;
                 }
             }
             Value::Object(values) => {
                 self.objects = self.objects.checked_add(1).ok_or(BackingError::Length)?;
                 self.members = self.members.checked_add(values.len()).ok_or(BackingError::Length)?;
-                if self.objects > MAX_OBJECTS || self.members > MAX_MEMBERS {
+                if self.objects > bounds.objects || self.members > bounds.members {
                     return Err(BackingError::Length.into());
                 }
                 checked_add(
@@ -144,7 +165,7 @@ impl Census {
                 )?;
                 for (key, value) in values {
                     self.string(key, control)?;
-                    self.value(value, depth + 1, control)?;
+                    self.value(value, depth + 1, bounds, control)?;
                 }
             }
             _ => {}
@@ -186,18 +207,33 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     }
     let text = metadata(node, control)?;
     let planned = envelope(text)?;
+    paid_reply(owner.quota(), ReplyKind::Filter, FILTER_BOUNDS, planned, text, control, || crate::xcf_filter_cmds::build_inspect_reply(id, stack, node))
+}
+/// Engine-private construction: only the two checked query factories call this.
+/// Every returned tree and serde temporary is backed by real same-ledger leases;
+/// this exposes neither a public numeric receipt nor a raw Value extractor.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn paid_reply(
+    quota: &BackingQuota,
+    kind: ReplyKind,
+    bounds: ReplyBounds,
+    planned: u64,
+    scanned_text: usize,
+    control: &ReadControl<'_>,
+    build: impl FnOnce() -> Result<Value>,
+) -> Result<OwnedFilterInspectReply> {
     // Actual serde constructs multiple temporary maps/argument vectors before
     // returning its tree. Hold a second complete envelope throughout that stage
     // and final capacity reconciliation; standard serde allocation is the same
     // explicitly bounded provider boundary used by other paid replies.
-    let lease = owner.quota().reserve(QuotaKind::Index, planned).map_err(|_| BackingError::Quota)?;
-    let mut reply = OwnedFilterInspectReply { value: Value::Null, quota: owner.quota().clone(), _lease: lease };
-    let temporary = owner.quota().reserve(QuotaKind::Index, planned).map_err(|_| BackingError::Quota)?;
-    let work = planned.checked_mul(2).and_then(|n| n.checked_add((text as u64).checked_mul(4)?)).ok_or(BackingError::Length)?;
+    let lease = quota.reserve(QuotaKind::Index, planned).map_err(|_| BackingError::Quota)?;
+    let mut reply = OwnedFilterInspectReply { value: Value::Null, kind, quota: quota.clone(), _lease: lease };
+    let temporary = quota.reserve(QuotaKind::Index, planned).map_err(|_| BackingError::Quota)?;
+    let work = planned.checked_mul(2).and_then(|n| n.checked_add((scanned_text as u64).checked_mul(4)?)).ok_or(BackingError::Length)?;
     control.check(work)?;
-    reply.value = crate::xcf_filter_cmds::build_inspect_reply(id, stack, node)?;
+    reply.value = build()?;
     let mut actual = Census::default();
-    actual.value(&reply.value, 0, control)?;
+    actual.value(&reply.value, 0, bounds, control)?;
     checked_add(&mut actual.bytes, std::mem::size_of::<OwnedFilterInspectReply>() + 128)?;
     if actual.bytes as u64 > planned {
         return Err(BackingError::Allocation.into());

@@ -99,6 +99,48 @@ mod actual_source {
         }
     }
     #[tokio::test]
+    #[ignore = "UNRUN: requires pinned original Alpha/Histogram project discovery"]
+    async fn project_discovery_preserves_pagination_canonical_ids_and_original_authorizer_id() {
+        for alpha in [true, false] {
+            let h = Arc::new(Mutex::new(headless(alpha)));
+            let server = PhotocraftMcp::with_backend(Backend::Headless(h.clone()));
+            let (snapshot, history, revision, q, baseline) = {
+                let h = h.lock().unwrap();
+                let state = h.session.active().unwrap();
+                let q = state.doc.accounted().unwrap().quota().clone();
+                (state.doc.clone(), state.history.clone(), state.revision, q.clone(), q.usage().unwrap())
+            };
+            let output = server.run_command("xcf.inspect".into(), Value::Null, false).await.unwrap();
+            assert_ne!(output.is_error, Some(true));
+            let value: Value = serde_json::from_str(text(&output)).unwrap();
+            assert_eq!(value["format"], "xcf");
+            assert_eq!(value["filters"]["offset"], 0);
+            assert_eq!(value["filters"]["limit"], 64);
+            let filter = value["filters"]["entries"][0]["id"].as_str().unwrap();
+            assert_eq!(filter, snapshot.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id.0.to_string());
+            let inspected = server.run_command("xcf.filter.inspect".into(), json!({"filterId":filter}), true).await.unwrap();
+            assert_ne!(inspected.is_error, Some(true));
+            let page = server.run_command("xcf.inspect".into(), json!({"offset":1,"limit":1}), true).await.unwrap();
+            let page: Value = serde_json::from_str(text(&page)).unwrap();
+            assert_eq!(page["filters"]["offset"], 1);
+            assert_eq!(page["filters"]["limit"], 1);
+            assert_eq!(page["filters"]["entries"], json!([]));
+            for params in [json!({"limit":0}), json!({"offset":-1}), json!({"limit":129}), json!({"owner":"not-a-project-field"})] {
+                assert_eq!(server.run_command("xcf.inspect".into(), params, true).await.unwrap().is_error, Some(true));
+            }
+            h.lock().unwrap().session.authorize =
+                Some(|id, _| if id == "xcf.inspect" { Err(photocraft_engine::EngineError::Other("deny project query".into())) } else { Ok(()) });
+            assert_eq!(server.run_command("xcf.inspect".into(), json!({}), true).await.unwrap().is_error, Some(true));
+            assert_ne!(server.run_command("xcf.filter.inspect".into(), json!({"filterId":filter}), true).await.unwrap().is_error, Some(true));
+            let h = h.lock().unwrap();
+            let state = h.session.active().unwrap();
+            assert!(state.doc.shares_state(&snapshot));
+            assert!(state.history.shares_accounted_history(&history));
+            assert_eq!(state.revision, revision);
+            assert_eq!(q.usage().unwrap(), baseline);
+        }
+    }
+    #[tokio::test]
     #[ignore = "UNRUN: requires actual pinned Histogram source; authorizer/malformed/batch declines"]
     async fn actual_authorization_and_raw_batch_refusals_cannot_bypass_paid_reply_contract() {
         let h = Arc::new(Mutex::new(headless(false)));
@@ -117,11 +159,13 @@ mod actual_source {
         h.lock().unwrap().session.authorize = None;
         {
             let mut h = h.lock().unwrap();
-            assert!(h.command_start("xcf.filter.inspect", params.clone(), true).is_err());
-            assert!(h.handle("engine.execute", json!({"command":"xcf.filter.inspect","params":params})).is_err());
-            let batch = h.batch_with_budget(&json!({"steps":[{"command":"xcf.filter.inspect","params":params}]}), BatchReplyBudget::escaped()).unwrap();
-            assert_eq!(batch["failed"], 1);
-            assert_eq!(batch["results"][0]["ok"], false);
+            for (id, params) in [("xcf.filter.inspect", params.clone()), ("xcf.inspect", json!({}))] {
+                assert!(h.command_start(id, params.clone(), true).is_err());
+                assert!(h.handle("engine.execute", json!({"command":id,"params":params})).is_err());
+                let batch = h.batch_with_budget(&json!({"steps":[{"command":id,"params":params}]}), BatchReplyBudget::escaped()).unwrap();
+                assert_eq!(batch["failed"], 1);
+                assert_eq!(batch["results"][0]["ok"], false);
+            }
         }
         let h = h.lock().unwrap();
         assert!(h.session.active().unwrap().doc.shares_state(&snapshot));

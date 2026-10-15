@@ -440,8 +440,14 @@ snapshot without applying queued jobs. Retained RPC and desktop control keep the
 paid reply through writing and flushing; MCP uses its bounded SDK text handoff.
 Bare-Value Headless methods and generic batches refuse accounted inspection;
 typed callers use `inspect_owned_filter_bounded` and retain its returned carrier.
-Resident inspection keeps its existing behavior. Discovery and inspection of
-other owned classes remain separate work.
+The same owned routes also accept `xcf.inspect` with null/omitted parameters or
+`{"offset":0,"limit":64}`. Offset is at most 100000; limit is 1–128. Each metadata
+collection is paginated independently. `filters.entries[].id` supplies the canonical
+ID for subsequent `xcf.filter.inspect` or separately authorized filter edits.
+Stack revisions remain decimal strings in project discovery. Typed callers use
+`inspect_owned_command_bounded` with exactly one of these two command IDs and retain
+the returned carrier. Resident inspection keeps its existing behavior. Inspection
+of other owned classes remains separate work.
 
 For explicit owned native reopen, use exactly `{"path":"current.pcraft","nativeProfilePolicy":"keepCurrent"}`
 with `doc.open` or MCP `doc_open`. Exactly one profile policy is permitted; both together,

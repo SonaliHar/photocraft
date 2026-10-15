@@ -77,6 +77,7 @@ fn wire_fee_stays_held_through_each_write_and_failed_output_does_not_mutate_or_l
         let mut calls = 0;
         write(
             &mut h,
+            "xcf.filter.inspect",
             &params,
             &mut Probe(
                 |chunk: &[u8]| {
@@ -103,6 +104,7 @@ fn wire_fee_stays_held_through_each_write_and_failed_output_does_not_mutate_or_l
         assert!(
             write(
                 &mut h,
+                "xcf.filter.inspect",
                 &params,
                 &mut Probe(
                     |chunk: &[u8]| {
@@ -123,6 +125,7 @@ fn wire_fee_stays_held_through_each_write_and_failed_output_does_not_mutate_or_l
         assert!(
             write(
                 &mut h,
+                "xcf.filter.inspect",
                 &params,
                 &mut Probe(
                     |chunk: &[u8]| Ok(chunk.len()),
@@ -141,7 +144,7 @@ fn wire_fee_stays_held_through_each_write_and_failed_output_does_not_mutate_or_l
         assert_eq!(h.session.active().unwrap().revision, revision);
         for bad in [Value::Null, json!({}), json!({"filterId":1}), json!({"filterId":"01"}), json!({"filterId":params["filterId"],"extra":true})] {
             let mut destination = Vec::new();
-            assert!(write(&mut h, &bad, &mut destination).is_err());
+            assert!(write(&mut h, "xcf.filter.inspect", &bad, &mut destination).is_err());
             assert!(destination.is_empty());
             assert_eq!(q.usage().unwrap(), baseline);
         }
@@ -252,5 +255,180 @@ fn actual_cli_compact_inspect_edit_undo_save_native_reopen_preserves_recipe_and_
 fn unsupported_empty_owner_does_not_intercept_ordinary_commands() {
     let h = Headless::trusted_local();
     assert!(!handles(&h, "xcf.filter.inspect"));
+    assert!(!handles(&h, "xcf.inspect"));
     assert!(!handles(&h, "file.new"));
+}
+
+#[test]
+#[ignore = "UNRUN: real paid discovery pagination and retained CLI wire"]
+fn discovery_default_null_and_bounded_pages_share_paid_transport_without_mutation() {
+    for histogram in [false, true] {
+        let dir = Directory::new();
+        let mut h = owned(histogram, &dir);
+        assert!(handles(&h, "xcf.inspect"));
+        let before = h.session.active().unwrap().doc.clone();
+        let history = h.session.active().unwrap().history.clone();
+        let journal = h.session.journal.clone();
+        let revision = h.session.active().unwrap().revision;
+        let q = before.quota().unwrap().clone();
+        let baseline = q.usage().unwrap();
+        let mut defaults = None;
+        for params in [Value::Null, json!({}), json!({"offset":0}), json!({"offset":1}), json!({"offset":100000}), json!({"offset":0,"limit":128})] {
+            let mut bytes = Vec::new();
+            write(
+                &mut h,
+                "xcf.inspect",
+                &params,
+                &mut Probe(
+                    |chunk: &[u8]| {
+                        assert!(q.usage().unwrap().index > baseline.index);
+                        bytes.extend_from_slice(chunk);
+                        Ok(chunk.len())
+                    },
+                    || {
+                        assert!(q.usage().unwrap().index > baseline.index);
+                        Ok(())
+                    },
+                ),
+            )
+            .unwrap();
+            let reply: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(reply["command"], "xcf.inspect");
+            assert_eq!(reply["result"]["filters"]["total"], 1);
+            let offset = params.get("offset").and_then(Value::as_u64).unwrap_or(0);
+            assert_eq!(reply["result"]["filters"]["offset"], offset);
+            if offset == 0 {
+                assert_eq!(reply["result"]["filters"]["entries"].as_array().unwrap().len(), 1);
+                assert_eq!(reply["result"]["filters"]["entries"][0]["inspectCommand"], "xcf.filter.inspect");
+                if params.get("limit").is_none() {
+                    if let Some(expected) = &defaults {
+                        assert_eq!(&reply, expected);
+                    } else {
+                        defaults = Some(reply.clone());
+                    }
+                } else {
+                    assert_eq!(reply["result"]["filters"]["limit"], 128);
+                }
+            } else {
+                assert!(reply["result"]["filters"]["entries"].as_array().unwrap().is_empty());
+            }
+            assert_eq!(q.usage().unwrap(), baseline);
+        }
+        for params in [
+            json!([]),
+            json!({"offset":-1}),
+            json!({"offset":100001}),
+            json!({"offset":1.5}),
+            json!({"limit":0}),
+            json!({"limit":129}),
+            json!({"limit":null}),
+            json!({"other":true}),
+        ] {
+            let mut out = Vec::new();
+            assert!(write(&mut h, "xcf.inspect", &params, &mut out).is_err());
+            assert!(out.is_empty());
+            assert_eq!(q.usage().unwrap(), baseline);
+        }
+        assert!(h.command_run("xcf.inspect", json!({})).is_err());
+        let batch = h.handle("batch", json!({"steps":[{"command":"xcf.inspect","params":{}}]})).unwrap();
+        assert_eq!(batch["failed"], 1);
+        assert!(h.session.active().unwrap().doc.shares_state(&before));
+        assert!(h.session.active().unwrap().history.shares_accounted_history(&history));
+        assert_eq!(h.session.journal, journal);
+        assert_eq!(h.session.active().unwrap().revision, revision);
+    }
+}
+#[test]
+#[ignore = "UNRUN: actual CLI discovery -> scalar inspection/edit -> native Save As/reopen"]
+fn discovery_supplies_real_filter_id_for_cli_inspection_edit_and_native_continuation() {
+    for histogram in [false, true] {
+        let dir = Directory::new();
+        let mut h = owned(histogram, &dir);
+        let mut out = Vec::new();
+        write(&mut h, "xcf.inspect", &Value::Null, &mut out).unwrap();
+        let discovery: Value = serde_json::from_slice(&out).unwrap();
+        let filter = discovery["result"]["filters"]["entries"][0]["id"].as_str().unwrap();
+        let inspect = json!({"filterId":filter}).to_string();
+        let mut scalar = Vec::new();
+        write(&mut h, "xcf.filter.inspect", &serde_json::from_str(&inspect).unwrap(), &mut scalar).unwrap();
+        let scalar: Value = serde_json::from_slice(&scalar).unwrap();
+        let field = if histogram { "low" } else { "value" };
+        let original = scalar["result"]["arguments"].as_array().unwrap().iter().find(|a| a["name"] == field).unwrap();
+        let bits = if original["state"]["value"]["Number"]["Float32Bits"] == 0.875f32.to_bits() { 0.25f32.to_bits() } else { 0.875f32.to_bits() };
+        let patch = json!({"filterId":filter,"arguments":[{"name":field,"value":{"Number":{"Float32Bits":bits}}}]}).to_string();
+        let input = dir.0.join("source.xcf");
+        let saved = dir.0.join("discovered.pcraft");
+        let original_bytes = std::fs::read(&input).unwrap();
+        let (code, text, error) = invoke(&[
+            "run",
+            input.to_str().unwrap(),
+            "--xcf-profile-policy",
+            "keepCurrent",
+            "--cmd",
+            "xcf.inspect",
+            "--params",
+            "null",
+            "--cmd",
+            "xcf.inspect",
+            "--params",
+            r#"{"offset":1}"#,
+            "--cmd",
+            "xcf.inspect",
+            "--params",
+            r#"{"offset":100000,"limit":128}"#,
+            "--cmd",
+            "xcf.filter.inspect",
+            "--params",
+            &inspect,
+            "--cmd",
+            "xcf.filter.set",
+            "--params",
+            &patch,
+            "--cmd",
+            "edit.undo",
+            "--cmd",
+            "edit.redo",
+            "--out",
+            saved.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "{error}");
+        let lines: Vec<Value> = text.lines().map(|v| serde_json::from_str(v).unwrap()).collect();
+        assert_eq!(lines.len(), 7);
+        assert_eq!(lines[0]["command"], "xcf.inspect");
+        assert_eq!(lines[0]["result"]["filters"]["entries"][0]["id"], filter);
+        for i in [1, 2] {
+            assert!(lines[i]["result"]["filters"]["entries"].as_array().unwrap().is_empty());
+        }
+        assert_eq!(lines[3]["result"]["filterId"], filter);
+        assert_eq!(lines[4]["result"]["updated"], true);
+        assert_eq!(std::fs::read(&input).unwrap(), original_bytes);
+        let saved_bytes = std::fs::read(&saved).unwrap();
+        let continued = dir.0.join("continued-discovery.pcraft");
+        let (code, text, error) = invoke(&[
+            "run",
+            saved.to_str().unwrap(),
+            "--native-profile-policy",
+            "keepCurrent",
+            "--cmd",
+            "xcf.inspect",
+            "--params",
+            r#"{"offset":0,"limit":128}"#,
+            "--cmd",
+            "xcf.filter.inspect",
+            "--params",
+            &inspect,
+            "--out",
+            continued.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "{error}");
+        let lines: Vec<Value> = text.lines().map(|v| serde_json::from_str(v).unwrap()).collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["result"]["filters"]["entries"][0]["id"], filter);
+        let value = lines[1]["result"]["arguments"].as_array().unwrap().iter().find(|a| a["name"] == field).unwrap();
+        assert_eq!(value["state"]["value"]["Number"]["Float32Bits"], bits);
+        assert_eq!(std::fs::read(&saved).unwrap(), saved_bytes);
+        let mut reopened = Headless::trusted_local();
+        drop(reopened.open_owned_native_keep_current_bounded(&continued).unwrap());
+        assert_eq!(reopened.session.active().unwrap().doc.name, "continued-discovery.pcraft");
+    }
 }

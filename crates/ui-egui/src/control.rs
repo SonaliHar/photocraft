@@ -657,8 +657,8 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         "engine.execute" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
-            if req.method == "engine.execute" && id == "xcf.filter.inspect"
-                && let Some(outcome) = crate::owned_filter_inspect::handle(app, req)
+            if req.method == "engine.execute" && matches!(id, "xcf.inspect" | "xcf.filter.inspect")
+                && let Some(outcome) = crate::owned_filter_inspect::handle(app, req, id)
             {
                 return outcome;
             }
