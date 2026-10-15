@@ -3194,3 +3194,4 @@ curves	Smooth	Lisser
 	set name	nom du jeu
 	{set} (modified)	{set} (modifié)
 	Random	Aléatoire
+	Show file name in title	Afficher le nom de fichier dans le titre
