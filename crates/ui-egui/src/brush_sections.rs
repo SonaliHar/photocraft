@@ -67,20 +67,51 @@ fn dim(ui: &mut egui::Ui, s: &str) {
     ui.label(RichText::new(s).color(t.text_dim));
 }
 
-/// `Control: [Off ▾] [25]`: the controller pop-up plus Fade's step count. `angle` offers the
+/// Whether a dynamic's control has a 0..1 input its own response curve shapes (not Off, not the
+/// direction controls, not Angle Jitter, whose controls set an angle).
+pub(crate) fn takes_curve(control: Control, angle: bool) -> bool {
+    !angle && matches!(control, Control::Fade | Control::PenPressure | Control::PenTilt | Control::StylusWheel | Control::Rotation)
+}
+
+/// egui memory key of the open/closed state of a dynamic's curve editor.
+pub(crate) fn curve_open_id(id: &str) -> egui::Id {
+    egui::Id::new(("brush-curve-open", id))
+}
+
+/// `Control: [Off ▾] [25] [~]`: the controller pop-up, Fade's step count and the button that
+/// shows this dynamic's own response curve (lit while the curve isn't linear). `angle` offers the
 /// direction controls (Photoshop only has them for Angle Jitter).
 fn control_row(ui: &mut egui::Ui, id: &str, d: &mut Dynamic, angle: bool) {
+    let open_id = curve_open_id(id);
+    let mut open: bool = ui.data(|m| m.get_temp(open_id)).unwrap_or(false);
     ui.horizontal(|ui| {
         dim(ui, tl!("Control:"));
         let n = if angle || matches!(d.control, Control::InitialDirection | Control::Direction) { 8 } else { 6 };
-        widgets::dropdown(ui, id, &mut d.control, &CONTROLS[..n], 130.0);
+        // Fade's new response-curve button must not widen a narrow section and shift
+        // the Minimum numeric column below it.
+        let control_width = if d.control == Control::Fade && takes_curve(d.control, angle) {
+            (ui.available_width() - 56.0 - 22.0 - 2.0 * ui.spacing().item_spacing.x).clamp(0.0, 130.0)
+        } else {
+            130.0
+        };
+        widgets::dropdown(ui, id, &mut d.control, &CONTROLS[..n], control_width);
         if d.control == Control::Fade {
             let mut steps = d.fade_steps as f32;
             if widgets::value_field(ui, &mut steps, 1.0..=9999.0, "", 56.0).on_hover_text(tl!("Fade steps")).changed() {
                 d.fade_steps = steps.round().clamp(1.0, 9999.0) as u32;
             }
         }
+        if takes_curve(d.control, angle) && crate::icons::button(ui, "spline", 22.0, open || !d.curve.is_linear(), tl!("Response curve")).clicked() {
+            open = !open;
+        }
     });
+    if open && takes_curve(d.control, angle) {
+        let mut points = d.curve.points();
+        if crate::pressure_curve_ui::edit_points(ui, egui::Id::new(("brush-curve-rect", id)), &mut points) {
+            d.curve = paint::ResponseCurve::new(&points);
+        }
+    }
+    ui.data_mut(|m| m.insert_temp(open_id, open));
     ui.add_space(2.0);
 }
 
@@ -671,7 +702,7 @@ mod tests {
             (&mut b.transfer.wetness, 0.11, 0.433),
             (&mut b.transfer.mix, 0.13, 0.643),
         ] {
-            *d = Dynamic { jitter, control, minimum, fade_steps: 37 };
+            *d = Dynamic { jitter, control, minimum, fade_steps: 37, ..Default::default() };
         }
         b
     }
@@ -716,6 +747,18 @@ mod tests {
                     let labels: Vec<_> = h.query_all_by_label("Minimum").map(|n| n.rect()).collect();
                     let controls: Vec<_> = h.query_all_by_role(Role::ComboBox).map(|n| n.rect()).collect();
                     assert_eq!(labels.len(), 4);
+                    let curves: Vec<_> = h.query_all_by_label("Response curve").map(|n| n.rect()).collect();
+                    assert_eq!(curves.len(), if control == Control::Off { 0 } else { 4 });
+                    for curve in &curves {
+                        assert!(curve.right() <= width - 8.0, "{kind:?}, {width}, {control:?}: curve toggle fits the section");
+                    }
+                    if control == Control::Fade {
+                        let counts: Vec<_> = h.query_all_by_role(Role::SpinButton).filter(|n| n.accesskit_node().numeric_value() == Some(37.0)).collect();
+                        assert_eq!(counts.len(), 4);
+                        for (count, curve) in counts.iter().zip(&curves) {
+                            assert!(count.rect().right() < curve.left(), "Fade count and curve toggle do not overlap");
+                        }
+                    }
                     for (i, value) in [17.0, 28.0, 43.0, 64.0].into_iter().enumerate() {
                         let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(value)).unwrap();
                         let label = labels[i];
@@ -732,7 +775,12 @@ mod tests {
                         );
                         let jitter =
                             h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some([3.0, 7.0, 11.0, 13.0][i])).unwrap();
-                        assert!((field.rect().right() - jitter.rect().right()).abs() < 0.5, "Minimum retains the numeric column");
+                        assert!(
+                            (field.rect().right() - jitter.rect().right()).abs() < 0.5,
+                            "{kind:?}, {width}, {control:?}, {i}: Minimum retains the numeric column: {:?}, jitter {:?}",
+                            field.rect(),
+                            jitter.rect()
+                        );
                         assert!(
                             field.rect().top() >= controls[i].bottom() && field.rect().top() - controls[i].bottom() < 15.0,
                             "Minimum stays attached to its own Control"
