@@ -291,6 +291,14 @@ fn import_psd(
     Ok(ImportResult { document, warnings, source_read_only: false, preview_only: false })
 }
 
+/// Global blocks [`import_file`] leaves in the file: embedded smart-object files of at least a
+/// megabyte, read when a smart object's contents are (editing them, saving). Only where a save
+/// that replaces the file leaves the open one readable (Unix rename semantics); on Windows the
+/// open file would block that replace, so they are read at open there.
+fn defer_block(key: &[u8; 4], len: u64) -> bool {
+    cfg!(unix) && matches!(key, b"lnk2" | b"lnk3" | b"lnkD") && len >= 1 << 20
+}
+
 /// Imports the file at `path`, as [`import_with_svg_group_depth_and_interrupt`] imports its
 /// bytes. A PSD/PSB is parsed from the open file ([`PsdFile::from_source`]) rather than read
 /// whole: its channel data is read layer by layer as it is decoded, so opening it needs memory
@@ -310,7 +318,7 @@ pub fn import_file(name: &str, path: &std::path::Path, max_group_depth: usize, c
         return import_with_svg_group_depth_and_interrupt(name, &bytes, max_group_depth, ctl);
     }
     let source = photocraft_psd::Source::new(source);
-    let r = import_psd(name, ctl, |want, recover| PsdFile::from_source_and_merged_recovering(source, want, recover))?;
+    let r = import_psd(name, ctl, |want, recover| PsdFile::from_source_deferring(source, defer_block, want, recover))?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
     Ok(r)
@@ -395,6 +403,17 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
 /// export fails with [`IoError::Cancelled`]; otherwise the bytes are exactly [`export`]'s.
 pub fn export_with(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
+    // Smart-object files left in the file the document was opened from are read for the save
+    // (the writers work on bytes in memory); a failed read fails the save, never writes them empty.
+    let loaded;
+    let doc = if doc.metadata.has_deferred_blocks() {
+        let mut d = doc.clone();
+        d.metadata.load_deferred_blocks().map_err(|e| IoError::Read(format!("a smart object's embedded file could not be read: {e}")))?;
+        loaded = d;
+        &loaded
+    } else {
+        doc
+    };
     let r = export_stages(doc, name_or_ext, opts, ctl)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);

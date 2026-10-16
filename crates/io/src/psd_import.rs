@@ -73,6 +73,23 @@ pub(crate) struct Ctx<'a> {
     pub total: usize,
 }
 
+/// A global block's data left in the file it was opened from (see [`photocraft_doc::Blob`]).
+struct StoredBlock(photocraft_psd::Stored);
+
+impl photocraft_doc::DeferredBytes for StoredBlock {
+    fn len(&self) -> u64 {
+        self.0.len
+    }
+
+    fn read(&self, at: u64, len: u64) -> Result<Vec<u8>, photocraft_doc::BlobError> {
+        self.0.read_part(at, len).map_err(|e| photocraft_doc::BlobError(e.to_string()))
+    }
+
+    fn origin(&self) -> String {
+        format!("{} bytes at offset {} of the opened file", self.0.len, self.0.offset)
+    }
+}
+
 /// Bytes of interleaved pixels a band decoded into tiles at once aims at: whole layers up to this
 /// size decode in one band, larger ones in bands of whole tile rows.
 const BAND_BYTES: usize = 32 << 20;
@@ -175,7 +192,7 @@ impl Ctx<'_> {
         let size = *self
             .plld_sizes
             .entry(id.clone())
-            .or_insert_with(|| crate::linked::source_size_in_blocks(global.iter().map(|(_, k, d)| (k, d.as_slice())), &id, &ctl));
+            .or_insert_with(|| crate::linked::source_size_in_globals(global, &id, &ctl));
         // Without the source (missing or unreadable), it is taken as placed at 100 %.
         let (transform, perspective) = blocks::plld_transform(&p, size, warp.as_ref());
         Placement { id, transform, perspective, warp }
@@ -814,7 +831,14 @@ pub(crate) fn psd_to_document_decoded(
     ctl: &photocraft_raster::Interrupt,
     decoded: Option<photocraft_psd::Result<Vec<u8>>>,
 ) -> Option<(Document, Vec<String>)> {
-    let global = file.global_blocks.iter().map(|b| (b.signature, b.key, Arc::new(b.data.clone()))).collect();
+    let mut global = Vec::with_capacity(file.global_blocks.len());
+    for b in &file.global_blocks {
+        let data = match &b.stored {
+            Some(s) => photocraft_doc::Blob::deferred(Arc::new(StoredBlock(s.clone()))),
+            None => photocraft_doc::Blob::new(b.data.clone()),
+        };
+        global.push((b.signature, b.key, data));
+    }
     psd_to_document_global(file, ctl, decoded, global)
 }
 
@@ -829,9 +853,14 @@ pub(crate) fn psd_to_document_owned(
         .global_blocks
         .iter_mut()
         .map(|b| {
-            // A layer block is still read by `unreadable_layer_block` (to say why it failed).
-            let data = if matches!(&b.key, b"Lr16" | b"Lr32" | b"Layr") { b.data.clone() } else { std::mem::take(&mut b.data) };
-            (b.signature, b.key, Arc::new(data))
+            let data = match &b.stored {
+                // Left in the file (`import_file`): read when a smart object's contents are.
+                Some(s) => photocraft_doc::Blob::deferred(Arc::new(StoredBlock(s.clone()))),
+                // A layer block is still read by `unreadable_layer_block` (to say why it failed).
+                None if matches!(&b.key, b"Lr16" | b"Lr32" | b"Layr") => photocraft_doc::Blob::new(b.data.clone()),
+                None => photocraft_doc::Blob::new(std::mem::take(&mut b.data)),
+            };
+            (b.signature, b.key, data)
         })
         .collect();
     psd_to_document_global(&file, ctl, decoded, global)
@@ -933,7 +962,7 @@ fn psd_to_document_global(
         cmyk: fmt.mode == ColorMode::Cmyk,
         warnings,
         dpi: doc.resolution_dpi,
-        txt2: global.iter().find(|(_, k, _)| k == b"Txt2").and_then(|(_, _, d)| photocraft_text::psd::parse_txt2(d)),
+        txt2: global.iter().find(|(_, k, _)| k == b"Txt2").and_then(|(_, _, d)| photocraft_text::psd::parse_txt2(d.resident())),
         filter_effects: Vec::new(),
         smart_contents: Default::default(),
         plld_sizes: Default::default(),
@@ -947,7 +976,7 @@ fn psd_to_document_global(
         if ctl.cancelled() {
             return None;
         }
-        match photocraft_psd::filter_effects::FilterEffects::parse(data) {
+        match photocraft_psd::filter_effects::FilterEffects::parse(data.resident()) {
             Ok(fx) => cx.filter_effects.extend(fx.items),
             Err(e) => cx.warn(format!("smart filter masks ({}) could not be read: {e}", String::from_utf8_lossy(key))),
         }

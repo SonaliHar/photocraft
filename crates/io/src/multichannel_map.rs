@@ -152,7 +152,7 @@ pub(crate) fn document_to_psd(doc: &Document, force_psb: bool) -> (PsdFile, Vec<
     let global_blocks: Vec<TaggedBlock> = crate::annotations_map::export_blocks(doc, crate::pattern_map::export_global_blocks(doc))
         .into_iter()
         .filter(|(_, key, _)| !matches!(key, b"Layr" | b"Lr16" | b"Lr32"))
-        .map(|(sig, key, data)| crate::psd_export::global_block(sig, key, &data))
+        .map(|(sig, key, data)| crate::psd_export::global_block(sig, key, data.resident()))
         .collect();
     let color_mode_data = photocraft_psd::hdr::color_mode_data_for_depth(header.depth);
     let file = PsdFile {
