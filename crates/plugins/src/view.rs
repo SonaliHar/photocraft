@@ -17,7 +17,11 @@ pub const MAX_DEPTH: usize = 16;
 /// Most options in one `choice`.
 pub const MAX_OPTIONS: usize = 256;
 /// Longest text a `text` widget may hold.
-pub const MAX_TEXT_LENGTH: usize = 8_000;
+///
+/// A whole chapter of a lettering script goes in one `text` field, so this is generous — a page of
+/// dialogue is a few kilobytes and the ABI already bounds one reply to 1 MiB (`ops::MAX_OPS_BYTES`),
+/// which is what keeps a panel from filling memory with widgets rather than this.
+pub const MAX_TEXT_LENGTH: usize = 65_536;
 /// Longest label, title or placeholder.
 pub const MAX_LABEL: usize = 256;
 

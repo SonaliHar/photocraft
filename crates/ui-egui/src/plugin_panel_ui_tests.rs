@@ -23,6 +23,8 @@ const PANEL: &str = "org.photocraft.example.panel";
 const ITEM: &str = "plugin.panel.item.org.photocraft.example.panel";
 /// The note the test types into the panel's field.
 const NOTE: &str = "chapter 1";
+/// More of it, typed and then left by *clicking* a button rather than pressing Enter.
+const TAIL: &str = " continued";
 
 /// The whole app, with the example panel installed and a 40 × 28 document open. One test drives all
 /// of it: the registry and the open panels are process-wide, so two of these running at once would be
@@ -165,6 +167,23 @@ fn a_panel_gets_a_window_row_that_opens_into_the_view_it_sent() {
     // belongs to the document and any other test's session can rewrite it between two frames, so the
     // acknowledgement is left to the engine test: the note above is what proves the commit happened.
 
+    // Clicking elsewhere in the panel ends the edit too, and that click must not lose it: a letterer
+    // pastes a chapter into a script box and presses a button, and what they typed has to reach the
+    // plug-in. What the panel then *says* is not asserted: its status line follows the document, and
+    // another test's session announces its own (or none) to this panel between frames — with three
+    // thousand tests in one binary, that line is not this test's to read. That a click sees the edit
+    // it overtook is asserted below, directly on `flush_typing`, where no other test can interfere.
+    assert!(focus_note_field(&mut h));
+    h.run_steps(1);
+    h.event(egui::Event::Text(TAIL.into()));
+    h.run_steps(1);
+    h.get_by_label("Read Document").click();
+    h.run_steps(3);
+    let stored = inspected(&mut h)["storage"]["note"].as_str().unwrap_or_default().to_string();
+    assert!(stored.ends_with(TAIL), "the click did not lose the edit: {stored:?}");
+    let typed = widget(&mut h, 1)["value"].as_str().unwrap_or_default().to_string();
+    assert!(typed.ends_with(TAIL), "and the field still holds what was typed: {typed:?}");
+
     // Picking the row again closes the window; the same row is the way back.
     crate::menus::invoke(h.state_mut(), &ctx, ITEM, json!({})).unwrap();
     h.run_steps(2);
@@ -175,7 +194,7 @@ fn a_panel_gets_a_window_row_that_opens_into_the_view_it_sent() {
     assert!(row_checked(&h), "`show` opens it whether or not it was open");
     // What a field holds is its value, not a label, so it is read from the view rather than found
     // drawn. Hiding a window keeps the panel's instance, so the note is still there.
-    assert_eq!(widget(&mut h, 1)["value"], NOTE, "and it opens as it was left");
+    assert_eq!(widget(&mut h, 1)["value"].as_str(), Some(typed.as_str()), "and it opens as it was left");
 
     // Restarting is allowed while it runs (it is what a stopped panel needs, and a panel that is
     // running is simply started over). It starts a *new* instance, so this is where plug-in storage
@@ -184,7 +203,21 @@ fn a_panel_gets_a_window_row_that_opens_into_the_view_it_sent() {
     h.run_steps(2);
     assert_eq!(inspected(&mut h)["state"], "running");
     assert_eq!(text(&mut h, 4), "Reads 0, ticks 0", "a restarted panel starts at `init` again");
-    assert_eq!(widget(&mut h, 1)["value"], NOTE, "with what the last instance stored");
+    assert_eq!(widget(&mut h, 1)["value"].as_str(), Some(typed.as_str()), "with what the last instance stored");
+
+    // The hazard the flush exists for cannot be reached through *this* panel: its note field is drawn
+    // before its buttons and egui reports the focus loss in the same frame, so the edit happens to be
+    // queued first even with no flush at all. A panel whose buttons come first — a preview pane above
+    // its script box — queues the click first instead and would letter the script from before the
+    // user's paste. So the flush is driven directly, with a click and an edit the same frame collected.
+    let frame = super::Pending {
+        events: vec![(PANEL.to_string(), "read".to_string(), Value::Null)],
+        typing: vec![(PANEL.to_string(), "note".to_string(), json!("half-typed"))],
+    };
+    let ctx = h.ctx.clone();
+    super::flush_typing(h.state_mut(), &ctx, &frame);
+    h.run_steps(2);
+    assert_eq!(inspected(&mut h)["storage"]["note"], "half-typed", "a click delivers the edit it overtook");
 
     // Leave nothing behind: the panel is process-wide, and the tests after this one should not have to
     // share a running plug-in.

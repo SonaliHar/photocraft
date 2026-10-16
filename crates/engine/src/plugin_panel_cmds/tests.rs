@@ -3,9 +3,34 @@
 //!
 //! Each fixture's `pc_event` answers with a fixed script, and then **echoes the event it is given**
 //! straight back inside a `storage.set`. That makes the event the host delivered readable from a
-//! test, byte for byte — which is how the timer fires and the refusals are checked.
+//! test, byte for byte — which is how the timer fires and the refusals are checked. The one event a
+//! scripted fixture does not treat that way is a tick's `doc.changed`, which another test's session
+//! can deliver at any moment: see [`tick_guard`].
+//!
+//! The installed plug-ins *and* the open panels are process-wide, so one id belongs to one test: a
+//! second test using it installs over the first one's instance, and the panel it is clicking becomes
+//! someone else's. A tick reaches every panel in the process too, so the tests that tick take
+//! [`ticking`] first.
 
 use super::*;
+
+/// Held by the tests that call `plugin.panel.tick`, for the length of the test.
+///
+/// `tick` advances *every* open panel in the process, so one test's tick lands in the middle of
+/// another test's assertions: it fires the other panel's timers, re-points the document the panel
+/// believes it is showing and grows its event counter. That is the host as it is, and it has no owner
+/// to appeal to — the application itself holds one session, and the tick *is* its frame — so a panel
+/// being ticked by a session that did not open it is a thing these tests have to live with rather
+/// than a bug to fix here. Taking this lock is how they live with it deterministically: two tests
+/// that tick cannot interleave, so each one's own ticks are the only ones inside its assertions.
+/// (Whatever a test's own tick does to a panel another test owns is still its own doing — which is
+/// why no assertion here speaks for the whole process, only for the panel it opened.)
+static TICKING: Mutex<()> = Mutex::new(());
+
+/// See [`TICKING`]: held for the length of a test that ticks.
+fn ticking() -> MutexGuard<'static, ()> {
+    TICKING.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Where the fixture's pieces live. The echo buffer sits high in the initial eight pages, below
 /// where `pc_alloc` starts handing out blocks (8 pages = 524,288).
@@ -57,6 +82,24 @@ fn echo_body() -> String {
     )
 }
 
+/// The reply a scripted fixture answers a `doc.changed` with: the view it already sent.
+///
+/// Panels are process-wide, so while one test runs, every other test in this binary ticks *its* panel
+/// too, and each of their frames delivers a `doc.changed` naming their session's document. A fixture
+/// that answered every call from one counter would have the reply meant for a click eaten by a tick,
+/// and the click would hear the echo of its own event instead — a flake no assertion can repair,
+/// because the test cannot see which call it got, nor when another session ticked past it. A tick
+/// gets the view back instead, which is idempotent (it is what the panel already sent) and writes
+/// nothing: the script then lines up with the events *this* test sends, and `storage["last"]` is only
+/// ever written by its own.
+fn tick_guard() -> String {
+    format!(
+        "(if (call $is_doc_changed (local.get $p) (local.get $len))
+           (then (return (i64.or (i64.shl (i64.const {}) (i64.const 32)) (i64.const {REPLIES_AT})))))",
+        VIEW.len()
+    )
+}
+
 /// A panel module for `id`: `pc_event` answers with `replies` in order and echoes the event back
 /// once the script runs out. A reply of [`TRAP`] traps instead of answering.
 fn panel(id: &str, replies: &[&str]) -> Vec<u8> {
@@ -66,6 +109,10 @@ fn panel(id: &str, replies: &[&str]) -> Vec<u8> {
 /// [`panel`] with a manifest of its own, for the tests that vary what a panel asks for: what it may
 /// run follows from `capabilities`, so a panel that asks for nothing must be able to do nothing.
 fn panel_with(manifest: &str, replies: &[&str]) -> Vec<u8> {
+    // The first reply is the view the panel sends on `init`, and it is also what a tick is answered
+    // with (see [`tick_guard`]) — so it is not one of the scripted answers below, and it is never a
+    // trap.
+    assert_eq!(replies.first(), Some(&VIEW), "a fixture's script starts with the view its panel sends");
     let mut data = String::new();
     for (i, reply) in replies.iter().enumerate() {
         if *reply != TRAP {
@@ -84,7 +131,11 @@ fn panel_with(manifest: &str, replies: &[&str]) -> Vec<u8> {
         };
         body = format!("(if (result i64) (i32.eq (local.get $n) (i32.const {i})) (then {then}) (else {body}))");
     }
-    module_with(manifest, &format!("(local.set $n (global.get $calls))\n  (global.set $calls (i32.add (local.get $n) (i32.const 1)))\n  {body}"), &data)
+    module_with(
+        manifest,
+        &format!("(local.set $n (global.get $calls))\n  {}\n  (global.set $calls (i32.add (local.get $n) (i32.const 1)))\n  {body}", tick_guard()),
+        &data,
+    )
 }
 
 /// What the fixtures' panels declare: reading the document and adding layers to it, and a store.
@@ -130,6 +181,19 @@ fn module_with(manifest: &str, event_body: &str, data: &str) -> Vec<u8> {
     (if (result i32) (i32.eq (local.get $old) (i32.const -1))
       (then (i32.const 0)) (else (i32.mul (local.get $old) (i32.const 65536)))))
   (func (export "pc_free") (param $p i32) (param $n i32))
+  (func $is_doc_changed (param $p i32) (param $len i32) (result i32) (local $i i32) (local $end i32)
+    (local.set $end (i32.sub (local.get $len) (i32.const 8)))
+    (block $out
+      (loop $scan
+        (br_if $out (i32.gt_s (local.get $i) (local.get $end)))
+        ;; `doc.chan`: the frame's own `"type": "doc.changed"`, which only a tick sends.
+        (if (i32.and
+              (i32.eq (i32.load (i32.add (local.get $p) (local.get $i))) (i32.const 0x2E636F64))
+              (i32.eq (i32.load (i32.add (local.get $p) (i32.add (local.get $i) (i32.const 4)))) (i32.const 0x6E616863)))
+          (then (return (i32.const 1))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $scan)))
+    (i32.const 0))
   (func (export "pc_event") (param $p i32) (param $len i32) (result i64) (local $n i32)
     {event_body})
 )"#,
@@ -271,9 +335,46 @@ fn a_click_reaches_the_panel_and_its_operations_are_carried_out() {
     cleanup(&mut s, id);
 }
 
+/// Another session's tick must not eat this panel's answers.
+///
+/// Panels are process-wide and `tick` announces the *calling* session's document to all of them, so a
+/// second session in the same process — another test in this binary, or a client on the control
+/// channel while the user works — hands this panel a `doc.changed` naming *its* document at any
+/// moment. The script answers the events this test sends, so the click still hears the reply written
+/// for it, and the document in it is the one the panel's own session holds.
+#[test]
+fn another_sessions_tick_does_not_eat_a_panels_answers() {
+    let _ticking = ticking();
+    let id = "test.panel.shared";
+    let mut s = app(id, &panel(id, &[VIEW, r#"[{"op": "doc.info", "id": "d1"}]"#]));
+    open(&mut s, id);
+    // A second session, with a document of its own, ticks every panel in the process — including
+    // this one, which is not its own. (`panels` is that count, not one: the other tests' panels are
+    // open too, and one tick reaches all of them.)
+    let mut other = Session::new();
+    other.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let ticked = other.execute("plugin.panel.tick", json!({})).unwrap();
+    assert!(ticked["panels"].as_u64().unwrap_or(0) >= 1, "{ticked}");
+    // It answers for the panels it was told about and no more: the `errors` of a process-wide tick
+    // are the whole process's, and a panel of another test's that fails on its own is not this one's
+    // to answer for — only this id's own entries would be.
+    let errors = ticked["errors"].as_array().cloned().unwrap_or_default();
+    assert!(!errors.iter().any(|e| e["id"] == id), "ticking this panel from another session is not an error: {ticked}");
+    // The click is answered by the script's reply for it, not by the echo of its own event.
+    click(&mut s, id, "go").unwrap();
+    let answer = last_event(&mut s, id);
+    assert_eq!(answer["type"], "result", "the click heard the reply the script holds for it: {answer}");
+    assert_eq!(answer["id"], "d1");
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["width"], 40, "and `doc.info` read the panel's own session's document: {answer}");
+    cleanup(&mut s, id);
+}
+
 #[test]
 fn a_timer_fires_as_the_result_of_the_operation_that_armed_it() {
+    let _ticking = ticking();
     let id = "test.panel.timer";
+
     let mut s = app(id, &panel(id, &[VIEW, r#"[{"op": "timer.set", "id": "poll", "ms": 16}]"#]));
     open(&mut s, id);
     click(&mut s, id, "go").unwrap();
@@ -450,7 +551,10 @@ fn a_panel_runs_a_command_the_host_allows_and_hears_the_answer() {
 /// did not ask for the capability for, both come back as `ok: false` with the reason.
 #[test]
 fn a_panel_is_told_why_a_command_was_refused() {
-    let id = "test.panel.refused";
+    // Not the id above: one id belongs to one test. The registry is process-wide, and a second test
+    // installing the same id replaces the instance the first one is clicking — which is how this
+    // test failed five runs in thirteen when it shared `test.panel.refused`.
+    let id = "test.panel.denied";
     let ask = |command: &str| format!(r#"[{{"op": "doc.command", "id": "nope", "command": "{command}"}}]"#);
     // `file.open` is not in the host's list, however the manifest is written.
     let open_ask = ask("file.open");
@@ -530,6 +634,7 @@ fn removing_or_replacing_a_plug_in_ends_its_instance() {
 /// type into its field, and read back what the host was told.
 #[test]
 fn the_example_panel_plug_in_works_end_to_end() {
+    let _ticking = ticking();
     let id = EXAMPLE_ID;
     let mut s = app(id, EXAMPLE);
     let st = open(&mut s, id);

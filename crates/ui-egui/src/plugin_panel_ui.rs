@@ -128,7 +128,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut cancelled: Vec<String> = Vec::new();
     // Interactions are collected and sent after drawing: a click may redraw the whole panel, and the
     // panel's own lock cannot be taken while its snapshot is being drawn from.
-    let mut pending: Vec<(String, String, Value)> = Vec::new();
+    let mut pending = Pending::default();
     for (i, panel) in panels.iter().enumerate() {
         if !panel.visible {
             continue;
@@ -177,10 +177,49 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     for id in cancelled {
         send_event(app, &id, "cancel", None, Value::Null);
     }
-    for (panel, widget, value) in pending {
+    flush_typing(app, ctx, &pending);
+    for (panel, widget, value) in pending.events {
         // A `null` value is a click; anything else is the value a field committed with `ui.change`.
         let kind = if value.is_null() { "ui.click" } else { "ui.change" };
         send_event(app, &panel, kind, Some(&widget), value);
+    }
+}
+
+/// What one frame of drawing collected.
+#[derive(Default)]
+struct Pending {
+    /// Interactions to send, in the order the widgets were drawn: `(panel, widget, value)`, where a
+    /// `null` value is a click and anything else is the value a field committed.
+    events: Vec<(String, String, Value)>,
+    /// Text fields that were being typed into when the frame ended: `(panel, widget, buffer)`.
+    ///
+    /// egui takes the focus from a text field when the user clicks somewhere else, but a field only
+    /// hears about it — and so only commits — on the *next* frame. Without this, a button whose
+    /// action reads the field would act on the value from before the user's last edit: paste a
+    /// chapter into a script box and press Create, and Create would letter the previous script.
+    /// Collected here and sent before any click the same frame produced.
+    typing: Vec<(String, String, Value)>,
+}
+
+/// Sends the edits that a click would otherwise overtake, so a button acts on what the user just
+/// typed rather than on the value before it. Each flushed field's buffer is dropped, so the focus
+/// loss is not reported a second time next frame: the plug-in answers the change by echoing the value
+/// back (a new view or `ui.set`), which is what the ABI already asks of it.
+fn flush_typing(app: &mut PhotocraftApp, ctx: &egui::Context, pending: &Pending) {
+    let clicks: Vec<&str> = pending.events.iter().filter(|(_, _, v)| v.is_null()).map(|(panel, ..)| panel.as_str()).collect();
+    if clicks.is_empty() {
+        return;
+    }
+    for (panel, widget, typed) in &pending.typing {
+        if !clicks.contains(&panel.as_str()) {
+            continue;
+        }
+        // Already committed this frame (the field lost the focus before the button was drawn).
+        if pending.events.iter().any(|(p, w, v)| p == panel && w == widget && !v.is_null()) {
+            continue;
+        }
+        send_event(app, panel, "ui.change", Some(widget), typed.clone());
+        ctx.data_mut(|d| d.remove::<(String, String)>(egui::Id::new(("plugin-panel-text", panel.as_str(), widget.as_str()))));
     }
 }
 
@@ -258,7 +297,7 @@ fn progress_row(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, progress: &Pro
 
 /// Draws one widget tree, collecting every interaction into `pending` — `(panel, widget, value)`,
 /// where a `null` value is a click and anything else is a committed value.
-fn body(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, widget: &Widget, pending: &mut Vec<(String, String, Value)>) {
+fn body(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, widget: &Widget, pending: &mut Pending) {
     let width = ui.available_width();
     match widget {
         Widget::Column { children } => {
@@ -314,7 +353,12 @@ fn body(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, widget: &Widget, pendi
                 crate::widgets::text_field_ex(ui, key, &mut buf.1, &hint, width, false, *max_length)
             };
             if resp.lost_focus() && buf.1 != shown {
-                pending.push((panel.id.clone(), id.clone(), Value::String(buf.1.clone())));
+                pending.events.push((panel.id.clone(), id.clone(), Value::String(buf.1.clone())));
+            }
+            // Still in the field with an edit the plug-in has not heard about: a click elsewhere in
+            // the panel ends the edit, so it has to be delivered before that click (see `Pending`).
+            if resp.has_focus() && buf.1 != shown {
+                pending.typing.push((panel.id.clone(), id.clone(), Value::String(buf.1.clone())));
             }
             if buf.1 == shown {
                 ui.data_mut(|d| d.remove::<(String, String)>(key));
@@ -335,7 +379,7 @@ fn body(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, widget: &Widget, pendi
                 }
                 let v = f64::from(v);
                 if v != shown {
-                    pending.push((panel.id.clone(), id.clone(), json!(v)));
+                    pending.events.push((panel.id.clone(), id.clone(), json!(v)));
                 }
             }
         }
@@ -343,7 +387,7 @@ fn body(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, widget: &Widget, pendi
             let shown = panel.values.get(id).and_then(Value::as_bool).unwrap_or(*value);
             let mut on = shown;
             if crate::widgets::toggle(ui, &mut on, label).changed() && on != shown {
-                pending.push((panel.id.clone(), id.clone(), json!(on)));
+                pending.events.push((panel.id.clone(), id.clone(), json!(on)));
             }
         }
         Widget::Choice { id, value, options } => {
@@ -353,7 +397,7 @@ fn body(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, widget: &Widget, pendi
             let list: Vec<(String, &str)> = options.iter().map(|o| (o.value.clone(), o.label.as_str())).collect();
             let salt = format!("plugin-panel-choice-{}-{id}", panel.id);
             if crate::widgets::dropdown_literal(ui, &salt, &mut current, &list, width) && current != shown {
-                pending.push((panel.id.clone(), id.clone(), Value::String(current)));
+                pending.events.push((panel.id.clone(), id.clone(), Value::String(current)));
             }
         }
         Widget::Button { id, label, primary, enabled } => {
@@ -366,7 +410,7 @@ fn body(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, widget: &Widget, pendi
                     },
                 );
             if resp.inner.clicked() {
-                pending.push((panel.id.clone(), id.clone(), Value::Null));
+                pending.events.push((panel.id.clone(), id.clone(), Value::Null));
             }
             if !on {
                 resp.response.on_hover_text(tl!("The plug-in has disabled this."));

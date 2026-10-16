@@ -154,8 +154,18 @@ what an agent can't finish alone.
   reviewed allow-list in the host, gated again by the capability its manifest declares (`read` /
   `addLayers`); the list is type and layer alignment, and nothing that reaches the file system, the
   settings, the plug-in registry or a recorded action (AUTO-219-6 partial).
+- **Proof it is enough (2026-10-16):** the ABI has been taken to the far end of what it was designed
+  for — a clean-room port of TyperTools 1.4.9's manga and comic lettering workflow, about 6,500 lines
+  with its own script parser and style library, which letters a page through five allow-listed
+  commands and nothing else (installed as one `.wasm` from a repository of its own: it is kept beside
+  the original it reimplements, not here). Install, open, paste a script, press Create, and the
+  document has a styled Type layer in the marquee, at the style's own size, in one undo step, with a
+  size step that grows the type without moving the layer. What it needed is why the list was cut down
+  to those five, and the widget set to what its pages draw.
 - **Still missing in v2:** document images (`doc.capture` / `doc.commit` answer "not supported yet"),
-  storage on disk rather than in memory, layers other than the active document, and
+  storage on disk rather than in memory, layers other than the active document, command and shortcut
+  contribution (so a panel's actions cannot become menu items or hotkeys — the lettering port's three
+  hotkey actions are buttons because of it), selection commands, and
   Filter › Last Filter repeating a plug-in run.
 - **Estimate:** 250–450 h. **Human:** .8BF needs native code under the isolated-`unsafe` rule.
 

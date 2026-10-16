@@ -19,37 +19,32 @@
 //! action can run any command at all, which would walk around this list), no `script.*`, and nothing
 //! at all from the shell's own `view.*`/`window.*`.
 //!
-//! The list is what the TyperTools port needs to letter a page, and nothing more. Growing it is a
-//! deliberate act with a comment saying why.
+//! The list is what lettering a page takes — type made, styled and read back — and nothing more.
+//! Growing it is a deliberate act with a comment saying why.
 
 use photocraft_plugins::{Capabilities, DocumentCap};
 
 /// The commands a panel may run, and the document capability each one needs.
 ///
-/// Reading the document (`doc.info`) covers the layer stack, the selection bounds and the history,
-/// so the reading half of lettering needs no command at all: what is left is making type and moving
-/// it. `type.fonts` is here because the style editor lists fonts; the `…More` sizes are the buttons
-/// that step by a larger amount.
+/// Reading the document (`doc.info`) covers the layer stack, the selection bounds and the history, so
+/// the reading half of lettering needs no command at all. What is left is making type, and reading a
+/// layer's back: the five below and nothing else — a command nothing calls is permission surface
+/// nobody has had to justify.
+///
+/// `type.edit` is the widest of the five, because it can rewrite what a layer says as well as shape
+/// it. It is the one that cannot be left out: it is what fits a text box around type that has just
+/// been laid out, re-shapes a layer on Align, moves the type into place, sets a style's
+/// anti-aliasing and steps a layer's size. Granting it is a decision, which is why the list is short
+/// enough to read.
 const PANEL_COMMANDS: &[(&str, DocumentCap)] = &[
-    // The type the letterer is placing: what it says, how it looks, how big it is.
+    // The type the letterer is placing: what it says, and how it looks.
     ("type.create", DocumentCap::AddLayers),
+    ("type.edit", DocumentCap::AddLayers),
     ("type.setStyle", DocumentCap::AddLayers),
-    ("type.increaseSize", DocumentCap::AddLayers),
-    ("type.increaseSizeMore", DocumentCap::AddLayers),
-    ("type.decreaseSize", DocumentCap::AddLayers),
-    ("type.decreaseSizeMore", DocumentCap::AddLayers),
-    // Reading a layer's type back: which font, which size, what it says.
+    // Reading it back: which font, which size, what it says — and which fonts the host has, for the
+    // style editor's two dropdowns.
     ("type.info", DocumentCap::Read),
     ("type.fonts", DocumentCap::Read),
-    // Putting the new line where the balloon is.
-    ("layer.align.leftEdges", DocumentCap::AddLayers),
-    ("layer.align.horizontalCenters", DocumentCap::AddLayers),
-    ("layer.align.rightEdges", DocumentCap::AddLayers),
-    ("layer.align.topEdges", DocumentCap::AddLayers),
-    ("layer.align.verticalCenters", DocumentCap::AddLayers),
-    ("layer.align.bottomEdges", DocumentCap::AddLayers),
-    // Choosing which layer to work on — the balloon a line is being set into.
-    ("layer.select", DocumentCap::Read),
 ];
 
 /// The capability `command` needs, if a panel may run it at all.
@@ -91,10 +86,9 @@ mod tests {
         let read = caps(&[DocumentCap::Read]);
         assert!(check(&read, "type.info").is_ok());
         assert!(check(&read, "type.fonts").is_ok());
-        assert!(check(&read, "layer.select").is_ok());
         let why = check(&read, "type.create").unwrap_err();
         assert!(why.contains("addLayers"), "{why}");
-        assert_eq!(granted(&read), ["type.info", "type.fonts", "layer.select"]);
+        assert_eq!(granted(&read), ["type.info", "type.fonts"]);
     }
 
     #[test]
@@ -106,10 +100,20 @@ mod tests {
     #[test]
     fn adding_layers_takes_the_whole_writing_set_with_it() {
         let both = caps(&[DocumentCap::Read, DocumentCap::AddLayers]);
-        for id in ["type.create", "layer.align.bottomEdges", "type.decreaseSizeMore", "type.info"] {
+        for id in ["type.create", "type.edit", "type.setStyle", "type.info"] {
             assert!(check(&both, id).is_ok(), "{id}");
         }
         assert_eq!(granted(&both).len(), PANEL_COMMANDS.len());
+    }
+
+    /// The list is short on purpose, and this is the test that keeps it that way: every row has to be
+    /// a command lettering actually emits. A row nothing calls is permission surface nobody decided
+    /// on, and a missing row is a feature that never worked.
+    #[test]
+    fn the_list_is_exactly_what_lettering_needs() {
+        let mut ids: Vec<&str> = PANEL_COMMANDS.iter().map(|(id, _)| *id).collect();
+        ids.sort_unstable();
+        assert_eq!(ids, ["type.create", "type.edit", "type.fonts", "type.info", "type.setStyle"]);
     }
 
     /// The point of the table: a panel cannot reach the file system, the settings, the plug-in

@@ -14,12 +14,12 @@ only gains the v2 manifest fields. Both kinds are installed, listed, removed and
 same `plugin.*` commands, in one `.wasm`-per-plug-in world.
 
 The sandbox is the same one, and its defining choice is unchanged: **a v2 module has no host
-imports at all.** There is no `pc_host.*` import surface (unlike the panel ABI proposed in the
-open upstream PR), no WASI, no file system, no network, no clock, no randomness. Everything a panel
-says and everything it is told crosses through the single `pc_event` entry point, as UTF-8 JSON.
-The only clock is the `now` field on every event; the only randomness is the `entropy` string in
-`init`. The host owns the widget tree, the event queue, the timers and the image bytes; the plug-in
-owns only its own state machine.
+imports at all** — the shape [#4301](https://github.com/storytold/photocraft/pull/4301) argues for in
+its own v2 proposal, and the one this host builds. There is no `pc_host.*` import surface, no WASI,
+no file system, no network, no clock, no randomness. Everything a panel says and everything it is
+told crosses through the single `pc_event` entry point, as UTF-8 JSON. The only clock is the `now`
+field on every event; the only randomness is the `entropy` string in `init`. The host owns the widget
+tree, the event queue, the timers and the image bytes; the plug-in owns only its own state machine.
 
 This page is the contract for panel authors and the reference for the host
 (`crates/plugins`, the `plugin.panel.*` commands in `crates/engine/src/plugin_panel_cmds.rs`).
@@ -208,12 +208,15 @@ on that list and say so about the rest. The refusals are answers, not silence:
   `"read"`): *"needs the manifest's `capabilities.document` to include `addLayers`"*.
 
 What a panel may run, with the capability each needs: **`read`** — `type.info` (a layer's type: font,
-size, text), `type.fonts` (the fonts to list in a style editor), `layer.select` (which layer the rest
-of the lettering acts on); **`addLayers`** — `type.create`, `type.setStyle`, `type.increaseSize`,
-`type.increaseSizeMore`, `type.decreaseSize`, `type.decreaseSizeMore`, and the six
-`layer.align.*` (left/horizontal/right/top/vertical/bottom edges). Growing that list is a deliberate
-act in `plugin_panel_cmds::permissions`, with a comment saying why — so a command added to the engine
-tomorrow is not reachable by a panel until someone decides it is.
+size, text), `type.fonts` (the fonts to list in a style editor); **`addLayers`** — `type.create`,
+`type.edit` (shape a text box, move a layer's type, set a style's anti-aliasing, step a size) and
+`type.setStyle`. That is the whole list, and it is what the workflow this ABI was designed around —
+manga and comic lettering, which is what the list was cut down to — actually emits, and nothing else:
+`doc.info` already carries the layer stack, the selection bounds and the history, so reading needs no
+command at all, and a row nothing calls is permission surface nobody has had to justify. Growing the
+list is a deliberate act in `plugin_panel_cmds::permissions`, with a comment saying why — so a command
+added to the engine tomorrow is not reachable by a panel until someone decides it is, and a panel that
+wants `layer.align.*` or a colour picker has to have that decision made for it.
 
 Nothing that reaches outside the document is on it, by construction: no `file.*` (a panel must not
 read or write the user's disk), no `plugin.*` (no self-install), no `edit.preferences`, no
@@ -278,7 +281,7 @@ A `ui.view` describes widgets; the host draws them with egui and `theme::Tokens`
 choose a colour, font or size, so a panel is on-theme in light and dark in every theme for free.
 The tree is checked whole: at most 512 widgets, at most 16 levels deep, at most 256 options in a
 `choice`. Labels, section titles and placeholders are at most 256 characters; a `text` value is at
-most 8 000 characters, or the widget's own `maxLength` when that is smaller.
+most 65 536 characters, or the widget's own `maxLength` when that is smaller.
 
 | `type` | Fields | Draws as | Events |
 |---|---|---|---|
@@ -466,6 +469,16 @@ changes instead of polling (`doc.changed`), remembers a note between sessions (`
 runs a timer while its Watch button is on — re-arming the one-shot timer from the `result` that
 fired it. Nothing in the ABI prefers its approach: a real plug-in in a language with an allocator
 and a JSON parser would use those.
+
+The other end of that range is the workflow this ABI was designed for: TyperTools 1.4.9, the manga
+and comic lettering panel for Photoshop, as a native panel — a clean-room Rust port of some 6,500
+lines with its own script parser, its own style library and that library's JSON format, lettering a
+page through those five commands and nothing else. It is not part of this repository: it is kept
+beside the original it reimplements, in a fork of it, and installs here as one `.wasm` module like any
+other panel. What it did shape is everything above — the allow-list was cut down to what it emits, the
+widget set to what it draws, and the ABI's rough edges are the ones it hit: a panel follows the
+document rather than being told about its own edits, and an action it cannot take is refused on screen
+rather than attempted.
 
 ## Not in v2 (yet)
 
