@@ -6,6 +6,8 @@ use photocraft_doc::{
     xcf_filters::{ExactNumber, FilterArgument, FilterNode, FilterStack, FilterValue, OperationIdentity},
 };
 use photocraft_xcf::{ArgumentValue, Effect};
+#[path = "xcf_filtered_flat_opacity_source.rs"]
+pub(crate) mod filtered_flat_opacity_source;
 #[path = "xcf_exposure_mixed_source.rs"]
 pub(crate) mod mixed_exposure_source;
 #[path = "xcf_invert_mixed_source.rs"]
@@ -623,6 +625,11 @@ pub(crate) fn qualified_ordered_filtered_flat_source_stack<P>(effects:&[Effect<P
     if effects.len()==1{return qualified_filtered_flat_source_stack(effects,masks,owner,first_id,version,NeighborhoodDomain::PointReplace(family));}
     qualified_stack_with_activation(effects,masks,owner,first_id,version,NeighborhoodDomain::PointReplace(family),StackActivation::OrderedFilteredFlatSource)
 }
+pub(crate) fn qualified_ordered_filtered_flat_opacity_source_stack<P>(effects:&[Effect<P>],masks:&[Option<ItemRef>],owner:ItemRef,first_id:u64,version:u32)->Result<FilterStack,IoError>{
+    if effects.is_empty()||effects.len()>4096{return Err(IoError::Unsupported("mixed opacity source count".into()));}
+    let family=effects.first().and_then(filtered_flat_opacity_source::family).ok_or_else(||IoError::Unsupported("mixed opacity source family".into()))?;
+    qualified_stack_with_activation(effects,masks,owner,first_id,version,NeighborhoodDomain::PointReplace(family),StackActivation::OrderedFilteredFlatOpacitySource)
+}
 /// Called only after the mixed original source has been independently admitted.
 /// Domain and actual operation must agree; no other mapper acquires this policy.
 pub(crate) fn qualified_filtered_flat_source_stack<P>(
@@ -643,7 +650,7 @@ pub(crate) fn qualified_filtered_flat_source_stack<P>(
     qualified_stack_with_activation(effects,masks,owner,first_id,version,domain,StackActivation::FilteredFlatSource)
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum StackActivation { Strict, OwnedNeighborhood, FilteredFlatSource, OrderedFilteredFlatSource }
+enum StackActivation { Strict, OwnedNeighborhood, FilteredFlatSource, OrderedFilteredFlatSource, OrderedFilteredFlatOpacitySource }
 /// Private owned-only activation mapping. The original whole-file source gate,
 /// shared preparation and exact current recipe are independent requirements.
 /// Only a successfully admitted sealed owned neighborhood route calls this;
@@ -671,9 +678,13 @@ fn qualified_stack_with_activation<P>(
     if domain==NeighborhoodDomain::BoxGeometry && (effects.len()!=1 || effects.first().is_none_or(|e|e.operation!="gegl:box-blur" || e.version.as_deref()!=Some("0:0") || e.arguments.len()!=1 || e.state.enabled.is_none())) {
         return Err(IoError::Unsupported("observational Box source envelope".into()));
     }
+    let opacity_source=activation==StackActivation::OrderedFilteredFlatOpacitySource;
+    let ordered_mixed=matches!(activation,StackActivation::OrderedFilteredFlatSource|StackActivation::OrderedFilteredFlatOpacitySource);
+    let mixed_source=ordered_mixed || activation==StackActivation::FilteredFlatSource;
+    let mixed_envelope=|effect:&Effect<P>| if opacity_source {filtered_flat_opacity_source::envelope(effect)}else{filtered_flat_source_envelope(effect)};
     let generic_replace = matches!(domain, NeighborhoodDomain::PointReplace(_));
     let domain = if let NeighborhoodDomain::PointReplace(family) = domain { family.domain() } else { domain };
-    if generic_replace && effects.len() != 1 && activation!=StackActivation::OrderedFilteredFlatSource {
+    if generic_replace && effects.len() != 1 && !ordered_mixed {
         return Err(IoError::Unsupported("generic point Replace requires one effect".into()));
     }
     if effects.len() != masks.len() {
@@ -681,9 +692,9 @@ fn qualified_stack_with_activation<P>(
     }
     let mut nodes = Vec::new();
     nodes.try_reserve_exact(effects.len()).map_err(|_| IoError::Unsupported("XCF filter allocation failed".into()))?;
-    if activation==StackActivation::OrderedFilteredFlatSource && nodes.capacity().checked_mul(std::mem::size_of::<photocraft_doc::xcf_filters::FilterNode>()).is_none_or(|n|effects.len().checked_mul(1024).is_none_or(|cap|n>cap)) {return Err(IoError::Unsupported("mixed ordered node capacity".into()));}
+    if ordered_mixed && nodes.capacity().checked_mul(std::mem::size_of::<photocraft_doc::xcf_filters::FilterNode>()).is_none_or(|n|effects.len().checked_mul(1024).is_none_or(|cap|n>cap)) {return Err(IoError::Unsupported("mixed ordered node capacity".into()));}
     for (ordinal, effect) in effects.iter().enumerate() {
-        let domain=if activation==StackActivation::OrderedFilteredFlatSource {filtered_flat_source_family(effect).ok_or_else(||unsupported(effect,"mixed ordered family"))?.domain()}else{domain};
+        let domain=if ordered_mixed {(if opacity_source {filtered_flat_opacity_source::family(effect)}else{filtered_flat_source_family(effect)}).ok_or_else(||unsupported(effect,"mixed ordered family"))?.domain()}else{domain};
         let source = &effect.state;
         let point_stack = domain == NeighborhoodDomain::PointStackEdits;
         let invert_linear = domain == NeighborhoodDomain::InvertLinearPrecision;
@@ -700,27 +711,27 @@ fn qualified_stack_with_activation<P>(
         if loaded_point && (!generic_replace||effects.len()!=1||!crate::xcf_point_replace_source::loaded_exposure_source::envelope(effect)) {
             return Err(unsupported(effect,"loaded Point Exposure envelope"));
         }
-        if loaded_mixed && (!generic_replace||!matches!(activation,StackActivation::FilteredFlatSource|StackActivation::OrderedFilteredFlatSource)
-            ||!filtered_flat_source_envelope(effect)||crate::xcf_point_replace_source::loaded_exposure_source::parameters(effect).is_none()) {
+        if loaded_mixed && (!generic_replace||!mixed_source
+            ||!mixed_envelope(effect)||crate::xcf_point_replace_source::loaded_exposure_source::parameters(effect).is_none()) {
             return Err(unsupported(effect,"loaded mixed Exposure envelope"));
         }
         let mixed_invert_linear=domain==NeighborhoodDomain::MixedInvertLinear;
         let mixed_invert_gamma=domain==NeighborhoodDomain::MixedInvertGamma;
         let mixed_invert=mixed_invert_linear||mixed_invert_gamma;
         if mixed_invert && (!generic_replace
-            || !matches!(activation,StackActivation::FilteredFlatSource|StackActivation::OrderedFilteredFlatSource)
-            || !filtered_flat_source_envelope(effect)
+            || !mixed_source
+            || !mixed_envelope(effect)
             || mixed_invert_source::kind(effect)!=Some(if mixed_invert_linear {mixed_invert_source::Kind::Linear}else{mixed_invert_source::Kind::Gamma})) {
             return Err(unsupported(effect,"unqualified mixed invert envelope"));
         }
         if mixed_exposure && (!generic_replace
-            || !matches!(activation,StackActivation::FilteredFlatSource|StackActivation::OrderedFilteredFlatSource)
-            || !filtered_flat_source_envelope(effect)) {
+            || !mixed_source
+            || !mixed_envelope(effect)) {
             return Err(unsupported(effect,"unqualified mixed Exposure envelope"));
         }
-        if effect.operation=="gegl:vibrance" && (!vibrance || !generic_replace || (effects.len()!=1 && activation!=StackActivation::OrderedFilteredFlatSource) || !(if matches!(activation,StackActivation::FilteredFlatSource|StackActivation::OrderedFilteredFlatSource) {filtered_flat_source_envelope(effect)}else{crate::xcf_point_replace_source::vibrance_source::envelope(effect)})){return Err(unsupported(effect,"unqualified Vibrance envelope"));}
-        if effect.operation=="gegl:hue-chroma" && (!hue_chroma || !generic_replace || (effects.len()!=1 && activation!=StackActivation::OrderedFilteredFlatSource) || !(if matches!(activation,StackActivation::FilteredFlatSource|StackActivation::OrderedFilteredFlatSource) {filtered_flat_source_envelope(effect)}else{crate::xcf_point_replace_source::hue_chroma_source::envelope(effect)})){return Err(unsupported(effect,"unqualified Hue-Chroma envelope"));}
-        if effect.operation=="gimp:semi-flatten" && (!semi_flatten || !generic_replace || (effects.len()!=1 && activation!=StackActivation::OrderedFilteredFlatSource) || !(if matches!(activation,StackActivation::FilteredFlatSource|StackActivation::OrderedFilteredFlatSource) {filtered_flat_source_envelope(effect)}else{crate::xcf_point_replace_source::semi_flatten_source::envelope(effect)})) { return Err(unsupported(effect,"unqualified Semi-Flatten envelope")); }
+        if effect.operation=="gegl:vibrance" && (!vibrance || !generic_replace || (effects.len()!=1 && !ordered_mixed) || !(if mixed_source {mixed_envelope(effect)}else{crate::xcf_point_replace_source::vibrance_source::envelope(effect)})){return Err(unsupported(effect,"unqualified Vibrance envelope"));}
+        if effect.operation=="gegl:hue-chroma" && (!hue_chroma || !generic_replace || (effects.len()!=1 && !ordered_mixed) || !(if mixed_source {mixed_envelope(effect)}else{crate::xcf_point_replace_source::hue_chroma_source::envelope(effect)})){return Err(unsupported(effect,"unqualified Hue-Chroma envelope"));}
+        if effect.operation=="gimp:semi-flatten" && (!semi_flatten || !generic_replace || (effects.len()!=1 && !ordered_mixed) || !(if mixed_source {mixed_envelope(effect)}else{crate::xcf_point_replace_source::semi_flatten_source::envelope(effect)})) { return Err(unsupported(effect,"unqualified Semi-Flatten envelope")); }
         if effect.operation == "gegl:color-overlay"
             && (!color_overlay
                 || !generic_replace
@@ -1025,7 +1036,7 @@ fn qualified_stack_with_activation<P>(
             -261651887
         });
         if version != 22
-            || effects.len() > if activation==StackActivation::OrderedFilteredFlatSource {4096}else{256}
+            || effects.len() > if ordered_mixed {4096}else{256}
             || source.mode != Some(62)
             || source.opacity_u8.is_some()
             || if generic_replace || observed_box_geometry {
@@ -1034,6 +1045,7 @@ fn qualified_stack_with_activation<P>(
                 source.composite_mode != sentinel || source.composite_space != sentinel || source.blend_space != sentinel
             }
             || !(source.opacity_bits == Some(1.0_f32.to_bits())
+                || opacity_source && filtered_flat_opacity_source::raw_opacity(effect).is_some()
                 || point_stack && effect.operation == "gegl:invert-linear" && source.opacity_bits == Some(0.5_f32.to_bits()))
             || source.clipping != Some(0)
             || if group_gaussian { !matches!(source.region, Some(0 | 1)) } else { source.region != Some(0) }

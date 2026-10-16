@@ -160,12 +160,12 @@ impl<L> RootPointPlan<L> {
         stack: &FilterStack,
         format: PixelFormat,
         extent: Rect,
-        current: bool,
+        allow_mixed_opacity: bool,
         interrupt: &Interrupt<'_>,
         budget: &mut B,
     ) -> Result<(Self, L), BackedNormalError> {
         let sole_new_family=stack.nodes.len()==1 && stack.nodes.first().is_some_and(|node|crate::gimp_exposure::claims(node)||crate::gimp_invert::claims(node));
-        if stack.nodes.len() == 1 && !sole_new_family && !(current && stack.nodes.first().is_some_and(|n| n.opacity_f64_bits != 1f64.to_bits())) {
+        if stack.nodes.len() == 1 && !sole_new_family && !(allow_mixed_opacity && stack.nodes.first().is_some_and(|n| n.opacity_f64_bits != 1f64.to_bits())) {
             return Self::prepare_singleton(stack, format, extent, interrupt, budget);
         }
         if stack.nodes.is_empty() || stack.nodes.len() > 1024 {
@@ -186,7 +186,7 @@ impl<L> RootPointPlan<L> {
         }
         for node in &stack.nodes {
             let opacity_bits = node.opacity_f64_bits;
-            let mix = if current && opacity_bits != 1f64.to_bits() {
+            let mix = if allow_mixed_opacity && opacity_bits != 1f64.to_bits() {
                 crate::gimp_mixed_filter_opacity::validate_opacity(opacity_bits)?;
                 let (value, fee) = crate::gimp_mixed_filter_opacity::PreparedMix::prepare(std::mem::size_of::<PaidMix<L>>() as u64, interrupt, budget)?;
                 Some(PaidMix { value, _lease: fee })
@@ -197,16 +197,16 @@ impl<L> RootPointPlan<L> {
             // stage payloads remain live. Field order protects failed unwinds.
             let prepared = if crate::gimp_invert::claims(node) {
                 work(budget,interrupt,128)?;
-                let kind=(if current { crate::gimp_invert::canonical_current } else { crate::gimp_invert::canonical })(node,SampleEncoding::NonlinearProfile,22,extent).map_err(BackedNormalError::Color)?;
+                let kind=(if allow_mixed_opacity { crate::gimp_invert::canonical_mixed_opacity } else { crate::gimp_invert::canonical })(node,SampleEncoding::NonlinearProfile,22,extent).map_err(BackedNormalError::Color)?;
                 let(candidate,fee)=crate::gimp_invert::PreparedInvert::prepare(kind,std::mem::size_of::<PreparedRootStage<L>>()as u64,interrupt,budget)?;
                 PreparedRootStage{mix,opacity_bits,kind:StageKind::Invert(candidate),enabled:node.enabled,_lease:fee}
             } else if crate::gimp_exposure::claims(node) {
                 work(budget,interrupt,512)?;
-                let parameters=if node.operation.schema_epoch==crate::gimp_exposure::LOADED_MIXED_EPOCH { (if current { crate::gimp_exposure::canonical_loaded_mixed_current } else { crate::gimp_exposure::canonical_loaded_mixed })(node,SampleEncoding::NonlinearProfile,22,extent).map_err(BackedNormalError::Color)?.effective() } else { (if current { crate::gimp_exposure::canonical_current } else { crate::gimp_exposure::canonical })(node,SampleEncoding::NonlinearProfile,22,extent).map_err(BackedNormalError::Color)? };
+                let parameters=if node.operation.schema_epoch==crate::gimp_exposure::LOADED_MIXED_EPOCH { (if allow_mixed_opacity { crate::gimp_exposure::canonical_loaded_mixed_opacity } else { crate::gimp_exposure::canonical_loaded_mixed })(node,SampleEncoding::NonlinearProfile,22,extent).map_err(BackedNormalError::Color)?.effective() } else { (if allow_mixed_opacity { crate::gimp_exposure::canonical_mixed_opacity } else { crate::gimp_exposure::canonical })(node,SampleEncoding::NonlinearProfile,22,extent).map_err(BackedNormalError::Color)? };
                 let (candidate,fee)=crate::gimp_exposure::PreparedExposure::prepare(parameters,std::mem::size_of::<PreparedRootStage<L>>()as u64,interrupt,budget)?;
                 PreparedRootStage{mix,opacity_bits,kind:StageKind::Exposure(candidate),enabled:node.enabled,_lease:fee}
             } else if crate::gimp_hue_chroma::claims(node) {
-                let parameters = (if current { crate::gimp_hue_chroma::canonical_current } else { crate::gimp_hue_chroma::canonical })(node, SampleEncoding::NonlinearProfile, 22, extent).map_err(BackedNormalError::Color)?;
+                let parameters = (if allow_mixed_opacity { crate::gimp_hue_chroma::canonical_mixed_opacity } else { crate::gimp_hue_chroma::canonical })(node, SampleEncoding::NonlinearProfile, 22, extent).map_err(BackedNormalError::Color)?;
                 let preparation = crate::gimp_hue_chroma::Preparation::plan(basis, interrupt, budget)?;
                 let bytes = header
                     .checked_add(preparation.peak_bytes()?)
@@ -216,7 +216,7 @@ impl<L> RootPointPlan<L> {
                 let candidate = preparation.construct(basis, parameters, interrupt, budget)?;
                 PreparedRootStage { mix, opacity_bits, kind: StageKind::Hue(candidate), enabled: node.enabled, _lease: fee }
             } else if crate::gimp_vibrance::claims(node) {
-                let parameters = (if current { crate::gimp_vibrance::canonical_current } else { crate::gimp_vibrance::canonical })(node, SampleEncoding::NonlinearProfile, 22, extent).map_err(BackedNormalError::Color)?;
+                let parameters = (if allow_mixed_opacity { crate::gimp_vibrance::canonical_mixed_opacity } else { crate::gimp_vibrance::canonical })(node, SampleEncoding::NonlinearProfile, 22, extent).map_err(BackedNormalError::Color)?;
                 let preparation = crate::gimp_vibrance::Preparation::plan(basis, interrupt, budget)?;
                 let bytes =
                     header.checked_add(preparation.peak_bytes()?).and_then(|n| n.checked_add(crate::gimp_vibrance::PIXEL_SCRATCH_BYTES)).ok_or_else(length)?;
@@ -235,7 +235,7 @@ impl<L> RootPointPlan<L> {
                         .and_then(|n| n.checked_add(header.checked_mul(64)?))
                         .ok_or_else(length)?,
                 )?;
-                let candidate = (if current { crate::gimp_semi_flatten::PreparedSemiFlatten::new_current } else { crate::gimp_semi_flatten::PreparedSemiFlatten::new })(node, basis, SampleEncoding::NonlinearProfile, 22, extent, interrupt)
+                let candidate = (if allow_mixed_opacity { crate::gimp_semi_flatten::PreparedSemiFlatten::new_mixed_opacity } else { crate::gimp_semi_flatten::PreparedSemiFlatten::new })(node, basis, SampleEncoding::NonlinearProfile, 22, extent, interrupt)
                     .map_err(BackedNormalError::Color)?;
                 PreparedRootStage { mix, opacity_bits, kind: StageKind::Semi(candidate), enabled: node.enabled, _lease: fee }
             } else {

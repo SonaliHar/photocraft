@@ -43,6 +43,7 @@ trait StagePolicy {
 pub(super) enum SelectedStagedFamily {
     Plain,
     FilteredFlat,
+    FilteredFlatOpacity,
     SeparableBlend,
     AnalyticGeometry,
     IsolatedNormalGroup,
@@ -64,6 +65,7 @@ impl std::fmt::Debug for SelectedStagedFamily {
         f.write_str(match self {
             Self::Plain => "Plain",
             Self::FilteredFlat => "FilteredFlat",
+            Self::FilteredFlatOpacity => "FilteredFlatOpacity",
             Self::SeparableBlend => "SeparableBlend",
             Self::AnalyticGeometry => "AnalyticGeometry",
             Self::IsolatedNormalGroup => "IsolatedNormalGroup",
@@ -91,12 +93,12 @@ impl StagePolicy for SourceSelectedPolicy {
     fn family_controlled<Q:ExactParsedPlane>(file:&XcfFile<Q>,ctl:&Interrupt<'_>,shared:Option<&photocraft_xcf::Budget<'_>>)->Result<SelectedStagedFamily,IoError>{
         if file.layers.len()==1 && file.layers.first().is_some_and(|d|d.effects.len()>=2) {
             let budget=shared.ok_or_else(||IoError::Unsupported("selected source requires accounting".into()))?;
-            if staged_filtered_flat::hint(file,ctl,budget)?{return Ok(SelectedStagedFamily::FilteredFlat)}
+            if staged_filtered_flat::hint(file,ctl,budget)?{return Ok(if staged_filtered_flat::opacity::has_nonunit(file,ctl,budget)? {SelectedStagedFamily::FilteredFlatOpacity}else{SelectedStagedFamily::FilteredFlat})}
         }
         let old=Self::family(file);
         if old!=SelectedStagedFamily::Plain{return Ok(old)}
         let budget=shared.ok_or_else(||IoError::Unsupported("selected source requires accounting".into()))?;
-        if staged_filtered_flat::hint(file,ctl,budget)?{return Ok(SelectedStagedFamily::FilteredFlat)}
+        if staged_filtered_flat::hint(file,ctl,budget)?{return Ok(if staged_filtered_flat::opacity::has_nonunit(file,ctl,budget)? {SelectedStagedFamily::FilteredFlatOpacity}else{SelectedStagedFamily::FilteredFlat})}
         if separable_blend::general_hint(file,ctl,budget)?{Ok(SelectedStagedFamily::SeparableBlend)}else{Ok(old)}
     }
     fn family<Q: ExactParsedPlane>(file: &XcfFile<Q>) -> SelectedStagedFamily {
@@ -485,8 +487,10 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
         let family = P::family_controlled(file,ctl,shared)?;
-        let filtered_flat=family==SelectedStagedFamily::FilteredFlat;
-        if filtered_flat {staged_filtered_flat::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("filtered flat accounting".into()))?)?;}
+        let filtered_flat_opacity=family==SelectedStagedFamily::FilteredFlatOpacity;
+        let filtered_flat=filtered_flat_opacity || family==SelectedStagedFamily::FilteredFlat;
+        if filtered_flat_opacity {staged_filtered_flat::opacity::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("filtered flat opacity accounting".into()))?)?;}
+        else if filtered_flat {staged_filtered_flat::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("filtered flat accounting".into()))?)?;}
         let separable = family == SelectedStagedFamily::SeparableBlend;
         let separable_domain = if separable {
             Some(separable_blend::qualify_selected(file,ctl,shared.ok_or_else(||IoError::Unsupported("separable source requires accounting".into()))?)?
@@ -623,7 +627,8 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             validate_drawable_alpha(d, point.is_some(), false, ctl, 0)?;
         }
         let mut domains = admission::AdmissionDomains {
-            filtered_flat_domain:filtered_flat,
+            filtered_flat_domain:filtered_flat && !filtered_flat_opacity,
+            filtered_flat_opacity_domain:filtered_flat_opacity,
             lab_separable_domain: separable_domain == Some(separable_blend::SourceKind::LabStrict),
             alpha_separable_domain: separable_domain == Some(separable_blend::SourceKind::AlphaStrict),
             component_separable_domain: separable_domain == Some(separable_blend::SourceKind::ComponentStrict),

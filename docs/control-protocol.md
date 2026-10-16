@@ -2651,3 +2651,50 @@ F64 factors and unobserved interactions remain fidelity limits. Ignored drafts
 and production compilation do not satisfy SC-002: matched PhotoCraft display
 comparisons <=2/255 and native/interface/performance/final gates remain deferred.
 Source/native/ICC/structure exactness retains zero tolerance.
+
+
+Mixed original XCF files can import finite-unit filter opacity through a separate
+Source-opacity qualification and preparation path. It covers the existing exact
+Semi-Flatten, Hue/Chroma, Vibrance, Exposure, Invert Linear and Invert Gamma mixed
+families, including the mixed loaded-Exposure endpoint identity. An all-unit
+source keeps the previous route. Ordinary one-filter Point and old PointStack
+priority and final refusals remain unchanged. One-root mixed sources still need
+at least two filters; this does not authorize CURRENT empty-stack topology for
+original source import.
+
+Every filter in a selected source must retain one four-byte tag33, no filter
+tag6, a finite unit BE F32 word, and its exact promoted operative F64 word.
+Positive and negative zero remain distinct raw data; negative zero is an explicit
+compatibility extension beyond the observed positive-zero sources. The actual
+fresh mapper preserves each drawable property group followed by its canonical
+filter property groups. A paid bounded pass checks that association, group count,
+contiguous order, owner, identity, lengths, version, flags and opacity hash. This
+fresh-mapper contract does not reconstruct arbitrary edited-document operation
+order from opacity values or inert opaque bytes.
+
+The separate new_opacity_source_budgeted entry prepares the real mapped Document
+under Source topology and native/default/padding/profile/zero-mask requirements.
+Loaded mixed Exposure V2 still requires its original two endpoint black words
+at this stage. Existing class-specific opaque-record4096, aggregate256MiB and
+per-record64MiB limits remain; these are not generic XCF resource limits. The
+grouping descriptors and parser/hash scratch, every comparison and traversal,
+mix holder/Space/Parts, expanded stages, and runtime scratch/work are paid on the
+same original quota/control. Hidden, disabled and zero-opacity data receive the
+complete proof. The old L1 Source factory and an independent CURRENT validation
+run before publication of the same sealed mixed import carrier.
+
+After import, rendering and edits use the committed declared linear premultiplied
+opacity schedule, including the enabled-zero Float-copy distinction from disabled
+filters. Current edits and native10 reopen remain independent from original F32
+Source grouping constraints. Existing controls, commands, history, source guards
+and .pcraft continuation use the same actual owner with no new field or epoch.
+Original XCF files remain read-only; this feature does not write XCF.
+
+The eight genuine GIMP original files provide both native depths and full,
+partial, zero and disabled cases, with exact source/raw/native custody. Producer
+RGB variability and the declared arithmetic limits remain. Ignored UNRUN drafts
+and production compilation do not establish numerical, native-workflow, interface
+or performance acceptance. All PhotoCraft tests and final gates remain deferred;
+SC-002 matched-display <=2/255 and exact source/native/ICC/structure fidelity
+still apply. Nonzero masks, broader stock filters, ordinary Point opacity,
+assigned profiles, offsets and source HDR remain separate implementation work.

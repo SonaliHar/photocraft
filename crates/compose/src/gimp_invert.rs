@@ -76,7 +76,7 @@ pub(crate) fn claims(node: &FilterNode) -> bool {
 pub(crate) fn canonical(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect) -> Result<Kind, CompositionError> {
     canonical_mode(node, stored, version, extent, false)
 }
-pub(crate) fn canonical_current(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect) -> Result<Kind, CompositionError> {
+pub(crate) fn canonical_mixed_opacity(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect) -> Result<Kind, CompositionError> {
     canonical_mode(node, stored, version, extent, true)
 }
 fn canonical_mode(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect, current: bool) -> Result<Kind, CompositionError> {

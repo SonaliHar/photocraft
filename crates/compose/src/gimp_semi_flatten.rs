@@ -66,7 +66,7 @@ pub(crate) fn literal_arguments(arguments: &[FilterArgument]) -> Result<([f32; 4
 pub(crate) fn canonical(node: &FilterNode, stored: SampleEncoding, version: u32, extent: Rect) -> Result<()> {
     canonical_mode(node, stored, version, extent, false)
 }
-pub(crate) fn canonical_current(node: &FilterNode, stored: SampleEncoding, version: u32, extent: Rect) -> Result<()> {
+pub(crate) fn canonical_mixed_opacity(node: &FilterNode, stored: SampleEncoding, version: u32, extent: Rect) -> Result<()> {
     canonical_mode(node, stored, version, extent, true)
 }
 fn canonical_mode(node: &FilterNode, stored: SampleEncoding, version: u32, extent: Rect, current: bool) -> Result<()> {
@@ -100,7 +100,7 @@ impl PreparedSemiFlatten {
     pub(crate) fn new(node: &FilterNode, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, control: &Interrupt<'_>) -> Result<Self> {
         Self::new_mode(node, profile, stored, version, extent, control, false)
     }
-    pub(crate) fn new_current(node: &FilterNode, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, control: &Interrupt<'_>) -> Result<Self> {
+    pub(crate) fn new_mixed_opacity(node: &FilterNode, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, control: &Interrupt<'_>) -> Result<Self> {
         Self::new_mode(node, profile, stored, version, extent, control, true)
     }
     fn new_mode(node: &FilterNode, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, control: &Interrupt<'_>, current: bool) -> Result<Self> {

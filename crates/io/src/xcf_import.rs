@@ -1693,6 +1693,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
 ) -> Result<(ImportResult, usize), IoError> {
     let admission::AdmissionDomains {
         filtered_flat_domain,
+        filtered_flat_opacity_domain,
         observed_box_geometry_domain,
         owned_assigned_box_domain,
         owned_assigned_median_domain,
@@ -1729,6 +1730,8 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         multiply_spaces_domain,
         composition_command_domain,
     } = P::admissions(&file, ctl, preparation.as_ref().map(|(budget, _)| *budget))?;
+    if filtered_flat_domain && filtered_flat_opacity_domain {return Err(IoError::Unsupported("conflicting mixed source purpose".into()));}
+    let filtered_flat_source_domain=filtered_flat_domain || filtered_flat_opacity_domain;
     let mut floating_ids = (None, None);
     let mut budget = Budget { used: file.charged_bytes, max: resident, peak: file.charged_bytes, shared };
     budget.charge(
@@ -1882,7 +1885,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         } else {
             modified_context.as_ref().map(|context| crate::xcf_modified_sources::validate_modified_source_with_storage(d, context, ctl)).transpose()?
         };
-        let filtered_root_domain=if filtered_flat_domain {Some(staged_filtered_flat::root_domain(d,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered flat accounting"))?)?)} else {None};
+        let filtered_root_domain=if filtered_flat_opacity_domain {Some(staged_filtered_flat::opacity::root_domain(d,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered flat opacity accounting"))?)?)} else if filtered_flat_domain {Some(staged_filtered_flat::root_domain(d,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered flat accounting"))?)?)} else {None};
         let point_replace_domain=filtered_root_domain.flatten().or(point_replace_domain);
         let effects_candidate = !d.effects.is_empty()
             && (point_replace_domain.is_some()
@@ -2088,7 +2091,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 .ok_or_else(|| unsupported(d, "filter metadata overflow"))?;
             budget.charge(metadata)?;
             let canvas_group_mask = gaussian_group_domain && d.group;
-            if filtered_flat_domain {
+            if filtered_flat_source_domain {
                 let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered mask accounting"))?;
                 staged_filtered_flat::work(ctl,source_budget,(d.effects.len() as u64).checked_mul(8).ok_or_else(||unsupported(d,"filtered mask count work"))?)?;
                 effect_mask_mapping::preflight_filtered_root(d,ctl)?;
@@ -2218,7 +2221,9 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
             } else {
                 crate::xcf_filters::NeighborhoodDomain::Unqualified
             };
-            let stack = if filtered_flat_domain {
+            let stack = if filtered_flat_opacity_domain {
+                crate::xcf_filters::qualified_ordered_filtered_flat_opacity_source_stack(&d.effects,&masks,owner,next_filter_id,file.version)?
+            } else if filtered_flat_domain {
                 crate::xcf_filters::qualified_ordered_filtered_flat_source_stack(&d.effects,&masks,owner,next_filter_id,file.version)?
             } else if let Some(domain) = owned_neighborhood_domain {
                 if domain != neighborhood_domain {
@@ -2609,13 +2614,13 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 .map(accounting_error)
                 .unwrap_or_else(|| if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF rendering consumer: {error}")) }));
         }
-    } else if P::requires_budgeted_filtered_flat_preparation(filtered_flat_domain) {
+    } else if P::requires_budgeted_filtered_flat_preparation(filtered_flat_source_domain) {
         // One real multi-root document, one shared source ledger and no leaf
         // singleton facade or filtered native intermediary. The mandatory
         // compiler proves every physical input/default/mask before promotion.
         let (shared, source_lease) = preparation.ok_or_else(||IoError::Unsupported("filtered flat source preparation accounting".into()))?;
         let mut adapter = SharedPreparation {shared,failure:None};
-        let checked = photocraft_compose::backed_filtered_flat_point_context::LeasedFilteredFlatPointPipeline::new_budgeted(&doc,ctl,&mut adapter,source_lease);
+        let checked = if filtered_flat_opacity_domain {photocraft_compose::backed_filtered_flat_point_context::LeasedFilteredFlatPointPipeline::new_opacity_source_budgeted(&doc,ctl,&mut adapter,source_lease)}else{photocraft_compose::backed_filtered_flat_point_context::LeasedFilteredFlatPointPipeline::new_budgeted(&doc,ctl,&mut adapter,source_lease)};
         if let Err(error)=checked {return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("filtered flat source preparation: {error}"))}));}
     } else if P::requires_budgeted_point_preparation(point_replace_domain.is_some() || owned_point_domain.is_some()) {
         // The original exact classifier and qualified_stack already succeeded.

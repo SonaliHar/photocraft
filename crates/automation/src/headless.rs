@@ -1125,3 +1125,7 @@ mod owned_exposure_loaded_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="headless/owned_filtered_flat_opacity_tests.rs"]
 mod owned_filtered_flat_opacity_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="headless/owned_filtered_flat_source_opacity_tests.rs"]
+mod owned_filtered_flat_source_opacity_tests;

@@ -166,7 +166,7 @@ pub(crate) fn canonical_loaded_mixed(
 ) -> Result<LoadedParameters, CompositionError> {
     canonical_loaded(node, stored, version, extent, LOADED_MIXED_EPOCH, false)
 }
-pub(crate) fn canonical_loaded_mixed_current(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect) -> Result<LoadedParameters, CompositionError> {
+pub(crate) fn canonical_loaded_mixed_opacity(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect) -> Result<LoadedParameters, CompositionError> {
     canonical_loaded(node, stored, version, extent, LOADED_MIXED_EPOCH, true)
 }
 pub(crate) fn claims(node: &FilterNode) -> bool {
@@ -177,7 +177,7 @@ pub(crate) fn claims(node: &FilterNode) -> bool {
 pub(crate) fn canonical(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect) -> Result<Parameters, CompositionError> {
     canonical_mode(node, stored, version, extent, false)
 }
-pub(crate) fn canonical_current(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect) -> Result<Parameters, CompositionError> {
+pub(crate) fn canonical_mixed_opacity(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect) -> Result<Parameters, CompositionError> {
     canonical_mode(node, stored, version, extent, true)
 }
 fn canonical_mode(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect, current: bool) -> Result<Parameters, CompositionError> {

@@ -84,7 +84,7 @@ pub(crate) fn parameters(arguments: &[FilterArgument]) -> Result<Parameters> {
 pub(crate) fn canonical(node: &FilterNode, stored: SampleEncoding, version: u32, extent: Rect) -> Result<Parameters> {
     canonical_mode(node, stored, version, extent, false)
 }
-pub(crate) fn canonical_current(node: &FilterNode, stored: SampleEncoding, version: u32, extent: Rect) -> Result<Parameters> {
+pub(crate) fn canonical_mixed_opacity(node: &FilterNode, stored: SampleEncoding, version: u32, extent: Rect) -> Result<Parameters> {
     canonical_mode(node, stored, version, extent, true)
 }
 fn canonical_mode(node: &FilterNode, stored: SampleEncoding, version: u32, extent: Rect, current: bool) -> Result<Parameters> {

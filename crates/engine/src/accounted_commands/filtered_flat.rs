@@ -605,3 +605,7 @@ mod invert_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_opacity_tests.rs"]
 mod opacity_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="filtered_flat_source_opacity_tests.rs"]
+mod source_opacity_tests;

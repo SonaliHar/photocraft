@@ -11,6 +11,7 @@ workspace = true
 corpus = []
 
 [dependencies]
+blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 sha2 = "0.11"
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
@@ -26,7 +27,6 @@ photocraft-algo = { workspace = true }
 rayon = { workspace = true }
 
 [dev-dependencies]
-blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 flate2 = { workspace = true }
 serde_json = { workspace = true }
 proptest = { workspace = true }

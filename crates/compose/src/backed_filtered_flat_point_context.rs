@@ -23,6 +23,8 @@ use photocraft_raster::{
         quota::{BackingQuota, QuotaKind, QuotaLease},
     },
 };
+#[path = "backed_filtered_flat_point_source_opacity.rs"]
+mod source_opacity;
 #[path = "backed_filtered_flat_point_stack.rs"]
 mod stack;
 use crate::backed_normal_stack::OwnedNormalStackBand;
@@ -115,6 +117,16 @@ impl<S, L> LeasedFilteredFlatPointPipeline<S, L> {
         let (plan, lease) = compile(doc, Purpose::Source, header, interrupt, &mut SharedBudget(budget)).map_err(preparation_error)?;
         Ok(Self { _plan: plan, _source: source_lease, _lease: lease })
     }
+    /// Fresh original-XCF mapper contract only: retained property groups prove
+    /// exact F32 opacity promotion before Source-topology preparation. This is
+    /// not CURRENT provenance recovery or an ordinary Point source endpoint.
+    pub fn new_opacity_source_budgeted<B: PreparationBudget<Lease=L>>(
+        doc:&Document, interrupt:&Interrupt<'_>, budget:&mut B, source_lease:S,
+    )->Result<Self,CompositionError> {
+        let header=u64::try_from(std::mem::size_of::<Self>()).map_err(|_|CompositionError::Invalid("filtered flat opacity source header"))?;
+        let(plan,lease)=compile(doc,Purpose::SourceOpacity,header,interrupt,&mut SharedBudget(budget)).map_err(preparation_error)?;
+        Ok(Self{_plan:plan,_source:source_lease,_lease:lease})
+    }
 }
 fn unit(raw: &[u8], format: PixelFormat) -> Result<(), E> {
     if raw.len() != format.bytes_per_pixel() {
@@ -145,7 +157,11 @@ fn numeric_zero(bytes: &[u8], sample: SampleType, i: &Interrupt<'_>) -> Result<(
     Ok(())
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Purpose { Source, Current }
+enum Purpose { Source, SourceOpacity, Current }
+impl Purpose {
+    fn source_topology(self)->bool { self != Self::Current }
+    fn allows_mixed_opacity(self)->bool { self != Self::Source }
+}
 fn compile<B: PlanBudget>(doc: &Document, purpose: Purpose, header: u64, interrupt: &Interrupt<'_>, budget: &mut B) -> Result<(Plan<B::Lease>, B::Lease), E> {
     charge(budget, interrupt, 1)?;
     let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
@@ -184,11 +200,12 @@ fn compile<B: PlanBudget>(doc: &Document, purpose: Purpose, header: u64, interru
     let mut nodes = 0usize;
     for stack in &state.filter_stacks {
         charge(budget, interrupt, 1)?;
-        if (purpose == Purpose::Source && stack.nodes.is_empty()) || stack.nodes.len() > 1024 { return Err(scope()); }
+        if (purpose.source_topology() && stack.nodes.is_empty()) || stack.nodes.len() > 1024 { return Err(scope()); }
         nodes = nodes.checked_add(stack.nodes.len()).ok_or_else(length)?;
         if nodes > 4096 { return Err(scope()); }
     }
-    if (purpose == Purpose::Source && (nodes == 0 || (count == 1 && nodes < 2))) || state.filter_masks.len() != nodes || state.items.len() != count.checked_add(nodes).ok_or_else(length)? { return Err(scope()); }
+    if (purpose.source_topology() && (nodes == 0 || (count == 1 && nodes < 2))) || state.filter_masks.len() != nodes || state.items.len() != count.checked_add(nodes).ok_or_else(length)? { return Err(scope()); }
+    if purpose == Purpose::SourceOpacity { source_opacity::verify(doc, interrupt, budget)?; }
     // All dynamic retained state is admitted before Vec reserve/fill or profile
     // construction; source adapters retain the full conservative bound.
     let metadata = count
@@ -340,16 +357,16 @@ fn compile<B: PlanBudget>(doc: &Document, purpose: Purpose, header: u64, interru
                 // Exact family canonical policies are unchanged, separately selected.
                 if crate::gimp_invert::claims(node) {
                     charge(budget,interrupt,128)?;
-                    (if purpose == Purpose::Current { crate::gimp_invert::canonical_current } else { crate::gimp_invert::canonical })(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?;
+                    (if purpose.allows_mixed_opacity() { crate::gimp_invert::canonical_mixed_opacity } else { crate::gimp_invert::canonical })(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?;
                 } else if crate::gimp_exposure::claims(node) {
                     charge(budget,interrupt,512)?;
-                    if node.operation.schema_epoch==crate::gimp_exposure::LOADED_MIXED_EPOCH { let parameters=(if purpose == Purpose::Current { crate::gimp_exposure::canonical_loaded_mixed_current } else { crate::gimp_exposure::canonical_loaded_mixed })(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?; let [_,raw_black]=parameters.raw_words(); if purpose==Purpose::Source && !matches!(raw_black,0x3dcc_cccd|0xbdcc_cccd) {return Err(scope());} } else { (if purpose == Purpose::Current { crate::gimp_exposure::canonical_current } else { crate::gimp_exposure::canonical })(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?; }
+                    if node.operation.schema_epoch==crate::gimp_exposure::LOADED_MIXED_EPOCH { let parameters=(if purpose.allows_mixed_opacity() { crate::gimp_exposure::canonical_loaded_mixed_opacity } else { crate::gimp_exposure::canonical_loaded_mixed })(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?; let [_,raw_black]=parameters.raw_words(); if purpose.source_topology() && !matches!(raw_black,0x3dcc_cccd|0xbdcc_cccd) {return Err(scope());} } else { (if purpose.allows_mixed_opacity() { crate::gimp_exposure::canonical_mixed_opacity } else { crate::gimp_exposure::canonical })(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?; }
                 } else if crate::gimp_semi_flatten::claims(node) {
-                    (if purpose == Purpose::Current { crate::gimp_semi_flatten::canonical_current } else { crate::gimp_semi_flatten::canonical })(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
+                    (if purpose.allows_mixed_opacity() { crate::gimp_semi_flatten::canonical_mixed_opacity } else { crate::gimp_semi_flatten::canonical })(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
                 } else if crate::gimp_hue_chroma::claims(node) {
-                    (if purpose == Purpose::Current { crate::gimp_hue_chroma::canonical_current } else { crate::gimp_hue_chroma::canonical })(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
+                    (if purpose.allows_mixed_opacity() { crate::gimp_hue_chroma::canonical_mixed_opacity } else { crate::gimp_hue_chroma::canonical })(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
                 } else if crate::gimp_vibrance::claims(node) {
-                    (if purpose == Purpose::Current { crate::gimp_vibrance::canonical_current } else { crate::gimp_vibrance::canonical })(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
+                    (if purpose.allows_mixed_opacity() { crate::gimp_vibrance::canonical_mixed_opacity } else { crate::gimp_vibrance::canonical })(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
                 } else {
                     return Err(scope());
                 }
@@ -418,7 +435,7 @@ fn compile<B: PlanBudget>(doc: &Document, purpose: Purpose, header: u64, interru
                 // existing plain Normal path; no lost operation is inferred.
                 (None, None)
             } else {
-                let (plan, fee) = RootPointPlan::prepare(stack, format, bounds, purpose == Purpose::Current, interrupt, budget)?;
+                let (plan, fee) = RootPointPlan::prepare(stack, format, bounds, purpose.allows_mixed_opacity(), interrupt, budget)?;
                 (Some(plan), Some(fee))
             }
         } else {

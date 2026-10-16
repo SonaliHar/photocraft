@@ -235,3 +235,10 @@ mod exposure_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_filtered_flat_invert_tests.rs"]
 mod invert_tests;
+
+#[path = "staged_filtered_flat_opacity.rs"]
+pub(super) mod opacity;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "staged_filtered_flat_opacity_tests.rs"]
+mod opacity_tests;

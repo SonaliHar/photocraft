@@ -222,3 +222,6 @@ fn full_inactive_proof_and_real_control_cleanup() {
     fails[1].store(false, Ordering::Relaxed);
     drop(c.render_band(r, &ctl()).unwrap());
 }
+
+#[path="backed_filtered_flat_point_source_opacity_tests.rs"]
+mod source_opacity;
