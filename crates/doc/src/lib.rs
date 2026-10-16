@@ -1123,11 +1123,26 @@ impl Document {
             _ => Err(E::Integrity),
         }
     }
+    /// Full invariants with only the complete actual-Doc-bound set's scans substituted.
+    pub fn validate_xcf_state_with_checked_filter_masks<L:xcf_filter_masks::MaskCoverageSetLease>(
+        &self, proof: &xcf_filter_masks::CheckedFilterMaskCoverageSet<'_,L>, control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<(), XcfValidationError> {
+        if !proof.claim_validation(self){return Err(XcfValidationError::new("filter_mask_identity","foreign or already consumed mask proof set"))}
+        self.validate_xcf_state_selection(control, None, Some(proof))
+    }
     fn validate_xcf_state_selected(
         &self,
         control: &photocraft_raster::Interrupt<'_>,
         selected: Option<&xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,
     ) -> Result<(), XcfValidationError> {
+        self.validate_xcf_state_selection(control, selected, None)
+    }
+    fn validate_xcf_state_selection(
+        &self, control: &photocraft_raster::Interrupt<'_>,
+        selected: Option<&xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,
+        set: Option<&dyn xcf_filter_masks::CoverageSetProof>,
+    ) -> Result<(), XcfValidationError> {
+        if set.is_some_and(|p| !p.matches(self)) { return Err(XcfValidationError::new("filter_mask_identity", "foreign mask proof set")); }
         if control.cancelled() {
             return Err(XcfValidationError::new("cancelled", "document validation cancelled"));
         }
@@ -1152,7 +1167,7 @@ impl Document {
             return Err(XcfValidationError::new("path_identity", "invalid or duplicate saved path identity"));
         }
         if let Some(state) = &self.xcf_state {
-            state.validate_with_selected_filter_mask(self, control, selected)?;
+            state.validate_with_filter_mask_selection(self, control, selected, set)?;
         }
         Ok(())
     }

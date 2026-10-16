@@ -204,6 +204,38 @@ impl PreparedMaskedScalar {
         pixel(after)?;
         self.mix.apply(before, after, raw, c)
     }
+    /// Additive ordered-stage lane: finite derived RGB, unit alpha; old unit entry stays exact.
+    pub(crate) fn evaluate_derived(&self, before: [f64; 4], enabled: bool, raw: f64, q: &BackingQuota, c: &ReadControl<'_>) -> Result<[f64; 4], E> {
+        c.check(128).map_err(E::Backing)?;
+        pixel(before)?;
+        crate::gimp_masked_exposure::coverage(raw)?;
+        if !enabled {
+            c.check(0).map_err(E::Backing)?;
+            return Ok(before);
+        }
+        c.check(if self.kind.linear() { 1408 } else { 640 }).map_err(E::Backing)?;
+        let _leaf_scratch = q.reserve(QuotaKind::Resident, LEAF_SCRATCH_BYTES).map_err(E::Quota)?;
+        c.check(0).map_err(E::Backing)?;
+        let rgb = if self.kind.linear() {
+            self.mix.linear_space().convert([before[0], before[1], before[2]], true).map_err(E::Color)?
+        } else {
+            [before[0], before[1], before[2]]
+        };
+        let mut leaf = [0.; 4];
+        c.check(0).map_err(E::Backing)?;
+        // Full lower operation is always invoked; its existing internal scalar
+        // identity behavior is not an adapter/native/endpoint bypass.
+        self.operation.try_eval_pixel(&[rgb[0], rgb[1], rgb[2], before[3]], 3, &mut leaf).map_err(|e| E::Color(e.into()))?;
+        c.check(0).map_err(E::Backing)?;
+        let rgb = if self.kind.linear() {
+            self.mix.linear_space().convert([leaf[0], leaf[1], leaf[2]], false).map_err(E::Color)?
+        } else {
+            [leaf[0], leaf[1], leaf[2]]
+        };
+        let after = [rgb[0], rgb[1], rgb[2], before[3]];
+        pixel(after)?;
+        self.mix.apply(before, after, raw, c)
+    }
 }
 
 #[cfg(test)]

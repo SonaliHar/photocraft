@@ -43,6 +43,7 @@ pub(crate) struct Reader<'a, 'o> {
     input: Input<'a>,
     pub pos: u64,
     pub version: u32,
+    metadata_only: bool,
     pub options: &'o DecodeOptions<'o>,
     pub limits: Limits,
     pub charged: usize,
@@ -503,10 +504,7 @@ impl<'a, 'o> Reader<'a, 'o> {
             }
         }
         if hierarchy != 0 && !d.group {
-            d.plane = Some(crate::pixels::plane(
-                self,
-                hierarchy,
-                PlaneDescriptor {
+            let descriptor = PlaneDescriptor {
                     width: w,
                     height: h,
                     channels,
@@ -517,11 +515,14 @@ impl<'a, 'o> Reader<'a, 'o> {
                     role,
                     record_offset: p,
                     offset: d.offset,
-                },
-                &d.name,
-                file.compression,
-                sink,
-            )?);
+                };
+            d.plane = Some(if self.metadata_only {
+                // Metadata planning does not inspect hierarchy/tile payload and
+                // is never decoded-pixel authority. Actual decode verifies it.
+                let mut control=PlaneSinkControl{reader:self};
+                sink.begin(&descriptor,&mut control)?;
+                sink.finish(&mut control)?
+            }else{crate::pixels::plane(self,hierarchy,descriptor,&d.name,file.compression,sink)?});
         } else if hierarchy != 0 {
             // GIMP 2.8 writes an empty pixel level for groups. Group appearance comes
             // from its editable children; the optional group cache is never a fallback.
@@ -580,6 +581,12 @@ fn decode_input<'o, S: PlaneSink>(
     input_already_charged: bool,
     sink: &mut S,
 ) -> Result<XcfFile<S::Plane>, XcfError> {
+    decode_input_mode(input,options,budget,input_already_charged,sink,false)
+}
+pub(crate) fn decode_source_metadata<'o,S:PlaneSink>(source:&mut dyn Source,options:&'o DecodeOptions<'o>,budget:&'o Budget<'o>,sink:&mut S)->Result<XcfFile<S::Plane>,XcfError>{
+    decode_input_mode(Input::Source(source),options,budget,true,sink,true)
+}
+fn decode_input_mode<'o,S:PlaneSink>(input:Input<'_>,options:&'o DecodeOptions<'o>,budget:&'o Budget<'o>,input_already_charged:bool,sink:&mut S,metadata_only:bool)->Result<XcfFile<S::Plane>,XcfError>{
     let limits = effective_limits(&options.limits);
     let length = input.len();
     if length > limits.input_bytes as u64 {
@@ -589,6 +596,7 @@ fn decode_input<'o, S: PlaneSink>(
         input,
         pos: 0,
         version: 0,
+        metadata_only,
         options,
         limits,
         charged: 0,
@@ -737,6 +745,7 @@ mod allocation_tests {
             input: Input::Bytes(&[]),
             pos: 0,
             version: 12,
+            metadata_only: false,
             options: &options,
             limits: Limits { resident_bytes: usize::MAX, ..Default::default() },
             charged: 0,

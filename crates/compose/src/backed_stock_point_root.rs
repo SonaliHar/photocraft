@@ -155,9 +155,26 @@ impl<L> PreparedRootStage<L> {
         Ok(output)
     }
 }
+struct HeldMasked<L>{candidate:crate::gimp_masked_mixed::Prepared,_fee:L}
+struct MaskedStage<L>{held:HeldMasked<L>,mask:photocraft_raster::Surface,extent:Rect,enabled:bool,_mask_fee:L}
+enum MaskedOrZero<L>{Zero(PreparedRootStage<L>),Masked(MaskedStage<L>)}
+impl<L> MaskedOrZero<L>{
+ fn enabled(&self)->bool {match self {Self::Zero(p)=>p.enabled,Self::Masked(p)=>p.enabled}}
+ fn evaluate(&self,pixel:[f64;4],derived:bool,position:(i32,i32),q:&BackingQuota,c:&ReadControl<'_>)->Result<[f64;4],BackedNormalError>{match self{
+ Self::Zero(p)=>p.evaluate(pixel,derived,q,c),
+ Self::Masked(p)=>{
+ c.check(256).map_err(BackedNormalError::Backing)?;
+ let _mix_scratch=p.held.candidate.reserve_runtime(q,c)?;
+ if position.0<p.extent.x0||position.0>=p.extent.x1||position.1<p.extent.y0||position.1>=p.extent.y1{return Err(scope());}
+ let mut raw=[0.;1];p.mask.try_read_pixel_f64(position.0,position.1,&mut raw).map_err(|e|BackedNormalError::Color(e.into()))?;
+ p.held.candidate.evaluate(pixel,p.enabled,derived,raw[0],q,c)
+ }
+ }}
+}
 enum RootProgram<L> {
     Singleton(OrderedStack),
     Ordered(Vec<PreparedRootStage<L>>),
+    MaskedOrdered(Vec<MaskedOrZero<L>>),
 }
 pub(crate) struct RootPointPlan<L> {
     program: RootProgram<L>,
@@ -193,6 +210,41 @@ impl<L> RootPointPlan<L> {
             return Err(BackedNormalError::Allocation);
         }
         for node in &stack.nodes {
+            let prepared = Self::prepare_stage(node, extent, allow_mixed_opacity, interrupt, budget)?;
+            stages.push(prepared);
+        }
+        Ok((Self { program: RootProgram::Ordered(stages), format }, lease))
+    }
+    pub(crate) fn prepare_masked<B:PlanBudget<Lease=L>>(stack:&FilterStack, masks:&[(&photocraft_doc::FilterMask,bool)],format:PixelFormat,extent:Rect,allow_mixed_opacity:bool,interrupt:&Interrupt<'_>,budget:&mut B)->Result<(Self,L),BackedNormalError> {
+        if masks.len()!=stack.nodes.len()||stack.nodes.is_empty()||stack.nodes.len()>1024 {return Err(scope());}
+        if !masks.iter().any(|(_,nonempty)|*nonempty) {return Self::prepare(stack,format,extent,allow_mixed_opacity,interrupt,budget);}
+        let count=stack.nodes.len();
+        let bytes=count.checked_mul(2).and_then(|n|n.checked_mul(std::mem::size_of::<MaskedOrZero<L>>())).and_then(|n|n.checked_add(std::mem::size_of::<Self>()+128)).ok_or_else(length)?;
+        let lease=budget.reserve(u64::try_from(bytes).map_err(|_|length())?)?;
+        let mut stages=Vec::new(); stages.try_reserve_exact(count).map_err(|_|BackedNormalError::Allocation)?;
+        if stages.capacity()>count.checked_mul(2).ok_or_else(length)? {return Err(BackedNormalError::Allocation);}
+        for (node,(mask,nonempty)) in stack.nodes.iter().zip(masks) {
+            work(budget,interrupt,1)?;
+            if !*nonempty {
+                stages.push(MaskedOrZero::Zero(Self::prepare_stage(node,extent,allow_mixed_opacity,interrupt,budget)?));
+                continue;
+            }
+            work(budget,interrupt,512)?;
+            let parameters=crate::gimp_masked_mixed::canonical(node,extent).map_err(BackedNormalError::Color)?;
+            work(budget,interrupt,(mask.surface.tile_count()as u64).checked_add(1).ok_or_else(length)?)?;
+            let payload=mask.surface.resident_payload_bytes().map_err(|_|length())?;
+            let mask_bytes=(mask.surface.tile_count()as u64).checked_mul(512).and_then(|n|n.checked_add(payload)).and_then(|n|n.checked_add((mask.surface.default_bytes().len()as u64).checked_mul(2)?)).and_then(|n|n.checked_add(std::mem::size_of::<photocraft_raster::Surface>()as u64+128)).ok_or_else(length)?;
+            let mask_fee=budget.reserve(mask_bytes)?;
+            let(candidate,fee)=crate::gimp_masked_mixed::Prepared::prepare(parameters,std::mem::size_of::<MaskedStage<L>>()as u64,interrupt,budget)?;
+            let held=HeldMasked{candidate,_fee:fee};
+            work(budget,interrupt,mask_bytes)?;
+            let mut retained=photocraft_raster::Surface::try_with_default_bytes(mask.surface.format(),mask.surface.default_bytes()).map_err(|e|BackedNormalError::Color(e.into()))?;
+            for(coordinate,tile) in mask.surface.tiles(){work(budget,interrupt,1)?;retained.put_tiles(std::iter::once((*coordinate,std::sync::Arc::clone(tile))));}
+            stages.push(MaskedOrZero::Masked(MaskedStage{held,mask:retained,extent,enabled:node.enabled,_mask_fee:mask_fee}));
+        }
+        Ok((Self{program:RootProgram::MaskedOrdered(stages),format},lease))
+    }
+    fn prepare_stage<B:PlanBudget<Lease=L>>(node:&FilterNode,extent:Rect,allow_mixed_opacity:bool,interrupt:&Interrupt<'_>,budget:&mut B)->Result<PreparedRootStage<L>,BackedNormalError> {
             let opacity_bits = node.opacity_f64_bits;
             let mix = if allow_mixed_opacity && opacity_bits != 1f64.to_bits() {
                 crate::gimp_mixed_filter_opacity::validate_opacity(opacity_bits)?;
@@ -259,9 +311,7 @@ impl<L> RootPointPlan<L> {
             } else {
                 return Err(scope());
             };
-            stages.push(prepared);
-        }
-        Ok((Self { program: RootProgram::Ordered(stages), format }, lease))
+            Ok(prepared)
     }
     fn prepare_singleton<B: PlanBudget<Lease = L>>(
         stack: &FilterStack,
@@ -361,6 +411,31 @@ impl<L> RootPointPlan<L> {
                     }
                     pixel = stage.evaluate(pixel, enabled != 0, quota, control)?;
                     if stage.enabled {
+                        enabled = enabled.checked_add(1).ok_or_else(length)?;
+                    }
+                }
+                control.check(0).map_err(BackedNormalError::Backing)?;
+                Ok(pixel)
+            }
+            RootProgram::MaskedOrdered(stages) => {
+                control.check(self.format.bytes_per_pixel() as u64 + 1).map_err(BackedNormalError::Backing)?;
+                if raw.len() != self.format.bytes_per_pixel() {
+                    return Err(length());
+                }
+                let read = |channel| photocraft_color::try_read_sample_f64(raw, self.format.sample, channel).map_err(|_| length());
+                let mut pixel = [read(0)?, read(1)?, read(2)?, read(3)?];
+                if pixel.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
+                    return Err(scope());
+                }
+                let mut enabled = 0usize;
+                for stage in stages.iter().rev() {
+                    // Disabled nodes neither narrow nor cause a bridge. Their
+                    // actual incoming value is still fully validated/applied.
+                    if stage.enabled() && enabled != 0 {
+                        pixel = nl_float_bridge(pixel, control)?;
+                    }
+                    pixel = stage.evaluate(pixel, enabled != 0, position, quota, control)?;
+                    if stage.enabled() {
                         enabled = enabled.checked_add(1).ok_or_else(length)?;
                     }
                 }

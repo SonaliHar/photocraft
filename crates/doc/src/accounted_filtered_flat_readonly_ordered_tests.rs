@@ -252,3 +252,6 @@ mod move_tests;
 
 #[path = "accounted_filtered_flat_readonly_remove_tests.rs"]
 mod remove_tests;
+
+#[path = "accounted_masked_filtered_flat_tests.rs"]
+mod masked_coverage_tests;

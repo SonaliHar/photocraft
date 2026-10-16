@@ -196,3 +196,6 @@ fn selected_writer_and_loader_preserve_external_controls() {
     assert!(matches!(load_document_from_owned_archive(memory, &Default::default(), Default::default(), q.clone(), &c), Err(FormatError::Cancelled)));
     assert!(owner.document().checked_f32_filter_mask_coverage_with(&ctl()).unwrap().unwrap().raw_nonempty());
 }
+
+#[path = "masked_filtered_flat_tests.rs"]
+mod masked_filtered_flat_tests;

@@ -1,4 +1,4 @@
-//! Portable owned-current native serialization after complete masked Point proof.
+//! Portable owned-current native serialization after complete masked recipe proof.
 //! This selects structural storage intent, never a path or original Source grant.
 use photocraft_doc::accounted_document::AccountedDocument;
 use photocraft_format::{FormatError, owned_document::OwnedDocumentLimits};
@@ -64,7 +64,13 @@ pub fn save_accounted_current_archive<W: Write + Seek>(
     if !owner.quota().shares_ledger(quota) {
         return Err(backing(BackingError::Quota));
     }
-    if !claims(owner, control)? {
+    // Structural intent comes from the actual retained runtime owner, including
+    // a derived empty stack. Epoch inference cannot grant this separate class.
+    let masked_flat = owner.is_readonly_masked_filtered_flat_point_storage();
+    if masked_flat {
+        control.check(1).map_err(backing)?;
+    }
+    if !masked_flat && !claims(owner, control)? {
         return photocraft_format::owned_document::save_accounted_current_document_archive(owner, output, limits, quota, control);
     }
     // Covers the fixed relay/first-error witness and error/header stack. The
@@ -102,6 +108,18 @@ pub fn save_accounted_current_archive<W: Write + Seek>(
         }
     };
     c.check(1).map_err(backing)?;
+    if masked_flat {
+        let prepared = photocraft_compose::backed_masked_filtered_flat_point_document::PreparedBackedMaskedFilteredFlatPointDocument::new(
+            owner,
+            Default::default(),
+            &c,
+        )
+        .map_err(&map)?;
+        prepared.validate_operative(&c).map_err(&map)?;
+        drop(prepared);
+        c.check(1).map_err(backing)?;
+        return photocraft_format::owned_document::save_accounted_masked_filtered_flat_document_archive(owner, output, limits, quota, &c);
+    }
     let prepared = photocraft_compose::backed_stock_point_context::PreparedBackedStockPointContext::new(
         owner,
         photocraft_cms::Builtin::Srgb.profile(),

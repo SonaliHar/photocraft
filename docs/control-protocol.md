@@ -2974,3 +2974,86 @@ bindings are separate from eight old-route none-mask baselines. Sixteen new
 ignored contracts remain UNRUN and uncompiled. Desktop/WebAssembly production
 checks are recorded separately; numerical/native GUI/visual/corpus/performance/
 parent and final acceptance stay deferred. Full XCF support remains unfinished.
+
+
+Ordered nonempty masks use a distinct accounted masked filtered-flat class and
+native12 `masked_filtered_flat_point` marker. Old Point and filtered-flat
+predicates remain exact. This class retains its purpose through single/empty
+CURRENT stacks and repeated native saves. Unmarked native metadata cannot grant
+the new class. Native original format/minimum-reader checks precede migration;
+migration11-to12 invents no marker. Save/reopen continues in .pcraft, not XCF.
+
+The five paired masked-MIXED identities are
+`xcf22-gegl-exposure-masked-mixed-wide-v1`,
+`xcf22-gegl-invert-linear-masked-mixed-wide-v1`,
+`xcf22-gegl-invert-gamma-masked-mixed-wide-v1`,
+`xcf22-gegl-brightness-contrast-masked-mixed-wide-v1` and
+`xcf22-gegl-levels-masked-mixed-wide-v1`. Exposure is stored1:0, the others0:0;
+their exact typed scalar parameters remain authoritative. These identities
+require raw-nonempty masks. BYTEzero siblings retain their existing identities
+and arithmetic. Signedzero-only numeric-empty masks refuse in this new class.
+Raw nonempty is measured before Float conversion, retaining the existing F64
+white rounding preimage and tiny positive samples rounding to zero.
+
+Complete immutable actual-Document proof sets bind actual mask ordinals,
+owners and nodes. The checked16MiB per-mask and64MiB aggregate physical caps
+precede proof vectors, sample scans and payload copies; native serialized-mask
+metadata is checked before Surface construction. Source planning uses a paid
+metadata-only descriptor pass and a conservative full-grid bound before any
+new-programme mask Surface allocation. Every subsequent descriptor must match
+the immutable plan. A cap-ineligible source permanently retains only the old
+strict route under its existing limits; it cannot upgrade after nonzero data
+is found. The new planning pass is actual additional work, not a free parse or
+a completion/performance guarantee. Sparse inputs exceeding the conservative
+grid bound may refuse this new class even if retained tiles would fit.
+
+The native XCF decoder keeps its default strict mask policy. Only an explicitly
+planned effect-mask descriptor may use checked Float coverage: original finite
+nonnegative samples are retained exactly while their F32 conversion must be
+finite and in[0,1]. This permits GIMP's observed F64 white preimage above1
+without changing its stored words. Earlier singleton positive F64 drafts were
+UNRUN; production compilation alone had not established successful import.
+The same bounded descriptor permission covers the five existing ordinary masked
+Point families with mixed-upgrade disabled; their original semantic selectors
+and current validators still decide admission. PointStack and loaded routes
+retain their existing behavior.
+
+Source retains the existing full-origin flat RGBNL650/750 unit-native,
+originalNone/currentImplicitSrgb limits and strict mixed topology: at least
+two roots or at least two nodes, with at least one nonempty mask. ALL Source
+filter opacity is exact+1. CURRENT permits derived sole/empty stacks, requires
+every nonempty-mask node opacity+1 even when disabled, and preserves existing
+finite-unit opacity rules for BYTEzero siblings. There is no new masked
+SourceOpacity route. Actual raw composition words remain uninterpreted and
+preserved; the transport envelope supplies three present fields, not inferred
+Auto values. Default/padding/native/profile/canonical/owner proofs remain full.
+
+Mixed roots execute actual ordered stages in reverse canonical order. A root
+with only BYTEzero masks delegates its complete old root plan. Within a masked
+root, old zero-sentinel stages retain the old per-node implementation; the new
+five leaves accept finite derived RGB with unit alpha after earlier stages.
+The original ordinary Point unit-only entry remains exact. Each enabled masked
+stage runs the complete scalar leaf and unchanged Linear premultiplied mask
+mix, including local0/1/identity and alpha-zero hidden RGB. Enabled-only Float
+handoffs, full inactive validation, overflow refusal and independent paid mask
+runtime/leaf/profile/header/storage work remain. A mask is not a free no-op.
+
+Engine, native/Web hosts and captured controls use explicit actual-class
+routes with full OLD/history/STAGED validation, target revisions, locks and
+source/view/reply/journal/publication fences. Parameter/activation/oldzero
+opacity edits, move/remove, metadata and undo retain that purpose. Generic
+pixel editing, mask painting, hierarchy, offsets, source HDR/Gray/assigned
+profiles and remaining stock operations are separate implementation work.
+
+One isolated GIMP author process recorded eight originals at two depths and
+four small topologies, including two independently selected masks, an oldzero
+sibling and two roots. All original native seed words stayed exact in live,
+same-process reopened and raw stored planes. Public/raw filter lists match
+reverse append order; each stored mask matches its own selection snapshot.
+The packet establishes transport and source custody, not unique arithmetic,
+independent fresh-process replay, large geometry or PhotoCraft numerical
+acceptance. Broader geometry and coverage within the stated caps are declared
+compatibility extensions. Ignored contracts remain UNRUN and uncompiled;
+production compilation is recorded separately in execution notes. PhotoCraft
+tests, runtime/UI/offscreen, corpus, performance and parent/final acceptance
+remain deferred. Full stock XCF support is unfinished.

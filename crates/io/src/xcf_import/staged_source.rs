@@ -43,6 +43,7 @@ trait StagePolicy {
 pub(super) enum SelectedStagedFamily {
     Plain,
     FilteredFlat,
+    MaskedFilteredFlat,
     FilteredFlatOpacity,
     SeparableBlend,
     AnalyticGeometry,
@@ -65,6 +66,7 @@ impl std::fmt::Debug for SelectedStagedFamily {
         f.write_str(match self {
             Self::Plain => "Plain",
             Self::FilteredFlat => "FilteredFlat",
+            Self::MaskedFilteredFlat => "MaskedFilteredFlat",
             Self::FilteredFlatOpacity => "FilteredFlatOpacity",
             Self::SeparableBlend => "SeparableBlend",
             Self::AnalyticGeometry => "AnalyticGeometry",
@@ -93,7 +95,7 @@ impl StagePolicy for SourceSelectedPolicy {
     fn family_controlled<Q:ExactParsedPlane>(file:&XcfFile<Q>,ctl:&Interrupt<'_>,shared:Option<&photocraft_xcf::Budget<'_>>)->Result<SelectedStagedFamily,IoError>{
         if file.layers.len()==1 && file.layers.first().is_some_and(|d|d.effects.len()>=2) {
             let budget=shared.ok_or_else(||IoError::Unsupported("selected source requires accounting".into()))?;
-            if staged_filtered_flat::hint(file,ctl,budget)?{return Ok(if staged_filtered_flat::opacity::has_nonunit(file,ctl,budget)? {SelectedStagedFamily::FilteredFlatOpacity}else{SelectedStagedFamily::FilteredFlat})}
+            if staged_filtered_flat::hint(file,ctl,budget)?{if staged_masked_filtered_flat::hint(file,ctl,budget)?{return Ok(SelectedStagedFamily::MaskedFilteredFlat);}return Ok(if staged_filtered_flat::opacity::has_nonunit(file,ctl,budget)? {SelectedStagedFamily::FilteredFlatOpacity}else{SelectedStagedFamily::FilteredFlat})}
         }
         let old=Self::family(file);
         if old==SelectedStagedFamily::Point(crate::xcf_filters::PointReplaceFamily::Exposure) {
@@ -110,7 +112,7 @@ impl StagePolicy for SourceSelectedPolicy {
         }
         if old!=SelectedStagedFamily::Plain{return Ok(old)}
         let budget=shared.ok_or_else(||IoError::Unsupported("selected source requires accounting".into()))?;
-        if staged_filtered_flat::hint(file,ctl,budget)?{return Ok(if staged_filtered_flat::opacity::has_nonunit(file,ctl,budget)? {SelectedStagedFamily::FilteredFlatOpacity}else{SelectedStagedFamily::FilteredFlat})}
+        if staged_filtered_flat::hint(file,ctl,budget)?{if staged_masked_filtered_flat::hint(file,ctl,budget)?{return Ok(SelectedStagedFamily::MaskedFilteredFlat);}return Ok(if staged_filtered_flat::opacity::has_nonunit(file,ctl,budget)? {SelectedStagedFamily::FilteredFlatOpacity}else{SelectedStagedFamily::FilteredFlat})}
         if separable_blend::general_hint(file,ctl,budget)?{Ok(SelectedStagedFamily::SeparableBlend)}else{Ok(old)}
     }
     fn family<Q: ExactParsedPlane>(file: &XcfFile<Q>) -> SelectedStagedFamily {
@@ -200,6 +202,7 @@ enum Storage {
 }
 struct StagedPlane<'b, 'a, P: StagePolicy = PlainPolicy> {
     descriptor: PlaneDescriptor,
+    masked_mixed_plan: bool,
     // Actual raster must die before its last reservation token.
     storage: Storage,
     _token: Token<'b, 'a>,
@@ -258,6 +261,8 @@ impl<'b, 'a> StagingBudget for BuilderBudget<'b, 'a> {
 struct Sink<'b, 'a, 'c, 'i, P: StagePolicy = PlainPolicy> {
     // All completed storage returned to parser drops before this final registry.
     active: Option<(PlaneDescriptor, StagedSurfaceBuilder<Reservation<'b, 'a>>)>,
+    descriptor_plan: Option<staged_masked_filtered_flat::DescriptorPlan<'b,'a>>,
+    planned_descriptor:Option<PlaneDescriptor>,
     tokens: Vec<Token<'b, 'a>>,
     registry_lease: Option<Reservation<'b, 'a>>,
     budget: &'b photocraft_xcf::Budget<'a>,
@@ -266,6 +271,14 @@ struct Sink<'b, 'a, 'c, 'i, P: StagePolicy = PlainPolicy> {
 }
 impl<'b, 'a, P: StagePolicy> PlaneSink for Sink<'b, 'a, '_, '_, P> {
     type Plane = StagedPlane<'b, 'a, P>;
+    fn validate_plane_descriptor(&mut self,d:&PlaneDescriptor,control:&mut PlaneSinkControl<'_, '_, '_>)->Result<(),XcfError>{
+        control.poll()?;
+        if let Some(plan)=&mut self.descriptor_plan{plan.verify(d,self.budget).map_err(|e|match e{IoError::Xcf(error)=>error,IoError::Cancelled=>stage_error(ErrorKind::Cancelled,"masked descriptor cancelled"),other=>stage_error(ErrorKind::Unsupported,other.to_string())})?;self.planned_descriptor=Some(d.clone());}
+        Ok(())
+    }
+    fn mask_coverage_policy(&self,d:&PlaneDescriptor)->photocraft_xcf::MaskCoveragePolicy{
+        if self.descriptor_plan.is_some()&&d.role==photocraft_xcf::PlaneRole::Mask&&self.active.as_ref().is_some_and(|(actual,_)|actual==d){photocraft_xcf::MaskCoveragePolicy::CheckedF32Preimage}else{photocraft_xcf::MaskCoveragePolicy::StrictUnit}
+    }
     fn begin(&mut self, d: &PlaneDescriptor, control: &mut PlaneSinkControl<'_, '_, '_>) -> Result<(), XcfError> {
         control.poll()?;
         if self.active.is_some() || !P::accepts(d) {
@@ -278,6 +291,7 @@ impl<'b, 'a, P: StagePolicy> PlaneSink for Sink<'b, 'a, '_, '_, P> {
                 },
             ));
         }
+        if self.descriptor_plan.is_some()&&self.planned_descriptor.take().as_ref()!=Some(d){return Err(stage_error(ErrorKind::Unsupported,"masked source descriptor was not prevalidated"));}
         let width = i32::try_from(d.width).map_err(|_| stage_error(ErrorKind::Limit, "staged width"))?;
         let height = i32::try_from(d.height).map_err(|_| stage_error(ErrorKind::Limit, "staged height"))?;
         let right = d.offset.0.checked_add(width).ok_or_else(|| stage_error(ErrorKind::Limit, "staged horizontal extent"))?;
@@ -362,7 +376,7 @@ impl<'b, 'a, P: StagePolicy> PlaneSink for Sink<'b, 'a, '_, '_, P> {
         let (surface, lease) = staged.into_parts();
         let token = Rc::new(LeaseToken { _surface: lease, _metadata: metadata, budget: self.budget });
         self.tokens.push(Rc::clone(&token));
-        Ok(StagedPlane { descriptor, storage: Storage::Ready(surface), _token: token, _policy: PhantomData })
+        Ok(StagedPlane { descriptor, masked_mixed_plan:self.descriptor_plan.as_ref().is_some_and(|p|p.mixed_upgrade()), storage: Storage::Ready(surface), _token: token, _policy: PhantomData })
     }
     fn abort(&mut self) {
         self.active.take();
@@ -447,6 +461,7 @@ impl<P: StagePolicy> StagedPlane<'_, '_, P> {
     }
 }
 impl<P: StagePolicy> ExactParsedPlane for StagedPlane<'_, '_, P> {
+    fn allows_masked_mixed_source_upgrade(&self)->bool{self.masked_mixed_plan}
     fn descriptor(&self) -> plane::ParsedPlaneDescriptor {
         StagedPlane::descriptor(self)
     }
@@ -499,6 +514,8 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
         let family = P::family_controlled(file,ctl,shared)?;
+        let masked_filtered_flat=family==SelectedStagedFamily::MaskedFilteredFlat;
+        if masked_filtered_flat{staged_masked_filtered_flat::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("masked mixed source accounting".into()))?)?;}
         let filtered_flat_opacity=family==SelectedStagedFamily::FilteredFlatOpacity;
         let filtered_flat=filtered_flat_opacity || family==SelectedStagedFamily::FilteredFlat;
         if filtered_flat_opacity {staged_filtered_flat::opacity::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("filtered flat opacity accounting".into()))?)?;}
@@ -650,6 +667,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         }
         let mut domains = admission::AdmissionDomains {
             filtered_flat_domain:filtered_flat && !filtered_flat_opacity,
+            masked_filtered_flat_domain:masked_filtered_flat,
             filtered_flat_opacity_domain:filtered_flat_opacity,
             lab_separable_domain: separable_domain == Some(separable_blend::SourceKind::LabStrict),
             alpha_separable_domain: separable_domain == Some(separable_blend::SourceKind::AlphaStrict),
@@ -972,10 +990,12 @@ fn complete_staged_source<'b, 'a, P: StagePolicy>(
     control.check().map_err(|_| IoError::Cancelled)?;
     // Sink registry is declared before decoded/mapped storage so errors destroy
     // actual Surfaces before their final token/registry refunds.
-    let mut sink = Sink::<P> { active: None, tokens: Vec::new(), registry_lease: None, budget, interrupt: control, _policy: PhantomData };
+    let descriptor_plan=if P::SOURCE_SELECTED{staged_masked_filtered_flat::preplan(source,options,budget,accounting,control)?}else{None};
+    let mut sink = Sink::<P> { active: None, descriptor_plan,planned_descriptor:None, tokens: Vec::new(), registry_lease: None, budget, interrupt: control, _policy: PhantomData };
     let strict = DecodeOptions { limits: options.limits.clone(), allow_finite_drawable_alpha: false, cancelled: options.cancelled, progress: options.progress };
     let photocraft_xcf::BudgetDecodedImport { decoded, reservations } =
         photocraft_xcf::decode_plain_source_into_sink_with_budget(source, &strict, budget, accounting, &mut sink).map_err(accounting_error)?;
+    if let Some(plan)=&sink.descriptor_plan{plan.complete()?;}
     let mut file = decoded.file;
     let family = P::family_controlled(&file,control,Some(budget))?;
     let encoded = usize::try_from(decoded.encoded_bytes).map_err(|_| IoError::Unsupported("staged source address space".into()))?;
@@ -998,7 +1018,7 @@ fn complete_staged_source<'b, 'a, P: StagePolicy>(
         .limits
         .resident_bytes
         .min(usize::try_from(budget.limits().get(BudgetKind::Resident)).map_err(|_| IoError::Unsupported("staged resident address space".into()))?);
-    let (mut result, _) = map_accounted(name, file, control, maximum, Some(&account), Some((budget, &leases)))?;
+    let (mut result, _) = map_accounted(name,file,control,maximum,Some(&account),Some((budget,&leases)))?;
     provenance::stamp(&mut result, source, decoded.encoded_bytes, control, budget, previous.get(), &account)?;
     // Mapping and provenance have finished. The completed transaction owns the
     // actual surface registry and source/mapping receipts until explicit transfer.
@@ -1043,7 +1063,7 @@ mod tests {
             let budget = photocraft_xcf::Budget::new(photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(), None);
             let mut source = Bytes(encoded);
             let mut sink = Sink::<PlainPolicy> {
-                active: None,
+                active: None,descriptor_plan:None,planned_descriptor:None,
                 tokens: Vec::new(),
                 registry_lease: None,
                 budget: &budget,
@@ -1105,7 +1125,7 @@ mod tests {
         let budget = photocraft_xcf::Budget::new(photocraft_xcf::ResourceLimits::for_policy(photocraft_xcf::ResourcePolicy::NativeStandard).unwrap(), None);
         let mut source = Bytes(fixture::image(12, 150, 0, 1, 1, &[11, 31, 97, 0]));
         let mut sink =
-            Sink::<PlainPolicy> { active: None, tokens: Vec::new(), registry_lease: None, budget: &budget, interrupt: &Interrupt::NONE, _policy: PhantomData };
+            Sink::<PlainPolicy> { active: None, descriptor_plan:None,planned_descriptor:None, tokens: Vec::new(), registry_lease: None, budget: &budget, interrupt: &Interrupt::NONE, _policy: PhantomData };
         let mut parsed = photocraft_xcf::decode_plain_source_into_sink_with_budget(
             &mut source,
             &DecodeOptions::default(),
@@ -1205,3 +1225,6 @@ mod masked_exposure_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_masked_stock_tests.rs"]
 mod masked_stock_tests;
+
+#[path="staged_masked_filtered_flat.rs"]
+pub(super) mod staged_masked_filtered_flat;

@@ -20,7 +20,7 @@ impl Plan<'_> {
 }
 fn prepare<'a>(owner: &AccountedDocument, edit: AccountedEdit<'a>, c: &ReadControl<'_>) -> Result<(ModelCensus, Option<Plan<'a>>), BackingError> {
     c.check(1)?;
-    if !owner.is_readonly_filtered_flat_point_storage() {
+    if !accepts(owner) {
         return Err(BackingError::Unsupported);
     }
     let AccountedEdit::LayerMetadata { layer, name, visible, opacity } = edit else {
@@ -34,7 +34,7 @@ fn prepare<'a>(owner: &AccountedDocument, edit: AccountedEdit<'a>, c: &ReadContr
     }
     // Full actual storage/census and coherent canonical prestate precede every
     // all-None or raw-bit no-op. Omitted fields never repair malformed state.
-    let logical = measured(owner.document(), owner.quota(), c)?;
+    let logical = measured_owner(owner, c)?;
     let mut target = None;
     for (index, candidate) in owner.document().layers.iter().enumerate() {
         c.check(1)?;

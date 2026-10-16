@@ -33,6 +33,8 @@ mod gaussian_group_readonly;
 mod flat_composite_readonly;
 #[path = "accounted_filtered_flat_readonly.rs"]
 mod filtered_flat_readonly;
+#[path = "accounted_masked_filtered_flat_readonly.rs"]
+mod masked_filtered_flat_readonly;
 pub use flat_composite_readonly::FlatCompositeCompositionPatch;
 pub use gaussian_group_readonly::{GaussianGroupEnabledPatch, GaussianGroupPatch};
 pub use point_readonly::{AssignedPointEnabledPatch, PointArgumentPatch, PointArgumentValue, PointFilterMovePatch, PointFilterPatch, PointFilterRemovePatch};
@@ -89,6 +91,7 @@ enum StorageClass {
     ReadonlyGaussianGroup,
     ReadonlyFlatComposite,
     ReadonlyFilteredFlatPoint,
+    ReadonlyMaskedFilteredFlatPoint,
 }
 struct ModelOwner {
     _storage_class: StorageClass,
@@ -405,7 +408,7 @@ impl AccountedDocument {
     /// Borrowed preflight for the closed imported current-metadata transaction.
     /// No allocation or mutation authority; final try_edit repeats these gates.
     pub fn validate_imported_metadata_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<(), BackingError> {
-        if self.is_readonly_filtered_flat_point_storage() {
+        if self.is_readonly_filtered_flat_point_storage() || self.is_readonly_masked_filtered_flat_point_storage() {
             return filtered_flat_readonly::metadata::validate(self, edit, control);
         }
         if self.is_readonly_point_storage() || self.is_readonly_assigned_point_storage() {
@@ -458,7 +461,7 @@ impl AccountedDocument {
     /// Unknown collections refuse before clone. Native COW allocation uses the
     /// same source ledger and never replaces immutable source/default samples.
     pub fn try_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<Self, BackingError> {
-        if self.is_readonly_filtered_flat_point_storage() {
+        if self.is_readonly_filtered_flat_point_storage() || self.is_readonly_masked_filtered_flat_point_storage() {
             return filtered_flat_readonly::metadata::edited(self, edit, control);
         }
         if self.is_readonly_point_storage() || self.is_readonly_assigned_point_storage() {
@@ -684,7 +687,7 @@ impl AccountedDocument {
     /// larger canonical-row bound belongs only to the new runtime class and
     /// does not grant selection or command mutation authority.
     pub fn accounted_layer_access(&self, id: LayerId, control: &ReadControl<'_>) -> Result<Option<AccountedLayerAccess<'_>>, BackingError> {
-        let limit = if self.is_readonly_filtered_flat_point_storage() { 8192 } else { 4096 };
+        let limit = if self.is_readonly_filtered_flat_point_storage() || self.is_readonly_masked_filtered_flat_point_storage() { 8192 } else { 4096 };
         accounted_layer_access_with_limit(self.document(), id, control, limit)
     }
 }

@@ -10,6 +10,8 @@ use photocraft_xcf::{ArgumentValue, Effect};
 pub(crate) mod mixed_affine_source;
 #[path="xcf_alien_hsl_mixed_source.rs"]
 pub(crate) mod mixed_alien_hsl_source;
+#[path="xcf_masked_mixed_source.rs"]
+pub(crate) mod masked_mixed_source;
 #[path="xcf_stock_rgb_mixed_source.rs"]
 pub(crate) mod mixed_stock_source;
 #[path = "xcf_filtered_flat_opacity_source.rs"]
@@ -33,6 +35,7 @@ pub(crate) enum PointReplaceFamily {
     MixedAlienHsl,
     LoadedExposure,
     MaskedExposure,
+    MaskedMixedExposure,MaskedMixedInvertLinear,MaskedMixedInvertGamma,MaskedMixedBrightnessContrast,MaskedMixedGeglLevels,
     MaskedInvertLinear,
     MaskedInvertGamma,
     MaskedBrightnessContrast,
@@ -80,6 +83,11 @@ impl PointReplaceFamily {
             Self::MixedAlienHsl => NeighborhoodDomain::MixedAlienHsl,
             Self::LoadedExposure => NeighborhoodDomain::ExposureLoadedPoint,
             Self::MaskedExposure => NeighborhoodDomain::ExposureMaskedPoint,
+            Self::MaskedMixedExposure=>NeighborhoodDomain::MaskedMixed(masked_mixed_source::Kind::Exposure),
+            Self::MaskedMixedInvertLinear=>NeighborhoodDomain::MaskedMixed(masked_mixed_source::Kind::InvertLinear),
+            Self::MaskedMixedInvertGamma=>NeighborhoodDomain::MaskedMixed(masked_mixed_source::Kind::InvertGamma),
+            Self::MaskedMixedBrightnessContrast=>NeighborhoodDomain::MaskedMixed(masked_mixed_source::Kind::BrightnessContrast),
+            Self::MaskedMixedGeglLevels=>NeighborhoodDomain::MaskedMixed(masked_mixed_source::Kind::Levels),
             Self::MaskedInvertLinear=>NeighborhoodDomain::InvertLinearMaskedPoint,
             Self::MaskedInvertGamma=>NeighborhoodDomain::InvertGammaMaskedPoint,
             Self::MaskedBrightnessContrast=>NeighborhoodDomain::BrightnessContrastMaskedPoint,
@@ -135,6 +143,7 @@ pub(crate) enum NeighborhoodDomain {
     MixedAlienHsl,
     ExposureLoadedPoint,
     ExposureMaskedPoint,
+    MaskedMixed(masked_mixed_source::Kind),
     InvertLinearMaskedPoint,
     InvertGammaMaskedPoint,
     BrightnessContrastMaskedPoint,
@@ -622,9 +631,14 @@ pub(crate) fn qualified_stack<P>(
     version: u32,
     domain: NeighborhoodDomain,
 ) -> Result<FilterStack, IoError> {
-    qualified_stack_with_activation(effects, masks, owner, first_id, version, domain, StackActivation::Strict)
+    qualified_stack_with_activation(effects, masks, owner, first_id, version, domain, StackActivation::Strict,None)
 }
 /// Source activity is independent only for the sealed mixed-root family.
+pub(crate) fn qualified_ordered_masked_filtered_flat_source_stack<P>(effects:&[Effect<P>],masks:&[Option<ItemRef>],domains:&[NeighborhoodDomain],owner:ItemRef,first_id:u64,version:u32)->Result<FilterStack,IoError>{
+ if effects.is_empty()||effects.len()>1024||effects.len()!=domains.len(){return Err(IoError::Unsupported("masked mixed ordered domains".into()));}
+ let first=*domains.first().ok_or_else(||IoError::Unsupported("masked mixed domain".into()))?;
+ qualified_stack_with_activation(effects,masks,owner,first_id,version,first,StackActivation::OrderedMaskedFilteredFlatSource,Some(domains))
+}
 /// Existing singleton envelope functions remain enabled-only. No input is
 /// normalized and all typed arguments and complete Replace fields stay exact.
 pub(crate) fn filtered_flat_source_envelope<P>(effect:&Effect<P>)->bool {
@@ -669,12 +683,12 @@ pub(crate) fn qualified_ordered_filtered_flat_source_stack<P>(effects:&[Effect<P
     if effects.is_empty()||effects.len()>4096{return Err(IoError::Unsupported("mixed ordered source count".into()));}
     let family=effects.first().and_then(filtered_flat_source_family).ok_or_else(||IoError::Unsupported("mixed ordered source family".into()))?;
     if effects.len()==1{return qualified_filtered_flat_source_stack(effects,masks,owner,first_id,version,NeighborhoodDomain::PointReplace(family));}
-    qualified_stack_with_activation(effects,masks,owner,first_id,version,NeighborhoodDomain::PointReplace(family),StackActivation::OrderedFilteredFlatSource)
+    qualified_stack_with_activation(effects,masks,owner,first_id,version,NeighborhoodDomain::PointReplace(family),StackActivation::OrderedFilteredFlatSource,None)
 }
 pub(crate) fn qualified_ordered_filtered_flat_opacity_source_stack<P>(effects:&[Effect<P>],masks:&[Option<ItemRef>],owner:ItemRef,first_id:u64,version:u32)->Result<FilterStack,IoError>{
     if effects.is_empty()||effects.len()>4096{return Err(IoError::Unsupported("mixed opacity source count".into()));}
     let family=effects.first().and_then(filtered_flat_opacity_source::family).ok_or_else(||IoError::Unsupported("mixed opacity source family".into()))?;
-    qualified_stack_with_activation(effects,masks,owner,first_id,version,NeighborhoodDomain::PointReplace(family),StackActivation::OrderedFilteredFlatOpacitySource)
+    qualified_stack_with_activation(effects,masks,owner,first_id,version,NeighborhoodDomain::PointReplace(family),StackActivation::OrderedFilteredFlatOpacitySource,None)
 }
 /// Called only after the mixed original source has been independently admitted.
 /// Domain and actual operation must agree; no other mapper acquires this policy.
@@ -698,10 +712,10 @@ pub(crate) fn qualified_filtered_flat_source_stack<P>(
     if effects.len()!=1 || effects.first().is_none_or(|e|e.operation!=operation||!filtered_flat_source_envelope(e)){
         return Err(IoError::Unsupported("mixed source filter envelope".into()));
     }
-    qualified_stack_with_activation(effects,masks,owner,first_id,version,domain,StackActivation::FilteredFlatSource)
+    qualified_stack_with_activation(effects,masks,owner,first_id,version,domain,StackActivation::FilteredFlatSource,None)
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum StackActivation { Strict, OwnedNeighborhood, FilteredFlatSource, OrderedFilteredFlatSource, OrderedFilteredFlatOpacitySource }
+enum StackActivation { Strict, OwnedNeighborhood, FilteredFlatSource, OrderedFilteredFlatSource, OrderedFilteredFlatOpacitySource,OrderedMaskedFilteredFlatSource }
 /// Private owned-only activation mapping. The original whole-file source gate,
 /// shared preparation and exact current recipe are independent requirements.
 /// Only a successfully admitted sealed owned neighborhood route calls this;
@@ -717,12 +731,12 @@ pub(crate) fn qualified_owned_neighborhood_stack<P>(
     {
         return Err(IoError::Unsupported("owned neighborhood activation domain".into()));
     }
-    qualified_stack_with_activation(effects, masks, owner, first_id, version, domain, StackActivation::OwnedNeighborhood)
+    qualified_stack_with_activation(effects, masks, owner, first_id, version, domain, StackActivation::OwnedNeighborhood,None)
 }
 #[allow(clippy::too_many_arguments)]
 fn qualified_stack_with_activation<P>(
     effects: &[Effect<P>], masks: &[Option<ItemRef>], owner: ItemRef,
-    first_id: u64, version: u32, domain: NeighborhoodDomain, activation: StackActivation,
+    first_id: u64, version: u32, domain: NeighborhoodDomain, activation: StackActivation, per_node_domains:Option<&[NeighborhoodDomain]>,
 ) -> Result<FilterStack, IoError> {
     // This observational envelope is Box-only; raw fields never authorize
     // another operation, filter opacity or ordinary composition mode.
@@ -730,7 +744,7 @@ fn qualified_stack_with_activation<P>(
         return Err(IoError::Unsupported("observational Box source envelope".into()));
     }
     let opacity_source=activation==StackActivation::OrderedFilteredFlatOpacitySource;
-    let ordered_mixed=matches!(activation,StackActivation::OrderedFilteredFlatSource|StackActivation::OrderedFilteredFlatOpacitySource);
+    let ordered_mixed=matches!(activation,StackActivation::OrderedFilteredFlatSource|StackActivation::OrderedFilteredFlatOpacitySource|StackActivation::OrderedMaskedFilteredFlatSource);
     let mixed_source=ordered_mixed || activation==StackActivation::FilteredFlatSource;
     let mixed_envelope=|effect:&Effect<P>| if opacity_source {filtered_flat_opacity_source::envelope(effect)}else{filtered_flat_source_envelope(effect)};
     let generic_replace = matches!(domain, NeighborhoodDomain::PointReplace(_));
@@ -745,7 +759,7 @@ fn qualified_stack_with_activation<P>(
     nodes.try_reserve_exact(effects.len()).map_err(|_| IoError::Unsupported("XCF filter allocation failed".into()))?;
     if ordered_mixed && nodes.capacity().checked_mul(std::mem::size_of::<photocraft_doc::xcf_filters::FilterNode>()).is_none_or(|n|effects.len().checked_mul(1024).is_none_or(|cap|n>cap)) {return Err(IoError::Unsupported("mixed ordered node capacity".into()));}
     for (ordinal, effect) in effects.iter().enumerate() {
-        let domain=if ordered_mixed {(if opacity_source {filtered_flat_opacity_source::family(effect)}else{filtered_flat_source_family(effect)}).ok_or_else(||unsupported(effect,"mixed ordered family"))?.domain()}else{domain};
+        let domain=if let Some(domains)=per_node_domains{let d=*domains.get(ordinal).ok_or_else(||unsupported(effect,"masked mixed domain ordinal"))?;if let NeighborhoodDomain::PointReplace(f)=d{f.domain()}else{d}}else if ordered_mixed {(if opacity_source {filtered_flat_opacity_source::family(effect)}else{filtered_flat_source_family(effect)}).ok_or_else(||unsupported(effect,"mixed ordered family"))?.domain()}else{domain};
         let source = &effect.state;
         let point_stack = domain == NeighborhoodDomain::PointStackEdits;
         let invert_linear = domain == NeighborhoodDomain::InvertLinearPrecision;
@@ -774,6 +788,9 @@ fn qualified_stack_with_activation<P>(
             || mixed_stock_source::kind(effect)!=Some(if mixed_temperature{mixed_stock_source::Kind::Temperature}else if mixed_sepia{mixed_stock_source::Kind::Sepia}else if mixed_alien_hsl{mixed_stock_source::Kind::AlienHsl}else{mixed_stock_source::Kind::AlienRgb})) {
             return Err(unsupported(effect,"mixed stock RGB source identity"));
         }
+        let masked_mixed_kind=if let NeighborhoodDomain::MaskedMixed(k)=domain{Some(k)}else{None};
+        let masked_mixed=masked_mixed_kind.is_some();
+        if masked_mixed&&(!generic_replace||activation!=StackActivation::OrderedMaskedFilteredFlatSource||!filtered_flat_source_envelope(effect)||masked_mixed_source::parameters(effect)!=masked_mixed_kind){return Err(unsupported(effect,"masked mixed exact leaf"));}
         let masked_scalar_kind=match domain{
             NeighborhoodDomain::InvertLinearMaskedPoint=>Some(crate::xcf_point_replace_source::masked_stock_source::Kind::InvertLinear),
             NeighborhoodDomain::InvertGammaMaskedPoint=>Some(crate::xcf_point_replace_source::masked_stock_source::Kind::InvertGamma),
@@ -863,12 +880,12 @@ fn qualified_stack_with_activation<P>(
         if effect.operation == "gegl:color-exchange" && (!color_exchange || !generic_replace || effects.len() != 1) {
             return Err(unsupported(effect, "unqualified Color Exchange source"));
         }
-        if effect.operation == "gegl:invert-gamma" && !mixed_invert_gamma && !masked_scalar
+        if effect.operation == "gegl:invert-gamma" && !mixed_invert_gamma && !masked_scalar && !masked_mixed
             && (!invert_gamma || !generic_replace || effects.len() != 1 || effect.version.as_deref() != Some("0:0") || !effect.arguments.is_empty())
         {
             return Err(unsupported(effect, "unqualified zero-argument Invert Gamma source"));
         }
-        if effect.operation == "gegl:invert-linear" && !mixed_invert_linear && !masked_scalar
+        if effect.operation == "gegl:invert-linear" && !mixed_invert_linear && !masked_scalar && !masked_mixed
             && (!matches!(domain, NeighborhoodDomain::InvertLinearPrecision | NeighborhoodDomain::PointStackEdits)
                 || effect.version.as_deref() != Some("0:0")
                 || !effect.arguments.is_empty()
@@ -1003,10 +1020,10 @@ fn qualified_stack_with_activation<P>(
         if exposure_black_precision && (effect.operation != "gegl:exposure" || effects.len() != 1 || effect.version.as_deref() != Some("1:0")) {
             return Err(unsupported(effect, "unqualified Exposure black-level owner or version"));
         }
-        if effect.operation == "gegl:levels" && !mixed_gegl_levels && !masked_scalar && (!gegl_levels_precision || effects.len() != 1 || effect.version.as_deref() != Some("0:0")) {
+        if effect.operation == "gegl:levels" && !mixed_gegl_levels && !masked_scalar && !masked_mixed && (!gegl_levels_precision || effects.len() != 1 || effect.version.as_deref() != Some("0:0")) {
             return Err(unsupported(effect, "unqualified GEGL Levels owner or version"));
         }
-        if effect.operation == "gegl:brightness-contrast" && !mixed_brightness && !masked_scalar && (!brightness_precision || effects.len() != 1 || effect.version.as_deref() != Some("0:0")) {
+        if effect.operation == "gegl:brightness-contrast" && !mixed_brightness && !masked_scalar && !masked_mixed && (!brightness_precision || effects.len() != 1 || effect.version.as_deref() != Some("0:0")) {
             return Err(unsupported(effect, "unqualified Brightness/Contrast owner or version"));
         }
         if clip && (domain != NeighborhoodDomain::RgbClipHdr || effects.len() != 1 || effect.version.as_deref() != Some("0:0")) {
@@ -1178,8 +1195,8 @@ fn qualified_stack_with_activation<P>(
         if color_to_alpha {
             arguments = color_to_alpha_arguments(effect)?;
         }
-        if masked_scalar {
-            crate::xcf_point_replace_source::masked_stock_source::parameters(effect).ok_or_else(||unsupported(effect,"masked singleton4 arguments"))?;
+        if masked_scalar || masked_mixed {
+            if masked_mixed{masked_mixed_source::parameters(effect).ok_or_else(||unsupported(effect,"masked mixed arguments"))?;}else{crate::xcf_point_replace_source::masked_stock_source::parameters(effect).ok_or_else(||unsupported(effect,"masked singleton4 arguments"))?;}
             let cap=effect.arguments.len().checked_mul(2).ok_or_else(||unsupported(effect,"masked singleton4 capacity"))?;
             if arguments.capacity()>cap||numeric.capacity()>cap{return Err(unsupported(effect,"masked singleton4 capacity"));}
             for argument in &effect.arguments{
@@ -1250,7 +1267,7 @@ fn qualified_stack_with_activation<P>(
         for argument in effect
             .arguments
             .iter()
-            .filter(|_| !levels && !color_balance && !mixed_stock && !masked_scalar && !masked_exposure && !mixed_affine && !mixed_invert && !loaded_exposure && !mixed_exposure && !hue_chroma && !vibrance && !semi_flatten && !color_exchange && !color_overlay && !color_to_alpha && !component_extract && !alpha_clip)
+            .filter(|_| !levels && !color_balance && !mixed_stock && !masked_mixed && !masked_scalar && !masked_mixed && !masked_exposure && !mixed_affine && !mixed_invert && !loaded_exposure && !mixed_exposure && !hue_chroma && !vibrance && !semi_flatten && !color_exchange && !color_overlay && !color_to_alpha && !component_extract && !alpha_clip)
         {
             if alien_map {
                 let (value, scalar) = match (&*argument.name, &argument.value) {
@@ -1594,7 +1611,7 @@ fn qualified_stack_with_activation<P>(
             .map_err(|_| unsupported(effect, "Red Eye typed parameters"))?;
         } else if video {
             photocraft_compose::gimp_video_degradation::typed_arguments(&arguments).map_err(|_| unsupported(effect, "Video Degradation typed schema"))?;
-        } else if mixed_stock || masked_scalar || masked_exposure || mixed_affine || loaded_exposure || mixed_invert || mixed_exposure || hue_chroma || vibrance || semi_flatten || color_rotate || channel_mixer || mono_signed || color_exchange || color_overlay || color_to_alpha || component_extract || alpha_clip {
+        } else if mixed_stock || masked_mixed || masked_scalar || masked_exposure || mixed_affine || loaded_exposure || mixed_invert || mixed_exposure || hue_chroma || vibrance || semi_flatten || color_rotate || channel_mixer || mono_signed || color_exchange || color_overlay || color_to_alpha || component_extract || alpha_clip {
             // The dedicated typed constructor already validated every name.
         } else if pixelize {
             if arguments.len() != 8 {
@@ -1698,6 +1715,8 @@ fn qualified_stack_with_activation<P>(
                     photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH
                 } else if mixed_alien_rgb {
                     photocraft_compose::ALIEN_MAP_RGB_MIXED_EPOCH
+                } else if let Some(kind)=masked_mixed_kind {
+                    kind.epoch()
                 } else if let Some(kind)=masked_scalar_kind {
                     kind.epoch()
                 } else if masked_exposure {
@@ -1823,6 +1842,8 @@ fn qualified_stack_with_activation<P>(
                     photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH
                 } else if mixed_alien_rgb {
                     photocraft_compose::ALIEN_MAP_RGB_MIXED_EPOCH
+                } else if let Some(kind)=masked_mixed_kind {
+                    kind.epoch()
                 } else if let Some(kind)=masked_scalar_kind {
                     kind.epoch()
                 } else if masked_exposure {

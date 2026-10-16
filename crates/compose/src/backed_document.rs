@@ -29,6 +29,7 @@ enum DocumentCompositor<'a> {
     ThresholdAlpha(crate::backed_threshold_alpha_document::PreparedBackedThresholdAlphaDocument<'a>),
     Point(crate::backed_stock_point_document::PreparedBackedStockPointDocument<'a>),
     FilteredFlatPoint(crate::backed_filtered_flat_point_document::PreparedBackedFilteredFlatPointDocument<'a>),
+    MaskedFilteredFlatPoint(crate::backed_masked_filtered_flat_point_document::PreparedBackedMaskedFilteredFlatPointDocument<'a>),
     Neighborhood(crate::backed_neighborhood_document::PreparedBackedNeighborhoodDocument<'a>),
     BoxBlur(crate::backed_box_document::PreparedBackedBoxDocument<'a>),
 }
@@ -86,6 +87,26 @@ impl<'a> PreparedBackedDocument<'a> {
         limits: NormalBandLimits,
         control: &ReadControl<'_>,
     ) -> Result<Self, BackedNormalError> {
+        if owner.is_readonly_masked_filtered_flat_point_storage() {
+            control.check(1).map_err(BackedNormalError::Backing)?;
+            let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
+            let known = photocraft_cms::Builtin::Srgb.profile();
+            control.check(1).map_err(BackedNormalError::Backing)?;
+            let supplied = profile.encoded_bytes().ok_or(BackedNormalError::Unsupported("masked filtered flat requires retained implicit basis"))?;
+            let expected = known.encoded_bytes().ok_or(BackedNormalError::Unsupported("masked filtered flat implicit basis encoding missing"))?;
+            if supplied.len() > 65536 || supplied.len() != expected.len() || profile.color_space != photocraft_cms::ColorSpace::Rgb || profile.channels() != 3 {
+                return Err(BackedNormalError::Unsupported("masked filtered flat implicit basis mismatch"));
+            }
+            control.check((supplied.len() as u64).checked_mul(2).ok_or(BackedNormalError::Invalid("masked filtered flat basis size"))?)
+                .map_err(BackedNormalError::Backing)?;
+            if supplied != expected {
+                return Err(BackedNormalError::Unsupported("masked filtered flat implicit basis mismatch"));
+            }
+            let prepared = crate::backed_masked_filtered_flat_point_document::PreparedBackedMaskedFilteredFlatPointDocument::new(owner, limits, control)?;
+            let bounds = prepared.bounds();
+            control.check(0).map_err(BackedNormalError::Backing)?;
+            return Ok(Self { stack: DocumentCompositor::MaskedFilteredFlatPoint(prepared), limits, quota: owner.quota().clone(), bounds, _index: index });
+        }
         if owner.is_readonly_filtered_flat_point_storage() {
             control.check(1).map_err(BackedNormalError::Backing)?;
             // The supplied implicit basis is a caller contract. The new factory
@@ -441,6 +462,7 @@ impl<'a> PreparedBackedDocument<'a> {
             DocumentCompositor::ThresholdAlpha(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::Point(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::FilteredFlatPoint(prepared) => prepared.render_band(rect, control),
+            DocumentCompositor::MaskedFilteredFlatPoint(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::Neighborhood(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::BoxBlur(prepared) => prepared.render_band(rect, control),
         }

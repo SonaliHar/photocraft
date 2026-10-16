@@ -17,7 +17,7 @@ pub(super) enum EditDomain {
 pub(super) fn validate_owner(owner: &AccountedDocument, edit: AccountedEdit<'_>, c: &ReadControl<'_>) -> Result<EditDomain, BackingError> {
     // Actual Point classes admit only the structural compound metadata plan.
     // This runs before generic no-op/history admission and grants no recipe.
-    if owner.is_readonly_filtered_flat_point_storage() {
+    if owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage() {
         filtered_flat_readonly::metadata::validate(owner, edit, c)?;
         return Ok(EditDomain::FilteredFlatMetadata);
     }

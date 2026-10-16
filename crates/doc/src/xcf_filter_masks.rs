@@ -6,6 +6,10 @@ use crate::{
 };
 use photocraft_color::{ColorMode, try_read_sample_f64};
 use photocraft_raster::{Interrupt, Surface};
+#[path = "xcf_filter_mask_coverage_set.rs"]
+mod coverage_set;
+pub(crate) use coverage_set::CoverageSetProof;
+pub use coverage_set::{MaskCoverageSetLease, CheckedFilterMaskCoverageSet, FilterMaskCoverageClass, MaskCoverageSetLimits, MaskCoverageSetRequirements};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FilterMask {
@@ -69,7 +73,7 @@ impl FilterMask {
             interrupt.check().map_err(|_| photocraft_raster::backing::BackingError::Cancelled)
         })
     }
-    fn scan_checked_f32_coverage(
+    pub(super) fn scan_checked_f32_coverage(
         &self,
         check: &dyn Fn(u64) -> Result<(), photocraft_raster::backing::BackingError>,
     ) -> Result<CheckedFilterMaskCoverage<'_>, photocraft_raster::backing::BackingError> {

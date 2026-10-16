@@ -41,7 +41,14 @@ pub(super) fn map<P: MappingPlane>(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn map_masked_source<P:MappingPlane>(drawable:&mut Drawable<P>,owner:photocraft_doc::item_identity::ItemRef,first_filter:u64,next_mask:&mut u64,state:&mut photocraft_doc::XcfState,budget:&mut Budget,ctl:&Interrupt<'_>,canvas:Rect,source_budget:&photocraft_xcf::Budget<'_>)->Result<Vec<Option<photocraft_doc::item_identity::ItemRef>>,IoError>{
     if drawable.effects.len()!=1{return Err(unsupported(drawable,"masked source singleton mapper"));}
-    map_inner(drawable,owner,first_filter,next_mask,state,budget,ctl,false,false,false,false,false,Some(canvas),None,Some(source_budget))
+    map_inner(drawable,owner,first_filter,next_mask,state,budget,ctl,false,false,false,false,false,Some(canvas),None,Some((source_budget,true)))
+}
+/// New masked-mixed purpose only. Old singleton nonempty and generic empty
+/// entries retain their contracts; the complete original plan caps precede it.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn map_masked_filtered_flat_source<P:MappingPlane>(drawable:&mut Drawable<P>,owner:photocraft_doc::item_identity::ItemRef,first_filter:u64,next_mask:&mut u64,state:&mut photocraft_doc::XcfState,budget:&mut Budget,ctl:&Interrupt<'_>,canvas:Rect,source_budget:&photocraft_xcf::Budget<'_>)->Result<Vec<Option<photocraft_doc::item_identity::ItemRef>>,IoError>{
+ if drawable.effects.len()>1024{return Err(unsupported(drawable,"masked mixed perroot nodes"));}
+ map_inner(drawable,owner,first_filter,next_mask,state,budget,ctl,false,false,false,false,false,Some(canvas),None,Some((source_budget,false)))
 }
 #[allow(clippy::too_many_arguments)]
 fn map_inner<P: MappingPlane>(
@@ -59,7 +66,7 @@ fn map_inner<P: MappingPlane>(
     exposure_geometry_mask: bool,
     point_replace_canvas: Option<Rect>,
     observational_box_canvas:Option<Rect>,
-    coverage:Option<&photocraft_xcf::Budget<'_>>,
+    coverage:Option<(&photocraft_xcf::Budget<'_>,bool)>,
 ) -> Result<Vec<Option<photocraft_doc::item_identity::ItemRef>>, IoError> {
     use photocraft_doc::{
         item_identity::{FilterId, ItemRef, MaskId},
@@ -81,6 +88,7 @@ fn map_inner<P: MappingPlane>(
     let owner_bounds = if needs_owner_bounds { Some(bounds(drawable)?) } else { None };
     let mut mapped = Vec::new();
     mapped.try_reserve_exact(drawable.effects.len()).map_err(|_| unsupported(drawable, "filter mask allocation failed"))?;
+    if coverage.is_some_and(|(_,required)|!required)&&mapped.capacity()>drawable.effects.len().checked_mul(2).ok_or_else(||unsupported(drawable,"masked mixed map capacity"))?{return Err(unsupported(drawable,"masked mixed map capacity"));}
     for (ordinal, effect) in drawable.effects.iter_mut().enumerate() {
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let Some(mask) = &mut effect.mask else {
@@ -131,13 +139,13 @@ fn map_inner<P: MappingPlane>(
         let filter =
             FilterId(u64::try_from(ordinal).ok().and_then(|n| first_filter.checked_add(n)).ok_or_else(|| unsupported(mask, "filter identity overflow"))?);
         let current = photocraft_doc::xcf_filter_masks::FilterMask { id, owner: filter, surface, bounds: rect };
-        if let Some(source_budget)=coverage {
+        if let Some((source_budget,require_nonempty))=coverage {
             // A local callback preserves this non-Sync original ledger. Polls
             // also debit one bookkeeping unit so its parent observer checks
             // the original deadline/cancellation even after payload prepay.
             let work=|units:u64|source_budget.consume_work(units.max(1),"masked source physical coverage").map_err(|e|if e.kind==ErrorKind::Cancelled{photocraft_raster::backing::BackingError::Cancelled}else{photocraft_raster::backing::BackingError::Work});
             let proof=current.validate_checked_f32_coverage_with_local_work(ctl,&work).map_err(crate::xcf_point_replace_source::masked_exposure_source::coverage_error)?;
-            if !proof.raw_nonempty(){return Err(unsupported(mask,"masked source requires raw nonempty field"));}
+            if require_nonempty && !proof.raw_nonempty() || !require_nonempty && !proof.raw_nonempty() && !proof.logical_all_byte_zero(){return Err(unsupported(mask,"masked source mask classification"));}
         }else if !current.is_empty_selection_with(ctl).map_err(|e| if e.code == "cancelled" { IoError::Cancelled } else { unsupported(mask, e) })? {
             return Err(unsupported(mask, "nonempty filter selection mask evaluation is unqualified"));
         }

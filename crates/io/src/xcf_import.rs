@@ -69,6 +69,9 @@ mod staged_filtered_flat;
 #[path = "xcf_import/owned_filtered_flat_source.rs"]
 mod owned_filtered_flat_source;
 pub use owned_filtered_flat_source::OwnedFilteredFlatXcfImport;
+#[path="xcf_import/owned_masked_filtered_flat_source.rs"]
+mod owned_masked_filtered_flat_source;
+pub use owned_masked_filtered_flat_source::OwnedMaskedFilteredFlatXcfImport;
 #[path = "xcf_import/owned_point_source.rs"]
 mod owned_point_source;
 pub use owned_point_source::OwnedPointXcfImport;
@@ -1677,6 +1680,11 @@ impl<'b, 'a> photocraft_compose::gimp_render::PreparationBudget for SharedPrepar
     }
 }
 
+impl<'b,'a> photocraft_compose::backed_masked_filtered_flat_point_context::MaskedFilterPreparationBudget for SharedPreparation<'b,'a>{
+ fn reserve_filter_mask_proof_index(&mut self,bytes:u64)->photocraft_compose::gimp_composite::Result<Self::Lease>{
+  self.shared.reserve(photocraft_xcf::BudgetKind::Index,bytes,"masked mixed source proof index").map_err(|error|{let raster=if error.kind==ErrorKind::Cancelled{photocraft_raster::RasterInputError::Cancelled}else{photocraft_raster::RasterInputError::LimitExceeded};self.failure=Some(error);raster.into()})
+ }
+}
 // Preserve the genuine default mapping seam used by staged/held-source imports.
 fn map_accounted<P: MappingPlane,S>(name:&str,file:XcfFile<P>,ctl:&Interrupt<'_>,resident:usize,shared:Option<&dyn Fn(usize)->Result<(),IoError>>,preparation:Option<(&photocraft_xcf::Budget<'_>,S)>)->Result<(ImportResult,usize),IoError>{
     map_accounted_with_authorized_font(name,file,ctl,resident,shared,preparation,None)
@@ -1693,6 +1701,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
 ) -> Result<(ImportResult, usize), IoError> {
     let admission::AdmissionDomains {
         filtered_flat_domain,
+        masked_filtered_flat_domain,
         filtered_flat_opacity_domain,
         observed_box_geometry_domain,
         owned_assigned_box_domain,
@@ -1732,6 +1741,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
     } = P::admissions(&file, ctl, preparation.as_ref().map(|(budget, _)| *budget))?;
     if filtered_flat_domain && filtered_flat_opacity_domain {return Err(IoError::Unsupported("conflicting mixed source purpose".into()));}
     let filtered_flat_source_domain=filtered_flat_domain || filtered_flat_opacity_domain;
+    let any_filtered_flat_source=filtered_flat_source_domain||masked_filtered_flat_domain;
     let masked_exposure_source=point_replace_domain==Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(crate::xcf_filters::PointReplaceFamily::MaskedExposure));
     let masked_scalar_source=matches!(point_replace_domain,Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(family)) if crate::xcf_point_replace_source::masked_stock_source::selected(family));
     let selected_masked_point_source=masked_exposure_source||masked_scalar_source;
@@ -1888,8 +1898,10 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         } else {
             modified_context.as_ref().map(|context| crate::xcf_modified_sources::validate_modified_source_with_storage(d, context, ctl)).transpose()?
         };
+        let masked_domains=if masked_filtered_flat_domain{Some(staged_source::staged_masked_filtered_flat::domains(d,file.sample,file.width,file.height,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"masked mixed domain accounting"))?)?)}else{None};
+        let masked_root_domain=masked_domains.as_ref().and_then(|v|v.values.first().copied());
         let filtered_root_domain=if filtered_flat_opacity_domain {Some(staged_filtered_flat::opacity::root_domain(d,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered flat opacity accounting"))?)?)} else if filtered_flat_domain {Some(staged_filtered_flat::root_domain(d,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered flat accounting"))?)?)} else {None};
-        let point_replace_domain=filtered_root_domain.flatten().or(point_replace_domain);
+        let point_replace_domain=masked_root_domain.or(filtered_root_domain.flatten()).or(point_replace_domain);
         let effects_candidate = !d.effects.is_empty()
             && (point_replace_domain.is_some()
                 || owned_point_domain.is_some()
@@ -2083,8 +2095,9 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                         .checked_add(effect.icon.len())?
                         .checked_add(effect.operation.len())?
                         .checked_add(effect.version.as_ref().map_or(0, String::len))?
-                        .checked_add(if filtered_flat_source_domain {crate::xcf_filters::mixed_stock_source::mapping_bytes(effect)?}else{0})?
+                        .checked_add(if any_filtered_flat_source {crate::xcf_filters::mixed_stock_source::mapping_bytes(effect)?}else{0})?
                         .checked_add(if masked_scalar_source {crate::xcf_point_replace_source::masked_stock_source::mapping_bytes(effect)?}else{0})?
+                        .checked_add(if masked_filtered_flat_domain && crate::xcf_filters::masked_mixed_source::parameters(effect).is_some(){crate::xcf_point_replace_source::masked_stock_source::mapping_bytes(effect)?}else{0})?
                         .checked_add(effect.arguments.iter().try_fold(0_usize, |n, a| {
                             n.checked_add(128)?.checked_add(a.name.len())?.checked_add(if let photocraft_xcf::ArgumentValue::Config(text) = &a.value {
                                 text.len().checked_mul(8)?
@@ -2096,12 +2109,15 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 .ok_or_else(|| unsupported(d, "filter metadata overflow"))?;
             budget.charge(metadata)?;
             let canvas_group_mask = gaussian_group_domain && d.group;
-            if filtered_flat_source_domain {
+            if any_filtered_flat_source {
                 let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered mask accounting"))?;
                 staged_filtered_flat::work(ctl,source_budget,(d.effects.len() as u64).checked_mul(8).ok_or_else(||unsupported(d,"filtered mask count work"))?)?;
                 effect_mask_mapping::preflight_filtered_root(d,ctl)?;
             }
-            let masks = if selected_masked_point_source {
+            let masks = if masked_filtered_flat_domain {
+                let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"masked mixed mask accounting"))?;
+                effect_mask_mapping::map_masked_filtered_flat_source(d,owner,next_filter_id,&mut next_mask_id,&mut state,&mut budget,ctl,doc.bounds(),source_budget)?
+            }else if selected_masked_point_source {
                 let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"masked source structural accounting"))?;
                 effect_mask_mapping::map_masked_source(d,owner,next_filter_id,&mut next_mask_id,&mut state,&mut budget,ctl,doc.bounds(),source_budget)?
             }else{effect_masks(
@@ -2229,7 +2245,9 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
             } else {
                 crate::xcf_filters::NeighborhoodDomain::Unqualified
             };
-            let stack = if filtered_flat_opacity_domain {
+            let stack = if masked_filtered_flat_domain {
+                crate::xcf_filters::qualified_ordered_masked_filtered_flat_source_stack(&d.effects,&masks,&masked_domains.as_ref().ok_or_else(||unsupported(d,"masked mixed domain plan"))?.values,owner,next_filter_id,file.version)?
+            }else if filtered_flat_opacity_domain {
                 crate::xcf_filters::qualified_ordered_filtered_flat_opacity_source_stack(&d.effects,&masks,owner,next_filter_id,file.version)?
             } else if filtered_flat_domain {
                 crate::xcf_filters::qualified_ordered_filtered_flat_source_stack(&d.effects,&masks,owner,next_filter_id,file.version)?
@@ -2583,7 +2601,13 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         state.selection.active = state.selection.selected.first().copied();
     }
     doc.xcf_state = Some(state);
-    let structural=if selected_masked_point_source {
+    let structural=if masked_filtered_flat_domain {
+        let b=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||IoError::Unsupported("masked mixed final accounting".into()))?;
+        let work=|units:u64|b.consume_work(units.max(1),"masked mixed final coverage").map_err(|e|if e.kind==ErrorKind::Cancelled{photocraft_raster::backing::BackingError::Cancelled}else{photocraft_raster::backing::BackingError::Work});
+        let reserve=|n:u64|b.reserve(photocraft_xcf::BudgetKind::Index,n,"masked mixed source proof index").map(staged_source::staged_masked_filtered_flat::CoverageLease).map_err(|e|if e.kind==ErrorKind::Cancelled{photocraft_raster::backing::BackingError::Cancelled}else{photocraft_raster::backing::BackingError::Quota});
+        let set=doc.checked_f32_filter_mask_coverages_with_reservation(photocraft_doc::xcf_filter_masks::MaskCoverageSetLimits::STANDARD,ctl,&work,&reserve).map_err(crate::xcf_point_replace_source::masked_exposure_source::coverage_error)?;
+        doc.validate_xcf_state_with_checked_filter_masks(&set,ctl)
+    }else if selected_masked_point_source {
         let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||IoError::Unsupported("masked source final structural accounting".into()))?;
         // Keep every debit and zero-work poll on the same original ledger;
         // the positive poll fee also invokes its original parent observer.
@@ -2628,6 +2652,10 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 .map(accounting_error)
                 .unwrap_or_else(|| if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF rendering consumer: {error}")) }));
         }
+    } else if masked_filtered_flat_domain {
+        let(shared,source_lease)=preparation.ok_or_else(||IoError::Unsupported("masked mixed Source preparation accounting".into()))?;
+        let mut adapter=SharedPreparation{shared,failure:None};
+        if let Err(error)=photocraft_compose::backed_masked_filtered_flat_point_context::LeasedMaskedFilteredFlatPointPipeline::new_budgeted(&doc,ctl,&mut adapter,source_lease){return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("masked mixed Source preparation: {error}"))}));}
     } else if P::requires_budgeted_filtered_flat_preparation(filtered_flat_source_domain) {
         // One real multi-root document, one shared source ledger and no leaf
         // singleton facade or filtered native intermediary. The mandatory

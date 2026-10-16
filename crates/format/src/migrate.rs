@@ -20,7 +20,12 @@ pub(crate) const STEPS: &[Step] = &[
     stored_color,
     current_storage_hint,
     point_f32_coverage,
+    masked_filtered_flat,
 ];
+// 11 -> 12: new explicit structural handoff only; invent no intent.
+fn masked_filtered_flat(value:&mut Value)->Result<()> {
+    if value.get("document").and_then(Value::as_object).is_none(){return Err(FormatError::corrupt("manifest has no document object"))}Ok(())
+}
 // 10 -> 11: a new closed hint value; absence and old values remain exact.
 fn point_f32_coverage(value: &mut Value) -> Result<()> {
     if value.get("document").and_then(Value::as_object).is_none() {

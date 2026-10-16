@@ -422,6 +422,14 @@ impl XcfState {
         control: &photocraft_raster::Interrupt<'_>,
         selected: Option<&crate::xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,
     ) -> Result<()> {
+        self.validate_with_filter_mask_selection(doc, control, selected, None)
+    }
+    pub(crate) fn validate_with_filter_mask_selection(
+        &self, doc: &Document, control: &photocraft_raster::Interrupt<'_>,
+        selected: Option<&crate::xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,
+        set: Option<&dyn crate::xcf_filter_masks::CoverageSetProof>,
+    ) -> Result<()> {
+        if set.is_some_and(|p| !p.matches(doc)) { return Err(invalid("filter_mask_identity")); }
         if let Some(proof) = selected {
             let mut found = 0usize;
             for mask in &self.filter_masks {
@@ -502,14 +510,15 @@ impl XcfState {
             }
         }
         let mut mask_ids = BTreeSet::new();
-        for mask in &self.filter_masks {
+        for (ordinal, mask) in self.filter_masks.iter().enumerate() {
             if control.cancelled() {
                 return Err(invalid("cancelled"));
             }
             if !mask_ids.insert(mask.id) {
                 return Err(invalid("filter_mask_identity"));
             }
-            if !selected.is_some_and(|proof| proof.covers(mask)) {
+            if set.is_some_and(|proof| !proof.covers(doc, ordinal, mask)) { return Err(invalid("filter_mask_identity")); }
+            if !selected.is_some_and(|proof| proof.covers(mask)) && set.is_none() {
                 mask.validate_with(control)?;
             }
         }

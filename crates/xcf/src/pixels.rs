@@ -8,6 +8,7 @@ pub(crate) fn plane<S: PlaneSink>(
     compression: Compression,
     sink: &mut S,
 ) -> Result<S::Plane, XcfError> {
+    sink.validate_plane_descriptor(&descriptor,&mut PlaneSinkControl{reader:r})?;
     let PlaneDescriptor { width: w, height: h, channels, source_sample: sample, .. } = descriptor;
     r.enter(p)?;
     let rw = r.u32()?;
@@ -35,6 +36,8 @@ pub(crate) fn plane<S: PlaneSink>(
     let out_sample = if sample == Sample::F16 { Sample::F32 } else { sample };
     let out_bpp = channels * out_sample.source_bytes();
     sink.begin(&descriptor, &mut PlaneSinkControl { reader: r })?;
+    let coverage_policy=sink.mask_coverage_policy(&descriptor);
+    if coverage_policy==MaskCoveragePolicy::CheckedF32Preimage && descriptor.role!=PlaneRole::Mask{return Err(r.error(ErrorKind::Unsupported,"checked coverage requires exact Mask descriptor"));}
     // One bounded tile scratch allocation, reused and charged along with the final plane.
     let max_tile = 64usize * 64 * bpp.max(out_bpp);
     // This is resident memory, not owned disk scratch (which wasm forbids).
@@ -179,6 +182,10 @@ pub(crate) fn plane<S: PlaneSink>(
         }
         let decoded = scratch.get(..pixels * out_bpp).ok_or_else(|| r.error(ErrorKind::Structure, "native tile extent"))?;
         if (descriptor.role != PlaneRole::Raster || descriptor.alpha) && matches!(out_sample, Sample::F32 | Sample::F64) {
+            if coverage_policy==MaskCoveragePolicy::CheckedF32Preimage{
+                let extra=(pixels as u64).checked_mul((out_sample.source_bytes()as u64).checked_add(16).ok_or_else(||r.error(ErrorKind::Limit,"checked coverage work"))?).ok_or_else(||r.error(ErrorKind::Limit,"checked coverage work"))?;
+                r.poll()?;if let Some(b)=r.budget{b.consume_work(extra,"checked preplanned mask coverage decode")?;}
+            }
             let width = out_sample.source_bytes();
             let coverage = if descriptor.role != PlaneRole::Raster { 0 } else { (channels - 1) * width };
             for (i, pixel) in decoded.chunks_exact(out_bpp).enumerate() {
@@ -191,7 +198,9 @@ pub(crate) fn plane<S: PlaneSink>(
                 } else {
                     f64::from(f32::from_ne_bytes(bytes.try_into().map_err(|_| r.error(ErrorKind::Structure, "coverage sample"))?))
                 };
-                if !value.is_finite() || ((descriptor.role != PlaneRole::Raster || !r.options.allow_finite_drawable_alpha) && !(0.0..=1.0).contains(&value)) {
+                if !value.is_finite() || if coverage_policy==MaskCoveragePolicy::CheckedF32Preimage{
+                    let converted=value as f32;value<0.||!converted.is_finite()||!(0.0..=1.0).contains(&converted)
+                }else{(descriptor.role != PlaneRole::Raster || !r.options.allow_finite_drawable_alpha) && !(0.0..=1.0).contains(&value)} {
                     return Err(r.error(ErrorKind::Unsupported, format!("{}: alpha/mask coverage outside 0..1", name.chars().take(80).collect::<String>())));
                 }
             }

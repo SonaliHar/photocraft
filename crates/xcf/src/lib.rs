@@ -18,6 +18,7 @@ mod text_layout;
 mod types;
 mod owned_backing_census;
 mod vector_layer;
+pub use container::{read_plain_source_metadata_with_budget,PlainSourceMetadata};
 pub use container::{
     BudgetDecodedImport, DecodeReservations, DecodedImport, SourceAccounting, SourceContainer, classify_container, decode_candidate,
     decode_candidate_with_budget, decode_with_resources,

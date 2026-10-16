@@ -121,7 +121,9 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
         Authority::HeldRoot => json!({"path":path,"name":name,"warnings":[]}),
     };
     control.check(1).map_err(|e| e.to_string())?;
-    if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) {
+    if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint) {
+        app.session.add_owned_native_masked_filtered_flat_archive(archive,name,Some(path),&control).map_err(|e|e.to_string())?;
+    } else if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) {
         app.session.add_owned_native_point_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
     } else if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) {
         app.session.add_owned_native_filtered_flat_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
@@ -175,7 +177,9 @@ pub(crate) fn adopt_bytes(
     let _reply_lease = archive.quota().reserve(QuotaKind::Index, 4096).map_err(|e| e.to_string())?;
     control.check(4096).map_err(|e| e.to_string())?;
     let reply = json!({"warnings":[]});
-    if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) {
+    if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint) {
+        app.session.add_owned_native_masked_filtered_flat_archive(archive,name,None,control).map_err(|e|e.to_string())?;
+    } else if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) {
         app.session.add_owned_native_point_archive(archive, name, None, control).map_err(|e| e.to_string())?;
     } else if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) {
         app.session.add_owned_native_filtered_flat_archive(archive, name, None, control).map_err(|e| e.to_string())?;

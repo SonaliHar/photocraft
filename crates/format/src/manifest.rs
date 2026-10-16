@@ -15,7 +15,7 @@ use photocraft_geom::{Affine, Rect, Size};
 use serde::{Deserialize, Serialize};
 
 /// Current manifest version written by this build.
-pub const FORMAT_VERSION: u32 = 11;
+pub const FORMAT_VERSION: u32 = 12;
 
 fn default_reader_version() -> u32 {
     1
@@ -27,6 +27,7 @@ fn default_reader_version() -> u32 {
 pub enum NativeCurrentStorageHint {
     FilteredFlatPoint,
     PointF32Coverage,
+    MaskedFilteredFlatPoint,
 }
 
 /// Hex-encoded BLAKE3 hash (64 chars).

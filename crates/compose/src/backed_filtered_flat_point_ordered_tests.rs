@@ -388,3 +388,6 @@ mod loaded_exposure;
 
 #[path = "backed_filtered_flat_point_opacity_tests.rs"]
 mod filter_opacity;
+
+#[path="backed_masked_filtered_flat_point_tests.rs"]
+mod masked_mixed;

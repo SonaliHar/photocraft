@@ -8,7 +8,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod accounted_commands;
-pub use accounted_commands::filtered_flat_filter_edit_candidate;
+pub use accounted_commands::{filtered_flat_filter_edit_candidate,masked_filtered_flat_filter_edit_candidate};
 pub mod accounted_filter_inspect;
 pub mod accounted_xcf_inspect;
 pub mod accounted_plain_xcf_inspect;

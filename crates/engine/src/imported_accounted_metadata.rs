@@ -75,7 +75,7 @@ pub(super) fn parse_rename<'a>(session:&Session,params:&'a Value,c:&ReadControl<
  if raw.contains('\0'){return Err(bad(cmd,"name must not contain NUL"))}
  let name=raw.trim();if name.is_empty(){return Err(bad(cmd,"nonempty name required"))}
  let state=session.active().ok_or(EngineError::NoDocument)?;
- if !state.doc.accounted().is_some_and(|o|o.is_readonly_filtered_flat_point_storage())||session.command_is_background()||session.command_has_pending_job()||session.has_jobs()||session.coalesce_request.is_some()||session.color_restrict.is_some()||state.coalesce.is_some()||state.floating.is_some()||state.doc.xcf_state.as_ref().is_some_and(|x|x.floating.is_some())||state.revision==u64::MAX{return Err(bad(cmd,"synchronous idle uncoalesced rename required"))}
+ if !state.doc.accounted().is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || o.is_readonly_masked_filtered_flat_point_storage())||session.command_is_background()||session.command_has_pending_job()||session.has_jobs()||session.coalesce_request.is_some()||session.color_restrict.is_some()||state.coalesce.is_some()||state.floating.is_some()||state.doc.xcf_state.as_ref().is_some_and(|x|x.floating.is_some())||state.revision==u64::MAX{return Err(bad(cmd,"synchronous idle uncoalesced rename required"))}
  let decimal=|v:&Value,zero:bool|->Result<u64>{let text=v.as_str().filter(|v|!v.is_empty()&&v.len()<=20&&v.bytes().all(|b|b.is_ascii_digit())&&!(v.len()>1&&v.starts_with('0'))).ok_or_else(||bad(cmd,"canonical captured identity required"))?;let id=text.parse().map_err(|_|bad(cmd,"identity overflow"))?;if id==0&&!zero{return Err(bad(cmd,"zero identity"))}Ok(id)};
  match(p.get("documentId"),p.get("expectedRevision")){(None,None)=>{},(Some(doc),Some(rev))=>{if decimal(doc,false)?!=state.doc.id.0||decimal(rev,true)?!=state.revision{return Err(bad(cmd,"stale captured target"))}},_=>return Err(bad(cmd,"paired captured identity/revision required"))}
  let target=match(p.get("layer"),p.get("layerId")){(Some(_),Some(_))=>return Err(bad(cmd,"one layer selector only")),(Some(v),None)=>Target::Id(LayerId(v.as_u64().ok_or_else(||bad(cmd,"integer layer required"))?)),(None,Some(v))=>Target::Id(LayerId(decimal(v,false)?)),(None,None)=>Target::Active};
@@ -142,7 +142,7 @@ impl<'a> Request<'a> {
         }
         let policy = MetadataPolicy::for_owner(owner);
         if crate::accounted_session::metadata_gesture::point_metadata_class(owner) && !matches!(policy,MetadataPolicy::ObservedBox) { return Err(BackingError::Unsupported.into()); }
-        if matches!(policy,MetadataPolicy::FlatComposite | MetadataPolicy::ObservedBox | MetadataPolicy::FilteredFlat) {policy.validate_storage(owner,control)?;}
+        if matches!(policy,MetadataPolicy::FlatComposite | MetadataPolicy::ObservedBox | MetadataPolicy::FilteredFlat | MetadataPolicy::MaskedFilteredFlat) {policy.validate_storage(owner,control)?;}
         let id = match self.target {
             Target::Active => state.active_layer.ok_or(EngineError::NoDocument)?,
             Target::Id(id) => id,
@@ -176,7 +176,7 @@ impl<'a> Request<'a> {
                     // Preserve the original flat topmost-name policy.
                     for layer in state.doc.layers.iter().rev() {
                         control.check((name.len() + 1) as u64)?;
-                        if if matches!(policy,MetadataPolicy::FlatComposite | MetadataPolicy::ObservedBox | MetadataPolicy::FilteredFlat) {same_name(&layer.name,name,control)?} else {layer.name == name} {
+                        if if matches!(policy,MetadataPolicy::FlatComposite | MetadataPolicy::ObservedBox | MetadataPolicy::FilteredFlat | MetadataPolicy::MaskedFilteredFlat) {same_name(&layer.name,name,control)?} else {layer.name == name} {
                             found = Some(layer.id);
                             break;
                         }
@@ -193,7 +193,7 @@ impl<'a> Request<'a> {
         policy.validate_current(owner, control)?;
         let assigned = match policy {
             MetadataPolicy::Plain => None,
-            MetadataPolicy::ObservedBox | MetadataPolicy::FlatComposite | MetadataPolicy::FilteredFlat | MetadataPolicy::AssignedGeometry | MetadataPolicy::IsolatedNormalGroup | MetadataPolicy::GaussianGroup => Some(AssignedFence::prepare::<Prepared<'_>>(session, control)?),
+            MetadataPolicy::ObservedBox | MetadataPolicy::FlatComposite | MetadataPolicy::FilteredFlat | MetadataPolicy::MaskedFilteredFlat | MetadataPolicy::AssignedGeometry | MetadataPolicy::IsolatedNormalGroup | MetadataPolicy::GaussianGroup => Some(AssignedFence::prepare::<Prepared<'_>>(session, control)?),
         };
         check_locks(owner, edit, self.rename, control)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
@@ -235,7 +235,7 @@ impl<'a> Request<'a> {
     }
 }
 fn check_locks(owner: &photocraft_doc::accounted_document::AccountedDocument, edit: AccountedEdit<'_>, rename:bool, control: &ReadControl<'_>) -> Result<()> {
-    let access = if owner.is_readonly_filtered_flat_point_storage() {owner.accounted_layer_access(edit.layer_id(),control)?} else {accounted_layer_access(owner.document(), edit.layer_id(), control)?}.ok_or(EngineError::NoLayer(edit.layer_id()))?;
+    let access = if owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage() {owner.accounted_layer_access(edit.layer_id(),control)?} else {accounted_layer_access(owner.document(), edit.layer_id(), control)?}.ok_or(EngineError::NoLayer(edit.layer_id()))?;
     if rename && (access.locks.all || access.locks.pixels || access.imported_locks.content) {return Err(EngineError::Other("the imported layer is content-locked".into()));}
     let AccountedEdit::LayerMetadata { visible, .. } = edit else { return Err(BackingError::Unsupported.into()) };
     // Content/Position/Alpha locks remain unchanged and are inspected through the

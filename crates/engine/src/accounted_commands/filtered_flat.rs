@@ -8,6 +8,25 @@ use photocraft_doc::{
     item_identity::{FilterId, ItemRef},
 };
 
+#[derive(Clone,Copy,PartialEq,Eq)]
+enum Route { Original, Masked }
+impl Route {
+ fn owner(o:&AccountedDocument)->Option<Self>{if o.is_readonly_masked_filtered_flat_point_storage(){Some(Self::Masked)}else if o.is_readonly_filtered_flat_point_storage(){Some(Self::Original)}else{None}}
+ fn validate(self,o:&AccountedDocument,c:&ReadControl<'_>)->Result<()>{if Self::owner(o)!=Some(self){return Err(BackingError::Unsupported.into())}match self{Self::Original=>Ok(o.validate_readonly_filtered_flat_point_storage(c)?),Self::Masked=>Ok(o.validate_readonly_masked_filtered_flat_point_storage(c)?)}}
+ fn recipe(self,o:&AccountedDocument,c:&ReadControl<'_>)->Result<()>{if Self::owner(o)!=Some(self){return Err(BackingError::Unsupported.into())}match self{Self::Original=>crate::accounted_xcf_open::filtered_flat::validate_current_filtered_flat_storage(o,c),Self::Masked=>crate::accounted_xcf_open::masked_filtered_flat::validate_current_masked_filtered_flat_storage(o,c)}}
+}
+fn masked_kind(n:&photocraft_doc::xcf_filters::FilterNode)->Option<photocraft_compose::MaskedMixedKind>{
+ use photocraft_compose::MaskedMixedKind as K;
+ let (k,v,e)=match n.operation.name.as_str(){
+ "gegl:exposure"=>(K::Exposure,"1:0",photocraft_compose::EXPOSURE_MASKED_MIXED_EPOCH),
+ "gegl:invert-linear"=>(K::InvertLinear,"0:0",photocraft_compose::INVERT_LINEAR_MASKED_MIXED_EPOCH),
+ "gegl:invert-gamma"=>(K::InvertGamma,"0:0",photocraft_compose::INVERT_GAMMA_MASKED_MIXED_EPOCH),
+ "gegl:brightness-contrast"=>(K::BrightnessContrast,"0:0",photocraft_compose::BRIGHTNESS_CONTRAST_MASKED_MIXED_EPOCH),
+ "gegl:levels"=>(K::GeglLevels,"0:0",photocraft_compose::GEGL_LEVELS_MASKED_MIXED_EPOCH),_=>return None};
+ (n.operation.stored_version==v&&n.operation.schema_epoch==e&&n.composition.as_ref().is_some_and(|p|p.compatibility_epoch==e)&&photocraft_compose::masked_mixed_parameters(k,&n.arguments).is_ok()).then_some(k)
+}
+fn route_family(r:Route,n:&photocraft_doc::xcf_filters::FilterNode)->Option<u8>{if r==Route::Masked {if let Some(k)=masked_kind(n){use photocraft_compose::MaskedMixedKind as K;return Some(match k{K::Exposure=>3,K::InvertLinear=>4,K::InvertGamma=>5,K::BrightnessContrast=>6,K::GeglLevels=>7})}}family(n)}
+
 pub(super) const REPLY_ENVELOPE: u64 = 8192;
 #[derive(Clone, Copy)]
 struct Argument<'a> {
@@ -222,7 +241,13 @@ fn valid_node(node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
 }
 /// Borrowed actual-class/retained-target hint, never a source/profile/render proof.
 pub fn candidate(owner: &AccountedDocument, layer: LayerId, node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
-    if !owner.is_readonly_filtered_flat_point_storage() || node.id.0 == 0 || !valid_node(node) {
+    if !owner.is_readonly_filtered_flat_point_storage(){return false} candidate_route(Route::Original,owner,layer,node)
+}
+pub fn masked_candidate(owner:&AccountedDocument,layer:LayerId,node:&photocraft_doc::xcf_filters::FilterNode)->bool{
+ if !owner.is_readonly_masked_filtered_flat_point_storage(){return false} candidate_route(Route::Masked,owner,layer,node)
+}
+fn candidate_route(route:Route,owner:&AccountedDocument,layer:LayerId,node:&photocraft_doc::xcf_filters::FilterNode)->bool{
+    if Route::owner(owner)!=Some(route) || node.id.0==0 || !(valid_node(node)||route==Route::Masked&&masked_kind(node).is_some()&&node.opacity_f64_bits==1.0f64.to_bits()) {
         return false;
     }
     let doc = owner.document();
@@ -235,7 +260,7 @@ pub fn candidate(owner: &AccountedDocument, layer: LayerId, node: &photocraft_do
 }
 fn context(session: &Session, id: &str, params: &Value) -> Result<()> {
     let state = session.active().ok_or(EngineError::NoDocument)?;
-    if !state.doc.accounted().is_some_and(|o| o.is_readonly_filtered_flat_point_storage()) {
+    if !state.doc.accounted().is_some_and(|o| Route::owner(o).is_some()) {
         return Err(BackingError::Unsupported.into());
     }
     if !matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove")
@@ -273,7 +298,7 @@ fn target<'a>(
                 if found.is_some(){return Err(BackingError::Integrity.into())}
                 let ItemRef::Layer(layer)=stack.owner else{return Err(BackingError::Integrity.into())};
                 c.check(owner.document().layers.len().checked_add(state.filter_stacks.len()).and_then(|n|n.checked_add(nodes)).ok_or(BackingError::Length)? as u64)?;
-                if !candidate(owner,layer,node){return Err(BackingError::Unsupported.into())}
+                if !candidate_route(Route::owner(owner).ok_or(BackingError::Unsupported)?,owner,layer,node){return Err(BackingError::Unsupported.into())}
                 found=Some((stack,node,layer,index));
             }
         }
@@ -292,7 +317,7 @@ fn incoming(kind:u8,argument:&Argument<'_>)->bool {
     if kind==0 {return argument.name=="color" && matches!(argument.value,PointArgumentValue::LiteralColor4F32{components,encoding:photocraft_doc::SampleEncoding::Linear|photocraft_doc::SampleEncoding::NonlinearProfile} if components.iter().all(|b|f32::from_bits(*b).is_finite()&&(0.0..=1.0).contains(&f32::from_bits(*b))))}
     matches!(argument.value,PointArgumentValue::Float32Bits(b) if number_in_domain(kind,argument.name,b))
 }
-fn stage_patches<const N:usize>(owner:&AccountedDocument,fields:&Fields<'_>,kind:u8,layer:photocraft_doc::LayerId,revision:u64,stack_len:usize,id:&str,move_to:Option<usize>,ctl:&ReadControl<'_>)->Result<AccountedDocument>{
+fn stage_patches<const N:usize>(route:Route,owner:&AccountedDocument,fields:&Fields<'_>,kind:u8,layer:photocraft_doc::LayerId,revision:u64,stack_len:usize,id:&str,move_to:Option<usize>,ctl:&ReadControl<'_>)->Result<AccountedDocument>{
     if fields.count>N {return Err(BackingError::Length.into())}
         // This scratch is additional to OLD/history/STAGED and the reply fees.
         // Declare the fee before the real array and retain it through full proof.
@@ -308,28 +333,22 @@ fn stage_patches<const N:usize>(owner:&AccountedDocument,fields:&Fields<'_>,kind
             *slot = PointArgumentPatch { name: argument.name, value: argument.value };
         }
         let staged = if id=="xcf.filter.remove" {
-            owner.try_remove_readonly_filtered_flat_point_filter(PointFilterRemovePatch{layer,filter:fields.filter,expected_stack_revision:revision},ctl)?
+            match route{Route::Original=>owner.try_remove_readonly_filtered_flat_point_filter(PointFilterRemovePatch{layer,filter:fields.filter,expected_stack_revision:revision},ctl)?,Route::Masked=>owner.try_remove_readonly_masked_filtered_flat_point_filter(PointFilterRemovePatch{layer,filter:fields.filter,expected_stack_revision:revision},ctl)?}
         } else if let Some(index)=move_to {
             if index>=stack_len{return Err(bad(id,"index is outside the current owner stack"))}
-            owner.try_move_readonly_filtered_flat_point_filter(PointFilterMovePatch{layer,filter:fields.filter,expected_stack_revision:revision,index},ctl)?
-        } else { owner.try_with_readonly_filtered_flat_point_filter_with_opacity(
-            PointFilterPatch {
-                layer,
-                filter: fields.filter,
-                expected_stack_revision: revision,
-                arguments: patches.get(..fields.count).ok_or(BackingError::Integrity)?,
-                enabled: fields.enabled,
-            },
-            fields.opacity,
-            ctl,
-        )? };
-        validate_recipe(&staged, ctl)?;
+            match route{Route::Original=>owner.try_move_readonly_filtered_flat_point_filter(PointFilterMovePatch{layer,filter:fields.filter,expected_stack_revision:revision,index},ctl)?,Route::Masked=>owner.try_move_readonly_masked_filtered_flat_point_filter(PointFilterMovePatch{layer,filter:fields.filter,expected_stack_revision:revision,index},ctl)?}
+        } else {
+ let patch=PointFilterPatch{layer,filter:fields.filter,expected_stack_revision:revision,arguments:patches.get(..fields.count).ok_or(BackingError::Integrity)?,enabled:fields.enabled};
+ match route{Route::Original=>owner.try_with_readonly_filtered_flat_point_filter_with_opacity(patch,fields.opacity,ctl)?,Route::Masked=>owner.try_with_readonly_masked_filtered_flat_point_filter_with_opacity(patch,fields.opacity,ctl)?}
+ };
+        route.recipe(&staged, ctl)?;
         Ok(staged)
 
 }
 
 pub(super) struct Request<'a> {
     id: &'static str,
+    route: Route,
     params: &'a Value,
     fields: Fields<'a>,
     move_to: Option<usize>,
@@ -338,6 +357,7 @@ impl<'a> Request<'a> {
     pub(super) fn parse(session: &Session, id: &str, params: &'a Value, c: &ReadControl<'_>) -> Result<Self> {
         c.check(32768)?;
         context(session, id, params)?;
+        let route=Route::owner(session.active().and_then(|s|s.doc.accounted()).ok_or(BackingError::Unsupported)?).ok_or(BackingError::Unsupported)?;
         let id = match id {
             "xcf.filter.set" => "xcf.filter.set",
             "xcf.filter.enable" => "xcf.filter.enable",
@@ -350,7 +370,7 @@ impl<'a> Request<'a> {
             let text=object.get("filterId").and_then(Value::as_str).filter(|s|!s.is_empty()&&s.len()<=20&&!s.starts_with('0')&&s.bytes().all(|b|b.is_ascii_digit()))
                 .ok_or_else(||bad(id,"canonical filterId required"))?;
             let filter=FilterId(text.parse().map_err(|_|bad(id,"filterId overflow"))?);
-            return Ok(Self{id,params,fields:Fields{filter,arguments:[None;10],count:0,enabled:None,opacity:None},move_to:None});
+            return Ok(Self{id,route,params,fields:Fields{filter,arguments:[None;10],count:0,enabled:None,opacity:None},move_to:None});
         }
         if id == "xcf.filter.move" {
             let object=params.as_object().filter(|o|o.len()==2 && o.keys().all(|k|matches!(k.as_str(),"filterId"|"index")))
@@ -360,7 +380,7 @@ impl<'a> Request<'a> {
             let filter=FilterId(text.parse().map_err(|_|bad(id,"filterId overflow"))?);
             let index=object.get("index").and_then(Value::as_u64).filter(|i|*i<1024).ok_or_else(||bad(id,"index must be a bounded owner-local integer"))?;
             let index=usize::try_from(index).map_err(|_|BackingError::Length)?;
-            return Ok(Self{id,params,fields:Fields{filter,arguments:[None;10],count:0,enabled:None,opacity:None},move_to:Some(index)});
+            return Ok(Self{id,route,params,fields:Fields{filter,arguments:[None;10],count:0,enabled:None,opacity:None},move_to:Some(index)});
         }
         let object = params
             .as_object()
@@ -375,22 +395,23 @@ impl<'a> Request<'a> {
         if fields.count > 3 {
             let owner = session.active().and_then(|s| s.doc.accounted()).ok_or(BackingError::Unsupported)?;
             let (_, node, _, _) = target(owner, fields.filter, c)?;
-            let kind=family(node).ok_or(BackingError::Unsupported)?;
+            let kind=route_family(route,node).ok_or(BackingError::Unsupported)?;
             if fields.count>patch_limit(kind) {return Err(bad(id,"patch count exceeds the actual target family"));}
         }
-        Ok(Self { id, params, fields, move_to:None })
+        Ok(Self { id, route, params, fields, move_to:None })
     }
     pub(super) fn prepare(self, session: &Session, ctl: &ReadControl<'_>) -> Result<Prepared<'a>> {
         context(session, self.id, self.params)?;
         let state = session.active().ok_or(EngineError::NoDocument)?;
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
-        owner.validate_readonly_filtered_flat_point_storage(ctl)?;
+        self.route.validate(owner,ctl)?;
         if !state.history.current()?.shares_state(&state.doc) {
             return Err(BackingError::Integrity.into());
         }
-        validate_recipe(owner, ctl)?;
+        self.route.recipe(owner, ctl)?;
         let (stack, node, layer,node_index) = target(owner, self.fields.filter, ctl)?;
-        let kind = family(node).ok_or(BackingError::Unsupported)?;
+        let kind = route_family(self.route,node).ok_or(BackingError::Unsupported)?;
+        if self.route==Route::Masked && masked_kind(node).is_some() && self.fields.opacity.is_some_and(|b|b!=1.0f64.to_bits()){return Err(BackingError::Unsupported.into())}
         if self.fields.count > patch_limit(kind) {
             return Err(bad(self.id, "argument count exceeds the target family"));
         }
@@ -448,9 +469,9 @@ impl<'a> Request<'a> {
         lease.reconcile_capacity(actual as u64).map_err(|_| BackingError::Allocation)?;
 
         let staged = if matches!(kind,10|11) {
-            stage_patches::<10>(owner,&self.fields,kind,layer,stack.revision,stack.nodes.len(),self.id,self.move_to,ctl)?
+            stage_patches::<10>(self.route,owner,&self.fields,kind,layer,stack.revision,stack.nodes.len(),self.id,self.move_to,ctl)?
         } else {
-            stage_patches::<4>(owner,&self.fields,kind,layer,stack.revision,stack.nodes.len(),self.id,self.move_to,ctl)?
+            stage_patches::<4>(self.route,owner,&self.fields,kind,layer,stack.revision,stack.nodes.len(),self.id,self.move_to,ctl)?
         };
         let updated = !staged.shares_model(owner);
         let mut history = state.history.clone();
@@ -539,9 +560,6 @@ fn locks(owner: &AccountedDocument, layer: LayerId, visibility: bool, c: &ReadCo
     }
     Ok(())
 }
-fn validate_recipe(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
-    crate::accounted_xcf_open::filtered_flat::validate_current_filtered_flat_storage(owner, c)
-}
 pub(super) struct Prepared<'a> {
     request: Request<'a>,
     captured: DocumentSnapshot,
@@ -600,6 +618,7 @@ impl Prepared<'_> {
             return Err(EngineError::Other("the prepared Point edit targets older Session state".into()));
         }
         let owner = state.doc.accounted().ok_or(BackingError::Integrity)?;
+        if Route::owner(owner)!=Some(self.request.route){return Err(BackingError::Integrity.into())}
         if !state.history.current()?.shares_state(&state.doc) {
             return Err(BackingError::Integrity.into());
         }
@@ -667,3 +686,7 @@ mod stock_rgb_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_hsl_tests.rs"]
 mod hsl_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="masked_filtered_flat_tests.rs"]
+mod masked_tests;

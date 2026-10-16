@@ -156,7 +156,7 @@ pub(crate) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
     let (valid, nonempty) = visit(p, f.sample, f.width, f.height, 1, true, i, b)?;
     Ok(valid && nonempty)
 }
-pub(super) fn visit<P: ExactParsedPlane>(
+pub(crate) fn visit<P: ExactParsedPlane>(
     p: &P,
     sample: Sample,
     width: u32,

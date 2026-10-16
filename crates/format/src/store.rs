@@ -280,7 +280,7 @@ fn read_manifest_with_interrupt(src: &dyn Source, opts: &LoadOptions, interrupt:
         }
     }
     if let Some(hint) = v.get("current_storage_hint").filter(|hint| !hint.is_null()) {
-        let floor = if hint.as_str() == Some("point_f32_coverage") { 11 } else { 10 };
+        let floor = match hint.as_str(){Some("masked_filtered_flat_point")=>12,Some("point_f32_coverage")=>11,_=>10};
         if v.get("format_version").and_then(serde_json::Value::as_u64).is_none_or(|version| version < floor)
             || v.get("minimum_reader_version").and_then(serde_json::Value::as_u64).is_none_or(|version| version < floor)
         {
@@ -297,6 +297,7 @@ fn read_manifest_with_interrupt(src: &dyn Source, opts: &LoadOptions, interrupt:
         return Err(FormatError::TooNew { found: m.minimum_reader_version, supported: FORMAT_VERSION });
     }
     let hint_floor = match m.current_storage_hint {
+        Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint) => 12,
         Some(crate::NativeCurrentStorageHint::PointF32Coverage) => 11,
         Some(crate::NativeCurrentStorageHint::FilteredFlatPoint) => 10,
         None => 1,

@@ -22,6 +22,7 @@ enum NativeHandoff {
     CurrentIsolatedGaussianGroup,
     CurrentSeparableBlend,
     CurrentFilteredFlat,
+    CurrentMaskedFilteredFlat,
 }
 
 /// Bounded work-policy routing hint only. Selecting the standard profile work
@@ -42,10 +43,15 @@ pub fn is_owned_current_filtered_flat_candidate(archive:&OwnedDocumentArchive, c
     control.check(1)?;
     match archive.current_storage_hint() {
         Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) => return Ok(true),
-        Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) => return Ok(false),
+        Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage | photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint) => return Ok(false),
         None => {}
     }
     is_current_filtered_flat_candidate(archive.document(),control)
+}
+
+/// Explicit marker-only purpose. No unmarked metadata can select this class.
+pub fn is_owned_current_masked_filtered_flat_candidate(archive:&OwnedDocumentArchive,c:&ReadControl<'_>)->std::result::Result<bool,BackingError>{
+ c.check(1)?;Ok(archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint))
 }
 
 /// Multi-root filtered identity hint only. A selected refusal is final and
@@ -511,6 +517,11 @@ impl Session {
         self.add_owned_native_with(archive,label,authorized_native_path,control,NativeHandoff::CurrentFilteredFlat)
     }
 
+    /// Marker12-only masked filtered-flat CURRENT continuation; failure is final.
+    pub fn add_owned_native_masked_filtered_flat_archive(&mut self,archive:OwnedDocumentArchive,label:&str,path:Option<&str>,control:&ReadControl<'_>)->Result<usize>{
+        self.add_owned_native_with(archive,label,path,control,NativeHandoff::CurrentMaskedFilteredFlat)
+    }
+
     fn add_owned_native_with(
         &mut self,
         archive: OwnedDocumentArchive,
@@ -536,6 +547,7 @@ impl Session {
             }
         }
         match archive.current_storage_hint() {
+            Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint) if !matches!(handoff,NativeHandoff::CurrentMaskedFilteredFlat)=>return Err(BackingError::Unsupported.into()),
             Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) if !matches!(handoff,NativeHandoff::CurrentFilteredFlat) => return Err(BackingError::Unsupported.into()),
             Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) if !matches!(handoff,NativeHandoff::CurrentPoint) => return Err(BackingError::Unsupported.into()),
             _ => {}
@@ -560,9 +572,10 @@ impl Session {
             NativeHandoff::CurrentIsolatedGaussianGroup => archive.into_accounted_readonly_gaussian_group_storage(control),
             NativeHandoff::CurrentSeparableBlend => archive.into_accounted_readonly_flat_composite_storage(control),
             NativeHandoff::CurrentFilteredFlat => archive.into_accounted_readonly_filtered_flat_storage(control),
+            NativeHandoff::CurrentMaskedFilteredFlat=>archive.into_accounted_readonly_masked_filtered_flat_storage(control),
         }
         .map_err(|error| {
-            if matches!(handoff, NativeHandoff::CurrentAssignedPoint | NativeHandoff::CurrentPoint | NativeHandoff::CurrentAnalyticGeometry | NativeHandoff::CurrentIsolatedNormalGroup | NativeHandoff::CurrentIsolatedGaussianGroup | NativeHandoff::CurrentSeparableBlend | NativeHandoff::CurrentFilteredFlat) {
+            if matches!(handoff, NativeHandoff::CurrentAssignedPoint | NativeHandoff::CurrentPoint | NativeHandoff::CurrentAnalyticGeometry | NativeHandoff::CurrentIsolatedNormalGroup | NativeHandoff::CurrentIsolatedGaussianGroup | NativeHandoff::CurrentSeparableBlend | NativeHandoff::CurrentFilteredFlat | NativeHandoff::CurrentMaskedFilteredFlat) {
                 if let photocraft_format::FormatError::Io(io) = &error {
                     if let Some(backing) = io.get_ref().and_then(|source| source.downcast_ref::<BackingError>()) {
                         return EngineError::from(*backing);
@@ -575,6 +588,9 @@ impl Session {
                 EngineError::Other(format!("owned native reopen: {error}"))
             }
         })?;
+        if let NativeHandoff::CurrentMaskedFilteredFlat=handoff{
+            crate::accounted_xcf_open::masked_filtered_flat::validate_current_masked_filtered_flat_storage(&document,control)?;
+        }
         if let NativeHandoff::CurrentFilteredFlat = handoff {
             crate::accounted_xcf_open::filtered_flat::validate_current_filtered_flat_storage(&document,control)?;
         }
@@ -748,3 +764,7 @@ mod hsl_native_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "accounted_masked_scalar_native_tests.rs"]
 mod masked_scalar_native_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_masked_filtered_flat_native_tests.rs"]
+mod masked_filtered_flat_native_tests;

@@ -211,6 +211,7 @@ pub fn save_accounted_current_document_archive<W: Write + Seek>(
     if !owner.quota().shares_ledger(quota) {
         return Err(error(BackingError::Quota));
     }
+    if owner.is_readonly_masked_filtered_flat_point_storage(){return save_accounted_masked_filtered_flat_document_archive(owner,output,limits,quota,control)}
     let hint = if owner.is_readonly_filtered_flat_point_storage() {
         owner.validate_readonly_filtered_flat_point_storage(control).map_err(error)?;
         Some(crate::NativeCurrentStorageHint::FilteredFlatPoint)
@@ -240,6 +241,13 @@ pub fn save_accounted_point_f32_coverage_document_archive<W: Write + Seek>(
     save_current_document_archive_with_hint(owner.document(), output, limits, quota, control, hint)
 }
 
+/// Exact structural selected mixed writer; caller proves complete CURRENT.
+pub fn save_accounted_masked_filtered_flat_document_archive<W:Write+Seek>(owner:&photocraft_doc::accounted_document::AccountedDocument,output:W,limits:OwnedDocumentLimits,quota:&BackingQuota,control:&ReadControl<'_>)->Result<W>{
+    control.check(0).map_err(error)?;
+    if !owner.is_readonly_masked_filtered_flat_point_storage() || !owner.quota().shares_ledger(quota){return Err(error(BackingError::Unsupported))}
+    owner.validate_readonly_masked_filtered_flat_point_storage(control).map_err(error)?;
+    save_current_document_archive_with_hint(owner.document(),output,limits,quota,control,Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint))
+}
 fn save_current_document_archive_with_hint<W: Write + Seek>(
     doc: &Document,
     output: W,
@@ -277,13 +285,14 @@ fn save_current_document_archive_with_hint<W: Write + Seek>(
     } else {
         None
     };
-    let document = if current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
+    let set=if current_storage_hint==Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint){Some(doc.checked_f32_filter_mask_coverages_with(photocraft_doc::xcf_filter_masks::MaskCoverageSetLimits::STANDARD,quota,control).map_err(error)?)}else{None};
+    let document = if let Some(set)=set.as_ref(){crate::convert::doc_m_with_checked_filter_masks(doc,&mut sink,set)?}else if current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
         crate::convert::doc_m_with_checked_filter_mask(doc, &mut sink, coverage.as_ref())?
     } else {
         crate::convert::doc_m(doc, &mut sink)?
     };
     let requires_v9 = super::requires_reader_v9_after_validation(doc, quota, control)?;
-    let version = if current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
+    let version = if current_storage_hint==Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint){12}else if current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
         11
     } else if current_storage_hint.is_some() {
         10

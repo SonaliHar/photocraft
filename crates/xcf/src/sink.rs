@@ -53,7 +53,15 @@ impl PlaneSinkControl<'_, '_, '_> {
 /// SAME caller Budget. Never charge both owners for one allocation. External
 /// leases travel with the returned plane; control-charged allocations travel
 /// with the decoded result's parser reservation through mapping.
+#[derive(Clone,Copy,PartialEq,Eq)]
+pub enum MaskCoveragePolicy{StrictUnit,CheckedF32Preimage}
 pub trait PlaneSink {
+    /// Called before hierarchy/index/native allocation for the actual plane.
+    fn validate_plane_descriptor(&mut self,_:&PlaneDescriptor,_:&mut PlaneSinkControl<'_, '_, '_>)->Result<(),XcfError>{Ok(())}
+    /// Trusted descriptor-bound parse permission only, never a Source grant.
+    /// Called after begin validated the actual descriptor, before native decode.
+    fn mask_coverage_policy(&self,_:&PlaneDescriptor)->MaskCoveragePolicy{MaskCoveragePolicy::StrictUnit}
+
     type Plane;
     fn begin(&mut self, descriptor: &PlaneDescriptor, control: &mut PlaneSinkControl<'_, '_, '_>) -> Result<(), XcfError>;
     fn tile(&mut self, x: u32, y: u32, width: u32, height: u32, bytes: &[u8], control: &mut PlaneSinkControl<'_, '_, '_>) -> Result<(), XcfError>;
@@ -113,4 +121,16 @@ impl PlaneSink for CollectingPlaneSink {
     fn abort(&mut self) {
         self.plane = None;
     }
+}
+
+/// Descriptor-only participant for the explicit metadata API. No Surface or
+/// decoded native bytes are returned; every actual plane needs later decode.
+pub(crate) struct MetadataPlaneSink(Option<PlaneDescriptor>);
+impl MetadataPlaneSink{pub(crate) fn new()->Self{Self(None)}}
+impl PlaneSink for MetadataPlaneSink{
+ type Plane=PlaneDescriptor;
+ fn begin(&mut self,d:&PlaneDescriptor,c:&mut PlaneSinkControl<'_, '_, '_>)->Result<(),XcfError>{c.consume_work(32)?;if self.0.is_some(){return Err(XcfError::at(ErrorKind::Structure,d.record_offset,"metadata plane active"));}self.0=Some(d.clone());Ok(())}
+ fn tile(&mut self,_:u32,_:u32,_:u32,_:u32,_:&[u8],_:&mut PlaneSinkControl<'_, '_, '_>)->Result<(),XcfError>{Err(XcfError::at(ErrorKind::Structure,0,"metadata plan received pixel payload"))}
+ fn finish(&mut self,c:&mut PlaneSinkControl<'_, '_, '_>)->Result<Self::Plane,XcfError>{c.poll()?;self.0.take().ok_or_else(||XcfError::at(ErrorKind::Structure,0,"metadata plane absent"))}
+ fn abort(&mut self){self.0=None;}
 }

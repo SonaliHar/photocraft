@@ -377,6 +377,24 @@ pub fn decode_plain_source_into_sink_with_budget<'b, 'a, S: PlaneSink>(
     accounting: PlainSourceAccounting,
     sink: &mut S,
 ) -> Result<BudgetDecodedImport<'b, 'a, S::Plane>, XcfError> {
+    decode_plain_source_into_sink_mode(source,options,budget,accounting,sink,false)
+}
+/// Read bounded original metadata and plane descriptors without accessing pixel
+/// hierarchy/tile payloads. This is NOT pixel validation or a source grant.
+/// Returned metadata owns the same real parser reservations as actual decode;
+/// a later decode must use the same immutable Source and original Budget.
+/// Retains actual metadata allocations and entry/header allowance. Pixel
+/// payloads are absent and this type cannot be used as a decoded native plane.
+pub struct PlainSourceMetadata<'b,'a>{parsed:BudgetDecodedImport<'b,'a,PlaneDescriptor>,_header:Reservation<'b,'a>}
+impl PlainSourceMetadata<'_, '_>{pub fn file(&self)->&XcfFile<PlaneDescriptor>{&self.parsed.decoded.file}}
+pub fn read_plain_source_metadata_with_budget<'b,'a>(source:&mut dyn Source,options:&DecodeOptions<'_>,budget:&'b Budget<'a>,accounting:PlainSourceAccounting)->Result<PlainSourceMetadata<'b,'a>,XcfError>{
+    let header=(std::mem::size_of::<PlainSourceMetadata<'_, '_>>() as u64).checked_add(std::mem::size_of::<crate::sink::MetadataPlaneSink>()as u64).and_then(|n|n.checked_add(std::mem::size_of::<crate::reader::Reader<'_, '_>>()as u64)).ok_or_else(||XcfError::new(ErrorKind::Limit,0,"metadata planning entry size"))?;
+    let fee=budget.reserve(BudgetKind::Resident,header,"metadata planning entry/header")?;
+    budget.consume_work(512,"metadata planning entry")?;
+    let parsed=decode_plain_source_into_sink_mode(source,options,budget,accounting,&mut crate::sink::MetadataPlaneSink::new(),true)?;
+    Ok(PlainSourceMetadata{parsed,_header:fee})
+}
+fn decode_plain_source_into_sink_mode<'b,'a,S:PlaneSink>(source:&mut dyn Source,options:&DecodeOptions<'_>,budget:&'b Budget<'a>,accounting:PlainSourceAccounting,sink:&mut S,metadata_only:bool)->Result<BudgetDecodedImport<'b,'a,S::Plane>,XcfError>{
     decode_control::poll(budget, options.cancelled, "plain source admission")?;
     let size = source.len();
     let limits = budget.limits();
@@ -426,7 +444,7 @@ pub fn decode_plain_source_into_sink_with_budget<'b, 'a, S: PlaneSink>(
         cancelled: options.cancelled,
         progress: options.progress,
     };
-    let mut file = crate::reader::decode_source(source, &local, budget, sink)?;
+    let mut file = if metadata_only{crate::reader::decode_source_metadata(source,&local,budget,sink)?}else{crate::reader::decode_source(source, &local, budget, sink)?};
     decode_control::poll(budget, options.cancelled, "plain parsed handoff")?;
     let parsed = file.charged_bytes as u64;
     let retained = budget.reserve(BudgetKind::Resident, parsed, "plain parsed state handoff")?;

@@ -29,10 +29,10 @@ fn position(nodes: &[FilterNode], id: crate::item_identity::FilterId, c: &ReadCo
 }
 fn prepare(owner: &AccountedDocument, patch: PointFilterMovePatch, c: &ReadControl<'_>) -> Result<(ModelCensus, Option<Plan>), BackingError> {
     c.check(1)?;
-    if !owner.is_readonly_filtered_flat_point_storage() {
+    if !accepts(owner) {
         return refused();
     }
-    let logical = measured(owner.document(), owner.quota(), c)?;
+    let logical = measured_owner(owner, c)?;
     if patch.layer.0 == 0 {
         return Err(BackingError::Integrity);
     }
@@ -75,6 +75,7 @@ impl AccountedDocument {
     /// Structural preflight only. Full OLD/history/STAGED operative and command
     /// fences remain mandatory externally, including a same-position request.
     pub fn validate_readonly_filtered_flat_point_filter_move(&self, patch: PointFilterMovePatch, c: &ReadControl<'_>) -> Result<(), BackingError> {
+        if self.is_readonly_masked_filtered_flat_point_storage(){return refused();}
         prepare(self, patch, c)?;
         Ok(())
     }
@@ -82,6 +83,7 @@ impl AccountedDocument {
     /// permits a destination within the actual bounded stack; command wire limits
     /// remain external. Same-position requests share the model without revision.
     pub fn try_move_readonly_filtered_flat_point_filter(&self, patch: PointFilterMovePatch, c: &ReadControl<'_>) -> Result<Self, BackingError> {
+        if self.is_readonly_masked_filtered_flat_point_storage(){return refused();}
         let (logical, plan) = prepare(self, patch, c)?;
         let Some(plan) = plan else {
             c.check(1)?;
@@ -118,4 +120,9 @@ pub(super) fn apply(doc: &mut Document, plan: Plan, c: &ReadControl<'_>) -> Resu
     }
     stack.revision = plan.revision;
     c.check(1)
+}
+
+impl AccountedDocument {
+    pub fn validate_readonly_masked_filtered_flat_point_filter_move(&self,patch:PointFilterMovePatch,c:&ReadControl<'_>)->Result<(),BackingError>{if !self.is_readonly_masked_filtered_flat_point_storage(){return refused()}prepare(self,patch,c)?;Ok(())}
+    pub fn try_move_readonly_masked_filtered_flat_point_filter(&self,patch:PointFilterMovePatch,c:&ReadControl<'_>)->Result<Self,BackingError>{if !self.is_readonly_masked_filtered_flat_point_storage(){return refused()}let(logical,plan)=prepare(self,patch,c)?;let Some(plan)=plan else{c.check(1)?;return Ok(self.clone())};current_copy(self,logical,CopyKind::Move(plan),c)}
 }

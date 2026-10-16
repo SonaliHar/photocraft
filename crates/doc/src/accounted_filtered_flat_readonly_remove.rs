@@ -40,10 +40,10 @@ fn shifted_bytes<T>(len: usize, index: usize) -> Result<u64, BackingError> {
 }
 fn prepare(owner: &AccountedDocument, patch: PointFilterRemovePatch, c: &ReadControl<'_>) -> Result<(ModelCensus, Plan), BackingError> {
     c.check(1)?;
-    if !owner.is_readonly_filtered_flat_point_storage() {
+    if !accepts(owner) {
         return refused();
     }
-    let logical = measured(owner.document(), owner.quota(), c)?;
+    let logical = measured_owner(owner, c)?;
     if patch.layer.0 == 0 || patch.filter.0 == 0 {
         return Err(BackingError::Integrity);
     }
@@ -134,6 +134,7 @@ impl AccountedDocument {
     /// Data-only removal preflight. Operation, lock, OLD/history/STAGED proofs
     /// and publication fences are mandatory externally; no source grant.
     pub fn validate_readonly_filtered_flat_point_filter_remove(&self, patch: PointFilterRemovePatch, c: &ReadControl<'_>) -> Result<(), BackingError> {
+        if self.is_readonly_masked_filtered_flat_point_storage(){return refused();}
         prepare(self, patch, c)?;
         Ok(())
     }
@@ -141,6 +142,7 @@ impl AccountedDocument {
     /// Inert source-mask properties are archived with their exact payload Arcs.
     /// Last-node removal retains the empty stack owner and checked revision.
     pub fn try_remove_readonly_filtered_flat_point_filter(&self, patch: PointFilterRemovePatch, c: &ReadControl<'_>) -> Result<Self, BackingError> {
+        if self.is_readonly_masked_filtered_flat_point_storage(){return refused();}
         let (logical, plan) = prepare(self, patch, c)?;
         current_copy(self, logical, CopyKind::Remove(plan), c)
     }
@@ -187,4 +189,9 @@ pub(super) fn apply(doc: &mut Document, plan: Plan, c: &ReadControl<'_>) -> Resu
     stack.nodes.remove(plan.node_index);
     stack.revision = plan.revision;
     c.check(1)
+}
+
+impl AccountedDocument {
+    pub fn validate_readonly_masked_filtered_flat_point_filter_remove(&self,patch:PointFilterRemovePatch,c:&ReadControl<'_>)->Result<(),BackingError>{if !self.is_readonly_masked_filtered_flat_point_storage(){return refused()}prepare(self,patch,c)?;Ok(())}
+    pub fn try_remove_readonly_masked_filtered_flat_point_filter(&self,patch:PointFilterRemovePatch,c:&ReadControl<'_>)->Result<Self,BackingError>{if !self.is_readonly_masked_filtered_flat_point_storage(){return refused()}let(logical,plan)=prepare(self,patch,c)?;current_copy(self,logical,CopyKind::Remove(plan),c)}
 }

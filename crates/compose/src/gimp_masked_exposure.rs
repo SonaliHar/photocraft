@@ -191,6 +191,29 @@ impl PreparedMaskedExposure {
         // No local zero or unit shortcut; leaf scratch remains held during mix.
         self.mix.apply(before, after, raw_coverage, c)
     }
+    /// Additive ordered-stage lane: finite derived RGB, unit alpha; old unit entry stays exact.
+    pub(crate) fn evaluate_derived(&self, before: [f64; 4], enabled: bool, raw_coverage: f64, q: &BackingQuota, c: &ReadControl<'_>) -> Result<[f64; 4], E> {
+        c.check(128).map_err(E::Backing)?;
+        pixel(before)?;
+        coverage(raw_coverage)?;
+        if !enabled {
+            c.check(0).map_err(E::Backing)?;
+            return Ok(before);
+        }
+        c.check(1408).map_err(E::Backing)?;
+        let _leaf_scratch = q.reserve(QuotaKind::Resident, crate::gimp_exposure::PIXEL_SCRATCH_BYTES).map_err(E::Quota)?;
+        c.check(0).map_err(E::Backing)?;
+        let rgb = self.mix.working.convert([before[0], before[1], before[2]], true).map_err(E::Color)?;
+        let mut leaf = [0.; 4];
+        c.check(0).map_err(E::Backing)?;
+        self.operation.try_eval_pixel(&[rgb[0], rgb[1], rgb[2], before[3]], 3, &mut leaf).map_err(|e| E::Color(e.into()))?;
+        c.check(0).map_err(E::Backing)?;
+        let rgb = self.mix.working.convert([leaf[0], leaf[1], leaf[2]], false).map_err(E::Color)?;
+        let after = [rgb[0], rgb[1], rgb[2], before[3]];
+        pixel(after)?;
+        // No local zero or unit shortcut; leaf scratch remains held during mix.
+        self.mix.apply(before, after, raw_coverage, c)
+    }
 }
 
 

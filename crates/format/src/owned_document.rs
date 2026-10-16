@@ -15,7 +15,7 @@ mod finite_catalog;
 mod save;
 mod source;
 use accounting::RetainedReservations;
-pub use save::{save_accounted_current_document_archive, save_accounted_point_f32_coverage_document_archive, save_current_document_archive};
+pub use save::{save_accounted_current_document_archive, save_accounted_masked_filtered_flat_document_archive, save_accounted_point_f32_coverage_document_archive, save_current_document_archive};
 
 /// Standard owned-codec per-raster logical ceiling. This is a descriptor allowance,
 /// not a resident allocation or encoded archive allowance. Native-large remains
@@ -84,6 +84,7 @@ enum AccountedHandoff {
     ReadonlyGaussianGroupStorage,
     ReadonlyFlatCompositeStorage,
     ReadonlyFilteredFlatStorage,
+    ReadonlyMaskedFilteredFlatStorage,
 }
 impl OwnedDocumentArchive {
     /// The actual ledger retaining this archive's model and encoded storage.
@@ -154,6 +155,8 @@ impl OwnedDocumentArchive {
         self.into_accounted_with(control, AccountedHandoff::ReadonlyFilteredFlatStorage)
     }
 
+    /// Marker-only selected current handoff, never unmarked source authority.
+    pub fn into_accounted_readonly_masked_filtered_flat_storage(self,control:&ReadControl<'_>)->Result<photocraft_doc::accounted_document::AccountedDocument>{self.into_accounted_with(control,AccountedHandoff::ReadonlyMaskedFilteredFlatStorage)}
     fn into_accounted_with(self, control: &ReadControl<'_>, handoff: AccountedHandoff) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
         struct NativeRetention {
             _archive: Arc<dyn ImmutableCanonicalArchive>,
@@ -161,7 +164,8 @@ impl OwnedDocumentArchive {
             _owner: photocraft_raster::backing::quota::QuotaLease,
         }
         let valid_handoff = match self.current_storage_hint {
-            None => true,
+            None => !matches!(handoff,AccountedHandoff::ReadonlyMaskedFilteredFlatStorage),
+            Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint)=>matches!(handoff,AccountedHandoff::ReadonlyMaskedFilteredFlatStorage),
             Some(crate::NativeCurrentStorageHint::FilteredFlatPoint) => matches!(handoff, AccountedHandoff::ReadonlyFilteredFlatStorage),
             Some(crate::NativeCurrentStorageHint::PointF32Coverage) => matches!(handoff, AccountedHandoff::ReadonlyPointStorage),
         };
@@ -196,11 +200,13 @@ impl OwnedDocumentArchive {
             AccountedHandoff::ReadonlyGaussianGroupStorage => {
                 photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_gaussian_group(document, retention, quota, control)
             }
+            AccountedHandoff::ReadonlyMaskedFilteredFlatStorage=>photocraft_doc::accounted_document::AccountedDocument::new_readonly_masked_filtered_flat_point_current_storage(document,retention,quota,control),
             AccountedHandoff::ReadonlyFilteredFlatStorage => match current_storage_hint {
                 Some(crate::NativeCurrentStorageHint::FilteredFlatPoint) => {
                     photocraft_doc::accounted_document::AccountedDocument::new_readonly_filtered_flat_point_current_storage(document, retention, quota, control)
                 }
                 None => photocraft_doc::accounted_document::AccountedDocument::new_readonly_filtered_flat_point_storage(document, retention, quota, control),
+                Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint)=>return Err(FormatError::Unsupported("masked mixed requires exact handoff".into())),
                 Some(crate::NativeCurrentStorageHint::PointF32Coverage) => return Err(FormatError::Unsupported("coverage requires Point handoff".into())),
             },
             AccountedHandoff::ReadonlyFlatCompositeStorage => {
@@ -326,7 +332,9 @@ pub fn load_document_from_owned_archive(
         legacy_linked_contents: HashMap::new(),
         tiles: HashMap::new(),
     };
-    let document = if manifest.current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
+    let document = if manifest.current_storage_hint == Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint){
+        loader.document_with_mask_set_control(&manifest.document,control,&quota)?
+    }else if manifest.current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
         loader.document_with_coverage_control(&manifest.document, control.interrupt, Some(control))?
     } else {
         loader.document_with_interrupt(&manifest.document, control.interrupt)?

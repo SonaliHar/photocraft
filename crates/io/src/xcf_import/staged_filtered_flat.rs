@@ -166,7 +166,7 @@ fn scan_work(i: &Interrupt<'_>, b: Option<&photocraft_xcf::Budget<'_>>, n: usize
     }
     i.check().map_err(|_| IoError::Cancelled)
 }
-fn native<P: ExactParsedPlane>(
+pub(super) fn native<P: ExactParsedPlane>(
     p: &P,
     sample: Sample,
     width: u32,

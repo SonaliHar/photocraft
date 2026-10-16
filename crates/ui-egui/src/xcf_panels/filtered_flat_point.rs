@@ -6,8 +6,14 @@ use photocraft_engine::DocumentSnapshot;
 mod affine;
 #[path="derived_rgb_mixed.rs"]
 mod derived_rgb;
+#[path="masked_mixed.rs"]
+mod masked;
+#[derive(Clone,Copy,PartialEq,Eq)]
+enum Route{Original,Masked}
+fn route(snapshot:&DocumentSnapshot)->Option<Route>{let o=snapshot.accounted()?;if o.is_readonly_masked_filtered_flat_point_storage(){Some(Route::Masked)}else if o.is_readonly_filtered_flat_point_storage(){Some(Route::Original)}else{None}}
 
 struct Target {
+    route:Route,
     snapshot: DocumentSnapshot,
     revision: u64,
     root: LayerId,
@@ -27,7 +33,7 @@ fn idle(app: &PhotocraftApp) -> bool {
         && !app.session.has_jobs()
 }
 fn node_at<'a>(snapshot: &'a DocumentSnapshot, root: LayerId,index:usize) -> Option<(&'a FilterNode, u64)> {
-    let owner = snapshot.accounted().filter(|owner| owner.is_readonly_filtered_flat_point_storage())?;
+    let owner=snapshot.accounted()?;let actual_route=route(snapshot)?;
     let state = snapshot.xcf_state.as_ref()?;
     if !(1..=4096).contains(&snapshot.layers.len()) || state.filter_stacks.len() > 4096 {
         return None;
@@ -47,7 +53,7 @@ fn node_at<'a>(snapshot: &'a DocumentSnapshot, root: LayerId,index:usize) -> Opt
         return None;
     }
     let node=stack.nodes.get(index)?;
-    photocraft_engine::filtered_flat_filter_edit_candidate(owner, root, node).then_some((node, stack.revision))
+    (match actual_route{Route::Original=>photocraft_engine::filtered_flat_filter_edit_candidate(owner,root,node),Route::Masked=>photocraft_engine::masked_filtered_flat_filter_edit_candidate(owner,root,node)}).then_some((node,stack.revision))
 }
 fn unlocked(snapshot: &DocumentSnapshot, root: LayerId) -> bool {
     let ordinary = snapshot.effective_locks(root);
@@ -57,7 +63,7 @@ fn unlocked(snapshot: &DocumentSnapshot, root: LayerId) -> bool {
 }
 fn capture_snapshot(snapshot:&DocumentSnapshot,revision:u64,root:LayerId,index:usize)->Option<Target>{
     let (node,stack_revision)=node_at(snapshot,root,index)?;
-    Some(Target{snapshot:snapshot.clone(),revision,root,stack_revision,node_index:index,stack_owner:ItemRef::Layer(root),filter:node.id,opacity_bits:node.opacity_f64_bits})
+    Some(Target{route:route(snapshot)?,snapshot:snapshot.clone(),revision,root,stack_revision,node_index:index,stack_owner:ItemRef::Layer(root),filter:node.id,opacity_bits:node.opacity_f64_bits})
 }
 #[cfg(test)]
 fn capture_at(app:&PhotocraftApp,root:LayerId,index:usize)->Option<Target>{
@@ -67,7 +73,8 @@ fn capture_at(app:&PhotocraftApp,root:LayerId,index:usize)->Option<Target>{
 fn validate(app: &PhotocraftApp, target: &Target) -> bool {
     idle(app)
         && app.session.active().is_some_and(|state| {
-            state.doc.id == target.snapshot.id
+            route(&state.doc)==Some(target.route)
+            && state.doc.id == target.snapshot.id
                 && state.revision == target.revision
                 && state.doc.shares_state(&target.snapshot)
                 && unlocked(&state.doc, target.root)
@@ -185,7 +192,8 @@ fn opacity_request(node:&FilterNode,request:Option<(&'static str,serde_json::Val
     params.as_object_mut()?.insert("opacityF64Bits".into(),json!(format!("0x{:016x}",opacity.to_bits())));
     Some(("xcf.filter.set",params))
 }
-fn controls(ui:&mut egui::Ui,node:&FilterNode,enabled_ui:bool)->Option<(&'static str,serde_json::Value)>{
+fn controls(ui:&mut egui::Ui,node:&FilterNode,enabled_ui:bool,route:Route)->Option<(&'static str,serde_json::Value)>{
+    if route==Route::Masked && masked::scope(node){return masked::edit(ui,node,enabled_ui)}
     let request=family_controls(ui,node,enabled_ui);
     let mut percent=f64::from_bits(node.opacity_f64_bits)*100.0;
     let intent=ui.add_enabled_ui(enabled_ui,|ui|ui.horizontal(|ui|{
@@ -212,7 +220,7 @@ pub(super) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, root: Layer
         let Some(target)=capture_snapshot(&snapshot,revision,root,index) else {ui.label(tl!("Filter editing is unavailable"));continue};
         let Some((node,_))=node_at(&target.snapshot,root,index) else {continue};
         ui.push_id((index,target.filter.0),|ui|{
-            if let Some((command,params))=controls(ui,node,validate(app,&target)) {
+            if let Some((command,params))=controls(ui,node,validate(app,&target),target.route) {
                 submit(app,&target,command,params);
             }
             let enabled=validate(app,&target);
@@ -284,3 +292,7 @@ mod source_opacity_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "filtered_flat_point_affine_tests.rs"]
 mod affine_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="masked_filtered_flat_tests.rs"]
+mod masked_tests;

@@ -6,7 +6,7 @@ use photocraft_raster::backing::{BackingError, ReadControl};
 /// implicit Point routes. Full current/native/command validation remains mandatory.
 pub fn is_current_standard_work_candidate(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<bool, BackingError> {
     c.check(1)?;
-    if owner.is_readonly_filtered_flat_point_storage() { return Ok(true); }
+    if owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage() { return Ok(true); }
     if !(owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage()) {
         return Ok(false);
     }
@@ -18,7 +18,7 @@ pub fn is_current_standard_work_candidate(owner: &AccountedDocument, c: &ReadCon
 /// Separate from Box so registered command selection retains every old Box route.
 pub fn is_current_pure_point_work_candidate(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<bool, BackingError> {
     c.check(1)?;
-    if owner.is_readonly_filtered_flat_point_storage() { return Ok(true); }
+    if owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage() { return Ok(true); }
     if !owner.is_readonly_point_storage() {
         return Ok(false);
     }

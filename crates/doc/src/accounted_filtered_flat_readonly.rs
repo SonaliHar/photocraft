@@ -205,7 +205,7 @@ fn present(doc: &Document, id: ItemRef, c: &ReadControl<'_>) -> Result<(), Backi
     Err(BackingError::Integrity)
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum TopologyPurpose {
+pub(super) enum TopologyPurpose {
     Source,
     Current,
 }
@@ -214,7 +214,7 @@ enum TopologyPurpose {
 pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<(), BackingError> {
     shape_with_purpose(doc, q, c, TopologyPurpose::Current)
 }
-fn shape_with_purpose(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>, purpose: TopologyPurpose) -> Result<(), BackingError> {
+pub(super) fn shape_with_purpose(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>, purpose: TopologyPurpose) -> Result<(), BackingError> {
     c.check(1)?;
     if !(1..=4096).contains(&doc.layers.len())
         || doc.mode != crate::ColorMode::Rgb
@@ -604,6 +604,11 @@ fn shape_with_purpose(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>, pur
     }
     Ok(())
 }
+fn measured_owner(owner: &AccountedDocument,c:&ReadControl<'_>)->Result<ModelCensus,BackingError>{
+    if owner.is_readonly_masked_filtered_flat_point_storage(){masked_filtered_flat_readonly::measured(owner.document(),owner.quota(),c,false)}
+    else{measured(owner.document(),owner.quota(),c)}
+}
+fn accepts(owner:&AccountedDocument)->bool {owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage()}
 fn measured(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
     measured_with_purpose(doc, q, c, TopologyPurpose::Current)
 }
@@ -770,7 +775,7 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, c: &ReadControl<'_>
         return Err(BackingError::Length);
     }
     imported_edits::validate_name(name, c)?;
-    let logical = measured(owner.document(), owner.quota(), c)?;
+    let logical = measured_owner(owner, c)?;
     if imported_edits::names_equal(&owner.document().name, name, c)? {
         return Ok(owner.clone());
     }
@@ -785,6 +790,7 @@ enum CopyKind<'a> {
     Metadata(metadata::Plan<'a>),
 }
 fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
+    if owner.is_readonly_masked_filtered_flat_point_storage(){owner.document().checked_f32_filter_mask_coverage_set_requirements(crate::xcf_filter_masks::MaskCoverageSetLimits::STANDARD,c)?;}
     let name_bytes = match kind {
         CopyKind::Title(name) => (name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
         CopyKind::Filter(_) | CopyKind::Move(_) | CopyKind::Remove(_) => 0,
@@ -839,7 +845,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         CopyKind::Remove(plan) => filter_remove::apply(&mut staged.document, plan, c)?,
         CopyKind::Metadata(plan) => metadata::apply(&mut staged.document, plan, c)?,
     }
-    let actual = measured(&staged.document, owner.quota(), c)?;
+    let actual = if owner.is_readonly_masked_filtered_flat_point_storage(){masked_filtered_flat_readonly::measured(&staged.document,owner.quota(),c,false)?}else{measured(&staged.document, owner.quota(), c)?};
     let actual_index = actual.index.checked_sub(header).ok_or(BackingError::Integrity)?;
     if actual_index > envelope || actual.payload > payload {
         return Err(BackingError::Allocation);
@@ -849,7 +855,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     c.check(1)?;
     Ok(AccountedDocument {
         owner: Arc::new(ModelOwner {
-            _storage_class: StorageClass::ReadonlyFilteredFlatPoint,
+            _storage_class: owner.owner._storage_class,
             document: staged.document,
             _selection: None,
             _selection_view: None,

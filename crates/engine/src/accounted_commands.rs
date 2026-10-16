@@ -24,6 +24,7 @@ mod imported_translate;
 mod point;
 mod filtered_flat;
 pub use filtered_flat::candidate as filtered_flat_filter_edit_candidate;
+pub use filtered_flat::masked_candidate as masked_filtered_flat_filter_edit_candidate;
 mod gaussian_group;
 mod flat_composition;
 mod readonly_layer_name;
@@ -87,12 +88,12 @@ fn bad(id: &str, message: &str) -> EngineError {
 
 /// Preserve the old global command set; rename is admitted only on this actual class.
 pub(crate) fn supports_for_session(session:&Session,id:&str)->bool{
- supports(id) || id=="layer.renameLayer" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage())
+ supports(id) || id=="layer.renameLayer" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || o.is_readonly_masked_filtered_flat_point_storage())
 }
 /// No editing or selection route is granted by readonly mixed-root storage.
 pub(crate) fn filtered_flat_mutation_refused(session:&Session,id:&str)->bool{
     supports_for_session(session,id) && !matches!(id,"edit.undo"|"edit.redo"|"history.selectState"|"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move"|"xcf.filter.remove"|"layer.setProps"|"layer.renameLayer")
-        && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage())
+        && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || o.is_readonly_masked_filtered_flat_point_storage())
 }
 
 enum Request<'a> {
@@ -162,7 +163,7 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
         crate::accounted_clear::validate_request(session, params)?;
         return Ok(Request::Clear(params));
     }
-    if matches!(id,"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move"|"xcf.filter.remove") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage()) {
+    if matches!(id,"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move"|"xcf.filter.remove") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || o.is_readonly_masked_filtered_flat_point_storage()) {
         return Ok(Request::FilteredFlat(filtered_flat::Request::parse(session,id,params,control)?));
     }
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove") {
@@ -193,7 +194,7 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
         params.as_object().ok_or_else(|| bad(id, "parameters must be an object"))?;
         return Ok(Request::HistorySelect(crate::history_select_cmds::validate_request(session, params, control)?));
     }
-    if id=="layer.renameLayer" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage()) {
+    if id=="layer.renameLayer" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || o.is_readonly_masked_filtered_flat_point_storage()) {
         return Ok(Request::ImportedMetadata(imported_metadata::parse_rename(session,params,control)?));
     }
     if id == "layer.setProps" && readonly_layer_name::applies(session) {
@@ -332,14 +333,14 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     if observed_box_mutation_refused(session, id) {
         return Ok(Some("this observed Box geometry recipe is read-only"));
     }
-    if matches!(id, "xcf.filter.move" | "xcf.filter.remove") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_point_storage() || owner.is_readonly_filtered_flat_point_storage()) {
+    if matches!(id, "xcf.filter.move" | "xcf.filter.remove") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_point_storage() || (owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage())) {
         return Ok(Some("this accounted filter storage has no qualified stack edit recipe"));
     }
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable")
         && !state
             .doc
             .accounted()
-            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_gaussian_group_storage() || owner.is_readonly_filtered_flat_point_storage() || point::assigned_enabled_candidate(owner))
+            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_gaussian_group_storage() || (owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage()) || point::assigned_enabled_candidate(owner))
     {
         return Ok(Some("this accounted filter storage has no qualified editing recipe"));
     }
