@@ -21,6 +21,7 @@ struct Fields<'a> {
     arguments: [Option<Argument<'a>>; 10],
     count: usize,
     enabled: Option<bool>,
+    opacity:Option<u64>,
 }
 
 fn flat_value_with_literal(v: &serde_json::Map<String, Value>, literal: bool) -> Option<(PointArgumentValue, Option<&str>)> {
@@ -89,6 +90,15 @@ fn flat_value_with_literal(v: &serde_json::Map<String, Value>, literal: bool) ->
     Some(result)
 }
 
+// Resident bits64 grammar is private; retain its bounded canonical form here.
+fn opacity_bits(value:&Value)->Option<u64>{
+    let text=value.as_str().filter(|s|s.len()==18&&s.starts_with("0x"))?;
+    let digits=text.get(2..)?;
+    if !digits.bytes().all(|b|b.is_ascii_hexdigit()&&!b.is_ascii_uppercase()){return None}
+    let bits=u64::from_str_radix(digits,16).ok()?;let value=f64::from_bits(bits);
+    (value.is_finite()&&(0.0..=1.0).contains(&value)).then_some(bits)
+}
+
 // This is a bounded borrowed wire check, not operation or source eligibility.
 fn wire_with_literal<'a>(id: &str, params: &'a Value, literal: bool) -> Option<Fields<'a>> {
     let enable = match id {
@@ -110,9 +120,7 @@ fn wire_with_literal<'a>(id: &str, params: &'a Value, literal: bool) -> Option<F
         None if enable => return None,
         None => None,
     };
-    if p.get("opacityF64Bits").is_some_and(|v| v.as_str() != Some("0x3ff0000000000000")) {
-        return None;
-    }
+    let opacity=match p.get("opacityF64Bits"){Some(value)=>Some(opacity_bits(value)?),None=>None};
     let mut arguments = [None; 10];
     let mut count = 0;
     if let Some(values) = p.get("arguments") {
@@ -137,7 +145,7 @@ fn wire_with_literal<'a>(id: &str, params: &'a Value, literal: bool) -> Option<F
     if count == 0 && enabled.is_none() && !p.contains_key("opacityF64Bits") {
         return None;
     }
-    Some(Fields { filter, arguments, count, enabled })
+    Some(Fields { filter, arguments, count, enabled, opacity })
 }
 
 fn family(node: &photocraft_doc::xcf_filters::FilterNode) -> Option<u8> {
@@ -275,7 +283,7 @@ impl<'a> Request<'a> {
             let text=object.get("filterId").and_then(Value::as_str).filter(|s|!s.is_empty()&&s.len()<=20&&!s.starts_with('0')&&s.bytes().all(|b|b.is_ascii_digit()))
                 .ok_or_else(||bad(id,"canonical filterId required"))?;
             let filter=FilterId(text.parse().map_err(|_|bad(id,"filterId overflow"))?);
-            return Ok(Self{id,params,fields:Fields{filter,arguments:[None;10],count:0,enabled:None},move_to:None});
+            return Ok(Self{id,params,fields:Fields{filter,arguments:[None;10],count:0,enabled:None,opacity:None},move_to:None});
         }
         if id == "xcf.filter.move" {
             let object=params.as_object().filter(|o|o.len()==2 && o.keys().all(|k|matches!(k.as_str(),"filterId"|"index")))
@@ -285,12 +293,12 @@ impl<'a> Request<'a> {
             let filter=FilterId(text.parse().map_err(|_|bad(id,"filterId overflow"))?);
             let index=object.get("index").and_then(Value::as_u64).filter(|i|*i<1024).ok_or_else(||bad(id,"index must be a bounded owner-local integer"))?;
             let index=usize::try_from(index).map_err(|_|BackingError::Length)?;
-            return Ok(Self{id,params,fields:Fields{filter,arguments:[None;10],count:0,enabled:None},move_to:Some(index)});
+            return Ok(Self{id,params,fields:Fields{filter,arguments:[None;10],count:0,enabled:None,opacity:None},move_to:Some(index)});
         }
         let object = params
             .as_object()
-            .filter(|o| o.len() <= 3 && o.keys().all(|k| matches!(k.as_str(), "filterId" | "arguments" | "enabled")))
-            .ok_or_else(|| bad(id, "only filterId,arguments,enabled supported"))?;
+            .filter(|o| o.len() <= 4 && o.keys().all(|k| matches!(k.as_str(), "filterId" | "arguments" | "enabled" | "opacityF64Bits")))
+            .ok_or_else(|| bad(id, "only filterId,arguments,enabled,opacityF64Bits supported"))?;
         if object.get("arguments").is_some_and(|v| v.as_array().is_none_or(|a| a.is_empty() || a.len() > 3)) {
             return Err(bad(id, "one to three patches required"));
         }
@@ -386,7 +394,7 @@ impl<'a> Request<'a> {
         } else if let Some(index)=self.move_to {
             if index>=stack.nodes.len(){return Err(bad(self.id,"index is outside the current owner stack"))}
             owner.try_move_readonly_filtered_flat_point_filter(PointFilterMovePatch{layer,filter:self.fields.filter,expected_stack_revision:stack.revision,index},ctl)?
-        } else { owner.try_with_readonly_filtered_flat_point_filter(
+        } else { owner.try_with_readonly_filtered_flat_point_filter_with_opacity(
             PointFilterPatch {
                 layer,
                 filter: self.fields.filter,
@@ -394,6 +402,7 @@ impl<'a> Request<'a> {
                 arguments: patches.get(..self.fields.count).ok_or(BackingError::Integrity)?,
                 enabled: self.fields.enabled,
             },
+            self.fields.opacity,
             ctl,
         )? };
         validate_recipe(&staged, ctl)?;
@@ -592,3 +601,7 @@ mod exposure_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_invert_tests.rs"]
 mod invert_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="filtered_flat_opacity_tests.rs"]
+mod opacity_tests;

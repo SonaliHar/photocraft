@@ -1441,11 +1441,10 @@ nodes retain a paid ordered stage, and empty CURRENT continuation remains plain.
 
 These nodes use existing enable, move, remove, undo and reader10 native routes.
 They have no editable scalar arguments. The registered mixed command accepts
-enabled-only edits with arguments omitted. Its existing outer parser refuses
-target-only requests, explicit empty arguments even with enabled, and any
-opacityF64Bits field including unit opacity. Nonempty argument patches have no
-supported name for these zero-argument nodes. A broader inner wire helper does
-not change the registered route. The UI captures the actual target and offers its
+enabled-only edits with arguments omitted. Its outer parser refuses target-only
+requests and explicit empty arguments even with enabled. Opacity follows the
+mixed CURRENT policy described below. Nonempty argument patches have no
+supported name for these zero-argument nodes. The UI captures the actual target and offers its
 checkbox and existing stack controls. Native hints recognize the new epochs,
 including a sole remaining invert, without selecting by old operation name.
 Complete OLD/history/STAGED proof, locks, original source custody, cumulative
@@ -1520,3 +1519,63 @@ acceptance. PhotoCraft tests and test compilation, numerical comparisons, native
 round trips, GUI checks, corpus and performance gates remain deferred. These
 endpoint observations do not establish generic filter blending, nonzero masks,
 HDR sources, arbitrary profiles/offsets or complete stock-XCF support.
+
+
+Mixed filtered-flat CURRENT documents support finite-unit filter opacity for
+Semi-Flatten, Hue/Chroma, Vibrance, Exposure (including mixed loaded-endpoint V2),
+Invert Linear and Invert Gamma. This is an additive CURRENT domain under their
+existing exact operation/schema/composition pairs. Source XCF qualification and
+all ordinary Point routes retain their previous exact unit-opacity requirement.
+Nonunit original XCF imports and nonzero filter masks are outside this increment.
+
+The declared policy is `mixed-current-linear-premultiplied-opacity-float-tail-v1`.
+Exact opacity +1 invokes the old kernel body without a mix or additional cast.
+Disabled nodes retain full preparation/input proof and the old exact wide pass.
+Enabled zero opacity still evaluates and validates the full leaf, counts as
+enabled, and retains the existing ordered NL Float bridges. It then checks and
+narrows each incoming nonlinear component through F32 before widening to F64;
+the alpha copy preserves negative zero and rounds near-one F64 alpha. Enabled
+zero therefore differs from disabling the filter.
+
+Partial opacity mixes the actual incoming pixel with the full leaf result in
+known linear sRGB. Alpha uses the unfused difference form b + t * (a - b).
+Each premultiplied linear channel uses the same interpolation order and divides
+by that alpha. At exactly zero resulting alpha, straight linear interpolation
+retains hidden RGB. There is no epsilon, alpha restoration, black substitution
+or clamp. Encoding back to nonlinear RGB ends with checked F32 RGB/alpha values
+widened to F64. Nonfinite intermediate results or casts refuse atomically.
+This explicit compatibility schedule does not claim unique GIMP internal formats.
+
+Preparation prices the real expanded stage/vector, mix owner, analytic Space
+and overlapping Parts. Independent same-quota 1024-byte runtime mix scratch is
+held before copying incoming/full-output pixels and throughout leaf application
+and mixing. Partial and zero mix calls debit 2048 and 256 work respectively,
+in addition to existing leaf costs. Full native/default/profile/zero-mask/recipe
+proof, controls, cancellation and all whole-document limits remain mandatory
+even for hidden, disabled or zero-opacity content. Source preparation stays
+separate from this CURRENT extension.
+
+`xcf.filter.set` accepts `opacityF64Bits` as a canonical lowercase `0x` plus
+16-digit finite-unit F64 word on these mixed CURRENT targets. For example,
+`{"filterId":"123","opacityF64Bits":"0x3fd8000000000000"}` sets 37.5 percent.
+Arguments, activation and opacity can share one transaction, revision and undo.
+Omitted arguments remain unchanged; an explicitly empty arguments array keeps
+its previous refusal. `xcf.filter.enable` still takes activation only. Loaded
+Exposure raw black words and strict incoming argument validation remain intact.
+
+The captured properties control displays 0-100 percent. Untouched opacity returns
+the original family request before any percent conversion, retaining arbitrary
+F64 words and signed zero on passive or parameter-only edits. Fresh frame/target
+opacity checks, locks, complete OLD/history/STAGED proof, no-op/revision checks,
+source guards, journaling and publication fences remain. Native continuation
+uses existing reader10 ownership and opacity storage with no new field/version.
+Original XCF files remain read-only; saved projects use `.pcraft`.
+
+Six GIMP-only author/fresh/repeat processes establish source/raw/native custody
+and representative full/partial/zero/disabled behavior at two native depths.
+Rendered RGB varies between producer runs by up to about0.0000391, while
+cross-phase alpha words remain stable. Exact Babl/cast/FMA placement, arbitrary
+F64 factors and unobserved interactions remain fidelity limits. Ignored drafts
+and production compilation do not satisfy SC-002: matched PhotoCraft display
+comparisons <=2/255 and native/interface/performance/final gates remain deferred.
+Source/native/ICC/structure exactness retains zero tolerance.

@@ -109,6 +109,7 @@ pub use gimp_hue_chroma::EPOCH as HUE_CHROMA_EPOCH;
 mod gimp_vibrance;
 pub use gimp_vibrance::EPOCH as VIBRANCE_EPOCH;
 mod gimp_exposure;
+mod gimp_mixed_filter_opacity;
 pub use gimp_exposure::{EPOCH as EXPOSURE_MIXED_EPOCH, Parameters as ExposureParameters, PreparedExposure, parameters as exposure_mixed_parameters};
 pub use gimp_exposure::{LOADED_POINT_EPOCH as EXPOSURE_LOADED_POINT_EPOCH, LOADED_MIXED_EPOCH as EXPOSURE_LOADED_MIXED_EPOCH, LoadedParameters as LoadedExposureParameters, loaded_parameters as loaded_exposure_parameters};
 mod gimp_invert;

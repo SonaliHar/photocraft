@@ -74,6 +74,12 @@ pub(crate) fn claims(node: &FilterNode) -> bool {
 }
 /// Exact CURRENT metadata kind; no source identity follows from lower arithmetic.
 pub(crate) fn canonical(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect) -> Result<Kind, CompositionError> {
+    canonical_mode(node, stored, version, extent, false)
+}
+pub(crate) fn canonical_current(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect) -> Result<Kind, CompositionError> {
+    canonical_mode(node, stored, version, extent, true)
+}
+fn canonical_mode(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect, current: bool) -> Result<Kind, CompositionError> {
     crate::gimp_semi_flatten::positive_origin(extent)?;
     let kind = match node.operation.name.as_str() {
         "gegl:invert-linear" => Kind::Linear,
@@ -85,7 +91,7 @@ pub(crate) fn canonical(node: &FilterNode, stored: SampleEncoding, version: u32,
         || node.operation.schema_epoch != kind.epoch()
         || !node.arguments.is_empty()
         || stored != SampleEncoding::NonlinearProfile
-        || node.opacity_f64_bits != 1f64.to_bits()
+        || if current { crate::gimp_mixed_filter_opacity::validate_opacity(node.opacity_f64_bits).is_err() } else { node.opacity_f64_bits != 1f64.to_bits() }
         || node.source_clipping != Some(0)
         || node.source_region != Some(0)
         || !node.auxiliary.is_empty()

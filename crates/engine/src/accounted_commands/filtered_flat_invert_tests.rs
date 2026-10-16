@@ -32,9 +32,9 @@ fn invert_targets_and_empty_wire_continue_native() {
                 serde_json::json!({"filterId":id.0.to_string()}),
                 serde_json::json!({"filterId":id.0.to_string(),"arguments":[]}),
                 serde_json::json!({"filterId":id.0.to_string(),"arguments":[],"enabled":false}),
-                serde_json::json!({"filterId":id.0.to_string(),"opacityF64Bits":"0x3ff0000000000000"}),
+                serde_json::json!({"filterId":id.0.to_string(),"opacityF64Bits":"0x3ff0000000000001"}),
                 serde_json::json!({"filterId":id.0.to_string(),"arguments":[{"name":"value","value":{"Number":{"Float32Bits":0}}}]}),
-                serde_json::json!({"filterId":id.0.to_string(),"opacityF64Bits":"0x0000000000000000"}),
+                serde_json::json!({"filterId":id.0.to_string(),"opacityF64Bits":"0xbff0000000000000"}),
             ] {
                 assert!(s.execute("xcf.filter.set", bad).is_err());
                 assert!(s.active().unwrap().doc.shares_state(&before));

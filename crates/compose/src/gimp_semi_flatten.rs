@@ -64,13 +64,19 @@ pub(crate) fn literal_arguments(arguments: &[FilterArgument]) -> Result<([f32; 4
     Ok((color, *encoding))
 }
 pub(crate) fn canonical(node: &FilterNode, stored: SampleEncoding, version: u32, extent: Rect) -> Result<()> {
+    canonical_mode(node, stored, version, extent, false)
+}
+pub(crate) fn canonical_current(node: &FilterNode, stored: SampleEncoding, version: u32, extent: Rect) -> Result<()> {
+    canonical_mode(node, stored, version, extent, true)
+}
+fn canonical_mode(node: &FilterNode, stored: SampleEncoding, version: u32, extent: Rect, current: bool) -> Result<()> {
     crate::gimp_semi_flatten::positive_origin(extent)?;
     if version != 22
         || node.operation.name != "gimp:semi-flatten"
         || node.operation.stored_version != "0:0"
         || node.operation.schema_epoch != EPOCH
         || stored != SampleEncoding::NonlinearProfile
-        || node.opacity_f64_bits != 1f64.to_bits()
+        || if current { crate::gimp_mixed_filter_opacity::validate_opacity(node.opacity_f64_bits).is_err() } else { node.opacity_f64_bits != 1f64.to_bits() }
         || node.source_clipping != Some(0)
         || node.source_region != Some(0)
         || !node.auxiliary.is_empty()
@@ -92,8 +98,14 @@ pub(crate) struct PreparedSemiFlatten {
 }
 impl PreparedSemiFlatten {
     pub(crate) fn new(node: &FilterNode, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, control: &Interrupt<'_>) -> Result<Self> {
+        Self::new_mode(node, profile, stored, version, extent, control, false)
+    }
+    pub(crate) fn new_current(node: &FilterNode, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, control: &Interrupt<'_>) -> Result<Self> {
+        Self::new_mode(node, profile, stored, version, extent, control, true)
+    }
+    fn new_mode(node: &FilterNode, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, control: &Interrupt<'_>, current: bool) -> Result<Self> {
         control.check().map_err(|_| RasterInputError::Cancelled)?;
-        canonical(node, stored, version, extent)?;
+        canonical_mode(node, stored, version, extent, current)?;
         if profile != Builtin::Srgb.profile() {
             return Err(scope());
         }

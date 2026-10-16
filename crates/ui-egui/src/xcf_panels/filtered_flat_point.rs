@@ -11,6 +11,7 @@ struct Target {
     node_index:usize,
     stack_owner:ItemRef,
     filter: FilterId,
+    opacity_bits:u64,
 }
 fn idle(app: &PhotocraftApp) -> bool {
     app.session.active().is_some_and(|state| {
@@ -52,7 +53,7 @@ fn unlocked(snapshot: &DocumentSnapshot, root: LayerId) -> bool {
 }
 fn capture_snapshot(snapshot:&DocumentSnapshot,revision:u64,root:LayerId,index:usize)->Option<Target>{
     let (node,stack_revision)=node_at(snapshot,root,index)?;
-    Some(Target{snapshot:snapshot.clone(),revision,root,stack_revision,node_index:index,stack_owner:ItemRef::Layer(root),filter:node.id})
+    Some(Target{snapshot:snapshot.clone(),revision,root,stack_revision,node_index:index,stack_owner:ItemRef::Layer(root),filter:node.id,opacity_bits:node.opacity_f64_bits})
 }
 #[cfg(test)]
 fn capture_at(app:&PhotocraftApp,root:LayerId,index:usize)->Option<Target>{
@@ -67,7 +68,7 @@ fn validate(app: &PhotocraftApp, target: &Target) -> bool {
                 && state.doc.shares_state(&target.snapshot)
                 && unlocked(&state.doc, target.root)
                 && target.stack_owner==ItemRef::Layer(target.root)
-                && node_at(&state.doc, target.root,target.node_index).is_some_and(|(node, revision)| node.id == target.filter && revision == target.stack_revision)
+                && node_at(&state.doc, target.root,target.node_index).is_some_and(|(node, revision)| node.id == target.filter && revision == target.stack_revision && node.opacity_f64_bits==target.opacity_bits)
         })
 }
 fn submit(app: &mut PhotocraftApp, target: &Target, command: &str, params: serde_json::Value) {
@@ -88,7 +89,7 @@ fn scalar_widgets<const N: usize>(ui: &mut egui::Ui, values: &mut [f32; N], labe
         });
     }
 }
-fn controls(ui: &mut egui::Ui, node: &FilterNode, enabled_ui: bool) -> Option<(&'static str, serde_json::Value)> {
+fn family_controls(ui: &mut egui::Ui, node: &FilterNode, enabled_ui: bool) -> Option<(&'static str, serde_json::Value)> {
     let mut enabled = node.enabled;
     let caption: String = node.source_display_name.as_deref().filter(|name| !name.is_empty()).unwrap_or(&node.operation.name).chars().take(128).collect();
     match node.operation.name.as_str() {
@@ -169,6 +170,26 @@ fn controls(ui: &mut egui::Ui, node: &FilterNode, enabled_ui: bool) -> Option<(&
         _ => None,
     }
 }
+// Keep the family builder separate: its exact loadedV2 early return must not
+// bypass opacity, and its intentional-only black patch rules remain untouched.
+fn opacity_request(node:&FilterNode,request:Option<(&'static str,serde_json::Value)>,opacity:f64,intent:bool)->Option<(&'static str,serde_json::Value)>{
+    if !intent || opacity.to_bits()==node.opacity_f64_bits{return request}
+    if !opacity.is_finite() || !(0.0..=1.0).contains(&opacity){return None}
+    let mut params=match request {Some((_,params))=>params,None=>json!({"filterId":node.id.0.to_string()})};
+    params.as_object_mut()?.insert("opacityF64Bits".into(),json!(format!("0x{:016x}",opacity.to_bits())));
+    Some(("xcf.filter.set",params))
+}
+fn controls(ui:&mut egui::Ui,node:&FilterNode,enabled_ui:bool)->Option<(&'static str,serde_json::Value)>{
+    let request=family_controls(ui,node,enabled_ui);
+    let mut percent=f64::from_bits(node.opacity_f64_bits)*100.0;
+    let intent=ui.add_enabled_ui(enabled_ui,|ui|ui.horizontal(|ui|{
+        let label=ui.label(tl!("Filter opacity"));
+        ui.add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(1.0).suffix("%").update_while_editing(false)).labelled_by(label.id).changed()
+    }).inner).inner;
+    // Percentage formatting is view-only. Never roundtrip untouched F64 words.
+    if !intent{return request}
+    opacity_request(node,request,percent/100.0,true)
+}
 pub(super) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, root: LayerId) {
     let Some((snapshot,revision))=app.session.active().map(|state|(state.doc.clone(),state.revision)) else{return};
     let count=snapshot.xcf_state.as_ref()
@@ -245,3 +266,7 @@ mod exposure_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_point_invert_tests.rs"]
 mod invert_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="filtered_flat_point_opacity_tests.rs"]
+mod opacity_tests;

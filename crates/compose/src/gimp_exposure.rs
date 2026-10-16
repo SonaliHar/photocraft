@@ -130,6 +130,7 @@ fn canonical_loaded(
     version: u32,
     extent: photocraft_geom::Rect,
     epoch: &str,
+    current: bool,
 ) -> Result<LoadedParameters, CompositionError> {
     crate::gimp_semi_flatten::positive_origin(extent)?;
     if !matches!(epoch, LOADED_POINT_EPOCH | LOADED_MIXED_EPOCH)
@@ -138,7 +139,7 @@ fn canonical_loaded(
         || node.operation.stored_version != "1:0"
         || node.operation.schema_epoch != epoch
         || stored != SampleEncoding::NonlinearProfile
-        || node.opacity_f64_bits != 1f64.to_bits()
+        || if current { crate::gimp_mixed_filter_opacity::validate_opacity(node.opacity_f64_bits).is_err() } else { node.opacity_f64_bits != 1f64.to_bits() }
         || node.source_clipping != Some(0)
         || node.source_region != Some(0)
         || !node.auxiliary.is_empty()
@@ -155,7 +156,7 @@ pub(crate) fn canonical_loaded_point(
     version: u32,
     extent: photocraft_geom::Rect,
 ) -> Result<LoadedParameters, CompositionError> {
-    canonical_loaded(node, stored, version, extent, LOADED_POINT_EPOCH)
+    canonical_loaded(node, stored, version, extent, LOADED_POINT_EPOCH, false)
 }
 pub(crate) fn canonical_loaded_mixed(
     node: &FilterNode,
@@ -163,7 +164,10 @@ pub(crate) fn canonical_loaded_mixed(
     version: u32,
     extent: photocraft_geom::Rect,
 ) -> Result<LoadedParameters, CompositionError> {
-    canonical_loaded(node, stored, version, extent, LOADED_MIXED_EPOCH)
+    canonical_loaded(node, stored, version, extent, LOADED_MIXED_EPOCH, false)
+}
+pub(crate) fn canonical_loaded_mixed_current(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect) -> Result<LoadedParameters, CompositionError> {
+    canonical_loaded(node, stored, version, extent, LOADED_MIXED_EPOCH, true)
 }
 pub(crate) fn claims(node: &FilterNode) -> bool {
     node.operation.name == "gegl:exposure" || node.operation.schema_epoch == EPOCH
@@ -171,13 +175,19 @@ pub(crate) fn claims(node: &FilterNode) -> bool {
 /// Mixed canonical metadata only; full actual root/native/profile/mask proof
 /// and original-source geometry enrollment remain separate caller policies.
 pub(crate) fn canonical(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect) -> Result<Parameters, CompositionError> {
+    canonical_mode(node, stored, version, extent, false)
+}
+pub(crate) fn canonical_current(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect) -> Result<Parameters, CompositionError> {
+    canonical_mode(node, stored, version, extent, true)
+}
+fn canonical_mode(node: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect, current: bool) -> Result<Parameters, CompositionError> {
     crate::gimp_semi_flatten::positive_origin(extent)?;
     if version != 22
         || node.operation.name != "gegl:exposure"
         || node.operation.stored_version != "1:0"
         || node.operation.schema_epoch != EPOCH
         || stored != SampleEncoding::NonlinearProfile
-        || node.opacity_f64_bits != 1f64.to_bits()
+        || if current { crate::gimp_mixed_filter_opacity::validate_opacity(node.opacity_f64_bits).is_err() } else { node.opacity_f64_bits != 1f64.to_bits() }
         || node.source_clipping != Some(0)
         || node.source_region != Some(0)
         || !node.auxiliary.is_empty()

@@ -340,16 +340,16 @@ fn compile<B: PlanBudget>(doc: &Document, purpose: Purpose, header: u64, interru
                 // Exact family canonical policies are unchanged, separately selected.
                 if crate::gimp_invert::claims(node) {
                     charge(budget,interrupt,128)?;
-                    crate::gimp_invert::canonical(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?;
+                    (if purpose == Purpose::Current { crate::gimp_invert::canonical_current } else { crate::gimp_invert::canonical })(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?;
                 } else if crate::gimp_exposure::claims(node) {
                     charge(budget,interrupt,512)?;
-                    if node.operation.schema_epoch==crate::gimp_exposure::LOADED_MIXED_EPOCH { let parameters=crate::gimp_exposure::canonical_loaded_mixed(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?; let [_,raw_black]=parameters.raw_words(); if purpose==Purpose::Source && !matches!(raw_black,0x3dcc_cccd|0xbdcc_cccd) {return Err(scope());} } else { crate::gimp_exposure::canonical(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?; }
+                    if node.operation.schema_epoch==crate::gimp_exposure::LOADED_MIXED_EPOCH { let parameters=(if purpose == Purpose::Current { crate::gimp_exposure::canonical_loaded_mixed_current } else { crate::gimp_exposure::canonical_loaded_mixed })(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?; let [_,raw_black]=parameters.raw_words(); if purpose==Purpose::Source && !matches!(raw_black,0x3dcc_cccd|0xbdcc_cccd) {return Err(scope());} } else { (if purpose == Purpose::Current { crate::gimp_exposure::canonical_current } else { crate::gimp_exposure::canonical })(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?; }
                 } else if crate::gimp_semi_flatten::claims(node) {
-                    crate::gimp_semi_flatten::canonical(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
+                    (if purpose == Purpose::Current { crate::gimp_semi_flatten::canonical_current } else { crate::gimp_semi_flatten::canonical })(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
                 } else if crate::gimp_hue_chroma::claims(node) {
-                    crate::gimp_hue_chroma::canonical(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
+                    (if purpose == Purpose::Current { crate::gimp_hue_chroma::canonical_current } else { crate::gimp_hue_chroma::canonical })(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
                 } else if crate::gimp_vibrance::claims(node) {
-                    crate::gimp_vibrance::canonical(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
+                    (if purpose == Purpose::Current { crate::gimp_vibrance::canonical_current } else { crate::gimp_vibrance::canonical })(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
                 } else {
                     return Err(scope());
                 }
@@ -418,7 +418,7 @@ fn compile<B: PlanBudget>(doc: &Document, purpose: Purpose, header: u64, interru
                 // existing plain Normal path; no lost operation is inferred.
                 (None, None)
             } else {
-                let (plan, fee) = RootPointPlan::prepare(stack, format, bounds, interrupt, budget)?;
+                let (plan, fee) = RootPointPlan::prepare(stack, format, bounds, purpose == Purpose::Current, interrupt, budget)?;
                 (Some(plan), Some(fee))
             }
         } else {
