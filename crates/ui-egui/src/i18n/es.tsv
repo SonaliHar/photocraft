@@ -4170,3 +4170,15 @@ navigator	Zoom	Zoom
 	This document's layers: {needed} of {budget} for layers	Capas de este documento: {needed} de {budget} para capas
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Las capas de este documento necesitan {needed} pero pueden ocupar {budget}: los redibujados de todo el documento usan la CPU
 	GPU Memory (MB, 0 = Automatic)	Memoria de GPU (MB, 0 = Automático)
+	A layer per frame, each with its own delay, edited in Window › Timeline	Una capa por fotograma, cada una con su propio retardo, editable en Ventana › Línea de tiempo
+	A still image	Una imagen fija
+	Change it later in Preferences › File Handling.	Puedes cambiarlo en Preferencias › Gestión de archivos.
+	First frame only	Solo el primer fotograma
+	Frame animation	Animación de fotogramas
+	One layer holding every frame, played on the timeline	Una capa con todos los fotogramas, reproducida en la línea de tiempo
+	Open Animated {format}	Abrir {format} animado
+	Remember this choice for {format} files	Recordar esta opción para archivos {format}
+	Video layer	Capa de vídeo
+	“{name}” is an animated {format} with {frames} frames. Open it as:	«{name}» es un {format} animado con {frames} fotogramas. Abrirlo como:
+	Open animated GIF as	Abrir GIF animado como
+	Open animated WebP as	Abrir WebP animado como

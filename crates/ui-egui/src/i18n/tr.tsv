@@ -3938,3 +3938,15 @@ cameraData	Lens	Lens
 	This document's layers: {needed} of {budget} for layers	Bu belgenin katmanları: katmanlar için {budget} içinden {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Bu belgenin katmanlarının {needed} belleğe ihtiyacı var ama en fazla {budget} kullanabilirler: tüm belgenin yeniden çizimi CPU'yu kullanır
 	GPU Memory (MB, 0 = Automatic)	GPU Belleği (MB, 0 = Otomatik)
+	A layer per frame, each with its own delay, edited in Window › Timeline	Her kare için bir katman, her biri kendi gecikmesiyle; Pencere › Zaman çizelgesi'nde düzenlenir
+	A still image	Durağan görüntü
+	Change it later in Preferences › File Handling.	Daha sonra Tercihler › Dosya İşleme'den değiştirebilirsiniz.
+	First frame only	Yalnızca ilk kare
+	Frame animation	Kare animasyonu
+	One layer holding every frame, played on the timeline	Tüm kareleri tutan tek katman, zaman çizelgesinde oynatılır
+	Open Animated {format}	Animasyonlu {format} Aç
+	Remember this choice for {format} files	Bu seçimi {format} dosyaları için hatırla
+	Video layer	Video katmanı
+	“{name}” is an animated {format} with {frames} frames. Open it as:	“{name}”, {frames} kareli animasyonlu bir {format}. Şu şekilde aç:
+	Open animated GIF as	Animasyonlu GIF'i şu şekilde aç
+	Open animated WebP as	Animasyonlu WebP'yi şu şekilde aç

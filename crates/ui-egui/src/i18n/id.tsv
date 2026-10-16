@@ -3200,3 +3200,15 @@ curves	Smooth	Haluskan
 	This document's layers: {needed} of {budget} for layers	Layer dokumen ini: {needed} dari {budget} untuk layer
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Layer dokumen ini membutuhkan {needed} tetapi boleh memakai {budget}: penggambaran ulang seluruh dokumen memakai CPU
 	GPU Memory (MB, 0 = Automatic)	Memori GPU (MB, 0 = Otomatis)
+	A layer per frame, each with its own delay, edited in Window › Timeline	Satu layer per frame, masing-masing dengan jedanya sendiri, disunting di Jendela › Timeline
+	A still image	Gambar diam
+	Change it later in Preferences › File Handling.	Ubah nanti di Preferensi › Penanganan Berkas.
+	First frame only	Hanya frame pertama
+	Frame animation	Animasi frame
+	One layer holding every frame, played on the timeline	Satu layer berisi semua frame, diputar di timeline
+	Open Animated {format}	Buka {format} Animasi
+	Remember this choice for {format} files	Ingat pilihan ini untuk berkas {format}
+	Video layer	Layer video
+	“{name}” is an animated {format} with {frames} frames. Open it as:	“{name}” adalah {format} animasi dengan {frames} frame. Buka sebagai:
+	Open animated GIF as	Buka GIF animasi sebagai
+	Open animated WebP as	Buka WebP animasi sebagai
