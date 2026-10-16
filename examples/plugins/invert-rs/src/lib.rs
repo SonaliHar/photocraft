@@ -47,19 +47,10 @@ pub extern "C" fn pc_alloc(size: u32) -> u32 {
 ///
 /// # Safety
 /// The host guarantees `buf..buf + len` is a block it got from `pc_alloc`, holding `len / 4`
-/// samples. 
+/// samples.
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pc_filter(
-    buf: *mut f32,
-    len: u32,
-    width: u32,
-    height: u32,
-    channels: u32,
-    format: u32,
-    _params: *const u8,
-    _params_len: u32,
-) -> i32 {
+pub unsafe extern "C" fn pc_filter(buf: *mut f32, len: u32, width: u32, height: u32, channels: u32, format: u32, _params: *const u8, _params_len: u32) -> i32 {
     let n = channels as usize;
     let alpha = format & HAS_ALPHA != 0;
 
@@ -71,10 +62,7 @@ pub unsafe extern "C" fn pc_filter(
     let sample_count = len as usize / 4;
 
     // Verify that the buffer contains exactly the expected pixels.
-    let Some(expected) = (width as usize)
-        .checked_mul(height as usize)
-        .and_then(|pixels| pixels.checked_mul(n))
-    else {
+    let Some(expected) = (width as usize).checked_mul(height as usize).and_then(|pixels| pixels.checked_mul(n)) else {
         return 1;
     };
 
@@ -116,4 +104,3 @@ pub unsafe extern "C" fn pc_filter(
 
     0
 }
-
