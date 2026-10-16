@@ -46,16 +46,10 @@ fn alpha_type_channels_import_as_alpha_and_round_trip() {
         assert!((a.opacity - 0.5).abs() < 1e-6);
         assert_eq!(a.indicates, ColorIndicates::MaskedAreas);
 
-        // It still prints as black ink, so the composite is what a black spot channel gives. The
-        // alpha is stored as-is (1 = selected), so that ink is its inverse, as on the PSD plane.
+        // It still prints as black ink, so the composite is what a black spot channel with the same
+        // values gives: both are stored as the Channels panel shows them, black = ink (#6123).
         let mut as_ink = d.clone();
-        let canvas = d.bounds();
-        let ink: Vec<f32> = d.channels[1].surface.read_region(canvas).iter().map(|v| 1.0 - v).collect();
-        let mut s = photocraft_raster::Surface::new(d.channels[1].surface.format());
-        s.write_region(canvas, &ink);
-        as_ink.channels[1].surface = s;
         as_ink.channels[1].spot = Some((photocraft_color::Color::BLACK, 0.0));
-        // Within f32 rounding: the inverted copy is re-quantised to the channel depth.
         let (shown, inked) = (photocraft_compose::flatten(&d).px, photocraft_compose::flatten(&as_ink).px);
         assert_eq!(shown.len(), inked.len());
         for (a, b) in shown.iter().zip(&inked) {
@@ -108,11 +102,11 @@ fn alpha_type_channels_are_stored_as_is_not_as_ink() {
     for depth in [8, 16] {
         let f = ink_and_alpha_file(depth);
         let (d, _) = psd_to_document(&f);
-        // A white (selected) alpha plane imports as 1.0, like an alpha channel of any other mode;
-        // the spot plane is still read as ink density (stored 0 = solid ink).
+        // A white (selected) alpha plane imports as 1.0, like an alpha channel of any other mode,
+        // and the spot plane as stored, 0 = solid ink (#6123): both straight copies.
         assert_eq!(d.channels[1].spot, None);
         assert_eq!(values(&d.channels[1]), [1.0, 1.0, 0.0, 0.0], "alpha channel ({depth}-bit)");
-        assert_eq!(values(&d.channels[0]), [1.0, 0.0, 1.0, 0.0], "spot channel ({depth}-bit)");
+        assert_eq!(values(&d.channels[0]), [0.0, 1.0, 0.0, 1.0], "spot channel ({depth}-bit)");
 
         // The composite is what Photoshop shows: the alpha prints as black ink where unselected.
         let px = photocraft_compose::flatten(&d).px;
@@ -136,7 +130,8 @@ fn a_full_alpha_channel_exports_as_a_full_plane() {
             s.write_region(photocraft_geom::Rect::new(0, 0, 4, 1), &[v; 4]);
             s
         };
-        doc.channels.push(photocraft_doc::AlphaChannel { spot: Some((Color::BLACK, 0.0)), ..photocraft_doc::AlphaChannel::new("Black", surface(1.0)) });
+        // Solid black ink is stored 0 (#6123).
+        doc.channels.push(photocraft_doc::AlphaChannel { spot: Some((Color::BLACK, 0.0)), ..photocraft_doc::AlphaChannel::new("Black", surface(0.0)) });
         doc.channels.push(photocraft_doc::AlphaChannel::new("Alpha 1", surface(1.0)));
         let (back, _) = roundtrip(&doc);
         let mut want = plane(&[0.0; 4], depth);

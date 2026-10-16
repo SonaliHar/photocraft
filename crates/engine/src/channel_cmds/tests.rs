@@ -499,7 +499,9 @@ fn channel_options_and_spot_channels() {
     let r = s.execute("channel.newSpot", json!({"color": "#ff00ff", "solidity": 100})).unwrap();
     let i = r["channel"].as_u64().unwrap() as usize;
     assert_eq!(doc(&s).channels[i].name, "Spot Color 1");
-    assert_eq!(chan(&s, i, 5, 5), 1.0, "from the selection");
+    // Stored as the Channels panel shows it (#6123): the selection is ink, black; the rest paper.
+    assert_eq!(chan(&s, i, 5, 5), 0.0, "from the selection");
+    assert_eq!(chan(&s, i, 20, 15), 1.0, "paper outside it");
     // Merge spot: flattens and prints the ink (solid magenta) into the image.
     s.execute("channel.mergeSpot", json!({"channel": i})).unwrap();
     let d = doc(&s);

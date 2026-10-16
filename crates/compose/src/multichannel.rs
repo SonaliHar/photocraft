@@ -1,11 +1,11 @@
 //! Display of Multichannel documents: every spot (ink) channel printed over white paper.
 //!
-//! Ink density `v` (the channel value, 1 = solid) of an ink with display colour `c` and solidity
-//! `s` turns the colour underneath `p` into `(1 − s·v)·p·(1 − v + v·c) + s·v·c`: transparent inks
-//! (solidity 0) multiply like overprinted process inks, opaque ones cover what is below, which is
-//! how Photoshop previews spot channels. An alpha-type channel of a Multichannel document
-//! (selected / masked areas) still prints, as a transparent black ink, like Photoshop shows it.
-//! Its value is stored as-is (1 = selected, white in the Channels panel), so its ink is `1 − value`.
+//! Every channel is stored as the Channels panel shows it, black = solid ink (#6123), so its ink
+//! density is `v = 1 − value`. An ink with display colour `c` and solidity `s` turns the colour
+//! underneath `p` into `(1 − s·v)·p·(1 − v + v·c) + s·v·c`: transparent inks (solidity 0) multiply
+//! like overprinted process inks, opaque ones cover what is below, which is how Photoshop previews
+//! spot channels. An alpha-type channel of a Multichannel document (selected / masked areas, 1 =
+//! selected) still prints, as a transparent black ink where it is black, like Photoshop shows it.
 
 use photocraft_doc::Document;
 use photocraft_geom::Rect;
@@ -17,10 +17,11 @@ pub fn inks(doc: &Document, rect: Rect) -> Buffer {
     let mut buf = Buffer::filled(rect, [1.0, 1.0, 1.0, 1.0]);
     let mut vals = Vec::new();
     for ch in &doc.channels {
-        let alpha = ch.spot.is_none();
         let (ink, solidity) = ch.spot.unwrap_or((photocraft_color::Color::BLACK, 0.0));
-        // An empty alpha channel (all black) is solid black ink, so it can't be skipped.
-        if !alpha && ch.surface.content_bounds().intersect(&rect).is_empty() {
+        // Only a channel that is paper wherever it has no tiles can be skipped when empty: an
+        // empty alpha channel (all black) is solid black ink.
+        let paper = ch.surface.default_pixel().first() == Some(&photocraft_doc::AlphaChannel::PAPER);
+        if paper && ch.surface.content_bounds().intersect(&rect).is_empty() {
             continue;
         }
         let c = ink.to_rgb();
@@ -28,7 +29,7 @@ pub fn inks(doc: &Document, rect: Rect) -> Buffer {
         let n = ch.surface.channels();
         ch.surface.read_region_into(rect, &mut vals);
         for (p, v) in buf.px.iter_mut().zip(vals.chunks_exact(n)) {
-            let v = if alpha { 1.0 - v[0] } else { v[0] }.clamp(0.0, 1.0);
+            let v = photocraft_doc::AlphaChannel::ink(v[0]).clamp(0.0, 1.0);
             if v <= 0.0 {
                 continue;
             }
@@ -58,10 +59,11 @@ mod tests {
     fn inks_multiply_over_paper() {
         let mut doc = Document::new("m", Size::new(4, 1), ColorMode::Multichannel, SampleType::U8);
         let fmt = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
-        let mut a = Surface::new(fmt);
-        a.write_region(Rect::new(0, 0, 4, 1), &[0.0, 1.0, 1.0, 0.0]);
-        let mut b = Surface::new(fmt);
-        b.write_region(Rect::new(0, 0, 4, 1), &[0.0, 0.0, 1.0, 1.0]);
+        // Stored as the Channels panel shows them: 0 = solid ink, 1 = paper.
+        let mut a = AlphaChannel::paper(fmt);
+        a.write_region(Rect::new(0, 0, 4, 1), &[1.0, 0.0, 0.0, 1.0]);
+        let mut b = AlphaChannel::paper(fmt);
+        b.write_region(Rect::new(0, 0, 4, 1), &[1.0, 1.0, 0.0, 0.0]);
         doc.channels.push(AlphaChannel { spot: Some((Color::rgb(0.0, 1.0, 1.0), 0.0)), ..AlphaChannel::new("Cyan", a) });
         doc.channels.push(AlphaChannel { spot: Some((Color::rgb(1.0, 0.0, 1.0), 0.0)), ..AlphaChannel::new("Magenta", b) });
         let r = crate::flatten(&doc);
