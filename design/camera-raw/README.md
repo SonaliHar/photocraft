@@ -61,7 +61,7 @@ photo values when interpreting image differences. Source captures stay local.
 
 ```powershell
 python scripts/compare_camera_raw.py --source reference.png --candidate preview.png `
-  --source-rect 38 594 550 1514 --candidate-rect 1134 211 1404 696 `
+  --source-rect 38 594 578 1092 --candidate-rect 1134 211 1404 460 --width 540 `
   --output C:/Temp/acr-comparison
 ```
 
@@ -80,3 +80,28 @@ Numeric fields use independent live settings: `valueFieldWidth`,
 `sectionRightPadding` controls the shared right edge of fields and tracks,
 independently of the label's left inset. These apply only to Camera Raw;
 ordinary editor fields retain their existing typography and centering.
+
+## Full-dock overlay registration (2026-10-15)
+
+Use the complete settings dock as the horizontal anchor, including ACR's
+reserved scrollbar gutter. Scaling only the inner controls (512 px in the
+expanded reference) to our full 270-point dock enlarges the reference by about
+5% and conceals spacing differences. The supplied expanded capture's full dock
+is 540 px wide, so its uniform scale to 270 points is exactly 0.5.
+
+The comparison script now writes `index.html`: ACR stays underneath, PhotoCraft
+is the adjustable-opacity layer above it. It includes source-only, candidate-only,
+50% overlay, blink, uniform zoom, absolute difference and crop/scale metadata.
+Before/after captures must retain their actual heights; purple marks absent
+coverage rather than stretching an image. Different image data and missing UI
+must remain visible.
+
+The laptop live pass adjusted section height/insets, row pitch, right-side gutter
+allowance, numeric-box size and numeric typography. At normalized 540 px width,
+all six Light track vertical bands now equal the reference: 126–131, 188–193,
+250–255, 312–317, 374–379 and 436–441. Before, their offsets grew from 8 to 26 px.
+This is a track-placement measurement, not a whole-interface parity claim.
+Numeric inactive text is still centered despite valueTextLeftAligned; handle
+geometry, bypass eyes, scrollbar treatment and other panel-specific geometry
+still need native changes. A global right inset cannot establish Curve/Grading
+parity; inspect their own overlays before changing them.
