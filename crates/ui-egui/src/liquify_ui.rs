@@ -382,7 +382,13 @@ impl LiquifyDialog {
         }
         let started = crate::gpu_canvas::now_ms();
         let rendered = ProxyImage::render_full_resolution_blended(
-            &self.source, &self.field, bounds, dirty, &mut self.view_out, &mut self.view_source_scratch, &self.view_blend,
+            &self.source,
+            &self.field,
+            bounds,
+            dirty,
+            &mut self.view_out,
+            &mut self.view_source_scratch,
+            &self.view_blend,
         );
         if !rendered {
             self.view_bounds = None;
@@ -458,19 +464,19 @@ fn preview_blend(selection: Option<&(Surface, LayerMask)>, bounds: Rect, max_sid
     let Some((original, mask)) = selection else { return Vec::new() };
     let original = ProxyImage::new(original, bounds, max_side);
     let coverage = ProxyImage::new(&mask.surface, bounds, max_side);
-    original.px.into_iter().zip(coverage.px).map(|(original, m)| PreviewBlend {
-        original,
-        coverage: if mask.enabled { 1.0 - mask.density * (1.0 - m[0]) } else { 1.0 },
-    }).collect()
+    original
+        .px
+        .into_iter()
+        .zip(coverage.px)
+        .map(|(original, m)| PreviewBlend { original, coverage: if mask.enabled { 1.0 - mask.density * (1.0 - m[0]) } else { 1.0 } })
+        .collect()
 }
 
 pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
     let (layer, mut surf, _) = crate::distort_ui::active_pixels(app)?;
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
-    let selection_mask = || st.doc.selection.as_ref().map(|s| LayerMask {
-        surface: s.clone(), enabled: true, linked: true, density: 1.0, feather: 0.0,
-    });
+    let selection_mask = || st.doc.selection.as_ref().map(|s| LayerMask { surface: s.clone(), enabled: true, linked: true, density: 1.0, feather: 0.0 });
     let mut selection = selection_mask().map(|mask| (surf.clone(), mask));
     if let Some(LayerContent::Smart(sm)) = st.doc.layer(layer).map(|l| &l.content) {
         // The stored cache already includes the stack mask. Warp the unmasked stack instead,
@@ -481,17 +487,18 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> 
                 selection = match sm.filter_mask.clone().or_else(selection_mask) {
                     Some(mask) => {
                         let original = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, 0)
-                            .map_err(|e| e.to_string())?.ok_or("smart object source became unavailable")?;
+                            .map_err(|e| e.to_string())?
+                            .ok_or("smart object source became unavailable")?;
                         Some((original, mask))
                     }
                     None => None,
                 };
             } else {
                 // A new filter is recorded but remains invisible while the stack is disabled.
-                selection = Some((surf.clone(), LayerMask {
-                    surface: Surface::new(photocraft_doc::PixelFormat::GRAY8),
-                    enabled: true, linked: true, density: 1.0, feather: 0.0,
-                }));
+                selection = Some((
+                    surf.clone(),
+                    LayerMask { surface: Surface::new(photocraft_doc::PixelFormat::GRAY8), enabled: true, linked: true, density: 1.0, feather: 0.0 },
+                ));
             }
         }
     }

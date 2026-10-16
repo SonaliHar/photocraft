@@ -1470,20 +1470,21 @@ mod tests {
         let mut field = LiquifyField::new(canvas, 2.0);
         field.d.fill([1.0, 0.0]);
         let proxy = ProxyImage::new(&source, canvas, 12);
-        let blend: Vec<_> = proxy.px.iter().enumerate().map(|(i, original)| PreviewBlend {
-            original: *original,
-            coverage: [0.0, 0.25, 0.5, 1.0][i % 4],
-        }).collect();
-        let expected: Vec<_> = (0..8).flat_map(|y| (0..12).map(move |x| (x, y))).map(|(x, y)| {
-            let old = source.pixel(x, y);
-            let warped = source.pixel((x + 1).min(11), y);
-            let coverage = [0.0, 0.25, 0.5, 1.0][x as usize % 4];
-            std::array::from_fn(|c| {
-                let a = if c == 3 { old[3] } else { old[c] * old[3] };
-                let b = if c == 3 { warped[3] } else { warped[c] * warped[3] };
-                ((a + (b - a) * coverage) * 255.0 + 0.5) as u8
+        let blend: Vec<_> =
+            proxy.px.iter().enumerate().map(|(i, original)| PreviewBlend { original: *original, coverage: [0.0, 0.25, 0.5, 1.0][i % 4] }).collect();
+        let expected: Vec<_> = (0..8)
+            .flat_map(|y| (0..12).map(move |x| (x, y)))
+            .map(|(x, y)| {
+                let old = source.pixel(x, y);
+                let warped = source.pixel((x + 1).min(11), y);
+                let coverage = [0.0, 0.25, 0.5, 1.0][x as usize % 4];
+                std::array::from_fn(|c| {
+                    let a = if c == 3 { old[3] } else { old[c] * old[3] };
+                    let b = if c == 3 { warped[3] } else { warped[c] * warped[3] };
+                    ((a + (b - a) * coverage) * 255.0 + 0.5) as u8
+                })
             })
-        }).collect();
+            .collect();
         let mut out = vec![[0; 4]; 96];
         proxy.render_blended(&field, [0, 0, 12, 8], &mut out, &blend);
         assert_eq!(out, expected);
