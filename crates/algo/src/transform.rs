@@ -5,8 +5,8 @@
 //! homography. Warping is an inverse mapping with premultiplied-alpha sampling (nearest, bilinear
 //! or Photoshop's Keys bicubic), processed per destination tile (in parallel on native) so memory stays
 //! bounded by the tile working set. Bicubic reductions are pre-filtered with a proper resize
-//! first, each axis by its own scale, so shrinking a layer doesn't alias and an axis that doesn't
-//! shrink stays sharp.
+//! first, so shrinking a layer doesn't alias; an affine map reduces each axis by its own scale, so
+//! an axis that doesn't shrink stays sharp.
 
 use photocraft_color::PixelFormat;
 use photocraft_geom::Rect;
@@ -271,11 +271,13 @@ fn corner_bounds(corners: &[(f64, f64); 4]) -> Option<Rect> {
 /// (√|det J|) blurred an axis the map keeps 1:1 while it squashes the other, and filtered the
 /// squashed axis for less than its reduction (#4864). A map that squashes along a slant (a rotated
 /// squash, or a skew that also flattens) shrinks a direction between the axes far more than either
-/// axis, which no axis-aligned prefilter follows; there both axes come down together until no
-/// direction is left a stronger reduction than the one factor left it (at most 50 %, where a 4×4
-/// kernel starts to alias). A perspective map (a Distort) reduces each part of the source by a
-/// different amount, which no single prefilter follows either, so it keeps the one factor at the
-/// source point that matters, as before.
+/// axis, which no axis-aligned prefilter follows; there both axes come down together until the
+/// warp shrinks no direction below what the one factor leaves it, or below 50 % (where a 4×4
+/// kernel starts to alias), whichever is lower. Where the one factor leaves more than 50 %, the
+/// pair keeps more detail than it does, with a little more room to alias along the slant. A
+/// perspective map (a Distort) reduces each part of the source by a different amount, which no
+/// single prefilter follows either, so it keeps the one factor at the source point that matters,
+/// as before.
 fn prefilter_scales(h: &Homography, src_rect: Rect, clip: Option<Rect>) -> (f64, f64) {
     let r = [f64::from(src_rect.x0), f64::from(src_rect.y0), f64::from(src_rect.x1), f64::from(src_rect.y1)];
     // With a clip, the scale that matters is the one at the source point landing in the clip's centre.
@@ -296,10 +298,15 @@ fn prefilter_scales(h: &Homography, src_rect: Rect, clip: Option<Rect>) -> (f64,
         return (one, one);
     }
     let (fx, fy) = (snap(j[0].hypot(j[2])), snap(j[1].hypot(j[3])));
+    // A uniform scale, turned or not, keeps the one factor: its column lengths differ from it only
+    // by rounding, which would otherwise pick the order of the two passes.
+    if (fx - one).abs() <= 1e-9 * one && (fy - one).abs() <= 1e-9 * one {
+        return (one, one);
+    }
     // The warp is left `J · diag(1/fx, 1/fy)`. Along a slant both columns stay long while the map
-    // squashes the direction between them, so both axes come down together until no direction is
-    // left a stronger reduction than the one factor √|det J| left it, √(σmin / σmax), or 50 %. A map
-    // that collapses (c = 0) reduces nothing, as before.
+    // squashes the direction between them, so both axes come down together until the warp shrinks
+    // no direction below √(σmin / σmax), what the one factor √|det J| leaves, or below 50 %,
+    // whichever is lower. A map that collapses (c = 0) reduces nothing, as before.
     let (hi, lo) = singular_values(j);
     let (_, left) = singular_values([j[0] / fx, j[1] / fy, j[2] / fx, j[3] / fy]);
     let target = if hi > 0.0 { (lo / hi).sqrt().min(0.5) } else { 0.0 };
@@ -868,9 +875,8 @@ mod tests {
 
     /// #4864: the prefilter's factors, per axis. An affine map gives the same pair with or without
     /// a clip, so a clipped warp matches the full one; a perspective Distort keeps the one factor at
-    /// its centre, as before; a skew
-    /// reduces nothing, and a squash along a slant keeps the one factor; a corner past the horizon
-    /// doesn't count; and a map that isn't finite reduces nothing.
+    /// its centre, as before; a skew reduces nothing, and a squash along a slant keeps the one
+    /// factor; a map past the horizon stays in range; and a map that isn't finite reduces nothing.
     #[test]
     fn prefilter_scales_are_per_axis_and_finite() {
         let r = Rect::new(0, 0, 64, 64);
@@ -920,6 +926,24 @@ mod tests {
         assert!(Homography([2.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0, 2.0]).is_identity());
         assert!(!Homography([1.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).is_identity());
         assert!(!Homography([1.0, 0.1, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).is_identity());
+    }
+
+    /// A uniform 50 % scale turned through `rect_to_quad`, as Free Transform builds it, keeps the
+    /// one factor exactly. Its column lengths differ from the factor in the last bits at most
+    /// angles, which picked the order of the two passes and changed the output by a level.
+    #[test]
+    fn a_turned_uniform_scale_keeps_the_one_factor() {
+        let r = Rect::new(0, 0, 6000, 4000);
+        for tenth in (5..3600).step_by(37) {
+            let (s, c) = (f64::from(tenth) / 10.0).to_radians().sin_cos();
+            let at = |x: f64, y: f64| {
+                let (dx, dy) = (x - 3000.0, y - 2000.0);
+                [3000.0 + 0.5 * (c * dx - s * dy) + 17.3, 2000.0 + 0.5 * (s * dx + c * dy) - 4.1]
+            };
+            let h = Homography::rect_to_quad([0.0, 0.0, 6000.0, 4000.0], [at(0.0, 0.0), at(6000.0, 0.0), at(6000.0, 4000.0), at(0.0, 4000.0)]).unwrap();
+            let one = h.local_scale(3000.0, 2000.0);
+            assert_eq!(prefilter_scales(&h, r, None), (one, one), "{tenth} tenths of a degree");
+        }
     }
 
     /// #4864: a rhombus squashed to 25 % along its diagonal (rotated 45°, then squashed vertically).
@@ -985,10 +1009,11 @@ mod tests {
     }
 
     /// #4864: a Bicubic warp by a degenerate map, or one that shrinks a single axis far below the
-    /// 1/64 the prefilter stops at, returns finite pixels in range instead of panicking.
+    /// 1/64 the prefilter stops at, returns finite pixels instead of panicking (32-bit, where a NaN
+    /// would show).
     #[test]
     fn bicubic_warp_survives_degenerate_and_extreme_maps() {
-        let mut s = Surface::new(PixelFormat::RGBA8);
+        let mut s = Surface::new(PixelFormat::new(photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::F32, true));
         s.fill_rect(Rect::new(0, 0, 40, 30), &[0.3, 0.6, 0.9, 1.0]);
         let maps = [
             Homography([0.0; 9]),
@@ -1013,7 +1038,7 @@ mod tests {
                 if let Ok(o) = o {
                     let b = o.content_bounds();
                     if !b.is_empty() {
-                        assert!(o.read_region(b).iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{h:?}");
+                        assert!(o.read_region(b).iter().all(|v| v.is_finite()), "{h:?}");
                     }
                 }
             }

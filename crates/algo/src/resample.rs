@@ -313,8 +313,9 @@ fn resize(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Option<Rect>)
 
 /// [`resize_surface`] with Bicubic, but each axis filtered for its own scale: two Image Sizes, the
 /// smaller scale first. Image Size designs one filter for both axes, which blurs the axis that
-/// shrinks less; a free transform's prefilter reduces the two independently (#4864). Equal scales,
-/// or one of exactly 1, give what [`resize_surface`] gives.
+/// shrinks less; a transform's prefilter filters each for its own scale instead, so an axis that
+/// shrinks less stays as sharp as it can (#4864). Equal scales, or one of exactly 1, give what
+/// [`resize_surface`] gives.
 pub(crate) fn resize_surface_per_axis(s: &Surface, sx: f64, sy: f64) -> Surface {
     let x = Pass { sx, sy: 1.0, kx: keys(Resample::Bicubic, sx), ky: Kernel::Nearest };
     let y = Pass { sx: 1.0, sy, kx: Kernel::Nearest, ky: keys(Resample::Bicubic, sy) };
