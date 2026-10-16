@@ -23,7 +23,11 @@ impl StoreGuard {
     }
 
     fn acquire(root: &Path, exclusive: bool) -> Result<Self> {
-        let path = checked_path(root, LOCK)?;
+        Self::named(root, LOCK, exclusive)
+    }
+
+    pub(super) fn named(root: &Path, name: &str, exclusive: bool) -> Result<Self> {
+        let path = checked_path(root, name)?;
         match std::fs::symlink_metadata(&path) {
             Ok(metadata) if !metadata.is_file() || is_link(&metadata) => return Err(error("plugin store lock must be a regular file")),
             Ok(_) => {}

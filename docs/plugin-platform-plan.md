@@ -1,6 +1,6 @@
 # PhotoCraft Universal Plugin Platform Plan
 
-**Status:** P01–P05 and the current-contract API/SDK implementation are complete. Phase 2 has begun with cooperative store locks and native result admission checks; its remaining lifecycle work is proposed.
+**Status:** P01–P05, the current-contract API/SDK work and Phase 2 are implemented and locally verified on Windows x64, with portable WebAssembly checks. Later phases and native macOS/Linux release qualification remain planned.
 
 **Date:** 2026-10-16
 **Scope:** Evolve the installed plugin system into a broad editor extension platform while preserving independent plugin projects, packages, releases and runtime dependencies.
@@ -29,7 +29,7 @@ The SDK is a development dependency, not a separately installed runtime service.
 
 ## 2. Existing contracts to preserve
 
-The implementation currently provides package format 2, panel API 1, standalone filter ABI 1 and native image/task protocol 1. These are separate version dimensions. Package-v1 AI services have already been retired; this plan protects the currently supported contracts and retains existing repair guidance for those retired installations.
+The implementation provides package format 2, panel API 2, standalone filter ABI 1 and native worker protocols 1 and 2. These are separate version dimensions. Panel API 1 remains a compatibility adapter for our existing binaries. Package-v1 AI services have already been retired; this plan protects the currently supported contracts and retains existing repair guidance for those retired installations.
 
 | Existing area | Preserve |
 |---|---|
@@ -122,31 +122,43 @@ A request's identity comes from the host invocation context, never a guest-suppl
 
 ## 5. Compatibility and protocol design
 
-### 5.1 Support policy
+### 5.1 One production API
 
-The current 0.1 foundation preview implements the evolution rules in the [SDK guide](plugin-sdk.md#compatibility-and-evolution-policy).
-The calendar support commitment below is a proposed stable-release policy, not an active
-24-month guarantee for the preview. SDK sources are distributed through the developer tool;
-public registry publication and ecosystem-wide release certification have not been performed.
+This is a pre-release platform with only our own plugins. The implementation phases evolve
+one current public API; a completed milestone does not create a new API major. Do not publish
+parallel production APIs, duplicate SDKs or calendar legacy-support commitments before there
+is an external ecosystem that needs them. The SDK guide records current contracts and checks.
 
-Adopt the following policy before inviting external developers:
+Panel API 2 is the current authoring contract. Panel 1 and native worker 1 are temporary
+compatibility adapters for our existing compiled plugins. Keep those plugins working while
+we migrate and test their independent repositories. Remove an adapter only with a concrete
+migration and unchanged-functionality evidence; no synchronized runtime dependency is allowed.
+Package format 2 and filter ABI 1 continue to serve their existing purposes. The opt-in worker-2
+transport changes actual process framing/lifetime, so it requires an explicit selector rather
+than guessing a protocol from an executable. These wire-format labels are not milestone APIs.
 
-1. Freeze the behavior of current supported v1 interfaces and package format 2 in immutable compatibility fixtures.
-2. Introduce panel API 2, worker protocol 2 and a richer package format 3 alongside the legacy adapters. Standalone filter ABI 1 continues to work; add a new filter ABI only when its transport requires one.
-3. Version capability families independently. Compatible additions stay within a major version; a breaking change gets a new major and an adapter when practical.
-4. Support the previous stable host API major for at least 24 months after its successor becomes generally available. Publish a removal date, migration tooling and fixture results before retirement. Security exceptions require a specific advisory and recovery path.
-5. Require host API ranges and required capability versions; allow explicitly optional capabilities with declared fallbacks. Discovery and installation return structured incompatibility reasons.
-6. Keep plugin release version, package format, host API, panel ABI, worker transport and saved-data schema separate.
-
-Strict validation remains valuable. New protocols provide a bounded namespaced `extensions` area and explicit optional-feature negotiation; do not make old parsers permissive or silently ignore required behavior. Unknown required capabilities fail before activation.
+Add compatible capabilities and optional messages to this API during development. Introduce a
+new major only for a real breaking wire or behavior change that cannot be made safely additive.
+Keep plugin release version, SDK package release, serialized API and saved-data schema distinct
+so independent plugins can release on their own schedule. Stable support commitments are made
+at the final release qualification, with actual compatibility and target-OS evidence.
 
 ### 5.2 One authoring schema
 
-The SDK takes one source manifest and generates package metadata, the embedded guest manifest, bindings, documentation and fixtures. For package format 3, `package.json` becomes the installation descriptor with identity, compatibility, contributions, capability requests, activation rules, target-specific payloads and transport declarations. The embedded API-2 manifest must match its generated identity/contract digest. A v2 package retains its existing descriptor and embedded-manifest rules.
+The optional SDK takes one authoring manifest and generates package metadata, the embedded
+panel descriptor and typed bindings. Package format 2 remains the installation container.
+Additional worker/migration declarations are bounded members of the same verified package;
+no package-format successor is required for Phase 2. The [future package-format proposal](plugin-package-v3.md)
+is retained for later packaging needs and does not create a parallel public API.
 
-Validate contribution IDs, UI trees, platform support, limits and permission changes without executing the plugin during normal discovery. Installation may run the existing bounded guest validation. Persist a host-created descriptor for lazy startup; never trust an unverified loose sidecar as installed authority.
+Validate contribution IDs, UI trees, compatibility and permission changes without executing
+plugins during normal discovery. Installation may run bounded guest validation. Persist a
+host-created descriptor in installation/ownership records and verify embedded metadata again
+at activation. Never trust an unverified loose sidecar as installed authority.
 
-Before freezing package format 3, write its complete JSON Schema and malformed-input corpus. Larger asset packages need streaming extraction, explicit disk budgets and tested ZIP64 support if adopted; do not merely remove the current archive limits or load entire large archives into memory. Existing v2 archive limits remain unchanged.
+Larger asset packages require streaming extraction, explicit disk budgets and tested ZIP64
+support if adopted. Current archive limits remain unchanged; removing limits or reading a
+whole large archive into memory is not a scaling strategy.
 
 ### 5.3 API 2 control messages
 
@@ -254,6 +266,19 @@ Sign a canonical integrity index covering package metadata and every executable,
 
 A directory/marketplace lists compatible targets, declared capabilities, execution profile, dependencies bundled, storage needs, licensing and conformance results. Install/update always use the same package store APIs. Hosting infrastructure is optional for manual/offline installation and is not part of a plugin's runtime dependency chain.
 
+An optional release source can point to each plugin's own GitHub repository and selected
+stable or prerelease channel. Use published Releases assets, with a bounded release index
+binding plugin ID, plugin version, supported host capabilities, target OS/architecture, asset
+size, digest and publisher signature. Compare plugin release versions explicitly; a repository
+branch, tag name or GitHub's latest-release ordering is not installation authority. The host
+checks compatibility and permission changes, then downloads and installs through the existing
+staged store transaction. Interrupted updates retain the selected code/state pair and rollback
+target. Repository transfer, signing-key rotation, rate limits, unavailable releases and private
+repository credentials need explicit behavior. No source checkout, build-on-install, shared
+updater runtime or other installed plugin is required. Manual/offline installation remains
+available. This is planned distribution work; current updates use explicit local-package
+replacement. GitHub provides the [release and asset discovery API](https://docs.github.com/en/rest/releases/releases).
+
 ## 8. Implementation phases
 
 Effort ranges below are initial engineering estimates for completed code, tests, documentation and integration, not elapsed calendar commitments. They total **43–72 engineer-weeks**. Re-estimate after the baseline and first vertical slice. Team size, operating-system validation and unresolved build/toolchain work affect elapsed time.
@@ -300,7 +325,7 @@ Start with the following small, ordered changes. Each is a reviewable pull reque
 |---|---|---|
 | P01 Compatibility fixtures | Add immutable neutral fixtures for current panel/filter/package/native protocols. Keep independently released plugin fixtures and acceptance tests in their own repositories. Record hashes and licenses; fetch large permitted artifacts from a controlled test store rather than commit runtime/model binaries. | Exercise old bytes, not rebuilt current-source replacements; install/restart/cancel/Apply/repair all pass. |
 | P02 Standalone conformance tool | Extend the independent starter checks into a developer command that checks package shape, manifests, ABI, declared targets, dependency ownership and clean exported builds. Keep Python packaging helpers supported while adding a Rust developer-tool path. | A clean exported Image Gain project builds and packages without the editor, a sibling plugin, companion or hidden PATH dependency. |
-| P03 API and descriptor schema | Add `photocraft-plugin-api`, JSON schemas, typed capability IDs, structured errors and descriptor validation. Register its L0 layer. Produce the package-3/panel-2 protocol RFCs without changing accepted legacy behavior. | Schema round trips, malformed inputs, generation consistency and layer/wasm checks pass. |
+| P03 API and descriptor schema | Add `photocraft-plugin-api`, JSON schemas, typed capability IDs, structured errors and descriptor validation. Register its L0 layer. Document the current panel API without introducing a milestone package format. | Schema round trips, malformed inputs, generation consistency and layer/wasm checks pass. |
 | P04 Broker and legacy adapter | Introduce host-injected principals, scoped handles, capability discovery and structured incompatibility errors. Route existing plugin requests through the adapter without changing their wire format. | Cross-plugin/generation/automation authority tests and all legacy fixtures pass. |
 | P05 One new vertical slice | Register a contributed Layer Organizer command and Document Inspector view; add single-document atomic edits plus the minimal layer-change event needed by those two plugins. | Both plugins are independent packages. Organizer changes several layers in one Undo step; Inspector reflects changes; injected failure commits nothing. |
 
@@ -315,7 +340,7 @@ extension categories, rather than completion of all categories in section 3.
 |---|---|
 | P01 | [Immutable compatibility corpus](../tests/plugin-compatibility/README.md), pinned compiled neutral panel/filter, golden responses and the external neutral native archive hash. Explicit native tests fail when an artifact is absent or changed. |
 | P02 | [Rust conformance tool](../apps/photocraft-plugin/README.md): package/ABI/target validation, local dependency ownership, clean exported builds, deterministic packaging and hashes. Existing Python helpers remain usable. |
-| P03 | Independent `photocraft-plugin-api` L0 contract crate, generated [JSON schemas](../schemas/plugins/), capability negotiation, contributions and structured errors. [Panel API 2](plugin-api-v2.md) is experimental; [package 3](plugin-package-v3.md) and worker 2 remain proposals. |
+| P03 | Independent `photocraft-plugin-api` L0 contract crate, generated [JSON schemas](../schemas/plugins/), capability negotiation, contributions and structured errors. [Panel API 2](plugin-api-v2.md) is the current pre-release authoring API; package format 2 remains its container. |
 | P04 | `engine/src/plugin_host/`: host-created principals, session/installation-scoped handles, revision checks, captured/current automation policies, capability discovery and a legacy adapter preserving API-1 wire messages and sequential behavior. Startup and installation reject contributed command collisions. |
 | P05 | Dynamic command discovery/menu/palette/assigned-shortcut routing, bounded layer snapshots and atomic rename/visibility batches, coalesced document invalidations and native read-only inspectors. Independently built [Layer Organizer](../examples/extensions/layer-organizer/) and [Document Inspector](../examples/extensions/document-inspector/) packages exercise the real WASM boundary. |
 
@@ -324,7 +349,8 @@ plugin, four host-query rounds, eight requests per response, 128 layers per page
 4096 handles per session and four simultaneous event workers across the process. Event
 queues rotate fairly and idle frames do not execute guests or rescan documents. Desktop
 inspector handlers run off the drawing thread; browser execution remains bounded and inline.
-Discovery reports these limits. The existing installed-plugin limit remains 128.
+Discovery reports these limits. Phase 2 raises the descriptor registry limit to 4096 and adds
+a thousand-dormant-descriptor regression.
 
 Atomic edits are single-submit, single-document batches limited to layer names/visibility.
 Observers cannot edit. Successful batches form one Undo step; failed batches retain the
@@ -332,38 +358,41 @@ document, revision, history and guest state. The sample Organizer explicitly ref
 larger than its first 128-layer snapshot rather than applying a partial rename. The Inspector
 shows its bounded first page and the total count.
 
-General docking/widgets, file/network services, persistent guest workers, pixel/tile APIs,
-effect recipes, tools/brushes, formats, finer store scheduling, native process containment,
+General docking/widgets, file/network services, pixel/tile APIs,
+effect recipes, tools/brushes, formats, restricted native process containment,
 signing and large-ecosystem qualification still belong to later phases. These limits must
 remain visible when describing current extensibility or scale readiness.
 
-### API/SDK completion and first Phase 2 slice (2026-10-16)
+### API/SDK and Phase 2 implementation (2026-10-16)
 
-The current-contract SDK work adds an independent L1 `photocraft-plugin-sdk`, typed event/reply
-and document contracts, bounded guest-owned ABI buffers, and optional authoring generation.
-One `authoring.json` generates the embedded descriptor, package-2 metadata and Rust bindings.
-The developer tool exports API/SDK sources or a complete private SDK project from its embedded
-bundle; no editor checkout, sibling plugin or shared installed runtime is required. Existing
-starters and binaries keep their wire versions and need no SDK migration. Ten generated schemas
-describe these contracts. See [SDK usage and evolution policy](plugin-sdk.md).
+The independent L1 `photocraft-plugin-sdk` provides typed events/replies and document builders,
+bounded ABI buffers, and optional single-manifest authoring. The developer executable embeds
+public API/SDK sources and exports a complete private project, licenses and locks. No editor
+checkout, sibling plugin or shared installed runtime is required. The public schema set includes
+the current panel/document contracts and the explicitly selected native worker transport.
 
-The generated guest acceptance path builds outside the editor with locked dependencies,
-loads its actual release WASM, invokes a contributed command and typed layer broker, commits
-an atomic edit, and verifies Undo. Temporary projects/packages are removed after the run.
-SDK/API 0.1 are a source-distributed foundation preview; registry publication and full stable
-ecosystem certification remain release work, not claims made by these changes.
+Phase 2 adds host-created lazy descriptors, scheduled streaming payload verification,
+per-generation OS leases, bounded fair scheduling, aggregate native admission estimates,
+private persistent workers with reset/idle eviction/cancel/deadlines/quarantine, bounded
+multi-preview retention, and staged managed-data migrations with code/state rollback.
+Bulk closure verification and filter compilation run in scheduled jobs; panel activation reads
+only bounded panel code. Store publication is serialized; unrelated plugins no longer share a
+long-lived worker lock.
+Managed-data copying and destination reuse require exclusive generation leases. Every result
+is independently checked for source and activation authority before commit.
 
-Phase 2 starts with a cooperative OS reader/writer store lock, shared leases through native
-execution and result admission, and persisted per-plugin activation epochs. Native completion
-and Apply reject another current host's update/remove/disable, including disable/re-enable and
-identical reinstall cycles. Separate-process tests cover contention, crash release and preservation
-of active files. The lock is initially store-wide: native work temporarily blocks management
-operations, while readers may run concurrently. See [store safety](plugin-safety.md#cooperative-store-locking).
+The functional gates cover 1000 dormant descriptors without guest/payload activation, separate
+host-process leases and crash release, real framed native subprocesses, failed/interrupted
+managed-data preparation and full-disk fault injection. Existing compiled neutral panel/filter/
+image packages and independent source projects remain compatibility checks. Generated validation
+projects and native fixture executables remain temporary.
 
-Phase 2 remains incomplete. Lazy descriptors, per-generation scheduling/leases, persistent
-worker protocol 2, aggregate quotas, migrations/rollback, crash quarantine and native process
-containment are still proposed. The installed-plugin limit remains 128; no thousand-plugin or
-cross-platform performance certification is implied.
+See [lifecycle and resource limits](plugin-lifecycle.md), [worker transport](plugin-worker-v2.md),
+and [managed storage](plugin-managed-storage.md). Native reservations and host validation quotas
+are cooperative; trusted native code is not OS resource-contained. Restricted native containment,
+signing and distribution belong to Phase 7. Full target-OS, release-performance, fuzz/soak and
+stable ecosystem qualification remain Phase 8 gates. This is one evolving pre-release API,
+not a new API major per implementation milestone or a stable-platform certification claim.
 
 ## 10. Performance and scale qualification
 

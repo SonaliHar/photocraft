@@ -1,13 +1,14 @@
 # Panel API 2 and host metadata contract
 
-**Status:** initial additive implementation, 2026-10-15. The contract crate is experimental
-`photocraft-plugin-api 0.1.0`. Package format 2, panel API 1, filter ABI 1 and native worker
-protocol 1 remain supported without rebuilding plugins. Package format 3 is a separate
-[proposal](plugin-package-v3.md).
+**Status:** current pre-release authoring contract, 2026-10-16, supplied by
+`photocraft-plugin-api 0.1.0`. Package format 2 carries this API; filter ABI 1 remains current.
+Panel API 1 and native worker protocol 1 remain compatibility paths for our existing compiled
+plugins. A separate [future package-format proposal](plugin-package-v3.md)
+describes possible packaging changes; it is not another implemented public API.
 
 The [guest SDK](plugin-sdk.md) now provides the typed event envelope, broker replies, layer
 requests/snapshots, bounded ABI exports and single-manifest authoring. These describe the
-existing implemented capability-v1 wire messages. Package 3 and worker 2 are still proposals;
+existing implemented capability-v1 wire messages. [Worker 2](plugin-worker-v2.md) adds explicitly selected persistent transport;
 SDK completion does not imply completion of later host capabilities.
 
 ## Version boundaries

@@ -196,6 +196,44 @@ fn replacement_and_disable_enable_revoke_existing_handles() {
     assert_code(s.execute("plugin.document.read", json!({"id":OWNER,"document":old["document"]})), ErrorCode::InvalidHandle);
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn plugin_document_edit_holds_store_admission_through_authorization_and_commit() {
+    thread_local! {
+        static CHECK: std::cell::RefCell<(std::path::PathBuf, usize)> = const { std::cell::RefCell::new((std::path::PathBuf::new(), 0)) };
+    }
+    fn policy(command: &str, params: &Value) -> Result<()> {
+        // The outer command includes id; the broker's final authorization uses scoped params.
+        if command == "plugin.document.edit" && params.get("id").is_none() {
+            CHECK.with(|state| {
+                let mut state = state.borrow_mut();
+                assert!(crate::extension_package::StoreGuard::write(&state.0).is_err(), "revocation must wait until the edit commits");
+                state.1 += 1;
+            });
+        }
+        Ok(())
+    }
+
+    let temporary = tempfile::tempdir().unwrap();
+    let mut s = session();
+    s.extensions.attach_folder(temporary.path().into()).unwrap();
+    install(&mut s, &editor_manifest(OWNER), &json!({}), false).unwrap();
+    let source = snapshot(&mut s, OWNER, json!({}));
+    CHECK.with(|state| *state.borrow_mut() = (s.extensions.folder.clone().unwrap(), 0));
+    s.authorize = Some(policy);
+    s.execute("plugin.document.edit", edit_params(&source, OWNER)).unwrap();
+    CHECK.with(|state| assert!(state.borrow().1 > 0));
+    assert_eq!(s.active().unwrap().doc.layers[0].name, "Organized First");
+    s.authorize = None;
+
+    let mut other = Session::new();
+    other.extensions.attach_folder(temporary.path().into()).unwrap();
+    other.execute("extension.enable", json!({"id":OWNER,"enabled":false})).unwrap();
+    let before = Arc::clone(&s.active().unwrap().doc);
+    assert!(s.execute("plugin.document.edit", edit_params(&source, OWNER)).is_err());
+    assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+}
+
 #[test]
 fn closing_and_reopening_same_document_id_never_resurrects_old_handles() {
     let mut s = installed_editor();
@@ -578,6 +616,26 @@ fn read_views_and_failed_edits_preserve_a_floating_selection_without_anchoring_i
     s.execute("extension.view.close", json!({"id":OWNER})).unwrap();
 }
 
+#[test]
+fn lifecycle_queries_and_failed_administration_never_anchor_a_floating_selection() {
+    let mut s = session();
+    float_selection(&mut s);
+    let before = Arc::clone(&s.active().unwrap().doc);
+    let revision = s.active().unwrap().revision;
+    let history = s.active().unwrap().history.past_len();
+    for command in ["extension.capabilities", "extension.commands", "extension.list"] {
+        s.execute(command, json!({})).unwrap();
+    }
+    for command in ["extension.runtime", "extension.storage", "extension.rollback"] {
+        assert!(s.execute(command, json!({"id":"org.example.missing"})).is_err());
+    }
+    let active = s.active().unwrap();
+    assert!(Arc::ptr_eq(&before, &active.doc));
+    assert_eq!(active.revision, revision);
+    assert_eq!(active.history.past_len(), history);
+    assert_eq!(active.floating.as_ref().unwrap().offset, (1, 0));
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn contributed_native_tasks_use_background_job_dispatch_and_preserve_state_on_worker_failure() {
@@ -598,6 +656,8 @@ fn contributed_native_tasks_use_background_job_dispatch_and_preserve_state_on_wo
         s.extensions.installed.insert(
             OWNER.into(),
             Installed {
+                #[cfg(not(target_arch = "wasm32"))]
+                deferred: None,
                 extension,
                 enabled: true,
                 state: Value::Null,
@@ -606,6 +666,7 @@ fn contributed_native_tasks_use_background_job_dispatch_and_preserve_state_on_wo
                 package: None,
                 native: Some(Arc::new(InstalledNative {
                     generation: None,
+                    worker_v2: None,
                     worker: "missing-photocraft-dynamic-task-fixture.exe".into(),
                     package: PackageInfo {
                         package_version: 2,

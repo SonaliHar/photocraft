@@ -27,7 +27,7 @@ Organize layer names** with default settings. The command also appears in the
 command palette and can receive a user shortcut. Undo reverses every renamed layer.
 
 The API-2 panel is carried by the existing panel-only package format 2. Package
-format 3 is a separate future contract. Older hosts that support only panel API 1
+format 2 remains the container. Older hosts that support only panel API 1
 reject this package without affecting existing plugins.
 
 ## Tests

@@ -5,6 +5,11 @@ document request builders, bounded ABI storage, export helpers and optional buil
 generation. Neither depends on the editor, UI, another plugin, an inference library or a shared
 runtime. SDK/API 0.1 are a foundation preview; platform-wide stable certification is a later gate.
 
+Native plugins may independently opt into [persistent worker protocol 2](plugin-worker-v2.md)
+and [managed storage migrations](plugin-managed-storage.md). The public API crate contains
+the worker descriptor and typed frames. Existing worker 1, panel 1/2 and filter 1 binaries stay
+supported without adopting the SDK. See [lifecycle and budgets](plugin-lifecycle.md).
+
 ## One source manifest
 
 Keep identity, UI, grants and contributions in `authoring.json`:
@@ -94,10 +99,13 @@ plugin binaries, catalogs and tests belong in their own repositories.
 
 - Plugin release versions, SDK crate versions, panel ABI, package version, host metadata and
   capability versions are separate. An SDK upgrade never silently upgrades a plugin's wire ABI.
-- Preserve panel 1, filter 1, package 2 and native worker 1 behavior. New SDK authoring selects
-  panel 2 explicitly. Existing supported binary plugins need no rebuild or synchronized release.
+- Target one production authoring API, currently panel 2. Preserve temporary panel-1/worker-1
+  adapters for our own compiled plugins until their independent migration is verified. There
+  is no external ecosystem support window or new API major for each implementation phase.
+  Package 2 and filter 1 remain unchanged; no additional package format is needed here.
 - The implemented capability-v1 methods and message/error semantics retain their meaning.
-  Breaking behavior needs a new negotiated capability or protocol major and a legacy adapter.
+  Extend this one current API during development. A new major requires an actual unavoidable
+  breaking wire/behavior change, rather than a completed implementation phase.
 - Unknown required capabilities fail clearly; optional ones negotiate unavailable and need a
   deliberate fallback. Negotiation/discovery does not grant permission.
 - Descriptors, effect messages and package metadata remain strict. The event envelope and
@@ -108,5 +116,5 @@ plugin binaries, catalogs and tests belong in their own repositories.
 - Deprecation/removal needs an explicit migration, compatibility evidence and release notes.
   This preview does not promise a calendar support window or certify future categories/targets.
 
-Package 3, worker 2, richer widgets, high-precision tile transport, tools and live effects remain
-separate later capabilities. The SDK cannot make unavailable host APIs available.
+Richer widgets, high-precision tile transport, tools and live effects remain later capabilities
+of the same developing API. Worker 2 is an optional transport described separately. The SDK cannot make unavailable host APIs available.

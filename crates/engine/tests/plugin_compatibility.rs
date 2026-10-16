@@ -113,15 +113,21 @@ fn frozen_panel_and_filter_install_restart_invoke_apply_cancel_and_repair() {
     session.set_inline_job_ctx(None);
     assert_eq!(session.active().unwrap().doc, source);
     session.execute("extension.enable", json!({"id":ID,"enabled":false})).unwrap();
-    // Corrupt the actual installed guest, then verify restart rejects it and reinstall repairs.
+    // Cached discovery stays lazy; activating corrupted code must fail before use.
     let record: Value = serde_json::from_slice(&std::fs::read(folder.join(format!("{ID}.installation.json"))).unwrap()).unwrap();
     let installed = folder.join("bundles").join(ID).join(record["hash"].as_str().unwrap()).join("plugin.pcext");
     std::fs::write(&installed, b"damaged").unwrap();
     drop(session);
     let mut broken = Session::new();
     broken.extensions.attach_folder(folder.clone()).unwrap();
-    assert!(!broken.extensions.installed.contains_key(ID));
-    assert!(!broken.extensions.load_errors.is_empty());
+    assert!(broken.extensions.load_errors.is_empty());
+    assert!(!broken.extensions.installed[ID].enabled);
+    assert_eq!(broken.extensions.installed[ID].extension.lifecycle(), "idle");
+    broken.execute("extension.enable", json!({"id":ID,"enabled":true})).unwrap();
+    let failure = broken.execute("extension.invoke", json!({"id":ID,"event":"process"})).unwrap_err().to_string();
+    assert!(failure.contains("installed panel module changed"), "{failure}");
+    assert!(broken.documents().is_empty());
+    broken.execute("extension.enable", json!({"id":ID,"enabled":false})).unwrap();
     std::fs::write(&download, &package).unwrap();
     broken.execute("extension.install", json!({"path":download,"replace":true})).unwrap();
     drop(broken);
@@ -194,8 +200,16 @@ fn pinned_native_packages_install_restart_cancel_and_repair() {
         drop(restarted);
         let mut damaged = Session::new();
         damaged.extensions.attach_folder(folder.clone()).unwrap();
-        assert!(!damaged.extensions.installed.contains_key(&id));
-        assert!(!damaged.extensions.load_errors.is_empty());
+        assert!(damaged.extensions.load_errors.is_empty());
+        assert!(!damaged.extensions.installed[&id].enabled);
+        damaged.execute("extension.enable", json!({"id":id,"enabled":true})).unwrap();
+        new_document(&mut damaged);
+        let document = Arc::clone(&damaged.active().unwrap().doc);
+        let failure = damaged.execute("plugin.processImage", json!({"id":id})).unwrap_err().to_string();
+        assert!(failure.contains("installed file changed"), "{failure}");
+        assert!(Arc::ptr_eq(&document, &damaged.active().unwrap().doc));
+        assert_eq!(damaged.plugin_previews().count(), 0);
+        damaged.execute("extension.enable", json!({"id":id,"enabled":false})).unwrap();
         damaged.execute("extension.install", json!({"path":source,"allowNative":true,"replace":true})).unwrap();
         drop(damaged);
         let mut repaired = Session::new();

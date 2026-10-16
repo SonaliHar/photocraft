@@ -12,6 +12,7 @@ mod descriptor;
 mod documents;
 mod events;
 mod protocol;
+mod worker;
 
 pub use authoring::*;
 pub use capabilities::*;
@@ -20,6 +21,7 @@ pub use descriptor::*;
 pub use documents::*;
 pub use events::*;
 pub use protocol::*;
+pub use worker::*;
 
 #[cfg(feature = "schema")]
 pub mod schema;

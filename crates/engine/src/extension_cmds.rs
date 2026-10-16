@@ -34,6 +34,8 @@ pub struct Installed {
     pub package: Option<crate::extension_package::PackageInfo>,
     #[cfg(not(target_arch = "wasm32"))]
     pub native: Option<Arc<crate::extension_package::InstalledNative>>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) deferred: Option<Arc<crate::extension_package::DeferredPayload>>,
 }
 
 #[derive(Default)]
@@ -108,6 +110,14 @@ pub const COMMANDS: &[&str] = &[
 
 pub(crate) type Completion = (String, Arc<Extension>, Value);
 
+pub(crate) fn scheduler_owner(s: &Session, id: &str) -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(native) = s.extensions.installed.get(id).and_then(|installed| installed.native.as_ref()).filter(|native| native.generation.is_some()) {
+        return native.scheduler_owner();
+    }
+    format!("session:{}:{id}", s.extensions.platform.session.unwrap_or(0))
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn validate_native_permission(manifest: &Manifest, package: Option<&crate::extension_package::PackageInfo>) -> Result<()> {
     if manifest.permissions.commands.iter().any(|id| id == "plugin.runTask") && package.is_none_or(|p| p.native.is_none()) {
@@ -138,9 +148,10 @@ pub fn validate_permissions(manifest: &Manifest) -> Result<()> {
 impl ExtensionHost {
     pub fn list(&self) -> Value {
         json!({"extensions": self.installed.values().map(|p| {
-            let mut item = json!({"manifest": p.extension.manifest, "enabled": p.enabled, "storage": p.storage});
+            let mut item = json!({"manifest": p.extension.manifest, "enabled": p.enabled, "storage": p.storage,
+                "lifecycle":if p.enabled { p.extension.lifecycle() } else { "disabled" }});
             #[cfg(not(target_arch = "wasm32"))]
-            { item["package"] = json!(p.package); }
+            { item["package"] = json!(p.package); item["runtime"] = p.native.as_ref().and_then(|native| native.worker_v2.as_ref()).map(|worker| worker.status()).unwrap_or(Value::Null); }
             #[cfg(target_arch = "wasm32")]
             { item["package"] = Value::Null; }
             item
@@ -151,7 +162,9 @@ impl ExtensionHost {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn attach_folder(&mut self, folder: std::path::PathBuf) -> Result<()> {
         for installed in self.installed.values() {
-            ensure_idle(installed)?;
+            if let Some(native) = &installed.native {
+                native.stop();
+            }
         }
         let folder = crate::extension_package::root(&folder)?;
         let _store = crate::extension_package::StoreGuard::read(&folder)?;
@@ -167,13 +180,13 @@ impl ExtensionHost {
             self.load_errors.push("Only the first 4096 plugin installation records were inspected".into());
         }
         for id in records.into_iter().take(4096) {
-            if self.installed.len() >= 128 {
-                self.load_errors.push("Only the first 128 plugins were loaded".into());
+            if self.installed.len() >= 4096 {
+                self.load_errors.push("Only the first 4096 plugins were loaded".into());
                 break;
             }
             let loaded = (|| {
-                let loaded = crate::extension_package::load(&folder, &id)?;
-                let extension = Extension::load(&loaded.module).map_err(error)?;
+                let loaded = crate::extension_package::discover(&folder, &id)?;
+                let extension = loaded.extension;
                 validate_permissions(&extension.manifest)?;
                 crate::plugin_host::validate_contributions(self, &extension.manifest)?;
                 if extension.manifest.id != id {
@@ -184,13 +197,14 @@ impl ExtensionHost {
                 self.installed.insert(
                     id.clone(),
                     Installed {
-                        extension: Arc::new(extension),
+                        extension,
                         enabled,
                         state: Value::Null,
                         storage: loaded.storage,
                         native: loaded.native,
                         package: loaded.package,
                         filters: loaded.filters,
+                        deferred: loaded.deferred,
                     },
                 );
                 Ok(())
@@ -205,9 +219,9 @@ impl ExtensionHost {
             .filter(|p| p.extension().is_some_and(|e| e == "pcext") && !p.file_stem().and_then(|n| n.to_str()).is_some_and(|id| record_ids.contains(id)))
             .collect::<Vec<_>>();
         paths.sort();
-        let available = 128usize.saturating_sub(self.installed.len());
+        let available = 4096usize.saturating_sub(self.installed.len());
         if paths.len() > available {
-            self.load_errors.push("Only the first 128 extensions were loaded".into());
+            self.load_errors.push("Only the first 4096 extensions were loaded".into());
             paths.truncate(available);
         }
         for path in paths {
@@ -233,6 +247,7 @@ impl ExtensionHost {
                         native: None,
                         package: None,
                         filters: BTreeMap::new(),
+                        deferred: None,
                     },
                 );
                 Ok(())
@@ -244,6 +259,15 @@ impl ExtensionHost {
         self.revision = self.revision.wrapping_add(1);
         Ok(())
     }
+}
+
+/// Activate bounded panel code only; bulk integrity checks and filter compilation run in jobs.
+pub(crate) fn activate(s: &mut Session, id: &str) -> Result<()> {
+    let installed =
+        s.extensions.installed.get_mut(id).filter(|installed| installed.enabled).ok_or_else(|| error("The plugin is not installed or is disabled"))?;
+    installed.extension.check_current().map_err(error)?;
+    installed.extension.activate().map_err(error)?;
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -349,16 +373,18 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
     let id = extension.manifest.id.clone();
     let replacing = s.extensions.installed.contains_key(&id);
     if replacing && !p.get("replace").and_then(Value::as_bool).unwrap_or(false) {
-        return Err(error("extension already installed; use replace:true to update it"));
+        #[cfg(not(target_arch = "wasm32"))]
+        let repair = s.extensions.folder.as_deref().map(|folder| crate::extension_package::needs_repair(folder, &id)).transpose()?.unwrap_or(false);
+        #[cfg(target_arch = "wasm32")]
+        let repair = false;
+        if !repair {
+            return Err(error("extension already installed; use replace:true to update it"));
+        }
     }
-    if !replacing && s.extensions.installed.len() >= 128 {
-        return Err(error("at most 128 extensions may be installed"));
+    if !replacing && s.extensions.installed.len() >= 4096 {
+        return Err(error("at most 4096 extensions may be installed"));
     }
     let enabled = s.extensions.installed.get(&id).is_none_or(|i| i.enabled);
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(installed) = s.extensions.installed.get(&id) {
-        ensure_idle(installed)?;
-    }
     #[cfg(not(target_arch = "wasm32"))]
     if let Some(package) = &input.package {
         if package.info.native.is_some() && p.get("allowNative").and_then(Value::as_bool) != Some(true) {
@@ -385,10 +411,17 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
     let result = json!({"manifest": extension.manifest, "enabled": enabled, "replaced": replacing, "storage": storage});
     s.forget_plugin_preview(&id);
     crate::plugin_host::revoke(s, &id);
+    let extension = input.extension;
+    #[cfg(not(target_arch = "wasm32"))]
+    let extension = if let Some(folder) = &s.extensions.folder {
+        crate::extension_package::bind(folder, &id, blake3::hash(&input.bytes).to_hex().as_str(), extension)?
+    } else {
+        extension
+    };
     s.extensions.installed.insert(
         id,
         Installed {
-            extension: Arc::new(input.extension),
+            extension: Arc::new(extension),
             enabled,
             state: Value::Null,
             storage,
@@ -400,6 +433,8 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
             package: input.package.as_ref().map(|package| package.info.clone()),
             #[cfg(not(target_arch = "wasm32"))]
             native,
+            #[cfg(not(target_arch = "wasm32"))]
+            deferred: None,
         },
     );
     s.extensions.revision = s.extensions.revision.wrapping_add(1);
@@ -437,31 +472,38 @@ fn enable(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         None
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    drop(_store);
+    crate::plugin_host::revoke(s, id);
     if let Some(installed) = s.extensions.installed.get_mut(id) {
         installed.enabled = enabled;
+        if enabled {
+            installed.extension.retry_activation();
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let (Some(activation), Some(native)) = (activation, &installed.native) {
             installed.native = Some(Arc::new(native.reactivated(activation)));
         }
     }
     if !enabled {
-        crate::plugin_host::revoke(s, id);
         s.extensions.task_epochs.remove(id);
         s.forget_plugin_preview(id);
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    if enabled && let Some(folder) = &s.extensions.folder {
+        let refreshed = crate::extension_package::discover(folder, id)?;
+        validate_permissions(&refreshed.extension.manifest)?;
+        if let Some(installed) = s.extensions.installed.get_mut(id) {
+            installed.extension = refreshed.extension;
+            installed.deferred = refreshed.deferred;
+            installed.native = refreshed.native;
+            installed.filters = refreshed.filters;
+            installed.package = refreshed.package;
+            installed.storage = refreshed.storage;
+        }
+    }
     s.extensions.revision = s.extensions.revision.wrapping_add(1);
     Ok(json!({"id": id, "enabled": enabled}))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn ensure_idle(installed: &Installed) -> Result<()> {
-    if installed.native.as_ref().is_some_and(|native| Arc::strong_count(native) > 1) {
-        return Err(error("Wait for this plugin's processing to finish or cancel it before updating or removing it"));
-    }
-    if installed.filters.values().any(|filter| Arc::strong_count(filter) > 1) {
-        return Err(error("Wait for this plugin's processing to finish or cancel it before updating or removing it"));
-    }
-    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -479,29 +521,130 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(error("extension is not installed"));
     }
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(installed) = s.extensions.installed.get(id) {
-        ensure_idle(installed)?;
-    }
-    #[cfg(not(target_arch = "wasm32"))]
     if let Some(folder) = &s.extensions.folder
-        && let Some(warning) = crate::extension_package::remove(folder, id)?
+        && let Some(warning) = crate::extension_package::remove_with_data(folder, id, p.get("purgeData").and_then(Value::as_bool).unwrap_or(false))?
     {
         s.extensions.load_errors.push(warning);
     }
-    s.extensions.installed.remove(id);
     crate::plugin_host::revoke(s, id);
+    s.extensions.installed.remove(id);
     s.extensions.task_epochs.remove(id);
     s.forget_plugin_preview(id);
     s.extensions.revision = s.extensions.revision.wrapping_add(1);
     Ok(json!({"removed": id}))
 }
 
+fn rollback(s: &mut Session, p: &Value) -> Result<Value> {
+    let id = id(p)?;
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (s, id);
+        Err(error("Plugin rollback requires a desktop installation"))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let folder = s.extensions.folder.as_ref().ok_or_else(|| error("Plugin rollback requires a persistent store"))?.clone();
+        crate::extension_package::rollback_checked(&folder, id, |manifest| {
+            validate_permissions(manifest)?;
+            crate::plugin_host::validate_contributions(&s.extensions, manifest)
+        })?;
+        let loaded = crate::extension_package::discover(&folder, id)?;
+        validate_permissions(&loaded.extension.manifest)?;
+        crate::plugin_host::validate_contributions(&s.extensions, &loaded.extension.manifest)?;
+        crate::plugin_host::revoke(s, id);
+        s.extensions.task_epochs.remove(id);
+        s.forget_plugin_preview(id);
+        let enabled = !crate::extension_package::checked_path(&folder, &format!("{id}.disabled"))?.exists();
+        s.extensions.installed.insert(
+            id.into(),
+            Installed {
+                extension: loaded.extension,
+                enabled,
+                state: Value::Null,
+                storage: loaded.storage,
+                filters: loaded.filters,
+                native: loaded.native,
+                package: loaded.package,
+                deferred: loaded.deferred,
+            },
+        );
+        s.extensions.revision = s.extensions.revision.wrapping_add(1);
+        Ok(json!({"id":id,"rolledBack":true}))
+    }
+}
+
+fn runtime(s: &mut Session, p: &Value) -> Result<Value> {
+    let id = id(p)?.to_owned();
+    let action = p.get("action").map(|value| value.as_str().ok_or_else(|| error("runtime action must be text"))).transpose()?.unwrap_or("status");
+    if !matches!(action, "status" | "retry" | "reset") {
+        return Err(error("runtime action must be status, retry or reset"));
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (s, id, action);
+        Err(error("Native plugin runtimes require the desktop application"))
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let installed = s.extensions.installed.get(&id).ok_or_else(|| error("plugin is not installed"))?;
+        let Some(supervisor) = installed.native.as_ref().and_then(|native| native.worker_v2.as_ref()).cloned() else {
+            if action == "status" {
+                return Ok(json!({"state":if installed.enabled {installed.extension.lifecycle()} else {"disabled"},"persistent":false}));
+            }
+            return Err(error("This installation does not declare a persistent native worker"));
+        };
+        if action == "status" {
+            return Ok(supervisor.status());
+        }
+        if action == "retry" {
+            installed.extension.check_current().map_err(error)?;
+            supervisor.retry()?;
+            return Ok(supervisor.status());
+        }
+        activate(s, &id)?;
+        let installed = s.extensions.installed.get(&id).ok_or_else(|| error("plugin is not installed"))?;
+        let native = installed.native.as_ref().cloned().ok_or_else(|| error("plugin has no native worker"))?;
+        let supervisor = native.worker_v2.as_ref().cloned().ok_or_else(|| error("plugin has no persistent worker"))?;
+        let completed_native = Arc::clone(&native);
+        let extension = Arc::clone(&installed.extension);
+        let ticket = s.plugin_scheduler.enqueue(
+            &scheduler_owner(s, &id),
+            crate::plugin_scheduler::Priority::Interactive,
+            crate::plugin_scheduler::Resources { cpu_units: 1, ..Default::default() },
+        )?;
+        crate::jobs::run(
+            s,
+            "Reset plugin worker",
+            false,
+            move |context| {
+                let _permit = ticket.wait(context)?;
+                let _lease = native.lease()?;
+                let _watch = native.watch(context)?;
+                native.verify_payload(context)?;
+                native.validate_storage()?;
+                supervisor.reset(context)?;
+                native.validate_storage()?;
+                Ok(supervisor.status())
+            },
+            move |session, result| {
+                let _lease = completed_native.admission()?;
+                extension.check_current().map_err(error)?;
+                if !session.extensions.installed.get(&id).is_some_and(|installed| installed.enabled && Arc::ptr_eq(&installed.extension, &extension)) {
+                    return Err(error("Plugin reset was revoked"));
+                }
+                Ok(result)
+            },
+        )
+    }
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     let spec = |id, label, params, run| CommandSpec { id, label, params, run, menu: &[], shortcut: None, enabled: crate::commands::always, journal: false };
     vec![
-        spec("extension.commands", "Extension Commands", "{}", |_, _| {
+        spec("extension.commands", "Extension Commands", "{}", |s, _| {
             Ok(
-                json!({"commands": COMMANDS.iter().filter(|id| crate::commands::find(id).is_some()).collect::<Vec<_>>(), "apiVersion": 1, "maxJsonBytes": MAX_JSON_BYTES}),
+                json!({"commands": COMMANDS.iter().filter(|id| crate::commands::find(id).is_some()).collect::<Vec<_>>(), "apiVersion": 1, "maxJsonBytes": MAX_JSON_BYTES,
+                    "maxInstalledPlugins":4096, "workerProtocols":[1,2], "restrictedNative":false, "scheduler":s.plugin_scheduler.status()}),
             )
         }),
         spec("extension.inspect", "Inspect Extension", r#"{"path":text,"data":text}"#, |_, p| {
@@ -513,7 +656,24 @@ pub fn specs() -> Vec<CommandSpec> {
         spec("extension.list", "List Extensions", "{}", |s, _| Ok(s.extensions.list())),
         spec("extension.invoke", "Run Extension Action", r#"{"id":text,"event":text,"values":json}"#, invoke),
         spec("extension.enable", "Enable Extension", r#"{"id":text,"enabled":bool}"#, enable),
-        spec("extension.remove", "Remove Extension", r#"{"id":text}"#, remove),
+        spec("extension.remove", "Remove Extension", r#"{"id":text,"purgeData":bool=false}"#, remove),
+        spec("extension.rollback", "Roll Back Plugin", r#"{"id":text}"#, rollback),
+        spec("extension.runtime", "Plugin Runtime", r#"{"id":text,"action":status|retry|reset=status}"#, runtime),
+        spec("extension.storage", "Plugin Managed Storage", r#"{"id":text}"#, |s, p| {
+            let plugin = id(p)?;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                crate::extension_package::managed_usage(
+                    s.extensions.folder.as_deref().ok_or_else(|| error("Plugin storage requires a persistent store"))?,
+                    plugin,
+                )
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = (s, plugin);
+                Err(error("Managed native storage requires the desktop application"))
+            }
+        }),
     ]
 }
 

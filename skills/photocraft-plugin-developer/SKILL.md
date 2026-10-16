@@ -26,9 +26,11 @@ build the project. Read its generated README and `AGENTS.md`. Edit `authoring.js
 the handler; Cargo generates manifests/bindings in `OUT_DIR`. Existing plugins need no
 SDK migration, synchronized SDK release or rebuild of their supported wire ABI.
 
-Current authoring contracts are panel API 1, experimental panel API 2, filter ABI 1,
-package format 2, and native worker protocol 1. Package format 3 and worker protocol 2
-are proposals. The application release number alone does not establish API support.
+Panel API 2 is the current pre-release authoring contract. Panel 1 and worker 1 remain
+compatibility paths for existing plugins; package format 2 and filter ABI 1 serve separate
+layers. Evolve one current public API; implementation milestones do not create new majors.
+Select worker 2 only through a verified runtime/worker-v2.json declaration. The application
+release number alone does not establish API support.
 
 Use the running host's `extension.capabilities`, `extension.commands`, and command
 descriptions where available. Discovery reports availability, not permission. An
@@ -48,14 +50,14 @@ Those documents are authoring references, not runtime source dependencies.
 | Feature | Starter path in a source checkout or developer kit | Result |
 |---|---|---|
 | Typed new panel/command guest with single source metadata | `photocraft-plugin new` from a reviewed authoring input | API-2 project with privately included SDK/API sources |
-| Panel combining permitted editor commands | `examples/extensions/plugin-starter` | Panel API 1 `.pcext` |
+| Legacy panel combining permitted editor commands | `examples/extensions/plugin-starter` | Panel API 1 `.pcext` |
 | Pixel algorithm using the filter target's depth and channels | `examples/plugins/filter-starter` | Filter ABI 1 `.wasm` |
 | Panel with its own executable and/or bundled WASM algorithm | `examples/extensions/image-plugin-starter` | Package 2 `.pcplugin` |
-| Namespaced command and atomic layer rename/visibility edits | `examples/extensions/layer-organizer` | Experimental API 2 `.pcplugin` |
-| Native read-only inspector refreshed by document changes | `examples/extensions/document-inspector` | Experimental API 2 `.pcplugin` |
+| Namespaced command and atomic layer rename/visibility edits | `examples/extensions/layer-organizer` | Panel API 2 `.pcplugin` |
+| Native read-only inspector refreshed by document changes | `examples/extensions/document-inspector` | Panel API 2 `.pcplugin` |
 
-Use API 1 when it covers the feature. Select API 2 deliberately for its implemented
-capabilities, without changing package format. Native maintenance tasks extend a
+Use panel API 2 for new projects and preserve existing API-1 binaries until their own
+projects migrate. Package format does not change with that choice. Native maintenance tasks extend a
 package with an owned worker; they are not a sixth starter or a separate runtime.
 Identify unsupported requirements early: dynamic/free-text controls, custom docking,
 canvas tools, general callbacks, and high-precision native layer/region transport
@@ -91,11 +93,17 @@ Run meaningful handler/algorithm tests, formatting, Clippy, release WASM/native 
 and packaging for each component changed. Native-only unit tests do not verify WASM
 exports or installed behavior. Keep source instructions and README usage in sync.
 
-Current desktop hosts protect native work with cooperative OS store locks and activation
-epochs. Store management can return busy until native work finishes. Completed results
-are rechecked; old generations, disable/re-enable and identical reinstall cannot revive
-an obsolete native result. Keep the store lock and activation tombstones intact. This
-does not sandbox native processes, impose aggregate quotas or implement worker protocol 2.
+Current desktop hosts discover cached descriptors lazily, use per-generation OS leases and
+activation epochs, and bound native queues, resident workers and resource reservations.
+Panel preparation verifies bounded panel code; bulk closure checks and packaged filter
+compilation run in scheduled processing jobs. A private persistent worker may opt into protocol 2; old workers retain their exact launch
+contract. Never share a process, runtime, writable cache or data migration with another plugin.
+Managed settings/data/cache/secrets references are generation-scoped; updates stage and validate
+a quiescent snapshot, and rollback selects a preserved code/data pair. Keep host lock files and
+activation tombstones intact. Reservations and managed validation quotas do not sandbox trusted
+native processes or enforce kernel memory/GPU/disk limits. Restricted native is unavailable.
+Read docs/plugin-lifecycle.md, docs/plugin-worker-v2.md and docs/plugin-managed-storage.md in the
+matching source/kit before adopting these optional facilities. Preserve existing external caches.
 Companion apps use the authenticated local control API/MCP rather than guest handles;
 plugins remain usable without a companion and automation restrictions still apply.
 

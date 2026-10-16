@@ -26,9 +26,8 @@ The inspector updates from document notifications. With more than 128 layers the
 view explicitly identifies its first-page snapshot; the layer total remains visible.
 Closing the image clears the previous document information.
 
-The existing panel-only package format 2 carries the API-2 guest. Package format 3
-is a separate future contract. Older hosts that support only panel API 1 reject this
-package without affecting existing plugins.
+The existing panel-only package format 2 carries the current API guest. Older hosts that
+support only panel API 1 reject this package without affecting their installed plugins.
 
 ## Tests
 

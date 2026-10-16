@@ -8,10 +8,10 @@ releases contain the panel/native package platform.
 
 | Contract | Implemented version | Important boundary |
 |---|---|---|
-| Panel | 1; additive experimental 2 | Import-free core WASM, `pce_*` exports |
+| Panel | 2 is current; 1 is a compatibility adapter | Import-free core WASM, `pce_*` exports |
 | Standalone pixel filter | ABI 1 | Import-free core WASM, `pc_*` exports |
 | Desktop package | 2 | ZIP, panel module, optional owned native/filter backends |
-| Native image/task worker | 1 | Host-owned requests/results, `--job` or `--task` |
+| Native image/task worker | 1; explicit opt-in 2 | Legacy `--job`/`--task`; worker 2 uses bounded framed `--serve` |
 | Shared contract crate | Experimental `photocraft-plugin-api` 0.1.0 | Serialized data, no editor linkage required |
 | Guest SDK | Experimental `photocraft-plugin-sdk` 0.1.0 | Typed events/replies, bounded ABI buffers, optional authoring generator |
 
@@ -27,15 +27,19 @@ Cargo generates the embedded descriptor and Rust constants; the package builder 
 same input. New projects may privately include the exported API/SDK source. Nothing links
 against engine/UI types, and no shared runtime installation is required.
 
-Package 3 and worker protocol 2 are proposals. API-2 panels still use package 2.
+The current panel API and native transports use package 2; milestones do not create new APIs.
+Worker 2 requires the separately verified runtime/worker-v2.json member and cannot be
+probed or inferred from an executable. Typed descriptor/frames ship in the optional API crate.
 Retired package-1 fixed AI services are not an authoring route. Photoshop UXP, CEP,
 and `.8BF` files require porting. Renaming files does not convert their ABI.
 
-Current desktop store mutations use an exclusive OS lock; native jobs use shared leases.
-Completion and Apply verify the selected payload, enabled state and persistent activation
-epoch. Store-wide locking can temporarily block management of any plugin during native
-work. Other instances reload changed installations. Older hosts/manual file edits do not
-participate; native containment, lazy activation and aggregate quotas remain future work.
+Current desktop hosts use lazy validated descriptors, bounded per-plugin scheduling,
+per-generation OS leases, aggregate native admission estimates and explicit preview retention
+budgets. Panel activation checks only bounded panel code; cancellable bulk verification and
+filter compilation run in scheduled jobs. Managed storage snapshots/migrations and rollback select the same generation as code.
+Legacy packages need no rebuild or shared runtime. Restricted native containment remains
+unavailable; trusted processes can exceed estimates or access the user's OS resources.
+See the matching source/kit lifecycle, worker-2 and managed-storage references for exact limits.
 
 ## Panels
 
@@ -135,7 +139,7 @@ as RGBA8. Channel Gain supports RGB/grayscale only; other modes need an algorith
 The host handles selection blending and overlap. Use `_image` band geometry for
 coordinate effects. Each band gets a fresh instance, without cross-band state.
 
-## Experimental panel API 2
+## Current pre-release panel API 2
 
 Declare required/optional versioned capabilities and plugin-namespaced contributions.
 Capability negotiation does not grant extra permissions. API-2 exports retain the

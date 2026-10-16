@@ -264,7 +264,7 @@ python scripts/plugins/test-platform-examples.py
 The Python helper uses the current Python executable for each exported project's build,
 omits existing build outputs, and points the host at only those newly built packages. Missing
 packages or failed host tests fail the run. It requires the `wasm32-unknown-unknown` Rust target;
-pass `--offline` when dependencies are already cached. Panel API 2 remains experimental; these
+pass `--offline` when dependencies are already cached. Panel API 2 is the current pre-release contract; these
 tests do not establish a support window for future host releases.
 For a local host built without optional HEIF support, pass `--host-features=`; CI retains the
 default `heif` selection.
@@ -293,3 +293,19 @@ all dependencies and the target toolchain already cached; `--locked` alone does 
 Before publishing, install the exact release artifact through the intended desktop route and
 run its manual acceptance cases. A passing unit suite or a successful ZIP build is not a claim
 that every input, host version or platform is bug-free.
+
+
+## Lifecycle acceptance
+
+Extend the existing neutral suites when changing lifecycle/store behavior. Cover lazy startup
+with 1000 dormant descriptors, separate-process generation leases and crash release, exact
+legacy artifacts, strict framed-worker handshake/reuse/reset/cancel/deadline/idle/quarantine,
+queue fairness/resource release, and multiple previews without cross-owner eviction. Managed
+storage tests must preserve the active code/data pair after interrupted stages, migration
+errors, quota exhaustion and injected full-disk writes. Temporary native fixture sources and
+executables are deleted; no plugin-specific model/runtime fixture belongs in the platform.
+
+The scheduler admits estimates, not kernel containment. Test restricted native only when that
+profile exists on the target OS; do not infer macOS/Linux certification from a Windows pass.
+See [lifecycle](plugin-lifecycle.md), [worker protocol](plugin-worker-v2.md) and
+[managed storage](plugin-managed-storage.md).

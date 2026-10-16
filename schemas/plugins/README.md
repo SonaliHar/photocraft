@@ -12,8 +12,12 @@ all-features contract test checks exact generation consistency.
 - `package-v2.schema.json`: current package metadata; native target compatibility is checked by the host.
 - `layers-read-v1.schema.json`, `layers-edit-v1.schema.json`: current document broker requests.
 - `layers-snapshot-v1.schema.json`, `layers-edited-v1.schema.json`: document broker success results.
+- `worker-v2.schema.json`: explicit private persistent-worker declaration and resource estimates.
+- `worker-v2-host-frame.schema.json`, `worker-v2-guest-frame.schema.json`: bounded control transport frames.
 
 Schemas validate structural shape, not authority. Native validators also enforce cross-field
 constraints, byte budgets and owner namespaces. The host checks grants and scoped handles.
-See [panel API 2](../../docs/plugin-api-v2.md) and the [standalone SDK](../../docs/plugin-sdk.md). Existing panel-1/package-2 readers remain
-separate. Package format 3 is an RFC and has no supported schema yet.
+See [panel API 2](../../docs/plugin-api-v2.md) and the [standalone SDK](../../docs/plugin-sdk.md).
+Package format 2 is current; the panel-1 reader remains a temporary compatibility path for
+our own existing binaries. The [future package proposal](../../docs/plugin-package-v3.md)
+has no accepted runtime format/schema. These labels version distinct wire formats, not API milestones.

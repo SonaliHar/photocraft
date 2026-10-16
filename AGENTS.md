@@ -149,12 +149,30 @@ released plugins belong in those plugins' repositories. Keep core regressions ne
 extend existing suites; generated SDK acceptance projects and packages stay temporary.
 Regenerate all public JSON Schema snapshots when their Rust contracts change.
 
-Managed native jobs hold a shared OS store lock through worker execution, and check the
-selected generation and persistent activation epoch again at completion/Apply. Store mutation uses an exclusive lock.
-Never replace/delete `.photocraft-store.lock` or bypass these guards. The current coarse
-lock covers the whole store; per-generation scheduling, persistent workers and aggregate
-quotas remain Phase 2 work. Update developer docs, this guide and the plugin developer
-skill with completed features and their actual limits before publishing changes.
+Discovery uses host-created cached descriptors. Panel activation reads only bounded panel
+code; scheduled jobs stream-verify the full closure before native execution or filter loading.
+Never hash model payloads or compile package filters during UI preparation. Compare the embedded
+panel descriptor with its cached authority. Preserve the eager adapter for old records and all existing wire bytes.
+Worker protocol 2 is an explicit verified runtime/worker-v2.json opt-in; never probe or silently
+upgrade legacy executables. Each installation/generation owns its persistent process and data.
+
+Use the bounded process-wide scheduler for native work. Scheduling/cancellation identities must
+include the private store, plugin, generation, activation epoch and private runtime instance; a same-named plugin in another
+store must not supply resident credits or receive cancellation. Admission estimates are not OS
+containment. Restricted native execution remains unavailable until Phase 7 verifies it per OS.
+
+Store publication uses a short OS lock; execution and idle workers retain per-generation leases.
+Never replace/delete lock files or activation tombstones. Managed-data migration requires an
+exclusive source-generation lease, stages a private snapshot, validates quotas and publishes the
+active code/state record last. Preserve one rollback pair and never touch external plugin caches.
+Bind the rollback journal to the target active hash so failed publication preserves the earlier
+rollback choice. Completion, broker requests and Apply recheck ownership, source revision and
+activation authority; keep a short shared store guard through final document/state admission.
+Retained previews have explicit byte/count budgets and cannot silently evict another owner's work.
+
+Update developer docs, this guide and the plugin developer skill with completed features and
+actual limits. Extend existing neutral suites with process/crash/cancel/store/rollback coverage;
+compile temporary native fixtures outside shipped source and remove generated projects/packages.
 
 ## 8. Keeping the native format complete
 

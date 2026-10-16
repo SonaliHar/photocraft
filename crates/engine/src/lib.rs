@@ -97,6 +97,7 @@ pub mod plugin_image_cmds;
 pub mod plugin_preview;
 #[cfg(not(target_arch = "wasm32"))]
 mod plugin_runtime;
+pub mod plugin_scheduler;
 pub mod plugin_task_cmds;
 pub mod prefs;
 pub mod preset_import_cmds;
@@ -448,6 +449,8 @@ pub struct Session {
     pub plugins_disabled: bool,
     /// Installed native-panel extensions and their isolated state.
     pub extensions: extension_cmds::ExtensionHost,
+    /// Cooperative process-wide plugin admission; declarations are not OS containment.
+    pub(crate) plugin_scheduler: plugin_scheduler::PluginScheduler,
     docs: Vec<DocState>,
     active: Option<usize>,
     pub tools: ToolState,

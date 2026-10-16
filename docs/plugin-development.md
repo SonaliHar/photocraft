@@ -6,9 +6,11 @@ the public APIs. Independent image processors can supply their own native worker
 packaged WASM filter through package version 2. This handbook takes you from a new project to a tested release using
 neutral starters. It does not depend on any AI plugin project.
 
-**API status:** preserved panel API version 1, experimental [panel API 2](plugin-api-v2.md),
-filter ABI version 1 and general package format version 2 in this source tree. Package 3 and
-worker protocol 2 remain proposals. Use a build
+**API status:** [panel API 2](plugin-api-v2.md) is the current pre-release authoring contract;
+panel API 1 remains a compatibility adapter. Filter ABI version 1 and general package format
+version 2 serve their existing layers. Native worker 1
+is preserved; [worker protocol 2](plugin-worker-v2.md) is an explicit persistent-worker opt-in.
+Use a build
 containing these APIs; an older release with the same application version number may not contain
 this contribution. Check that Plugins contains Manage Plugins. API versions, native package
 versions and your plugin's release version are different numbers.
@@ -16,6 +18,9 @@ versions and your plugin's release version are different numbers.
 ## Contents
 
 - [Standalone API-2 SDK](plugin-sdk.md)
+- [Lifecycle, scheduling and recovery](plugin-lifecycle.md)
+- [Persistent native workers](plugin-worker-v2.md)
+- [Managed storage and migrations](plugin-managed-storage.md)
 - [Development with agents](#development-with-agents)
 - [Choose a plugin type](#choose-a-plugin-type)
 - [Prepare your tools](#prepare-your-tools)
@@ -594,8 +599,8 @@ does not conceal a missing dependency. Record ordinary OS and hardware-driver pr
 | Filesystem/network/process access from WASM | No imports/grants for these |
 | Independent native image processor | Yes, package version 2 and the generic PNG/job contract |
 | Owned native maintenance tasks | Yes, `plugin.runTask`; other native capability families require host work |
-| Contributed commands, layer snapshots and atomic rename/visibility batches | Experimental API 2; bounded single-document batches with one Undo step |
-| Native read-only inspector and document invalidations | Experimental API 2; one explicitly opened inspector/subscription per plugin |
+| Contributed commands, layer snapshots and atomic rename/visibility batches | Panel API 2; bounded single-document batches with one Undo step |
+| Native read-only inspector and document invalidations | Panel API 2; one explicitly opened inspector/subscription per plugin |
 | Free-text/dynamic/custom controls, docking, overlays | Host UI/schema work required |
 | Startup subscriptions or general async callbacks | Not exposed; the inspector invalidation/query loop is a limited separate contract |
 | Independent data-contract crate and conformance/build tool | Experimental `photocraft-plugin-api`; [Rust developer tool](../apps/photocraft-plugin/README.md), with independently exported starter builds |

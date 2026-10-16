@@ -1,14 +1,19 @@
-# Plugin package format 3 RFC
+# Future plugin package format 3 proposal
 
-**Status:** design proposal, 2026-10-15; not an accepted installation format. Current packages
-continue to use [package format 2](plugin-native-packages.md). Panel API 2 is independently
-versioned and does not require package format 3.
+**Status: future design only.** PhotoCraft currently accepts package format 2. This proposal
+does not create a second public plugin API, require migration at an implementation milestone,
+or describe an accepted runtime format. Implement it only if its packaging changes are needed
+for a future build, with a concrete migration for our independently released plugins.
+
+Current packages continue to use [package format 2](plugin-native-packages.md).
 
 ## Motivation and ownership
 
-Format 2 derives identity and UI metadata from its embedded WASM manifest. A future format 3
-will expose verified descriptors without activating WASM during ordinary discovery, and will
-describe multiple target payloads, activation and integrity using one authoring source.
+Format 2 derives identity and UI metadata from its embedded WASM manifest. Phase 2 already
+provides host-cached verified descriptors and lazy discovery without changing that container.
+A future format 3 could add publisher-authenticated descriptors, multiple target payloads and
+expanded activation/integrity metadata through the same authoring source, if needed. Lazy
+discovery and persistent workers alone do not require it.
 
 Every package remains self-contained: its algorithms, executable modules, native dependencies,
 assets, licenses, private settings and release cadence belong to that plugin. The descriptor

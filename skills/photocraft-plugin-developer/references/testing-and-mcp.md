@@ -110,3 +110,13 @@ are sequential and do not roll back earlier successes. File writes and native ta
 side effects are not reversed by editor Undo. Inspect effects before retrying a
 request whose completion is uncertain. Report build, structural, handler-probe, and
 real-host acceptance results separately, with host/API/platform versions.
+
+
+For optional persistent workers, run real subprocess acceptance against the intended host:
+strict framing/handshake, private process reuse, reset, cancel, deadlines, idle eviction and
+quarantine recovery. Check `extension.commands` for scheduler limits and `extension.runtime`
+for status. These are trusted host/control calls, outside guest command grants. Managed
+migrations must leave the old code/data selected after failure; test explicit rollback and
+source/destination lease contention. Preserve external caches and verify independent packaging.
+Phase milestones evolve one current API; keep any necessary compatibility adapter until our
+independent plugins have a tested migration. Native admission estimates are not OS hard limits.

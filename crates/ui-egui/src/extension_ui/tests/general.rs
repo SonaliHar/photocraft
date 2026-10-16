@@ -1,4 +1,4 @@
-//! General package UI coverage uses an independent filter fixture, not either shipped AI tool.
+//! Neutral package UI coverage uses an independently compiled filter fixture.
 use super::*;
 use egui_kittest::{
     Harness,
@@ -199,7 +199,9 @@ fn filter_only_package_review_install_menu_and_done_need_no_native_consent() {
     let mut restarted = photocraft_engine::Session::new();
     restarted.extensions.attach_folder(dir.0.join("Extensions")).unwrap();
     assert!(restarted.extensions.load_errors.is_empty());
-    assert_eq!(restarted.extensions.installed[ID].filters.len(), 1);
+    assert!(restarted.extensions.installed[ID].filters.is_empty());
+    assert_eq!(restarted.extensions.installed[ID].package.as_ref().unwrap().filters.len(), 1);
+    assert_eq!(restarted.extensions.installed[ID].extension.lifecycle(), "idle");
     assert!(restarted.extensions.installed[ID].native.is_none());
 }
 
