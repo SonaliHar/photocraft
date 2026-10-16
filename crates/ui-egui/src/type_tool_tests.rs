@@ -2066,3 +2066,105 @@ fn type_mask_shift_adds_and_alt_subtracts_without_a_layer_row() {
     assert!(at(&app, stem.0, stem.1) < 0.01, "⌥ subtracts the glyphs");
     assert!(at(&app, 1050, 150) > 0.99, "and keeps the rest");
 }
+
+/// Selecting another layer by any route, not only a Layers-panel row (#5584), ends text
+/// editing: the edit is kept, the caret goes and the tool shortcuts work again (#6483).
+mod leaving_the_layer {
+    use super::*;
+
+    /// A document with an edited type layer (typed "Kept", session open) and a pixel layer.
+    fn editing() -> (PhotocraftApp, LayerId, LayerId) {
+        let mut app = new_app();
+        let text = LayerId(app.run("type.create", json!({"text": "Before", "size": 24, "x": 20, "y": 80})).unwrap()["layer"].as_u64().unwrap());
+        let other = LayerId(app.run("layer.new.layer", json!({"name": "Other"})).unwrap()["layer"].as_u64().unwrap());
+        app.run("layer.select", json!({"layer": text.0})).unwrap();
+        super::super::edit_active(&mut app).unwrap();
+        let session = app.ui.text_edit.as_ref().unwrap().session.clone();
+        app.run("type.edit", json!({"layer": text.0, "text": "Kept", "coalesce": session})).unwrap();
+        (app, text, other)
+    }
+
+    fn kept(app: &PhotocraftApp, id: LayerId) {
+        let layer = app.session.active().unwrap().doc.layer(id).unwrap();
+        let LayerContent::Text(t) = &layer.content else { panic!("still a type layer") };
+        assert_eq!(t.text, "Kept");
+    }
+
+    #[test]
+    fn selecting_another_layer_from_anywhere_commits() {
+        for mode in ["replace", "add"] {
+            let (mut app, text, other) = editing();
+            app.run("layer.select", json!({"layer": other.0, "mode": mode})).unwrap();
+            super::super::end_if_left(&mut app);
+            assert!(app.ui.text_edit.is_none(), "{mode}");
+            kept(&app, text);
+        }
+    }
+
+    #[test]
+    fn staying_on_the_edited_layer_keeps_editing() {
+        let (mut app, text, _) = editing();
+        let before = app.ui.text_edit.clone();
+        super::super::end_if_left(&mut app);
+        assert_eq!(app.ui.text_edit, before);
+        kept(&app, text);
+    }
+
+    #[test]
+    fn a_new_empty_type_layer_left_behind_is_removed() {
+        let mut app = new_app();
+        let other = LayerId(app.run("layer.new.layer", json!({"name": "Other"})).unwrap()["layer"].as_u64().unwrap());
+        super::super::pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+        let id = LayerId(app.ui.text_edit.as_ref().expect("new type session").layer);
+        let session = app.ui.text_edit.as_ref().unwrap().session.clone();
+        app.run("type.edit", json!({"layer": id.0, "text": "", "coalesce": session})).unwrap();
+        app.run("layer.select", json!({"layer": other.0})).unwrap();
+        super::super::end_if_left(&mut app);
+        assert!(app.ui.text_edit.is_none());
+        assert!(app.session.active().unwrap().doc.layer(id).is_none(), "empty new text is deleted, as on any commit");
+    }
+
+    #[test]
+    fn no_document_or_no_active_layer_ends_the_session_without_panicking() {
+        let (mut app, _, _) = editing();
+        app.session.active_mut().unwrap().active_layer = None;
+        super::super::end_if_left(&mut app);
+        assert!(app.ui.text_edit.is_none());
+
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.text_edit = Some(crate::state::TextEdit {
+            layer: 7,
+            caret: 0,
+            anchor: 0,
+            session: "s".into(),
+            created: true,
+            mask: false,
+            dragging: false,
+            resize: None,
+            preedit: None,
+        });
+        super::super::end_if_left(&mut app);
+        assert!(app.ui.text_edit.is_none());
+    }
+
+    /// The whole app: a layer selected outside the Layers panel (here the control channel, like
+    /// a canvas auto-select) ends editing on the next frame, and V then picks the Move tool
+    /// instead of typing a "v" into the old layer.
+    #[test]
+    fn shortcuts_work_again_after_selecting_another_layer() {
+        let (app, text, other) = editing();
+        let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            app
+        });
+        h.run_steps(4);
+        assert!(h.state().ui.text_edit.is_some(), "editing");
+        h.state_mut().run("layer.select", json!({"layer": other.0})).unwrap();
+        h.run_steps(2);
+        assert!(h.state().ui.text_edit.is_none(), "selecting another layer ends editing");
+        h.key_press(egui::Key::V);
+        h.run_steps(2);
+        assert_eq!(h.state().ui.tool, crate::state::Tool::Move);
+        kept(h.state(), text);
+    }
+}

@@ -959,6 +959,18 @@ pub fn commit(app: &mut PhotocraftApp) {
     commit_with(app, egui::Modifiers::NONE);
 }
 
+/// A type session whose layer is no longer the active one commits, as in Photoshop: selecting
+/// another layer from anywhere (the canvas, a menu, the control channel, not only a Layers-panel
+/// row) ends text editing, so the caret never stays on a layer that is not targeted and the
+/// shortcuts work again (#6483). Checked every frame.
+pub fn end_if_left(app: &mut PhotocraftApp) {
+    let Some(ed) = &app.ui.text_edit else { return };
+    let layer = ed.layer;
+    if app.session.active().and_then(|st| st.active_layer).is_none_or(|active| active.0 != layer) {
+        commit(app);
+    }
+}
+
 /// [`commit`] with the modifiers held while committing: a Type Mask adds its glyphs to the
 /// selection with ⇧, subtracts them with ⌥ and intersects with ⇧⌥ (Photoshop); with none it
 /// replaces the selection.
