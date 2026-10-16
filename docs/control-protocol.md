@@ -2272,3 +2272,17 @@ all existing native and mask checks. No command, caller limit, source profile,
 CURRENT rendering rule or publication authority changes. Cancellation remains
 a cancellation error, including before output copy. This is an implementation
 change with behavioral, native and performance acceptance still deferred.
+
+
+Seven additional existing point domains accept checked full-canvas origin
+geometry: Desaturate, three Saturation variants, precision Value Invert and two
+Color Balance variants. Existing typed filter requests and synchronous lanes
+remain the interface. Their original profile/precision/working/argument rules
+still qualify every request; Color Balance visibility/full-opacity and RGB-Yuv
+depth restrictions remain binding. Exact semantic tuples select the existing
+finite work service without granting command validity. Caller-lowered controls,
+one cumulative ledger/deadline, source protection and publication fences remain.
+Larger masks use an explicit actual-grid allowance capped at16MiB, admitted
+before full physical/default/padding byte-zero proof. Old8x6 mask behavior is
+preserved. No new Move/remove/compound/empty continuation is added. Native
+continuation remains `.pcraft`; behavior and performance gates are deferred.

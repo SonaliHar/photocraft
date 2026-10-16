@@ -1186,6 +1186,35 @@ pub(crate) fn qualify_current_point_layer_coverage_metadata(
 ) -> Result<()> {
     qualify_point_storage_metadata(doc, layer, state, stack, extent, stored, format, default_bytes, PointLayerCoverage::Current)
 }
+// Closed second geometry bundle; no source, precision or operation grant.
+pub(crate) fn residual_origin_node(node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
+    match node.operation.name.as_str() {
+        "gimp:desaturate" => node.operation.schema_epoch == crate::gimp_filters::DESATURATE_PRECISION_EPOCH,
+        "gegl:saturation" => matches!(node.operation.schema_epoch.as_str(), crate::gimp_filters::SATURATION_PRECISION_EPOCH | crate::gimp_filters::SATURATION_GRAY_PRECISION_EPOCH | crate::gimp_filters::SATURATION_RGB_YUV_PRECISION_EPOCH),
+        "gegl:value-invert" => node.operation.schema_epoch == crate::gimp_filters::VALUE_INVERT_PRECISION_EPOCH,
+        "gimp:color-balance" => matches!(node.operation.schema_epoch.as_str(), crate::gimp_color_balance::EPOCH | crate::gimp_color_balance::DEPTH_EPOCH),
+        _ => false,
+    }
+}
+pub(crate) fn residual_origin_extent(extent: Rect) -> bool {
+    extent.x0 == 0 && extent.y0 == 0 && !extent.is_empty()
+        && extent.width() <= 262144 && extent.height() <= 262144
+        && u64::from(extent.width()).checked_mul(u64::from(extent.height())).is_some_and(|pixels| pixels <= 1 << 30)
+}
+/// Join plain Document canonical geometry to the actual native descriptor before
+/// profile construction or physical mask traversal. L1 custody is not assumed.
+pub(crate) fn qualify_residual_origin_context(doc: &Document, layer: &Layer, state: &photocraft_doc::XcfState, stack: &photocraft_doc::xcf_filters::FilterStack, extent: Rect) -> Result<()> {
+    if !stack.nodes.first().is_some_and(residual_origin_node) { return Ok(()) }
+    let [actual_layer] = doc.layers.as_slice() else { return Err(CompositionError::Unsupported("residual origin singleton layer")) };
+    let [actual_stack] = state.filter_stacks.as_slice() else { return Err(CompositionError::Unsupported("residual origin singleton stack")) };
+    if state.items.len() != 2 || state.filter_masks.len() != 1 || stack.nodes.len() != 1 || actual_stack.nodes.len() != 1
+        || actual_layer.id != layer.id || stack.owner != ItemRef::Layer(layer.id) || actual_stack.owner != stack.owner
+        || actual_stack.nodes.first().map(|node| node.id) != stack.nodes.first().map(|node| node.id)
+        || !residual_origin_extent(extent) || extent != doc.bounds() || extent.size() != doc.size
+        || state.items.iter().find(|item| item.item == ItemRef::Layer(layer.id)).and_then(|item| item.raster_bounds) != Some(extent)
+    { return Err(CompositionError::Unsupported("residual checked origin canonical/native extent")); }
+    Ok(())
+}
 /// Metadata portion of the existing scoped precision-point/current raster gates.
 /// Native input validation stays with the caller's real controlled reader.
 /// These identities retain their own epochs and never use PointReplace aliases.
@@ -1195,6 +1224,7 @@ pub(crate) fn qualify_residual_point_metadata(
     stored:SampleEncoding, interrupt:&photocraft_raster::Interrupt<'_>,
 )->Result<()> {
     interrupt.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
+    qualify_residual_origin_context(doc, layer, state, stack, extent)?;
     let [node]=stack.nodes.as_slice() else { return Ok(()) };
     let desaturate=node.operation.name=="gimp:desaturate" && node.operation.schema_epoch==crate::gimp_filters::DESATURATE_PRECISION_EPOCH;
     let saturation=node.operation.name=="gegl:saturation" && matches!(node.operation.schema_epoch.as_str(),crate::gimp_filters::SATURATION_PRECISION_EPOCH|crate::gimp_filters::SATURATION_GRAY_PRECISION_EPOCH|crate::gimp_filters::SATURATION_RGB_YUV_PRECISION_EPOCH);
@@ -1209,9 +1239,7 @@ pub(crate) fn qualify_residual_point_metadata(
         (photocraft_color::SampleType::F64,SampleEncoding::NonlinearProfile))
     } else if posterize { doc.depth==photocraft_color::SampleType::U8 && stored==SampleEncoding::NonlinearProfile
     } else { matches!(doc.depth,photocraft_color::SampleType::U16|photocraft_color::SampleType::F32|photocraft_color::SampleType::F64) && matches!(stored,SampleEncoding::Linear|SampleEncoding::NonlinearProfile) };
-    let side=if posterize {32} else {8};
-    let height=if posterize {32} else {6};
-    if doc.size!=photocraft_doc::Size::new(side,height) || extent!=Rect::new(0,0,side as i32,height as i32)
+    if (posterize && (doc.size!=photocraft_doc::Size::new(32,32) || extent!=Rect::new(0,0,32,32)))
         || doc.mode!=if gray {ColorMode::Grayscale} else {ColorMode::Rgb}
         || !precision || (yuv && !matches!(doc.depth,photocraft_color::SampleType::U16|photocraft_color::SampleType::F32))
         || doc.layers.len()!=1 || !doc.channels.is_empty() || !doc.paths.is_empty() || !state.source_items.is_empty()

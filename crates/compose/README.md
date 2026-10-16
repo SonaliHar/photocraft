@@ -1146,3 +1146,31 @@ original operation. Constructor work and actual token/facts/guard/scratch state
 are admitted before construction and held through physical mask proof. The
 complete decoded source Surface remains retained. Geometry and reduced repeated
 work do not establish large-image throughput, memory fit or completion.
+
+
+Seven residual/configured point domains now share checked positive full-canvas
+origin geometry: precision Desaturate, RGB/Gray/RGB-Yuv Saturation, precision
+Value Invert and base/depth Color Balance. Their existing epochs, typed
+arguments, native/working domains, model/depth/encoding tuples and profile rules
+remain separate. Color Balance still requires visible/full-opacity CURRENT;
+RGB-Yuv retains its existing U16/F32 restriction. Legacy Posterize/Value Invert,
+histogram Threshold, Levels/Curves and witnessed Exposure remain separate.
+
+The CURRENT guard bounds singleton root/stack and canonical item/mask counts
+before joining document bounds, owner record and actual native extent. Larger
+geometry explicitly replaces these seven domains' old one-tile mask payload
+allowance with checked physical canvas-grid bytes capped at16MiB. An O(1) tile
+count bound precedes the bounded capacity census and all byte scans. Default,
+every stored physical tile and padding must be byte-zero. Stored out-of-grid
+zero tiles are retained within the allowance; no new intersecting-only policy
+is borrowed. The old8x6 branch retains its prior mask allowance and semantics.
+
+Only staged source qualification uses the new origin-canvas variant. The eager
+Frozen path and existing witness geometries remain unchanged. Exact native byte
+totals and the at-most64-complete-pixel visitor retain their original caller
+controls and actual byte/sample charges. No per-pixel CMS call exists in that
+native predicate; the preceding nine-domain preparation is not transplanted.
+Exact seven operation/schema/compatibility/version tuples select finite work
+service only. Existing typed controls remain fully qualified; Move, remove,
+direct compound metadata and new empty roles gain no permission. Regression
+drafts remain ignored, unrun and uncompiled; full acceptance remains deferred.

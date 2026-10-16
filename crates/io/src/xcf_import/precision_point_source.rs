@@ -40,9 +40,26 @@ pub(super) fn qualify_threshold_geometry<P: ExactParsedPlane>(
 ) -> Result<bool, IoError> {
     qualify_geometry(file, "gimp:threshold-alpha", false, Geometry::ThresholdCanvas, control, budget)
 }
+/// Staged-only dimension policy for the seven residual/configured roles.
+/// Filter arguments, outer policy and the full physical mask still require the
+/// selected mapper and paid source preparation; this native visitor is not a
+/// standalone source grant. Frozen/eager and witnessed geometry stay separate.
+pub(super) fn qualify_origin_geometry<P: ExactParsedPlane>(
+    file: &XcfFile<P>,
+    operation: &str,
+    balance_depth: bool,
+    control: &Interrupt<'_>,
+    budget: Option<&photocraft_xcf::Budget<'_>>,
+) -> Result<bool, IoError> {
+    if !matches!(operation, "gimp:desaturate" | "gegl:saturation" | "gegl:value-invert" | "gimp:color-balance") {
+        return Ok(false);
+    }
+    qualify_geometry(file, operation, balance_depth, Geometry::OriginCanvas, control, budget)
+}
 enum Geometry {
     Frozen { exposure: bool },
     ThresholdCanvas,
+    OriginCanvas,
 }
 fn qualify_geometry<P: ExactParsedPlane>(
     file: &XcfFile<P>,
@@ -53,9 +70,10 @@ fn qualify_geometry<P: ExactParsedPlane>(
     budget: Option<&photocraft_xcf::Budget<'_>>,
 ) -> Result<bool, IoError> {
     poll(control, budget, 32)?;
+    let origin_geometry = matches!(geometry, Geometry::OriginCanvas);
     let (canvas, drawable, exposure_geometry) = match geometry {
         Geometry::Frozen { exposure } => (if exposure { (295, 160) } else { (8, 6) }, if exposure { (257, 129) } else { (8, 6) }, exposure),
-        Geometry::ThresholdCanvas => {
+        Geometry::ThresholdCanvas | Geometry::OriginCanvas => {
             if file.width == 0
                 || file.height == 0
                 || file.width > 262144
@@ -131,7 +149,7 @@ fn qualify_geometry<P: ExactParsedPlane>(
         return Ok(false);
     }
     let Some(effect) = d.effects.first() else { return Ok(false) };
-    if effect.operation != operation {
+    if effect.operation != operation || origin_geometry && effect.arguments.len() > 10 {
         return Ok(false);
     }
     if operation == "gegl:saturation" {
@@ -166,6 +184,9 @@ fn qualify_geometry<P: ExactParsedPlane>(
         .and_then(|w| usize::try_from(drawable.1).ok().and_then(|h| w.checked_mul(h)))
         .and_then(|n| n.checked_mul(stride))
         .ok_or_else(|| bad("plane byte count overflow"))?;
+    if origin_geometry && plane.native_byte_len() != Some(u64::try_from(expected).map_err(|_| bad("plane byte address space"))?) {
+        return Ok(false);
+    }
     let maximum_block = stride.checked_mul(64).ok_or_else(|| bad("visitor block overflow"))?;
     let mut seen = 0usize;
     let mut valid = true;
@@ -204,3 +225,7 @@ fn qualify_geometry<P: ExactParsedPlane>(
 #[cfg(test)]
 #[path = "precision_point_source_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "precision_point_origin_geometry_tests.rs"]
+mod origin_geometry_tests;

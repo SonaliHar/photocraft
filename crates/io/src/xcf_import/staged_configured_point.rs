@@ -56,7 +56,7 @@ impl ConfiguredPointFamily {
         }
         match self {
             Self::ColorBalance | Self::ColorBalanceDepth => {
-                precision_point_source::qualify(file, "gimp:color-balance", self == Self::ColorBalanceDepth, false, ctl, budget)
+                precision_point_source::qualify_origin_geometry(file, "gimp:color-balance", self == Self::ColorBalanceDepth, ctl, budget)
             }
             Self::Levels | Self::Curves => configured_raster(file, self, ctl, budget),
         }

@@ -433,7 +433,7 @@ fn qualify_configured_metadata(doc: &Document, node: &FilterNode, extent: Rect, 
                         | (775, SampleType::F64, SampleEncoding::Perceptual)
                 )
             });
-            doc.size == photocraft_doc::Size::new(8, 6) && extent == Rect::new(0, 0, 8, 6) && (if depth { extra } else { base })
+            crate::gimp_render::residual_origin_extent(extent) && extent == doc.bounds() && (if depth { extra } else { base })
         }
     };
     if !valid
@@ -589,6 +589,8 @@ fn prepare_plan<B: PlanBudget>(
         }
         _ => return Err(scope()),
     };
+    crate::gimp_render::qualify_residual_origin_context(doc, layer, state, filters, extent).map_err(BackedNormalError::Color)?;
+    crate::gimp_neighborhood::qualify_expanded_residual_mask_storage(state, node, extent).map_err(BackedNormalError::Color)?;
     let stored = doc.sample_encoding.ok_or_else(scope)?;
     if crate::gimp_vibrance::claims(node) {
         return owned_vibrance::prepare(doc, supplied, header, extent, format, default, interrupt, budget);
@@ -1022,3 +1024,7 @@ mod origin_geometry_tests;
 #[cfg(test)]
 #[path = "backed_point_replace_origin_geometry_tests.rs"]
 mod point_replace_origin_geometry_tests;
+
+#[cfg(test)]
+#[path = "residual_origin_geometry_tests.rs"]
+mod residual_origin_geometry_tests;

@@ -58,7 +58,7 @@ impl ResidualPointFamily {
         if matches!(self, Self::SaturationRgb | Self::SaturationYuv) && file.model != Model::Rgb {
             return Ok(false);
         }
-        precision_point_source::qualify(file, operation, false, false, ctl, budget)
+        precision_point_source::qualify_origin_geometry(file, operation, false, ctl, budget)
     }
     pub(super) fn set_late(self, domains: &mut admission::LateAdmissionDomains) {
         match self {

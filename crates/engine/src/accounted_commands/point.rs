@@ -776,3 +776,7 @@ mod origin_geometry_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "point_bundle_geometry_tests.rs"]
 mod bundle_geometry_tests;
+
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "point_residual_geometry_tests.rs"]
+mod residual_geometry_tests;

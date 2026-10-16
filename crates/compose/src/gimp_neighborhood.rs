@@ -676,10 +676,47 @@ fn gaussian(node: &FilterNode, version: u32) -> Result<GaussianParams> {
 pub(crate) fn qualify_selection_mask(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, extent: Rect) -> Result<()> {
     qualify_selection_mask_with_interrupt(state, node, owner, extent, &Interrupt::NONE)
 }
+// Only expanded geometry in the seven residual/configured domains uses this
+// grid-sized allowance. The old 8x6 payload/token behavior remains unchanged.
+fn expanded_residual_mask_limit(node: &FilterNode, extent: Rect, format: PixelFormat) -> Result<Option<u64>> {
+    if !crate::gimp_render::residual_origin_node(node) || extent == Rect::from_xywh(0, 0, 8, 6) { return Ok(None) }
+    if !crate::gimp_render::residual_origin_extent(extent) || format.mode != photocraft_color::ColorMode::Grayscale || format.alpha {
+        return Err(CompositionError::Unsupported("residual origin mask geometry/format"));
+    }
+    let side = photocraft_geom::TILE_SIZE as u64;
+    let columns = u64::from(extent.width()).checked_add(side - 1).ok_or(CompositionError::Invalid("residual mask columns"))? / side;
+    let rows = u64::from(extent.height()).checked_add(side - 1).ok_or(CompositionError::Invalid("residual mask rows"))? / side;
+    let bytes = columns.checked_mul(rows).and_then(|n| n.checked_mul(side)).and_then(|n| n.checked_mul(side))
+        .and_then(|n| n.checked_mul(format.bytes_per_pixel() as u64)).and_then(|n| n.checked_add(format.bytes_per_pixel() as u64))
+        .ok_or(CompositionError::Invalid("residual mask grid capacity"))?;
+    Ok(Some(bytes.min(CACHE_BYTES)))
+}
+// O(1) map cardinality admission precedes the existing payload census. Surface
+// tiles have the surface's fixed format, so an over-cap shared map cannot cause
+// an unbounded descriptor walk merely to discover that it is over the cap.
+fn residual_mask_payload_fits(surface: &photocraft_raster::Surface, limit: u64) -> Result<bool> {
+    let per_tile = 65536u64.checked_mul(surface.format().bytes_per_pixel() as u64).ok_or(CompositionError::Invalid("residual mask tile bytes"))?;
+    let default = u64::try_from(surface.default_bytes().len()).map_err(|_| CompositionError::Invalid("residual mask default bytes"))?;
+    let count = u64::try_from(surface.tile_count()).map_err(|_| CompositionError::Invalid("residual mask tile count"))?;
+    if per_tile == 0 || limit.checked_sub(default).is_none_or(|remaining| count > remaining / per_tile) { return Ok(false) }
+    Ok(surface.resident_payload_bytes()? <= limit)
+}
+/// No physical scan: admit actual expanded-mask storage before its prepaid scan
+/// work. Retained zero tiles, including out-of-grid ones, are never pruned.
+pub(crate) fn qualify_expanded_residual_mask_storage(state: &photocraft_doc::XcfState, node: &FilterNode, extent: Rect) -> Result<()> {
+    if !crate::gimp_render::residual_origin_node(node) || extent == Rect::from_xywh(0, 0, 8, 6) { return Ok(()) }
+    let [mask] = state.filter_masks.as_slice() else { return Err(CompositionError::Unsupported("residual origin singleton mask")) };
+    let limit = expanded_residual_mask_limit(node, extent, mask.surface.format())?.ok_or(CompositionError::Invalid("residual mask capacity"))?;
+    if node.mask != Some(photocraft_doc::item_identity::ItemRef::Mask(mask.id)) || mask.owner != node.id || mask.bounds != extent || !residual_mask_payload_fits(&mask.surface, limit)? {
+        return Err(CompositionError::Unsupported("residual origin physical mask storage"));
+    }
+    Ok(())
+}
 pub(crate) fn qualify_selection_mask_with_interrupt(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, extent: Rect, control: &Interrupt<'_>) -> Result<()> {
     mask_controlled::prepare(control, |control| qualify_selection_mask_controlled(state, node, owner, extent, control))
 }
 fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, extent: Rect, control: &Interrupt<'_>) -> Result<()> {
+    qualify_expanded_residual_mask_storage(state, node, extent)?;
     if crate::gimp_semi_flatten::claims(node) {
         let [mask] = state.filter_masks.as_slice() else { return Err(CompositionError::Unsupported("Semi-Flatten singleton selection mask")); };
         crate::gimp_semi_flatten::positive_origin(extent)?;
@@ -757,13 +794,20 @@ fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &Fi
     let mut masks = mask_controlled::iter(&state.filter_masks, control).filter(|m| m.id == id);
     let mask = masks.next().ok_or(CompositionError::Invalid("filter mask missing"))?;
     let format = mask.surface.format();
+    let expanded_residual_limit = expanded_residual_mask_limit(node, extent, format)?;
+    // Cap before the first default/region/physical scan, also for direct users.
+    if let Some(limit) = expanded_residual_limit {
+        if !residual_mask_payload_fits(&mask.surface, limit)? {
+            return Err(CompositionError::Unsupported("residual origin physical mask capacity"));
+        }
+    }
     let rgb_clip_mask = node.operation.name == "gegl:rgb-clip"
         && node.operation.schema_epoch == crate::gimp_filters::RGB_CLIP_HDR_EPOCH
         && extent == Rect::from_xywh(0, 0, 8, 6)
         && format == PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::F32, false);
     let value_precision_mask = node.operation.name == "gegl:value-invert"
         && node.operation.schema_epoch == crate::gimp_filters::VALUE_INVERT_PRECISION_EPOCH
-        && extent == Rect::from_xywh(0, 0, 8, 6)
+        && crate::gimp_render::residual_origin_extent(extent)
         && format.mode == photocraft_color::ColorMode::Grayscale
         && !format.alpha
         && matches!(format.sample, photocraft_color::SampleType::U16 | photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64);
@@ -814,7 +858,7 @@ fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &Fi
                 node.operation.schema_epoch.as_str(),
                 crate::gimp_filters::COLOR_TEMPERATURE_PRECISION_EPOCH | crate::gimp_filters::COLOR_TEMPERATURE_OFFGRID_EPOCH
             ))
-        && extent == Rect::from_xywh(0, 0, 8, 6)
+        && (if crate::gimp_render::residual_origin_node(node) { crate::gimp_render::residual_origin_extent(extent) } else { extent == Rect::from_xywh(0, 0, 8, 6) })
         && format.mode == photocraft_color::ColorMode::Grayscale
         && !format.alpha
         && matches!(format.sample, photocraft_color::SampleType::U16 | photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64);
@@ -829,19 +873,22 @@ fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &Fi
         return Err(CompositionError::Unsupported("unqualified RGB Yuv selection mask precision"));
     }
     let saturation_yuv_mask = saturation_yuv_node
-        && extent == Rect::from_xywh(0, 0, 8, 6)
+        && crate::gimp_render::residual_origin_extent(extent)
         && format.mode == photocraft_color::ColorMode::Grayscale
         && !format.alpha
         && matches!(format.sample, photocraft_color::SampleType::U16 | photocraft_color::SampleType::F32);
     let color_balance_depth = node.operation.schema_epoch == crate::gimp_color_balance::DEPTH_EPOCH;
     let color_balance_mask = node.operation.name == "gimp:color-balance"
         && matches!(node.operation.schema_epoch.as_str(), crate::gimp_color_balance::EPOCH | crate::gimp_color_balance::DEPTH_EPOCH)
-        && extent == Rect::from_xywh(0, 0, 8, 6)
+        && crate::gimp_render::residual_origin_extent(extent)
         && format.mode == photocraft_color::ColorMode::Grayscale
         && !format.alpha
         && (matches!(format.sample, photocraft_color::SampleType::U16 | photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64)
             || color_balance_depth && matches!(format.sample, photocraft_color::SampleType::U8 | photocraft_color::SampleType::U32));
-    if (rgb_clip_mask
+    if expanded_residual_limit.is_some() && (!mask_controlled::bytes_zero(mask.surface.default_bytes(), control)? || !mask_controlled::tiles_zero(&mask.surface, control)?) {
+        return Err(CompositionError::Unsupported("residual origin physical mask bits"));
+    }
+    if expanded_residual_limit.is_none() && (rgb_clip_mask
         || value_precision_mask
         || brightness_precision_mask
         || gegl_levels_precision_mask
@@ -876,7 +923,7 @@ fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &Fi
                     alpha: false
                 }
             ));
-    let mask_payload_limit = if threshold_alpha_precision_mask {
+    let mask_payload_limit = if let Some(limit) = expanded_residual_limit { limit } else if threshold_alpha_precision_mask {
         // Price the actual sparse full-canvas grid, retaining the existing
         // preparation ceiling. Extra tiles outside that grid are not inert.
         let side = photocraft_geom::TILE_SIZE as u64;

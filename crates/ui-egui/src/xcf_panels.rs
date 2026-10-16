@@ -1499,3 +1499,7 @@ mod pure_point_geometry_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "xcf_panels/nine_point_geometry_tests.rs"]
 mod nine_point_geometry_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "xcf_panels/residual_point_geometry_tests.rs"]
+mod residual_point_geometry_tests;

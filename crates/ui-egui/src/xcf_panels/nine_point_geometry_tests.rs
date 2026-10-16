@@ -69,6 +69,12 @@ fn existing_nine_epoch_ui_controls_keep_native_custody() {
         harness.run_steps(2);
         let app = harness.state_mut();
         assert_eq!(fixture::node(&app.session.active().unwrap().doc).enabled, enabled);
+        // Ordinary readonly Point metadata preserves its existing synchronous-only
+        // service: background UI dispatch refuses before changing the snapshot.
+        let before_name = app.session.active().unwrap().doc.clone();
+        assert!(app.run("layer.setProps", json!({"name":"Nine CURRENT metadata","visible":true,"opacity":1.0})).unwrap_err().contains("synchronous"));
+        assert!(app.session.active().unwrap().doc.shares_state(&before_name));
+        app.background_jobs = false;
         app.run("layer.setProps", json!({"name":"Nine CURRENT metadata","visible":true,"opacity":1.0})).unwrap();
         let current = app.session.active().unwrap().doc.clone();
         fixture::retained(&before, &current);

@@ -37,7 +37,7 @@ pub fn is_current_pure_point_work_candidate(owner: &AccountedDocument, c: &ReadC
             }
             let epoch =
                 |v: &str| matches!(v, photocraft_compose::SEMI_FLATTEN_EPOCH | photocraft_compose::HUE_CHROMA_EPOCH | photocraft_compose::VIBRANCE_EPOCH);
-            Ok(matches!(node.operation.name.as_str(), "gimp:semi-flatten" | "gegl:hue-chroma" | "gegl:vibrance")
+            let existing = matches!(node.operation.name.as_str(), "gimp:semi-flatten" | "gegl:hue-chroma" | "gegl:vibrance")
                 || epoch(&node.operation.schema_epoch)
                 || compat.is_some_and(epoch)
                 // These nine existing roles share their old Replace compatibility
@@ -54,7 +54,25 @@ pub fn is_current_pure_point_work_candidate(owner: &AccountedDocument, c: &ReadC
                         | ("gegl:component-extract","xcf-22-stock-component-extract-cmyk-precision-v1")
                         | ("gegl:component-extract","xcf-22-stock-component-extract-ycbcr-precision-v1")
                         | ("gegl:alpha-clip","xcf22-stock-alpha-clip-precision-v1")
-                        | ("gegl:alpha-clip","xcf22-stock-alpha-clip-finite-precision-v1")))
+                        | ("gegl:alpha-clip","xcf22-stock-alpha-clip-finite-precision-v1"));
+            // Existing positive routes retain their exact prior checks/debits.
+            if existing {
+                return Ok(true);
+            }
+            // The seven residual/configured roles use their own compatibility
+            // epochs, never the generic PointReplace epoch or a names-only OR.
+            // Pay fixed bounded comparisons before this additive fallback.
+            c.check(7 * 128)?;
+            Ok(node.operation.stored_version == "0:0"
+                && compat == Some(node.operation.schema_epoch.as_str())
+                && matches!((node.operation.name.as_str(), node.operation.schema_epoch.as_str()),
+                    ("gimp:desaturate", "xcf-22-stock-desaturate-precision-v1")
+                    | ("gegl:saturation", "xcf-22-stock-saturation-precision-v1")
+                    | ("gegl:saturation", "xcf-22-stock-gray-saturation-precision-v1")
+                    | ("gegl:saturation", "xcf-22-stock-rgb-yuv-saturation-precision-v1")
+                    | ("gegl:value-invert", "xcf-22-stock-value-invert-precision-v1")
+                    | ("gimp:color-balance", "xcf-22-stock-color-balance-precision-v1")
+                    | ("gimp:color-balance", "xcf-22-stock-color-balance-depth-v1")))
         }
         [] => {
             c.check(128)?;
