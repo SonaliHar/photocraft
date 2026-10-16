@@ -2,14 +2,36 @@
 //! qualification. Synthetic native stores and raw masks stay genuinely prepaid.
 use super::*;
 fn ordered_fixture(q: &BackingQuota, sample: SampleType, counts: &[usize]) -> (Document, Arc<Guard>) {
-    assert!(!counts.is_empty() && counts.len() <= 3);
+    assert!(!counts.is_empty() && counts.len() <= 5);
     let (mut d, g) = fixture(q, sample);
     let old = d.xcf_state.as_ref().unwrap();
     let stack = old.filter_stacks[0].clone();
     let mask = old.filter_masks[0].clone();
     let mask_item = old.items.iter().find(|i| i.item == ItemRef::Mask(mask.id)).unwrap().clone();
     d.layers.truncate(counts.len());
-    let roots = d.layers.iter().map(|l| old.items.iter().find(|i| i.item == ItemRef::Layer(l.id)).unwrap().clone()).collect::<Vec<_>>();
+    // Additional test roots share an actually paid same-q native owner. Their
+    // headers/names/canonical rows remain covered by the existing model prehold.
+    while d.layers.len() < counts.len() {
+        let mut layer = d.layers[0].clone();
+        layer.id = LayerId(100 + d.layers.len() as u64);
+        d.layers.push(layer);
+    }
+    let roots = d
+        .layers
+        .iter()
+        .map(|l| {
+            let mut row = old
+                .items
+                .iter()
+                .find(|i| i.item == ItemRef::Layer(l.id))
+                .unwrap_or_else(|| old.items.iter().find(|i| i.item == ItemRef::Layer(d.layers[0].id)).unwrap())
+                .clone();
+            row.item = ItemRef::Layer(l.id);
+            row.name = l.name.clone();
+            row.visible = l.visible;
+            row
+        })
+        .collect::<Vec<_>>();
     let state = d.xcf_state.as_mut().unwrap();
     state.filter_stacks.clear();
     state.filter_masks.clear();
@@ -123,11 +145,12 @@ fn global_and_local_identity_limits_refuse_before_publication() {
     let (d, _g) = ordered_fixture(&q, SampleType::F32, &[1]);
     assert!(AccountedDocument::readonly_filtered_flat_point_storage_requirements(&d, &q, &ctl()).is_err());
     let q = quota();
-    let (mut d, _g) = ordered_fixture(&q, SampleType::F32, &[4097]);
+    let (mut d, _g) = ordered_fixture(&q, SampleType::F32, &[1024, 1024, 1024, 1024, 1]);
     let s = d.xcf_state.as_mut().unwrap();
     let last = s.filter_masks.pop().unwrap().id;
     s.items.retain(|i| i.item != ItemRef::Mask(last));
-    //4096 masks/items pass their cheap cardinality guards; actual node sum4097
+    // All five stacks fit1024 and4096 masks pass their cheap cardinality guard;
+    // actual node sum4097
     // must still fail before any native tile or per-node deep interpretation.
     assert!(matches!(AccountedDocument::readonly_filtered_flat_point_storage_requirements(&d, &q, &ctl()), Err(BackingError::Length)));
 }

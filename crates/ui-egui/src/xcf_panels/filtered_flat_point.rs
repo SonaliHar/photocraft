@@ -27,7 +27,10 @@ fn node_at<'a>(snapshot: &'a DocumentSnapshot, root: LayerId,index:usize) -> Opt
     if !(1..=4096).contains(&snapshot.layers.len()) || state.filter_stacks.len() > 4096 {
         return None;
     }
-    let total=state.filter_stacks.iter().try_fold(0usize,|n,stack|n.checked_add(stack.nodes.len()).filter(|n|*n<=4096))?;
+    let total=state.filter_stacks.iter().try_fold(0usize,|n,stack|{
+        if stack.nodes.is_empty() || stack.nodes.len()>1024{return None}
+        n.checked_add(stack.nodes.len()).filter(|n|*n<=4096)
+    })?;
     if total==0 || snapshot.layers.len()==1 && total<2{return None}
     let mut roots = snapshot.layers.iter().filter(|layer| layer.id == root);
     roots.next()?;
@@ -136,7 +139,7 @@ pub(super) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, root: Layer
     let count=snapshot.xcf_state.as_ref()
         .and_then(|state|state.filter_stacks.iter().find(|stack|stack.owner==ItemRef::Layer(root)))
         .map_or(0,|stack|stack.nodes.len());
-    if count==0 || count>4096 {
+    if count==0 || count>1024 {
         ui.label(tl!("Filter editing is unavailable"));return;
     }
     ui.separator();ui.label(tl!("GIMP Filters"));
@@ -160,8 +163,8 @@ pub(super) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, root: Layer
             if let Some(destination)=destination {
                 submit(app,&target,"xcf.filter.move",serde_json::json!({"filterId":target.filter.0.to_string(),"index":destination}));
             }
-            // Existing wire destinations remain 0..1024; all stored targets
-            // can move to the front without widening the protocol.
+            // Each admitted stack and existing wire destinations are bounded
+            // to 1024; the document-wide node census stays at 4096.
         });
     }
 }

@@ -1297,9 +1297,12 @@ Accounted native save/reopen uses the owned-document format route. Although it
 bypasses the separate generic IO census and standard native version visitors,
 owned serialization and loading call generic Document/XCF validation, which
 still rejects stacks above 1024 nodes. This transitive guard corrects the earlier
-incomplete trace. The 4096-node composition/custody bound does not establish
-native migration beyond that save/load limit, or large-stack runtime, throughput
-or memory acceptance.
+incomplete trace. Mixed source qualification, structural admission, composition and edit/UI
+targeting now also enforce that upstream 1024-node per-stack limit. The global
+4096-node allowance spans multiple stacks; roots remain bounded at4096 and
+canonical root/mask items at8192. Oversized selected sources refuse rather than
+retrying a generic path. This does not establish large-stack runtime, throughput,
+memory or native-migration acceptance.
 
 The existing `xcf.filter.move` now reorders an actual mixed root's existing
 filter. Its canonical decimal `filterId` and zero-based `index` wire remain

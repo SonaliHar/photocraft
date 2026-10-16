@@ -190,7 +190,7 @@ pub fn candidate(owner: &AccountedDocument, layer: LayerId, node: &photocraft_do
         return false;
     }
     doc.layers.iter().any(|l| l.id == layer)
-        && state.filter_stacks.iter().any(|s| s.owner == ItemRef::Layer(layer) && s.nodes.len()<=4096 && s.nodes.iter().any(|n|std::ptr::eq(n,node)))
+        && state.filter_stacks.iter().any(|s| s.owner == ItemRef::Layer(layer) && s.nodes.len()<=1024 && s.nodes.iter().any(|n|std::ptr::eq(n,node)))
 }
 fn context(session: &Session, id: &str, params: &Value) -> Result<()> {
     let state = session.active().ok_or(EngineError::NoDocument)?;
@@ -226,6 +226,7 @@ fn target<'a>(
     for stack in &state.filter_stacks {
         c.check(1)?;
         nodes=nodes.checked_add(stack.nodes.len()).filter(|n|*n<=4096).ok_or(BackingError::Length)?;
+        if stack.nodes.len()>1024{return Err(BackingError::Length.into())}
         if stack.nodes.is_empty(){return Err(BackingError::Integrity.into())}
         for (index,node) in stack.nodes.iter().enumerate(){c.check(1)?;
             if node.id == id {

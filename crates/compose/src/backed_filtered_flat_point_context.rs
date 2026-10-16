@@ -182,7 +182,7 @@ fn compile<B: PlanBudget>(doc: &Document, header: u64, interrupt: &Interrupt<'_>
     let mut nodes = 0usize;
     for stack in &state.filter_stacks {
         charge(budget, interrupt, 1)?;
-        if stack.nodes.is_empty() || stack.nodes.len() > 4096 { return Err(scope()); }
+        if stack.nodes.is_empty() || stack.nodes.len() > 1024 { return Err(scope()); }
         nodes = nodes.checked_add(stack.nodes.len()).ok_or_else(length)?;
         if nodes > 4096 { return Err(scope()); }
     }

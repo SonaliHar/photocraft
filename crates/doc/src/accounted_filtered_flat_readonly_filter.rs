@@ -143,7 +143,7 @@ pub(super) fn apply(doc: &mut Document, plan: Plan, c: &ReadControl<'_>) -> Resu
     }
     let state = doc.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
     let stack = state.filter_stacks.get_mut(plan.stack_index).ok_or(BackingError::Integrity)?;
-    if stack.owner != ItemRef::Layer(plan.layer) || stack.revision != plan.old_revision || stack.nodes.is_empty() || stack.nodes.len() > 4096 {
+    if stack.owner != ItemRef::Layer(plan.layer) || stack.revision != plan.old_revision || stack.nodes.is_empty() || stack.nodes.len() > 1024 {
         return Err(BackingError::Integrity);
     }
     let node = stack.nodes.get_mut(plan.node_index).ok_or(BackingError::Integrity)?;

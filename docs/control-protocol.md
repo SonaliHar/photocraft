@@ -2359,8 +2359,11 @@ Accounted saving and owned reopen follow the owned-document format route.
 They bypass the separate generic IO census and standard native version visitors,
 but serialization and loading still call generic Document/XCF validation with
 its 1024-node per-stack limit. This corrects the earlier incomplete path trace.
-The broader composition bound does not grant native migration beyond this limit.
-Model, quota/work and staged-proof bounds remain; runtime acceptance is deferred.
+Mixed source qualification, structural admission, composition and edit/UI
+targeting now use that same 1024-node per-stack limit. The global4096 allowance
+spans multiple stacks, with roots<=4096 and canonical root/mask items<=8192.
+Oversized selected sources refuse without a generic retry. Model, quota/work
+and staged-proof bounds remain; runtime acceptance is deferred.
 
 Mixed filtered-flat `xcf.filter.move` accepts the existing two-key wire:
 `{"filterId":"123","index":0}`. The ID is canonical decimal text and the
@@ -2373,3 +2376,15 @@ locks, full OLD/history/STAGED validation and final publication fences. Up, Down
 and Top controls use the frame's captured target and only valid wire indices.
 No new command ID or layer-movement authority is introduced. Ten new regression
 groups remain ignored, uncompiled and unrun; PhotoCraft tests remain deferred.
+
+Owned native serialization now checks whether exact stored-colour data requires
+reader version9 before selecting an older version. Owned loading rejects a
+header below9 when decoded state requires that feature, matching the existing
+standard native reader. This includes nested configurations, graphs and source
+records. The private scan runs after normal Document validation, reuses the
+upstream feature rules and retains the original work/deadline/cancellation
+control with prepaid bounded work and a same-quota temporary reservation.
+Legacy colour/number-only data retains its previous required-version policy.
+This changes native compatibility headers; it grants no colour interpretation,
+filter rendering or broader source admission. New regression drafts are ignored,
+uncompiled and unrun; native round-trip execution remains deferred.

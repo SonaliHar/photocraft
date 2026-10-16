@@ -28,7 +28,7 @@ pub(super) fn root_domain<P>(d: &Drawable<P>, i: &Interrupt<'_>, b: &photocraft_
     if d.effects.is_empty() {
         return Ok(None);
     }
-    if d.effects.len()>4096 {return Err(IoError::Unsupported("filtered flat node count".into()));}
+    if d.effects.len()>1024 {return Err(IoError::Unsupported("filtered flat per-stack node count".into()));}
     let mut first=None;
     for e in &d.effects {
         work(i,b,e.operation.len() as u64+128)?;
@@ -60,6 +60,7 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
     let mut nodes=0usize;
     for d in &f.layers {
         work(i,b,1)?;
+        if d.effects.len()>1024 {return Err(IoError::Unsupported("filtered flat per-stack node count".into()));}
         nodes=nodes.checked_add(d.effects.len()).ok_or_else(||IoError::Unsupported("filtered flat node count".into()))?;
         if nodes>4096 {return Err(IoError::Unsupported("filtered flat node count".into()));}
     }

@@ -257,11 +257,11 @@ fn genuine_ordered_originals_retain_actual_global_transport() {
     }
 }
 #[test]
-#[ignore = "UNRUN: synthetic single-root two/four/4096 ordered nodes retain own family and stable ordinal; external decoded harness is not producer proof"]
+#[ignore = "UNRUN: synthetic single-root2/4/1024 success and1025 refusal, global4096 across4stacks; external decoded harness is not producer proof"]
 fn topology_is_global_bounded_not_three_nodes_per_root() {
     use photocraft_doc::item_identity::ItemRef;
     for sample in [Sample::F32, Sample::F64] {
-        for count in [2, 4, 4096] {
+        for count in [2, 4, 1024] {
             let f = ordered(sample, count);
             let b = budget();
             assert!(hint(&f, &Interrupt::NONE, &b).unwrap());
@@ -282,6 +282,23 @@ fn topology_is_global_bounded_not_three_nodes_per_root() {
                 assert_eq!(node.mask, masks[n]);
             }
         }
+        let over_stack = ordered(sample, 1025);
+        // Hint stays coarse so this matching overbound source is selected for
+        // strict final refusal rather than falling back to another family.
+        assert!(hint(&over_stack, &Interrupt::NONE, &budget()).unwrap());
+        assert!(root_domain(&over_stack.layers[0], &Interrupt::NONE, &budget()).is_err());
+        assert!(qualify(&over_stack, &Interrupt::NONE, &budget()).is_err());
+        let mut global = ordered(sample, 1024);
+        let root = global.layers[0].clone();
+        for _ in 0..3 {
+            global.layers.push(root.clone());
+        }
+        qualify(&global, &Interrupt::NONE, &budget()).unwrap();
+        assert_eq!(global.layers.iter().map(|d| d.effects.len()).sum::<usize>(), 4096);
+        global.layers.push(ordered(sample, 1).layers.remove(0));
+        assert!(global.layers.iter().all(|d| d.effects.len() <= 1024));
+        assert!(hint(&global, &Interrupt::NONE, &budget()).is_err());
+        assert!(qualify(&global, &Interrupt::NONE, &budget()).is_err());
     }
     let mut old = ordered(Sample::F32, 1);
     assert!(!hint(&old, &Interrupt::NONE, &budget()).unwrap());
@@ -291,9 +308,6 @@ fn topology_is_global_bounded_not_three_nodes_per_root() {
     let too_many = ordered(Sample::F32, 4097);
     assert!(hint(&too_many, &Interrupt::NONE, &budget()).is_err());
     assert!(qualify(&too_many, &Interrupt::NONE, &budget()).is_err());
-    let mut global = ordered(Sample::F32, 2049);
-    global.layers.push(global.layers[0].clone());
-    assert!(qualify(&global, &Interrupt::NONE, &budget()).is_err());
 }
 #[test]
 #[ignore = "UNRUN: malformed later ordered node cannot inherit first domain or hide in inactive source; old singleton classifier remains final"]

@@ -15,7 +15,7 @@ pub(super) struct Plan {
     revision: u64,
 }
 fn position(nodes: &[FilterNode], id: crate::item_identity::FilterId, c: &ReadControl<'_>) -> Result<usize, BackingError> {
-    if nodes.is_empty() || nodes.len() > 4096 || id.0 == 0 {
+    if nodes.is_empty() || nodes.len() > 1024 || id.0 == 0 {
         return Err(BackingError::Integrity);
     }
     let mut found = None;

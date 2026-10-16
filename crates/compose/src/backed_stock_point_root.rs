@@ -141,7 +141,7 @@ impl<L> RootPointPlan<L> {
         if stack.nodes.len() == 1 {
             return Self::prepare_singleton(stack, format, extent, interrupt, budget);
         }
-        if stack.nodes.len() < 2 || stack.nodes.len() > 4096 {
+        if stack.nodes.len() < 2 || stack.nodes.len() > 1024 {
             return Err(scope());
         }
         let count = stack.nodes.len();

@@ -88,17 +88,28 @@ fn noop_max_quota_and_identity_fences() {
     assert!(measured(&d, &q, &ctl()).is_err());
 }
 #[test]
-#[ignore = "UNRUN: data-only actualstack destination1024 is supported independently of unchanged engine wire destination<1024; oldPoint class remains separate"]
-fn actual_stack_destination_is_not_engine_wire_limit() {
-    let owner = owned_ordered(SampleType::F32, &[1025]);
-    let p = movement(&owner, 0, 0, 1024);
+#[ignore = "UNRUN: upstream1024 perstack bound succeeds at destination1023,1025 nodes refuse; global4096 remains independent and oldPoint stays separate"]
+fn actual_stack_matches_upstream_bound() {
+    let owner = owned_ordered(SampleType::F32, &[1024]);
+    let p = movement(&owner, 0, 0, 1023);
     owner.validate_readonly_filtered_flat_point_filter_move(p, &ctl()).unwrap();
     let old = owner.document().xcf_state.as_ref().unwrap().filter_stacks[0].nodes.iter().map(|n| n.id).collect::<Vec<_>>();
     let changed = owner.try_move_readonly_filtered_flat_point_filter(p, &ctl()).unwrap();
     let nodes = &changed.document().xcf_state.as_ref().unwrap().filter_stacks[0].nodes;
     assert_eq!(nodes.last().unwrap().id, old[0]);
-    assert_eq!(nodes[..1024].iter().map(|n| n.id).collect::<Vec<_>>(), old[1..]);
+    assert_eq!(nodes[..1023].iter().map(|n| n.id).collect::<Vec<_>>(), old[1..]);
     assert!(owner.try_move_readonly_point_filter(p, &ctl()).is_err());
+    let q = quota();
+    let (too_many, _guard) = ordered_fixture(&q, SampleType::F32, &[1025]);
+    assert!(matches!(AccountedDocument::readonly_filtered_flat_point_storage_requirements(&too_many, &q, &ctl()), Err(BackingError::Length)));
+    // Four independent stacks still reach the4096 global bound; no global cap
+    // was inadvertently narrowed to1024 with the per-stack guard.
+    let q = quota();
+    let (global, guard) = ordered_fixture(&q, SampleType::F32, &[1024, 1024, 1024, 1024]);
+    assert!(measured(&global, &q, &ctl()).unwrap().index <= 16 << 20);
+    let global = AccountedDocument::new_readonly_filtered_flat_point_storage(global, guard, q, &ctl()).unwrap();
+    assert_eq!(global.document().xcf_state.as_ref().unwrap().filter_stacks.iter().map(|s| s.nodes.len()).sum::<usize>(), 4096);
+    global.validate_readonly_filtered_flat_point_storage(&ctl()).unwrap();
 }
 #[test]
 #[ignore = "UNRUN: changed move denies fullIndex/late cumulative Work/copy-lease cancellation with exact quota refunds and original source owners intact"]

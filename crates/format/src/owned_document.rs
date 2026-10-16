@@ -201,6 +201,39 @@ pub(crate) fn error(error: BackingError) -> FormatError {
     if error == BackingError::Cancelled { FormatError::Cancelled } else { FormatError::Io(std::io::Error::other(error)) }
 }
 
+/// Private post-validation feature scan. Both callers have just completed the
+/// normal Doc validation through doc_m or Loader::document_with_interrupt.
+/// Keep the upstream scanner and every generic node/argument limit unchanged.
+fn requires_reader_v9_after_validation(doc:&Document,quota:&BackingQuota,control:&ReadControl<'_>)->Result<bool>{
+    control.check(1).map_err(error)?;
+    let needs_scan=doc.xcf_state.as_ref().is_some_and(|state|!state.source_items.is_empty()||!state.filter_stacks.is_empty());
+    if !needs_scan {
+        let found=crate::convert::requires_reader_v9_state_with(doc,*control.interrupt)?;
+        control.check(0).map_err(error)?;
+        return Ok(found);
+    }
+    let state=doc.xcf_state.as_ref().ok_or_else(||error(BackingError::Integrity))?;
+    if state.source_items.len()>10000 || state.filter_stacks.len()>10000 {
+        return Err(FormatError::LimitExceeded("stored-color state scan count".into()));
+    }
+    // Doc validation bounds total filters to100000; the upstream feature scan
+    // bounds combined argument/graph visits to100000. Include root argument
+    // calls/recursive frames with a conservative scalar-operation multiplier.
+    // This is prepaid logical work, not measured CPU time or a fresh counter.
+    let work=100000u64.checked_add(100000)
+        .and_then(|n|n.checked_add(state.source_items.len() as u64))
+        .and_then(|n|n.checked_add(state.filter_stacks.len() as u64))
+        .and_then(|n|n.checked_add(1)).and_then(|n|n.checked_mul(8))
+        .ok_or_else(||FormatError::LimitExceeded("owned stored-color scan work".into()))?;
+    control.check(work).map_err(error)?;
+    // Real same-ledger phase admission for depth<=32 recursion and wrapper/
+    // guard headers. A conservative logical envelope, not a stack/RSS census.
+    let _scan=quota.reserve(photocraft_raster::backing::quota::QuotaKind::Resident,32<<10).map_err(|_|error(BackingError::Quota))?;
+    let found=crate::convert::requires_reader_v9_state_with(doc,*control.interrupt)?;
+    control.check(0).map_err(error)?;
+    Ok(found)
+}
+
 /// Optional whole resident document load through the existing field mapper.
 /// Ordinary compressed tile/blob lookup remains supported under explicit caps.
 /// FiniteRaster uses exact finite current backing; ordinary objects retain the existing mapper.
@@ -260,6 +293,9 @@ pub fn load_document_from_owned_archive(
     let document = loader.document_with_interrupt(&manifest.document, control.interrupt)?;
     let max_id = loader.max_id;
     drop(loader);
+    if requires_reader_v9_after_validation(&document,&quota,control)? && manifest.minimum_reader_version<9 {
+        return Err(FormatError::Corrupt("raw stored color requires minimum reader version 9".into()));
+    }
     if crate::convert::requires_reader_v3_state(&document) && manifest.minimum_reader_version < 3 {
         return Err(FormatError::Corrupt("required source/working state requires minimum reader version 3".into()));
     }
@@ -289,3 +325,7 @@ pub fn load_document_from_owned_archive(
     control.check(0).map_err(error)?;
     Ok(candidate)
 }
+
+#[cfg(test)]
+#[path="owned_document/stored_color_v9_tests.rs"]
+mod stored_color_v9_tests;

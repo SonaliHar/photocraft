@@ -253,7 +253,7 @@ pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Re
     let mut node_count = 0usize;
     for stack in &state.filter_stacks {
         c.check(1)?;
-        if stack.nodes.is_empty() || stack.nodes.len() > 4096 {
+        if stack.nodes.is_empty() || stack.nodes.len() > 1024 {
             return Err(BackingError::Length);
         }
         node_count = node_count.checked_add(stack.nodes.len()).ok_or(BackingError::Length)?;

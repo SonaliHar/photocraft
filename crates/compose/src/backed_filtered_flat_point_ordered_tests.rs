@@ -237,16 +237,16 @@ impl PreparationBudget for Budget {
     }
 }
 #[test]
-#[ignore = "UNRUN global4096node/cardinality and rootaggregate4096physicalmask cap before physicalfee/scan; no alias pruning"]
+#[ignore = "UNRUN perstack1024/global4096 node caps independently precede physicalfee/scan, plus rootaggregate4096physicalmask cap; no alias pruning"]
 fn actual_node_and_root_mask_caps_precede_scans() {
     let mut f = ordered(SampleType::F64, &[&[0, 0]], false);
     let q = f.quota.clone();
     let template = f.document.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].clone();
     let nodes = &mut f.document.xcf_state.as_mut().unwrap().filter_stacks[0].nodes;
     nodes.clear();
-    nodes.try_reserve_exact(4097).unwrap();
-    assert!(nodes.capacity() <= 8194);
-    for _ in 0..4097 {
+    nodes.try_reserve_exact(1025).unwrap();
+    assert!(nodes.capacity() <= 2050);
+    for _ in 0..1025 {
         nodes.push(template.clone());
     }
     assert!(nodes.capacity() * std::mem::size_of::<photocraft_doc::xcf_filters::FilterNode>() < (8 << 20));
@@ -256,6 +256,48 @@ fn actual_node_and_root_mask_caps_precede_scans() {
         LeasedFilteredFlatPointPipeline::new_budgeted(&f.document, &Interrupt::NONE, &mut budget, f.retention.clone()),
         Err(CompositionError::Unsupported(_))
     ));
+    assert_eq!(q.usage().unwrap(), before);
+    assert_eq!(f.reads.load(Ordering::Relaxed), 0);
+    assert_eq!(budget.used, 2); // Entry check + first actual stack; no physical work.
+    // A separate global rejection: five DISTINCT actual roots and stack owners,
+    // each stack <=1024. The intentionally incomplete mask/node identities
+    // are never claimed valid: global admission must refuse BEFORE those scans.
+    let mut f = ordered(SampleType::F64, &[&[0], &[0], &[0], &[0]], false);
+    // ordered() already retains prospective Index8MiB+Resident8MiB before all
+    // following native-owner/row/stack/node clones. Backed payloads stay shared.
+    let mut fifth = f.document.layers[3].clone();
+    let old_id = fifth.id;
+    fifth.id = LayerId::fresh();
+    let fifth_id = fifth.id;
+    f.document.layers.push(fifth);
+    let state = f.document.xcf_state.as_mut().unwrap();
+    let mut row = state.items.iter().find(|r| r.item == ItemRef::Layer(old_id)).unwrap().clone();
+    row.item = ItemRef::Layer(fifth_id);
+    state.items.push(row);
+    let mut fifth = state.filter_stacks[3].clone();
+    fifth.owner = ItemRef::Layer(fifth_id);
+    state.filter_stacks.push(fifth);
+    for (stack, count) in state.filter_stacks.iter_mut().zip([1024, 1024, 1024, 1024, 1]) {
+        let template = stack.nodes[0].clone();
+        stack.nodes.clear();
+        stack.nodes.try_reserve_exact(count).unwrap();
+        assert!(stack.nodes.capacity() <= 2 * count);
+        for _ in 0..count {
+            stack.nodes.push(template.clone());
+        }
+    }
+    assert!(state.filter_stacks.iter().all(|s| s.nodes.len() <= 1024));
+    assert_eq!(state.filter_stacks.iter().map(|s| s.nodes.len()).sum::<usize>(), 4097);
+    assert_eq!(f.document.layers.iter().map(|l| l.id).collect::<std::collections::HashSet<_>>().len(), 5);
+    assert!(state.filter_stacks.iter().map(|s| s.nodes.capacity() * std::mem::size_of::<photocraft_doc::xcf_filters::FilterNode>()).sum::<usize>() < (8 << 20));
+    let q = f.quota.clone();
+    let before = q.usage().unwrap();
+    let mut budget = Budget { q: q.clone(), used: 0, limit: 1 << 20 };
+    assert!(matches!(
+        LeasedFilteredFlatPointPipeline::new_budgeted(&f.document, &Interrupt::NONE, &mut budget, f.retention.clone()),
+        Err(CompositionError::Unsupported(_))
+    ));
+    assert_eq!(budget.used, 6); // Entry + all five actual stack counts, no census.
     assert_eq!(q.usage().unwrap(), before);
     assert_eq!(f.reads.load(Ordering::Relaxed), 0);
     let mut f = ordered(SampleType::F64, &[&[0, 0]], false);
