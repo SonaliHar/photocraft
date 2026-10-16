@@ -233,9 +233,10 @@ pub struct Candidate {
 /// Rank of an adapter (lower is better): high-performance device types first (egui's power
 /// preference) or software adapters first for `cpu`; then backends, with DX12 before Vulkan for
 /// Intel on Windows. For `cpu`, any GL adapter comes before Vulkan, which is only the fallback
-/// for presenting the window (see [`backends`]).
+/// for presenting the window (see [`backends`]). On Windows GL comes after every other adapter,
+/// WARP included: GL there (VMware's SVGA3D, GL-only old GPUs) drew a black window (#5191, #1788).
 fn rank(a: &Candidate, backend: GpuBackend, os: Os) -> (u8, u8, u8) {
-    let fallback = u8::from(backend == GpuBackend::Cpu && a.backend == wgpu::Backend::Vulkan);
+    let fallback = u8::from((backend == GpuBackend::Cpu && a.backend == wgpu::Backend::Vulkan) || (os == Os::Windows && a.backend == wgpu::Backend::Gl));
     let ty = match a.device_type {
         wgpu::DeviceType::DiscreteGpu => 0,
         wgpu::DeviceType::IntegratedGpu => 1,
@@ -284,14 +285,7 @@ fn skips_indirect_validation(os: Os, intel: bool) -> bool {
 /// Configure eframe's wgpu setup for `plan`: instance backends, the DX12 shader compiler, adapter
 /// selection (Intel on Windows, software adapters for `cpu`) and the marker update once the
 /// adapter is chosen. `note` receives a remark for System Info (e.g. the Intel default).
-pub fn configure(
-    setup: &mut egui_wgpu::WgpuSetup,
-    plan: &Plan,
-    os: Os,
-    sentinel: SharedSentinel,
-    note: Arc<Mutex<Option<String>>>,
-    present_modes: SharedPresentModes,
-) {
+pub fn configure(setup: &mut egui_wgpu::WgpuSetup, plan: &Plan, os: Os, sentinel: SharedSentinel, note: Arc<Mutex<Option<String>>>) {
     if let egui_wgpu::WgpuSetup::CreateNew(create) = setup {
         if let Some(b) = backends(plan, os) {
             create.instance_descriptor.backends = b;
@@ -304,10 +298,7 @@ pub fn configure(
             let env = std::env::var("WGPU_DX12_COMPILER").ok();
             create.instance_descriptor.backend_options.dx12.shader_compiler = dx12_compiler(env.as_deref(), exe.as_deref().and_then(Path::parent));
         }
-        // The selector also records the surface's present modes ([`surface_config`]). Under
-        // `WGPU_BACKEND` or `WGPU_POWER_PREF`, egui picks the adapter itself (and the window keeps
-        // vsync); otherwise `auto` ranks adapters like egui's high-performance preference.
-        let select = plan.env.is_none() && wgpu::PowerPreference::from_env().is_none();
+        let select = plan.env.is_none() && (plan.backend == GpuBackend::Cpu || (plan.backend == GpuBackend::Auto && os == Os::Windows));
         if select {
             let backend = plan.backend;
             create.native_adapter_selector = Some(Arc::new(move |adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>>| {
@@ -332,11 +323,7 @@ pub fn configure(
                     *note.lock().unwrap_or_else(PoisonError::into_inner) =
                         Some("Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)".into());
                 }
-                let chosen = adapters.get(i).cloned().ok_or_else(|| "no graphics adapter found".to_string())?;
-                if let Some(s) = surface {
-                    *present_modes.lock().unwrap_or_else(PoisonError::into_inner) = Some(s.get_capabilities(&chosen).present_modes);
-                }
-                Ok(chosen)
+                adapters.get(i).cloned().ok_or_else(|| "no graphics adapter found".to_string())
             }));
         }
     }
@@ -353,65 +340,6 @@ pub fn configure(
             }
         }
     });
-}
-
-/// Present modes the chosen adapter can use on the window (`None` until the adapter selector ran,
-/// or when egui picked the adapter itself).
-pub type SharedPresentModes = Arc<Mutex<Option<Vec<wgpu::PresentMode>>>>;
-
-/// Frame cap with a present mode that doesn't wait for the display: frames shown at most this
-/// long after they were drawn, without redrawing flat out (240 fps).
-pub const MAILBOX_MIN_FRAME_MS: f64 = 1000.0 / 240.0;
-
-/// The window surface's presentation. One queued frame instead of egui's default two (which
-/// delays every hover and drag by a frame), and mailbox where the surface supports it: under a
-/// compositing window manager, vsync (FIFO) queues another frame, and menus lag behind the
-/// pointer. `supported` are the surface's present modes (`None`: unknown, so vsync).
-///
-/// `PHOTOCRAFT_FRAME_LATENCY` (1–3) and `PHOTOCRAFT_PRESENT_MODE` (`vsync`, `novsync`, `fifo`,
-/// `mailbox`, `immediate`) override it; a mode the surface lacks, or anything unparsable, is
-/// ignored (configuring an unsupported mode is a device error).
-pub fn surface_config(latency: Option<&str>, mode: Option<&str>, supported: Option<&[wgpu::PresentMode]>) -> egui_wgpu::SurfaceConfig {
-    use wgpu::PresentMode as M;
-    let mut c = egui_wgpu::SurfaceConfig::LOW_LATENCY;
-    if let Some(n) = latency.and_then(|v| v.trim().parse::<u32>().ok()).filter(|n| (1..=3).contains(n)) {
-        c.desired_maximum_frame_latency = Some(n);
-    }
-    let has = |m: M| supported.is_some_and(|s| s.contains(&m));
-    let wanted = match mode.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
-        Some("vsync") => Some(M::AutoVsync),
-        Some("novsync") => Some(M::AutoNoVsync),
-        // Every surface supports FIFO; the Auto modes fall back by themselves.
-        Some("fifo") => Some(M::Fifo),
-        Some("mailbox") if has(M::Mailbox) => Some(M::Mailbox),
-        Some("immediate") if has(M::Immediate) => Some(M::Immediate),
-        _ => None,
-    };
-    c.present_mode = wanted.unwrap_or(if has(M::Mailbox) { M::Mailbox } else { M::AutoVsync });
-    c
-}
-
-/// `config` for System Info: "mailbox, 1 frame".
-pub fn describe(config: &egui_wgpu::SurfaceConfig) -> String {
-    use wgpu::PresentMode as M;
-    let mode = match config.present_mode {
-        M::AutoVsync => "vsync",
-        M::AutoNoVsync => "no vsync",
-        M::Fifo => "fifo",
-        M::FifoRelaxed => "fifo relaxed",
-        M::Immediate => "immediate",
-        M::Mailbox => "mailbox",
-    };
-    match config.desired_maximum_frame_latency {
-        Some(1) => format!("{mode}, 1 frame"),
-        Some(n) => format!("{mode}, {n} frames"),
-        None => mode.to_string(),
-    }
-}
-
-/// The frame cap for `config` (see [`MAILBOX_MIN_FRAME_MS`]); vsync paces frames itself.
-pub fn min_frame_ms(config: &egui_wgpu::SurfaceConfig) -> Option<f64> {
-    matches!(config.present_mode, wgpu::PresentMode::Mailbox | wgpu::PresentMode::Immediate | wgpu::PresentMode::AutoNoVsync).then_some(MAILBOX_MIN_FRAME_MS)
 }
 
 /// What a previous start left behind.
@@ -515,6 +443,14 @@ pub fn read_display_server(path: Option<&Path>) -> photocraft_engine::prefs::Lin
         .unwrap_or_default()
 }
 
+/// Preferences › Performance › Low-Latency Drawing (`performance.lowLatencyDrawing`, off unless
+/// turned on), read before the window opens: it picks the surface's present mode.
+pub fn read_low_latency(path: Option<&Path>) -> bool {
+    let v: Value = path.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+    let default = photocraft_engine::prefs::Preferences::default().performance.low_latency_drawing;
+    v.get("performance").and_then(|p| p.get("lowLatencyDrawing")).and_then(Value::as_bool).unwrap_or(default)
+}
+
 /// Read the policy leniently at startup, including old settings without renderingMode.
 pub fn read_rendering_prefs(path: Option<&Path>) -> (GpuBackend, RenderingMode) {
     let v: Value = path.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
@@ -533,6 +469,23 @@ mod tests {
 
     fn crashed(backend: &str, adapter_backend: &str) -> Marker {
         Marker { backend: backend.into(), adapter: "Intel(R) UHD Graphics".into(), adapter_backend: adapter_backend.into(), ..Default::default() }
+    }
+
+    #[test]
+    fn low_latency_drawing_is_read_before_the_window_opens_and_defaults_off() {
+        let dir = std::env::temp_dir().join(format!("photocraft-low-latency-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("preferences.json");
+        let read = |json: &str| {
+            std::fs::write(&file, json).unwrap();
+            read_low_latency(Some(&file))
+        };
+        assert!(read(r#"{"performance":{"lowLatencyDrawing":true}}"#));
+        assert!(!read(r#"{"performance":{"lowLatencyDrawing":false}}"#));
+        assert!(!read(r#"{"performance":{"lowLatencyDrawing":"nope"}}"#), "garbage keeps the default (off)");
+        assert!(!read("not json"));
+        assert!(!read_low_latency(None), "no settings file: the default (off)");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -642,34 +595,6 @@ mod tests {
     }
 
     #[test]
-    fn surface_prefers_mailbox_with_one_queued_frame() {
-        use wgpu::PresentMode as M;
-        let all = [M::Fifo, M::FifoRelaxed, M::Mailbox, M::Immediate];
-        let fifo = [M::Fifo];
-        let pm = |l, m, s: Option<&[M]>| {
-            let c = surface_config(l, m, s);
-            (c.present_mode, c.desired_maximum_frame_latency)
-        };
-        assert_eq!(pm(None, None, Some(&all)), (M::Mailbox, Some(1)));
-        assert_eq!(pm(None, None, Some(&fifo)), (M::AutoVsync, Some(1)));
-        assert_eq!(pm(None, None, None), (M::AutoVsync, Some(1)), "unknown support: vsync");
-        assert_eq!(pm(Some(" 2 "), Some("VSync"), Some(&all)), (M::AutoVsync, Some(2)));
-        assert_eq!(pm(None, Some("immediate"), Some(&all)), (M::Immediate, Some(1)));
-        assert_eq!(pm(None, Some("fifo"), None), (M::Fifo, Some(1)));
-        // A mode the surface lacks is never configured (a device error).
-        assert_eq!(pm(None, Some("mailbox"), Some(&fifo)), (M::AutoVsync, Some(1)));
-        assert_eq!(pm(None, Some("immediate"), None), (M::AutoVsync, Some(1)));
-        // Out of range or unknown values keep the defaults.
-        for (l, m) in [("0", "bogus"), ("9", ""), ("-1", "vsync!"), ("", "  ")] {
-            assert_eq!(pm(Some(l), Some(m), Some(&all)), (M::Mailbox, Some(1)), "{l:?} {m:?}");
-        }
-        assert_eq!(min_frame_ms(&surface_config(None, None, Some(&all))), Some(MAILBOX_MIN_FRAME_MS));
-        assert_eq!(min_frame_ms(&surface_config(None, None, Some(&fifo))), None);
-        assert_eq!(describe(&surface_config(None, None, Some(&all))), "mailbox, 1 frame");
-        assert_eq!(describe(&surface_config(Some("2"), None, None)), "vsync, 2 frames");
-    }
-
-    #[test]
     fn safe_gpu_forces_the_cpu_for_one_launch() {
         let p = plan(Vulkan, Some(&crashed("vulkan", "vulkan")), None, true, Os::Other);
         assert_eq!((p.backend, p.remember), (Cpu, false));
@@ -734,6 +659,20 @@ mod tests {
         assert_eq!(pick(&[gl, nvidia_vk], Cpu, Os::Other), Some(1));
         // Other backends rank as before.
         assert_eq!(pick(&[nvidia_gl, nvidia_vk], Auto, Os::Other), Some(1));
+    }
+
+    /// #5191, #1788: a Windows VM offers VMware's SVGA3D over GL (`Other`) and WARP (`Cpu`, DX12).
+    /// GL drew a black window; WARP works. GL stays the last resort.
+    #[test]
+    fn windows_auto_prefers_warp_over_gl() {
+        use wgpu::{Backend as B, DeviceType as T};
+        let svga_gl = cand(0x15ad, T::Other, B::Gl);
+        let warp = cand(0x1414, T::Cpu, B::Dx12);
+        assert_eq!(pick(&[svga_gl, warp], Auto, Os::Windows), Some(1));
+        assert_eq!(pick(&[cand(INTEL, T::IntegratedGpu, B::Gl), warp], Auto, Os::Windows), Some(1));
+        assert_eq!(pick(&[svga_gl], Auto, Os::Windows), Some(0));
+        // Elsewhere GL keeps its rank.
+        assert_eq!(pick(&[svga_gl, warp], Auto, Os::Other), Some(0));
     }
 
     #[test]
@@ -955,7 +894,7 @@ mod tests {
         // The app's setup replaces wgpu's default (`Auto`: DXC by name from the search path).
         let mut setup = egui_wgpu::WgpuSetup::without_display_handle();
         let plan = plan(Auto, None, None, false, Os::Windows);
-        configure(&mut setup, &plan, Os::Windows, Arc::new(Mutex::new(None)), Arc::default(), Arc::default());
+        configure(&mut setup, &plan, Os::Windows, Arc::new(Mutex::new(None)), Arc::default());
         let egui_wgpu::WgpuSetup::CreateNew(create) = &setup else { panic!("a new instance") };
         if std::env::var_os("WGPU_DX12_COMPILER").is_none() {
             let safe = match &create.instance_descriptor.backend_options.dx12.shader_compiler {
@@ -979,13 +918,13 @@ mod tests {
             let mut setup = egui_wgpu::WgpuSetup::without_display_handle();
             let egui_wgpu::WgpuSetup::CreateNew(before) = &setup else { panic!("a new instance") };
             let before = before.instance_descriptor.flags;
-            configure(&mut setup, &plan(Auto, None, None, safe_gpu, os), os, Arc::new(Mutex::new(None)), Arc::default(), Arc::default());
+            configure(&mut setup, &plan(Auto, None, None, safe_gpu, os), os, Arc::new(Mutex::new(None)), Arc::default());
             let egui_wgpu::WgpuSetup::CreateNew(create) = &setup else { panic!("a new instance") };
             assert_eq!(create.instance_descriptor.flags, before, "{os:?}: flags untouched");
         }
         if cfg!(target_arch = "x86_64") && std::env::var_os("WGPU_VALIDATION_INDIRECT_CALL").is_none() {
             let mut setup = egui_wgpu::WgpuSetup::without_display_handle();
-            configure(&mut setup, &plan(Auto, None, None, false, Os::Mac), Os::Mac, Arc::new(Mutex::new(None)), Arc::default(), Arc::default());
+            configure(&mut setup, &plan(Auto, None, None, false, Os::Mac), Os::Mac, Arc::new(Mutex::new(None)), Arc::default());
             let egui_wgpu::WgpuSetup::CreateNew(create) = &setup else { panic!("a new instance") };
             assert!(!create.instance_descriptor.flags.contains(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL));
         }
