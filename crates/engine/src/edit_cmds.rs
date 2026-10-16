@@ -595,14 +595,12 @@ fn new_from_clipboard(s: &mut Session) -> Result<Value> {
     if w == 0 || h == 0 {
         return Err(EngineError::Other("the clipboard image has no size".into()));
     }
+    let (Some(dx), Some(dy)) = (b.x0.checked_neg(), b.y0.checked_neg()) else {
+        return Err(EngineError::Other("the clipboard origin is outside the coordinate range for a new document".into()));
+    };
     let fmt = clip.surface.format();
     let target = PixelFormat::new(fmt.mode, fmt.sample, true);
-    let moved = shifted(
-        &clip.surface,
-        b.x0.checked_neg().ok_or_else(|| pixel_error("clipboard offset overflow"))?,
-        b.y0.checked_neg().ok_or_else(|| pixel_error("clipboard offset overflow"))?,
-    )?;
-    clip.color.profile(fmt.mode)?;
+    let moved = if dx == 0 && dy == 0 { clip.surface } else { photocraft_algo::resample::translate_surface(&clip.surface, dx, dy) };
     let mut doc = Document::new("Untitled", photocraft_geom::Size::new(w, h), fmt.mode, fmt.sample);
     clip.color.apply(&mut doc);
     let mut l = Layer::raster(doc.next_layer_name("Layer"), target);
@@ -873,6 +871,98 @@ fn transform_again_params(s: &Session) -> Result<Value> {
     Ok(p)
 }
 
+/// Guides further than this from the canvas origin are refused: far past any document (300000 px)
+/// yet well within f32 precision.
+const MAX_GUIDE_PX: f64 = 1_000_000.0;
+
+/// A guide `position` in document pixels: a number of pixels, or text with a unit as in Photoshop's
+/// New Guide dialog ("50%", "2.5 cm", "12 pt"). Percent is of the document's width for a vertical
+/// guide and its height for a horizontal one; points and picas follow Units & Rulers › Point Size.
+/// `None` when there is no `position`.
+fn guide_position(s: &Session, p: &Value, vertical: bool) -> Result<Option<f64>> {
+    let Some(v) = p.get("position") else { return Ok(None) };
+    let px = match (v.as_f64(), v.as_str()) {
+        (Some(n), _) => n,
+        (None, Some(text)) => {
+            let (n, unit) = crate::prefs::Unit::parse_length(text).ok_or_else(|| {
+                EngineError::Other(format!("`position` {text:?} is not a length: give a number of pixels, or a number with px, in, cm, mm, pt, pc or %"))
+            })?;
+            let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+            let extent = if vertical { doc.size.width } else { doc.size.height };
+            unit.unwrap_or(crate::prefs::Unit::Pixels).to_px(n, doc.resolution_dpi as f64, extent as f64, s.prefs().units_and_rulers.point_size.per_inch())
+        }
+        _ => return Err(EngineError::Other("`position` must be a number of pixels or text with a unit".into())),
+    };
+    if !px.is_finite() || px.abs() > MAX_GUIDE_PX {
+        return Err(EngineError::Other(format!("`position` is out of range (at most {MAX_GUIDE_PX} px from the canvas origin)")));
+    }
+    Ok(Some(px))
+}
+
+/// Photoshop's guide colours, in its order, by the names `view.newGuide` takes: New Guide's and
+/// New Guide Layout's Color lists. Cyan (the default guide colour in Preferences, so a guide
+/// dragged from a ruler reads as Cyan), Magenta and Yellow are the values New Guide Layout first
+/// shipped with; the rest approximate Photoshop's on screen, rounded to web-safe steps.
+pub const GUIDE_COLORS: [(&str, [u8; 3]); 9] = [
+    ("lightBlue", [0x33, 0x66, 0xff]),
+    ("lightRed", [0xff, 0x33, 0x33]),
+    ("green", [0x33, 0xff, 0x33]),
+    ("mediumBlue", [0x33, 0x33, 0xff]),
+    ("yellow", [0xff, 0xcc, 0x00]),
+    ("magenta", [0xff, 0x00, 0xff]),
+    ("cyan", [0x4a, 0xff, 0xff]),
+    ("lightGray", [0xe7, 0xe7, 0xe7]),
+    ("black", [0x00, 0x00, 0x00]),
+];
+
+/// A guide `color`: one of [`GUIDE_COLORS`]' names or `"#rrggbb"`. `None` when there is no `color`
+/// (the guide uses Preferences › Guides, Grid & Slices › Guide colour).
+fn guide_color(p: &Value) -> Result<Option<[u8; 3]>> {
+    let Some(v) = p.get("color") else { return Ok(None) };
+    let text = v.as_str().ok_or(EngineError::Other("`color` must be a colour name or \"#rrggbb\"".into()))?;
+    GUIDE_COLORS.iter().find(|(name, ..)| name.eq_ignore_ascii_case(text)).map(|(.., rgb)| *rgb).or_else(|| crate::prefs::parse_hex(text)).map(Some).ok_or_else(
+        || EngineError::Other(format!("`color` {text:?} is not a guide colour: use \"#rrggbb\" or one of {}", GUIDE_COLORS.map(|c| c.0).join(", "))),
+    )
+}
+
+/// Edit Selected Guides (the guide context menu): change one guide's orientation, position and
+/// colour in one history step. A guide that keeps its orientation keeps its index; one that turns
+/// goes to the end of the other list. Without `color` it keeps its own colour, or none.
+fn edit_guide(s: &mut Session, p: &Value) -> Result<Value> {
+    let orientation = |key: &str| match p.get(key).map(|v| v.as_str()) {
+        None => Ok(None),
+        Some(Some("horizontal")) => Ok(Some(false)),
+        Some(Some("vertical")) => Ok(Some(true)),
+        Some(_) => Err(EngineError::Other(format!("`{key}` must be \"horizontal\" or \"vertical\""))),
+    };
+    let from = orientation("orientation")?.unwrap_or(false);
+    let to = orientation("newOrientation")?.unwrap_or(from);
+    let index = p.get("index").and_then(Value::as_u64).ok_or(EngineError::Other("missing `index`".into()))?;
+    let pos = guide_position(s, p, to)?;
+    let color = guide_color(p)?;
+    s.edit("Edit Guide", |doc, _| {
+        let guides = &mut doc.guides;
+        let list = if from { &guides.vertical } else { &guides.horizontal };
+        let i = usize::try_from(index).ok().filter(|i| *i < list.len()).ok_or(EngineError::Other("no such guide".into()))?;
+        let old = list[i];
+        let at = pos.unwrap_or(old);
+        let rgb = color.or_else(|| guides.color(from, old));
+        if from == to {
+            let list = if from { &mut guides.vertical } else { &mut guides.horizontal };
+            list[i] = at;
+        } else {
+            (if from { &mut guides.vertical } else { &mut guides.horizontal }).remove(i);
+            (if to { &mut guides.vertical } else { &mut guides.horizontal }).push(at);
+        }
+        guides.prune_colors();
+        if rgb.is_some() {
+            guides.set_color(to, at, rgb);
+        }
+        Ok(())
+    })?;
+    Ok(Value::Null)
+}
+
 /// View › New Guide / guide moves (undoable, like Photoshop's "New Guide"/"Move Guide" states).
 mod guide_controlled;
 
@@ -1009,23 +1099,16 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| guide_cmd(s, p, "move")
         ),
         spec!(
-            "view.deleteGuide",
-            "Delete Guide",
+            "view.editGuide",
+            "Edit Guide",
             &[],
             None,
-            r##"{"orientation":"horizontal|vertical","index":n,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            r##"{"orientation":"horizontal|vertical","index":n,"newOrientation":"horizontal|vertical"?,"position":px or "<number><unit>"?,"color":name or "#rrggbb"?} (Edit Selected Guides: units and colours as for view.newGuide; % is of the new orientation's extent; whatever is left out stays as it was)"##,
             has_doc,
-            |s, p| guide_cmd(s, p, "delete")
+            edit_guide
         ),
-        spec!(
-            "view.clearGuides",
-            "Clear Guides",
-            &["View"],
-            None,
-            r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
-            has_doc,
-            |s, p| guide_cmd(s, p, "clear")
-        ),
+        spec!("view.deleteGuide", "Delete Guide", &[], None, r##"{"orientation":"horizontal|vertical","index":n}"##, has_doc, |s, p| guide_cmd(s, p, "delete")),
+        spec!("view.clearGuides", "Clear Guides", &["View"], None, "{}", has_doc, |s, p| guide_cmd(s, p, "clear")),
         spec!(
             "view.setRulerOrigin",
             "Set Ruler Origin",
@@ -1055,6 +1138,117 @@ mod tests {
         })
         .unwrap();
         s
+    }
+
+    #[test]
+    fn new_clipboard_document_rejects_an_unrepresentable_origin() {
+        let mut s = Session::new();
+        let mut surface = Surface::new(PixelFormat::RGBA8);
+        surface.write_pixel(i32::MIN, 0, &[1.0, 0.0, 0.0, 1.0]);
+        s.clipboard = Some(Clip { surface, bounds: Rect::from_xywh(i32::MIN, 0, 1, 1), layers: None, resolution: None });
+        let result = new_from_clipboard(&mut s);
+        assert!(result.unwrap_err().to_string().contains("clipboard origin"));
+        assert!(s.execute("file.newFromClipboard", json!({})).is_err());
+        assert!(s.documents().is_empty());
+        assert_eq!(s.clipboard.as_ref().unwrap().surface.rgba(i32::MIN, 0), [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn injected_clear_buffer_failure_leaves_the_document_unchanged() {
+        let mut s = session();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let before = st.doc.layer(id).unwrap().surface().unwrap().clone();
+        let revision = st.revision;
+
+        crate::allocation::fail_next_for_test();
+        let result = s.execute("edit.clear", json!({}));
+
+        assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for erasing pixels")));
+        let st = s.active().unwrap();
+        assert_eq!(st.doc.layer(id).unwrap().surface(), Some(&before));
+        assert_eq!(st.revision, revision);
+    }
+
+    #[test]
+    fn injected_copy_buffer_failure_does_not_change_document_or_clipboard() {
+        let mut s = session();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let before = st.doc.layer(id).unwrap().surface().unwrap().clone();
+        let revision = st.revision;
+
+        crate::allocation::fail_next_for_test();
+        let result = s.execute("edit.copy", json!({}));
+
+        assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for copying pixels")));
+        let st = s.active().unwrap();
+        assert_eq!(st.doc.layer(id).unwrap().surface(), Some(&before));
+        assert_eq!(st.revision, revision);
+        assert!(s.clipboard.is_none());
+    }
+
+    #[test]
+    fn injected_fill_result_reservation_failure_keeps_pixels_and_history() {
+        let mut s = session();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let before = st.doc.layer(id).unwrap().surface().unwrap().clone();
+        let revision = st.revision;
+        let history_len = st.history.past_len();
+
+        crate::allocation::fail_next_for_test();
+        let result = s.execute("edit.fill", json!({"color": "#00ff00"}));
+
+        assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for blending pixels")));
+        let st = s.active().unwrap();
+        assert_eq!(st.doc.layer(id).unwrap().surface(), Some(&before));
+        assert_eq!(st.revision, revision);
+        assert_eq!(st.history.past_len(), history_len);
+    }
+
+    #[test]
+    fn injected_paste_failure_does_not_change_document_or_clipboard() {
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 8, "height": 8})).unwrap();
+        s.execute("edit.copy", json!({})).unwrap();
+        let before_clip = s.clipboard.clone();
+        let st = s.active().unwrap();
+        let before_doc = (*st.doc).clone();
+        let revision = st.revision;
+        let history_len = st.history.past_len();
+
+        crate::allocation::fail_next_for_test();
+        let result = s.execute("edit.paste", json!({}));
+
+        assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for pasting pixels")));
+        let st = s.active().unwrap();
+        assert_eq!(*st.doc, before_doc);
+        assert_eq!(st.revision, revision);
+        assert_eq!(st.history.past_len(), history_len);
+        let after_clip = s.clipboard.as_ref().expect("clipboard remains available");
+        let before_clip = before_clip.as_ref().expect("clipboard was populated");
+        assert_eq!(after_clip.bounds, before_clip.bounds);
+        assert_eq!(after_clip.surface, before_clip.surface);
+    }
+
+    #[test]
+    fn injected_transform_failure_keeps_pixels_and_history() {
+        let mut s = session();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        let before = st.doc.layer(id).unwrap().surface().unwrap().clone();
+        let revision = st.revision;
+        let history_len = st.history.past_len();
+
+        crate::allocation::fail_next_for_test();
+        let result = s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 20, 30]}));
+
+        assert!(result.as_ref().is_err_and(|e| e.to_string().contains("not enough memory for transforming pixels")));
+        let st = s.active().unwrap();
+        assert_eq!(st.doc.layer(id).unwrap().surface(), Some(&before));
+        assert_eq!(st.revision, revision);
+        assert_eq!(st.history.past_len(), history_len);
     }
 
     fn active_bounds(s: &Session) -> Rect {
@@ -1810,6 +2004,60 @@ mod tests {
         let g = &s.active().unwrap().doc.guides;
         assert!(g.vertical.is_empty() && g.colors.is_empty());
         assert_eq!(s.active().unwrap().history.can_undo(), undo_before);
+    }
+
+    #[test]
+    fn editing_a_guide_changes_what_is_given_in_one_undoable_step() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
+        s.execute("view.newGuide", json!({"orientation": "vertical", "position": 10})).unwrap();
+        s.execute("view.newGuide", json!({"orientation": "vertical", "position": 20, "color": "magenta"})).unwrap();
+        s.execute("view.newGuide", json!({"orientation": "vertical", "position": 30})).unwrap();
+        let guides = |s: &Session| s.active().unwrap().doc.guides.clone();
+        // Position only: the guide keeps its index and its own colour.
+        s.execute("view.editGuide", json!({"orientation": "vertical", "index": 1, "position": "50%"})).unwrap();
+        let g = guides(&s);
+        assert_eq!(g.vertical, vec![10.0, 200.0, 30.0]);
+        assert_eq!((g.color(true, 20.0), g.color(true, 200.0)), (None, Some([0xff, 0x00, 0xff])));
+        // Colour only: an uncoloured guide gets one; the position stays.
+        s.execute("view.editGuide", json!({"orientation": "vertical", "index": 0, "color": "#123456"})).unwrap();
+        assert_eq!(guides(&s).color(true, 10.0), Some([0x12, 0x34, 0x56]));
+        // Turning it: % is of the new orientation's extent, and the colour goes along.
+        s.execute("view.editGuide", json!({"orientation": "vertical", "index": 1, "newOrientation": "horizontal", "position": "25%"})).unwrap();
+        let g = guides(&s);
+        assert_eq!((g.vertical.clone(), g.horizontal.clone()), (vec![10.0, 30.0], vec![50.0]));
+        assert_eq!((g.color(true, 200.0), g.color(false, 50.0)), (None, Some([0xff, 0x00, 0xff])));
+        // One step each: undo restores the vertical guide with its colour.
+        s.undo();
+        let g = guides(&s);
+        assert_eq!((g.vertical.clone(), g.horizontal.is_empty()), (vec![10.0, 200.0, 30.0], true));
+        assert_eq!(g.color(true, 200.0), Some([0xff, 0x00, 0xff]));
+    }
+
+    #[test]
+    fn bad_guide_edits_are_refused_without_a_history_step() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
+        s.execute("view.newGuide", json!({"orientation": "vertical", "position": 10, "color": "green"})).unwrap();
+        let before = s.active().unwrap().doc.guides.clone();
+        for bad in [
+            json!({}),
+            json!({"orientation": "vertical"}),
+            json!({"orientation": "vertical", "index": 1}),
+            json!({"orientation": "horizontal", "index": 0}),
+            json!({"orientation": "vertical", "index": -1}),
+            json!({"orientation": "vertical", "index": "0"}),
+            json!({"orientation": "vertical", "index": u64::MAX}),
+            json!({"orientation": "diagonal", "index": 0}),
+            json!({"orientation": "vertical", "index": 0, "newOrientation": 3}),
+            json!({"orientation": "vertical", "index": 0, "position": "far"}),
+            json!({"orientation": "vertical", "index": 0, "position": 1e12}),
+            json!({"orientation": "vertical", "index": 0, "color": "puce"}),
+        ] {
+            assert!(s.execute("view.editGuide", bad.clone()).is_err(), "{bad}");
+        }
+        assert_eq!(s.active().unwrap().doc.guides, before);
+        assert_eq!(s.active().unwrap().history.undo_label(), Some("New Guide"));
     }
 
     #[test]

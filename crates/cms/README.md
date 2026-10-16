@@ -118,13 +118,13 @@ polls, rather than a claim of controlled initialization or complete process-memo
 | `rec2020` | Rec. 2020 primaries, Rec. 709 OETF |
 | `gray-gamma-2.2`, `sgray` | gray gamma 2.2; gray with the sRGB curve (default gray working space) |
 | `lab-d50` | Lab identity (v4 encoding) |
-| `coated-cmyk` | **Photocraft Coated CMYK (synthetic, 300% TAC, medium GCR)** — default CMYK |
+| `coated-cmyk` | **PhotoCraft Coated CMYK (synthetic, 300% TAC, medium GCR)** — default CMYK |
 
 ### The CMYK profile
 
 Adobe's CMYK profiles (U.S. Web Coated SWOP, Coated FOGRA39) are proprietary, and the freely
 downloadable characterisation-based profiles (ECI/FOGRA, colord, Ghostscript) carry
-redistribution conditions or unclear licences, so Photocraft generates its own
+redistribution conditions or unclear licences, so PhotoCraft generates its own
 (`src/synth.rs`): a Yule–Nielsen modified Neugebauer model (n = 2) over the 16 overprints with
 ISO 12647-2 coated-paper Lab aims for paper/C/M/Y/RGB overprints, parabolic dot gain (14 % CMY,
 17 % K at 50 %), GCR black generation (starts at 20 % gray component, K max 95 %), total ink

@@ -3,7 +3,8 @@
 use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
 use photocraft_doc::{Adjustment, Document, Fill, Layer, LayerContent, LayerId, LayerMask, Size};
 use photocraft_geom::Rect;
-use serde_json::{Value, json};
+use photocraft_raster::Surface;
+use serde_json::{Map, Value, json};
 
 use crate::{EngineError, Result, Session, inspect, pixels};
 
@@ -179,10 +180,32 @@ pub fn command_specs() -> &'static [CommandSpec] {
 pub fn list_entry(s: &Session, c: &CommandSpec, reason: Option<String>) -> Value {
     let needs_document =
         s.active().is_none() && reason.as_deref().is_some_and(|r| ["no document", "no active document", "no open document"].iter().any(|p| r.starts_with(p)));
-    json!({
+    let mut entry = json!({
         "id": c.id, "label": c.label, "menu": c.menu, "shortcut": c.shortcut, "params": c.params,
         "enabled": reason.is_none(), "disabledReason": reason, "needsDocument": needs_document,
-    })
+    });
+    if let (Some(k), Some(o)) = (search_keywords(c.id), entry.as_object_mut()) {
+        o.insert("keywords".into(), json!(k));
+    }
+    entry
+}
+
+/// Other names a command is looked for by, beyond its id and label: the Photoshop tools and
+/// options it stands for (#5060). `select.rect` is also the Elliptical and Single Row/Column
+/// Marquee, which an agent searches for as "ellipse" or "marquee".
+pub(crate) const SEARCH_KEYWORDS: &[(&str, &str)] =
+    &[("select.rect", "Rectangular Marquee, Elliptical Marquee (\"ellipse\":true), ellipse, oval, circle, Single Row/Column Marquee (\"line\")")];
+
+/// [`SEARCH_KEYWORDS`] of command `id`, if it has any.
+pub fn search_keywords(id: &str) -> Option<&'static str> {
+    SEARCH_KEYWORDS.iter().find(|(k, _)| *k == id).map(|(_, words)| *words)
+}
+
+/// Does a [`list_entry`] row match a command-list filter (`commands --filter`, `engine.commands`,
+/// MCP `command_list`)? Its id, label or keywords contain `needle`, ignoring case.
+pub fn list_entry_matches(entry: &Value, needle: &str) -> bool {
+    let needle = needle.to_lowercase();
+    ["id", "label", "keywords"].iter().any(|k| entry.get(*k).and_then(Value::as_str).is_some_and(|v| v.to_lowercase().contains(&needle)))
 }
 
 pub fn find(id: &str) -> Option<&'static CommandSpec> {
@@ -267,7 +290,10 @@ pub(crate) fn parse_hex(s: &str) -> Option<[f32; 4]> {
 }
 /// Layer › Create / Release Clipping Mask. With a `layer` param, just that layer. Otherwise, as in
 /// Photoshop, the selection (#1248): Create clips every selected layer except the lowest, which
-/// becomes the base; Release releases every selected layer. One history step either way.
+/// becomes the base; Release releases every selected layer. Releasing a clipped layer also
+/// releases the clipped layers above it in its group, as Adobe documents ("removes the selected
+/// layer and any layers above it from the clipping mask"), so none is left clipped to a layer
+/// that is no longer clipped. One history step either way.
 fn set_clipped(s: &mut Session, p: &Value, clip: bool) -> Result<Value> {
     let label = if clip { "Create Clipping Mask" } else { "Release Clipping Mask" };
     let ids: Vec<LayerId> = if p.get("layer").is_some() {
@@ -280,6 +306,20 @@ fn set_clipped(s: &mut Session, p: &Value, clip: bool) -> Result<Value> {
             (true, [_base, rest @ ..]) => rest.to_vec(),
             (false, all) => all.to_vec(),
         }
+    };
+    let ids = if clip {
+        ids
+    } else {
+        let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+        let mut all = ids.clone();
+        for id in ids.iter().filter(|id| doc.layer(**id).is_some_and(|l| l.clipped)) {
+            for above in crate::clip_group::clipped_above(doc, *id) {
+                if !all.contains(&above) {
+                    all.push(above);
+                }
+            }
+        }
+        all
     };
     s.edit(label, |doc, _| {
         for id in &ids {
@@ -397,12 +437,12 @@ fn destructive_adjust(s: &mut Session, label: &str, adj: Adjustment, p: &Value) 
         });
     }
     if crate::channel_cmds::is_channel_target(p) {
-        // Alpha channel / Quick Mask target: the adjustment runs on the grayscale channel.
+        // Alpha channel / Quick Mask target: the adjustment runs on the grayscale channel as on
+        // a layer mask, its unstored black included, so ⌘I in Quick Mask inverts it all (#6095).
         return s.edit(label, |doc, _| {
             let sel = doc.selection.clone();
             if let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, None, p)? {
-                pixels::adjust_surface(surf, &adj, sel.as_ref(), ColorMode::Grayscale)?;
-                surf.prune();
+                pixels::adjust_mask(surf, &adj, sel.as_ref());
             }
             Ok(Value::Null)
         });
@@ -429,6 +469,31 @@ pub fn adjustment_from_params(kind: &str, p: &Value) -> Adjustment {
 
 fn doc_mode(s: &Session) -> ColorMode {
     s.active().map_or(ColorMode::Rgb, |d| d.doc.mode)
+}
+
+/// The colour mode a destructive adjustment parses its tone space in: a targeted layer mask,
+/// saved channel or Quick Mask holds gray levels whatever the document's mode, so Curves and
+/// Levels stay in the neutral space instead of Lab (where the composite is ignored) or CMYK
+/// (where the curve runs on the inks) (#5335).
+fn adjust_mode(s: &Session, p: &Value) -> ColorMode {
+    if is_mask_target(p) || crate::channel_cmds::is_channel_target(p) { ColorMode::Grayscale } else { doc_mode(s) }
+}
+
+/// Tone params for a gray plane target: the document-space channel records are dropped, because
+/// those keys select the Lab or CMYK tone space and a plane only holds levels (#5335).
+fn gray_tone_params(p: &Value) -> Value {
+    match p {
+        Value::Object(m) => {
+            let mut o = Map::new();
+            for (k, v) in m {
+                if !matches!(k.as_str(), "cyan" | "magenta" | "yellow" | "black" | "lightness" | "a" | "b") {
+                    o.insert(k.clone(), v.clone());
+                }
+            }
+            Value::Object(o)
+        }
+        other => other.clone(),
+    }
 }
 
 // ---------- the table ----------
@@ -606,7 +671,7 @@ fn build() -> Vec<CommandSpec> {
             "Select Layer",
             [],
             None,
-            r##"{"layer":id,"mode":"replace|toggle|range|add|remove"="replace"} (toggle = ⌘-click, range = ⇧-click, remove = deselect it, keeping at least one)"##,
+            r##"{"layer":id|str | "name":str,"occurrence":index?,"mode":"replace|toggle|range|add|remove"="replace"} (name occurrence: zero-based document walk order; required for duplicate names; toggle = ⌘-click, range = ⇧-click, remove = deselect it, keeping at least one)"##,
             has_doc,
             crate::layer_multi_cmds::select
         ),
@@ -615,55 +680,111 @@ fn build() -> Vec<CommandSpec> {
             "Layer Properties",
             [],
             None,
-            r##"{"layer":id?,"name":str?,"visible":bool?,"opacity":0..1?,"fill":0..1?,"blend":"Multiply|…"?,"clipped":bool?,"locked":bool?,"locks":{"transparency","pixels","position","artboard","all":bool}?,"channels":[bool,…]? (Advanced Blending: which colour channels blend, R G B / C M Y K / L a b)}"##,
+            r##"{"layer":id?,"layers":[id,…]? (the same change to each, one step: the Layers panel's controls with several layers selected),"name":str? (one layer only),"visible":bool?,"opacity":0..1?,"fill":0..1?,"blend":"Multiply|…"?,"clipped":bool?,"locked":bool?,"locks":{"transparency","pixels","position","artboard","all":bool}?,"channels":[bool,…]? (Advanced Blending: which colour channels blend, R G B / C M Y K / L a b)}"##,
             has_layer,
             |s, p| {
-                let id = layer_param(s, p)?;
-                let only_visibility =
-                    p.as_object().is_some_and(|o| o.contains_key("visible") && o.keys().all(|k| matches!(k.as_str(), "layer" | "visible" | "coalesce")));
-                let label = if only_visibility { "Layer Visibility" } else { "Layer Properties" };
+                // Several layers at once (the Layers panel with several selected, as in Photoshop),
+                // else the given or active one.
+                let ids: Vec<LayerId> = match p.get("layers") {
+                    None | Some(Value::Null) => vec![layer_param(s, p)?],
+                    Some(Value::Array(a)) if !a.is_empty() && a.len() <= 10_000 => {
+                        let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+                        let mut ids = Vec::with_capacity(a.len());
+                        for v in a {
+                            let id = v.as_u64().map(LayerId).ok_or_else(|| bad("layer.setProps", format!("`layers` holds layer ids, got {v}")))?;
+                            if doc.layer(id).is_none() {
+                                return Err(EngineError::NoLayer(id));
+                            }
+                            if !ids.contains(&id) {
+                                ids.push(id);
+                            }
+                        }
+                        ids
+                    }
+                    Some(v) => return Err(bad("layer.setProps", format!("`layers` is a non-empty list of layer ids, got {v}"))),
+                };
+                if ids.len() > 1 && p.get("name").is_some() {
+                    return Err(bad("layer.setProps", "`name` renames one layer, not several"));
+                }
+                // Opacity and Fill are fractions here, while the Layer Style commands take
+                // percentages: a value outside 0..1 is refused, never clamped to 100 % (#5242).
+                let unit = |key: &str| -> Result<Option<f32>> {
+                    let Some(v) = p.get(key) else { return Ok(None) };
+                    match v.as_f64() {
+                        Some(x) if (0.0..=1.0).contains(&x) => Ok(Some(x as f32)),
+                        _ => Err(bad("layer.setProps", format!("{key} must be a number in 0..1 (1 = 100 %), got {v}"))),
+                    }
+                };
+                let (opacity, fill) = (unit("opacity")?, unit("fill")?);
+                // Photoshop's History names for a single kind of change; a mix is "Layer Properties".
+                let changed: Vec<&str> = p
+                    .as_object()
+                    .map(|o| o.keys().map(String::as_str).filter(|k| !matches!(*k, "layer" | "layers" | "coalesce")).collect())
+                    .unwrap_or_default();
+                let label = match changed.as_slice() {
+                    ["visible"] => "Layer Visibility",
+                    ["opacity"] => "Opacity Change",
+                    ["fill"] => "Fill Opacity Change",
+                    ["blend"] => "Blending Change",
+                    ["name"] => "Rename Layer",
+                    _ => "Layer Properties",
+                };
                 let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
                 // Clipping and channel changes reach the layers around it: recomposite everything.
                 let local = p.get("clipped").is_none() && p.get("channels").is_none();
                 s.edit(label, |doc, _| {
-                    let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-                    if let Some(v) = p.get("name").and_then(Value::as_str) {
-                        l.name = v.to_string();
-                    }
-                    if let Some(v) = p.get("visible").and_then(Value::as_bool) {
-                        l.visible = v;
-                    }
-                    if let Some(v) = p.get("opacity").and_then(Value::as_f64) {
-                        l.opacity = (v as f32).clamp(0.0, 1.0);
-                    }
-                    if let Some(v) = p.get("fill").and_then(Value::as_f64) {
-                        l.fill_opacity = (v as f32).clamp(0.0, 1.0);
-                    }
-                    if let Some(v) = p.get("blend").and_then(Value::as_str) {
-                        l.blend = blend_from_str(v).ok_or_else(|| bad("layer.setProps", format!("unknown blend mode `{v}`")))?;
-                    }
-                    if let Some(v) = p.get("clipped").and_then(Value::as_bool) {
-                        l.clipped = v;
-                    }
-                    if let Some(v) = p.get("locked").and_then(Value::as_bool) {
-                        l.locks.all = v;
-                    }
-                    if let Some(Value::Array(ch)) = p.get("channels") {
-                        // Blending Options › Advanced Blending › Channels: unchecked = left out.
-                        l.excluded_channels = ch.iter().take(32).enumerate().filter(|(_, v)| v.as_bool() == Some(false)).fold(0, |m, (i, _)| m | 1 << i);
-                    }
-                    if let Some(Value::Object(m)) = p.get("locks") {
-                        for (k, v) in m {
-                            let v = v.as_bool().unwrap_or(false);
-                            if !l.locks.set(k, v) {
-                                return Err(bad("layer.setProps", format!("unknown lock `{k}`")));
+                    // The Background has no opacity, fill or blend mode: like Photoshop, setting
+                    // one that changes its look turns it into a normal layer ("Layer 0") first.
+                    let num = |k: &str| p.get(k).and_then(Value::as_f64).is_some_and(|v| v < 1.0);
+                    let blends = p.get("blend").and_then(Value::as_str).and_then(blend_from_str).is_some_and(|b| b != photocraft_color::BlendMode::Normal);
+                    for &id in &ids {
+                        if num("opacity") || num("fill") || blends {
+                            crate::extra_cmds::background_to_layer(doc, id);
+                        }
+                        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+                        if let Some(v) = p.get("name").and_then(Value::as_str) {
+                            l.name = v.to_string();
+                        }
+                        if let Some(v) = p.get("visible").and_then(Value::as_bool) {
+                            l.visible = v;
+                        }
+                        if let Some(v) = opacity {
+                            l.opacity = v;
+                        }
+                        if let Some(v) = fill {
+                            l.fill_opacity = v;
+                        }
+                        if let Some(v) = p.get("blend").and_then(Value::as_str) {
+                            let b = blend_from_str(v).ok_or_else(|| bad("layer.setProps", format!("unknown blend mode `{v}`")))?;
+                            // Pass Through is a group's mode only, as in Photoshop.
+                            if b == photocraft_color::BlendMode::PassThrough && !l.is_group() {
+                                return Err(bad("layer.setProps", format!("Pass Through applies to groups only; layer {} isn't one", l.id.0)));
+                            }
+                            l.blend = b;
+                        }
+                        if let Some(v) = p.get("clipped").and_then(Value::as_bool) {
+                            l.clipped = v;
+                        }
+                        if let Some(v) = p.get("locked").and_then(Value::as_bool) {
+                            l.locks.all = v;
+                        }
+                        if let Some(Value::Array(ch)) = p.get("channels") {
+                            // Blending Options › Advanced Blending › Channels: unchecked = left out.
+                            l.excluded_channels = ch.iter().take(32).enumerate().filter(|(_, v)| v.as_bool() == Some(false)).fold(0, |m, (i, _)| m | 1 << i);
+                        }
+                        if let Some(Value::Object(m)) = p.get("locks") {
+                            for (k, v) in m {
+                                let v = v.as_bool().unwrap_or(false);
+                                if !l.locks.set(k, v) {
+                                    return Err(bad("layer.setProps", format!("unknown lock `{k}`")));
+                                }
                             }
                         }
                     }
                     Ok(())
                 })?;
                 if local {
-                    crate::layer_multi_cmds::note_damage(s, &before, &[id]);
+                    crate::layer_multi_cmds::note_damage(s, &before, &ids);
                 }
                 Ok(Value::Null)
             }
@@ -716,8 +837,28 @@ fn build() -> Vec<CommandSpec> {
             has_layer,
             crate::layer_mask_storage_controlled::hide_all
         ),
-        cmd!("layer.layerMask.revealSelection", "Reveal Selection", ["Layer", "Layer Mask"], None, r##"{"layer":id?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_selection, crate::layer_mask_storage_controlled::run),
-        cmd!("layer.layerMask.delete", "Delete", ["Layer", "Layer Mask"], None, r##"{"layer":id?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_layer, crate::layer_mask_storage_controlled::delete),
+        cmd!(
+            "layer.layerMask.revealSelection",
+            "Reveal Selection",
+            ["Layer", "Layer Mask"],
+            None,
+            r##"{"layer":id?} (no layer: every selected layer that can take a mask)"##,
+            has_selection,
+            |s, p| {
+                let sel = s.active().and_then(|d| d.doc.selection.clone()).ok_or(EngineError::Other("no selection".into()))?;
+                let mask = LayerMask { surface: sel, ..LayerMask::reveal_all() };
+                // The selection becomes the mask, so Photoshop drops it (as Hide Selection does): a
+                // following Invert (⌘I) on the targeted mask then inverts all of it, not just the
+                // part inside the old selection. Same undo step as the mask.
+                set_mask_and_deselect(s, p, "Add Layer Mask", mask)
+            }
+        ),
+        cmd!("layer.layerMask.delete", "Delete", ["Layer", "Layer Mask"], None, r##"{"layer":id?}"##, has_layer, |s, p| set_mask(
+            s,
+            p,
+            "Delete Layer Mask",
+            None
+        )),
         cmd!("layer.mergeDown", "Merge Down", ["Layer"], None, r##"{"layer":id?}"##, has_layer, |s, p| {
             let id = layer_param(s, p)?;
             s.edit("Merge Down", |doc, active| {
@@ -1199,7 +1340,16 @@ fn build() -> Vec<CommandSpec> {
                 });
                 let adj = match eyedropped {
                     Some(adj) => adj,
-                    None => crate::adjust_params::from_params(&kind, p, None, doc_mode(s))?,
+                    None => {
+                        // A gray plane target keeps the neutral tone space even over params
+                        // carrying Lab or CMYK records (#5335).
+                        let tone = if is_mask_target(p) || crate::channel_cmds::is_channel_target(p) {
+                            if matches!(kind.as_str(), "levels" | "curves") { gray_tone_params(p) } else { p.clone() }
+                        } else {
+                            p.clone()
+                        };
+                        crate::adjust_params::from_params(&kind, &tone, None, adjust_mode(s, p))?
+                    }
                 };
                 let label = adj.label().to_string();
                 // A smart object records the adjustment as a smart filter (Photoshop), which
@@ -1213,6 +1363,7 @@ fn build() -> Vec<CommandSpec> {
         });
     }
     v.extend(crate::layer_style::specs());
+    v.extend(crate::layer_list_cmds::specs());
     v.extend(crate::filters::specs());
     v.extend(crate::filters_ext::specs());
     v.extend(crate::color_to_alpha_cmds::specs());
@@ -1287,6 +1438,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::proof_sim::specs());
     v.extend(crate::presets::specs());
     v.extend(crate::document_preset_cmds::specs());
+    v.extend(crate::export_preset_cmds::specs());
     v.extend(crate::render_cmds::specs());
     v.extend(crate::slice_cmds::specs());
     v.extend(crate::web_cmds::specs());
@@ -1431,6 +1583,35 @@ fn arrange(s: &mut Session, p: &Value, delta: i32) -> Result<Value> {
     Ok(Value::Null)
 }
 
+/// Add (`Some`) or remove (`None`) a layer mask. Adding acts on every selected layer that can take
+/// one ([`crate::layer_multi_cmds::mask_targets`]), in one history step.
+fn set_mask(s: &mut Session, p: &Value, label: &str, mask: Option<LayerMask>) -> Result<Value> {
+    set_mask_with(s, p, label, mask, false)
+}
+
+/// [`set_mask`] that also drops the selection the mask was made from, in the same history step.
+fn set_mask_and_deselect(s: &mut Session, p: &Value, label: &str, mask: LayerMask) -> Result<Value> {
+    set_mask_with(s, p, label, Some(mask), true)
+}
+
+fn set_mask_with(s: &mut Session, p: &Value, label: &str, mask: Option<LayerMask>, deselect: bool) -> Result<Value> {
+    let ids = if mask.is_some() { crate::layer_multi_cmds::mask_targets(s, p)? } else { vec![layer_param(s, p)?] };
+    s.edit(label, |doc, _| {
+        let mask = mask.clone().map(|mask| mask_at_depth(mask, doc.depth)).transpose()?;
+        for id in &ids {
+            if mask.is_some() {
+                crate::extra_cmds::background_to_layer_for_mask(doc, *id);
+            }
+            doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?.mask = mask.clone();
+        }
+        if deselect {
+            doc.selection = None;
+        }
+        Ok(())
+    })?;
+    Ok(Value::Null)
+}
+
 /// Move a layer's pixels, linked mask and type by whole pixels (vectors move via
 /// `vector_cmds::translate_vectors`).
 pub(crate) fn try_translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i32) -> Result<()> {
@@ -1541,7 +1722,7 @@ fn merge_group(s: &mut Session, id: LayerId) -> Result<Value> {
         solo.clipped = false;
         let mut tmp = doc.clone();
         tmp.layers = vec![solo];
-        let mut merged = Layer::new(group.name.clone(), LayerContent::Raster(pixels::composite_layers(&tmp, fmt, None)?));
+        let mut merged = Layer::new(group.name.clone(), LayerContent::Raster(pixels::composite_layers_uncropped(&tmp, fmt)));
         merged.id = group.id;
         merged.opacity = group.opacity;
         merged.blend = if group.blend == photocraft_doc::BlendMode::PassThrough { photocraft_doc::BlendMode::Normal } else { group.blend };
@@ -1572,29 +1753,28 @@ mod registry_tests {
 }
 
 #[cfg(test)]
-mod xcf_merge_interaction_tests {
+mod set_props_tests {
     use super::*;
+
     #[test]
-    fn explicit_transfer_adjustments_and_auto_tone_keep_upstream_pixel_locks() {
-        use photocraft_doc::{SampleEncoding, SampleType, Size};
-        for depth in [SampleType::U16, SampleType::F32] {
-            let mut doc = Document::new("linear imported", Size::new(2, 2), ColorMode::Rgb, depth);
-            doc.sample_encoding = Some(SampleEncoding::Linear);
-            let mut layer = Layer::raster("samples", doc.pixel_format());
-            layer.surface_mut().unwrap().write_pixel(0, 0, &[0.25, 0.25, 0.25, 1.0]);
-            layer.locks.pixels = true;
-            doc.layers.push(layer);
-            let mut session = Session::new();
-            session.open_document(doc, None).unwrap();
-            let before = session.active().unwrap().doc.clone();
-            for command in ["image.adjustments.exposure", "image.autoTone", "image.autoContrast", "image.autoColor"] {
-                assert!(session.execute(command, json!({"exposure":1.0})).is_err(), "{command} changed locked imported pixels");
-                assert_eq!(session.active().unwrap().doc, before);
-            }
-            session.execute("layer.lockLayers", json!({"pixels":false})).unwrap();
-            session.execute("image.adjustments.exposure", json!({"exposure":1.0})).unwrap();
-            let value = session.active().unwrap().doc.layers[0].surface().unwrap().pixel(0, 0)[0];
-            assert!((value - 0.5).abs() < 2.0 / 65535.0, "linear integer/float transfer lost: {value}");
+    fn opacity_and_fill_outside_zero_to_one_are_refused_not_clamped() {
+        // #5242: `55` (a percentage, as the Layer Style commands take) used to become 100 %.
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("layer.setProps", json!({"opacity": 0.55, "fill": 0.4})).unwrap();
+        let layer = |s: &Session| {
+            let d = s.active().unwrap();
+            let l = d.doc.layer(d.active_layer.unwrap()).unwrap();
+            (l.opacity, l.fill_opacity)
+        };
+        assert_eq!(layer(&s), (0.55, 0.4));
+        for bad in [json!({"opacity": 55}), json!({"opacity": -0.1}), json!({"fill": 1.5}), json!({"opacity": "50%"}), json!({"opacity": 0.5, "fill": 40})] {
+            let e = s.execute("layer.setProps", bad.clone()).unwrap_err().to_string();
+            assert!(e.contains("0..1"), "{bad}: {e}");
+            assert_eq!(layer(&s), (0.55, 0.4), "{bad} left the layer alone");
         }
+        s.execute("layer.setProps", json!({"opacity": 0, "fill": 1})).unwrap();
+        assert_eq!(layer(&s), (0.0, 1.0));
     }
 }

@@ -155,8 +155,9 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 43] = [
+pub const UI_SET_FIELDS: [&str; 38] = [
     "tool",
+    "strokeTrace",
     "panels",
     "dock",
     "dockTabs",
@@ -196,9 +197,11 @@ pub const UI_SET_FIELDS: [&str; 43] = [
     "cropOverlayShow",
     "cropOverlayOrientation",
     "cropShield",
+    "cropFill",
     "shapeStroke",
     "camTransformOnDrop",
     "tileGrid",
+    "layerFilter",
 ];
 
 /// Most clicks one `ui.click` may queue (#982). Each click is a press and a release that the app
@@ -646,7 +649,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 return err("context action is unavailable");
             }
             // A pasteboard row changes a preference: the policy sees the `prefs.set` it runs.
-            let (command, params) = crate::canvas_tool_menu::engine_call(menu, id);
+            let (command, params) = crate::canvas_tool_menu::engine_call(app, menu, id);
             if let Some(authorize) = app.services.automation_command.as_ref()
                 && let Err(error) = authorize(&command, &params)
             {
@@ -776,14 +779,19 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     None => None,
                 };
                 let gradient_classic = bool_field(p, "gradientClassic")?;
-                let underline_draft = underline_draft_field(p)?;
-                let color_rotate_draft = color_rotate_draft_field(p)?;
-                let filter_stack_page = filter_stack_page_field(p)?;
-                let item_set_page = layer_page_field(p,"xcfItemSetPage",9984)?;
-                let source_page = crate::control_xcf_pages::source(p)?;
-                let resource_page = crate::control_xcf_pages::resource(p)?;
-                let composition_draft = crate::control_xcf_pages::composition(p)?;
-                let item_set_draft = item_set_draft_field(p)?;
+                // The stroke latency trace (`stroke_trace`), at runtime: on (stderr) or off. A CSV
+                // file is only for the user's own launch (`--stroke-trace <path>`): a path over the
+                // control channel would write outside the automation write root.
+                let stroke_trace = match p.get("strokeTrace") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::Bool(b)) => Some(if *b { "stderr" } else { "off" }),
+                    Some(Value::String(v)) => match v.trim() {
+                        "stderr" | "on" | "true" => Some("stderr"),
+                        "off" | "false" => Some("off"),
+                        _ => return Err("strokeTrace must be true, false, \"stderr\" or \"off\"; a CSV file is set at launch (--stroke-trace <path>)".into()),
+                    },
+                    Some(_) => return Err("strokeTrace must be true, false, \"stderr\" or \"off\"".into()),
+                };
                 // The Eyedropper's options bar (#1649): Sample Size, Sample, Show Sampling Ring.
                 let eyedropper_size = match p.get("eyedropperSampleSize") {
                     Some(v) => Some(
@@ -805,6 +813,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 let cam_transform_on_drop = bool_field(p, "camTransformOnDrop")?;
                 // Developer overlay of the active layer's storage tiles (tile_overlay.rs).
                 let tile_grid = bool_field(p, "tileGrid")?;
+                let layer_filter = p.get("layerFilter").map(|v| crate::layer_filter_ui::patched(&app.ui, v)).transpose()?;
                 // The Crop tool's overlay menu (#1919).
                 let crop_overlay = match p.get("cropOverlay") {
                     Some(v) => Some(v.as_str().and_then(crate::crop_overlay::CropOverlay::from_id).ok_or_else(|| {
@@ -824,6 +833,15 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 let crop_overlay_orientation = match uint_field(p, "cropOverlayOrientation")? {
                     Some(o) if o < 4 => Some(o as u8),
                     Some(_) => return Err("cropOverlayOrientation must be 0, 1, 2 or 3".into()),
+                    None => None,
+                };
+                // The Crop tool's Fill (#3823): "background" (Background (Default)) or "contentAware".
+                let crop_content_aware = match p.get("cropFill") {
+                    Some(v) => Some(match v.as_str() {
+                        Some("background") => false,
+                        Some("contentAware") => true,
+                        _ => return Err("cropFill must be \"background\" or \"contentAware\"".into()),
+                    }),
                     None => None,
                 };
                 // The Crop tool's gear menu: Show Cropped Area and the shield (#1919).
@@ -958,7 +976,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     }
                 }
                 if let Some(t) = tool {
-                    app.ui.tool = t;
+                    crate::tool_memory::select(app, t);
                     // Each tool keeps its own brush (#218), so switch it in before `brushSize`
                     // below sets the new tool's size.
                     crate::paint_mouse::sync_tool_brush(app);
@@ -966,6 +984,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 let gradient_before = app.ui.tool_options.clone();
                 if let Some(mode) = gradient_blend {
                     app.ui.tool_options.gradient_blend_mode = mode;
+                }
+                if let Some(v) = &stroke_trace {
+                    app.stroke_trace.set(v);
                 }
                 if let Some(classic) = gradient_classic {
                     app.ui.tool_options.gradient_classic = classic;
@@ -988,8 +1009,14 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if let Some(on) = tile_grid {
                     app.ui.view.tile_grid = on;
                 }
+                if let Some(f) = layer_filter {
+                    crate::layer_filter_ui::apply(&mut app.ui, f);
+                }
                 if let Some(k) = crop_overlay {
                     app.ui.tool_options.crop_overlay = k;
+                }
+                if let Some(on) = crop_content_aware {
+                    app.ui.tool_options.crop_content_aware = on;
                 }
                 if let Some(v) = crop_overlay_show {
                     app.ui.tool_options.crop_overlay_show = v;
@@ -1301,7 +1328,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             let secondary = matches!(button.as_str(), "secondary" | "right");
             let mods = modifiers_from(&m);
             if let Some(t) = tool {
-                app.ui.tool = t;
+                crate::tool_memory::select(app, t);
             }
             // Space held: the Crop tool moves the frame being drawn, a marquee, lasso or shape
             // being drawn moves instead of growing (hold_keys.rs). Like a modifier flag, it may be
@@ -1617,6 +1644,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Result<Value, String
                 "pos": menu.pos,
                 "tool": menu.tool,
                 "pasteboard": menu.pasteboard,
+                "guide": menu.guide,
                 "entries": context_entries(app, menu)
             })
         }),
@@ -1637,9 +1665,9 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Result<Value, String
         "gpuFallbackNotice": app.ui.gpu_fallback_notice,
         "kysOffer": app.ui.kys_offer,
         "frame": app.frame,
-        "session": photocraft_engine::inspect::session(&app.session).map_err(|error| error.to_string())?,
-        "document": app.session.active().map(photocraft_engine::inspect::document).transpose().map_err(|error| error.to_string())?,
-        "perf": {"fps": app.fps, "timings": app.perf},
+        "session": photocraft_engine::inspect::session(&app.session),
+        "document": app.session.active().map(photocraft_engine::inspect::document),
+        "perf": {"fps": app.fps, "timings": app.perf, "strokeTrace": app.stroke_trace.last},
         "brush": {"size": app.session.tools.brush.size, "hardness": app.session.tools.brush.hardness, "opacity": app.session.tools.brush.opacity},
         "distort": app.distort.describe(),
         "jobs": crate::jobs_ui::inspect(app),
@@ -1790,6 +1818,26 @@ mod tests {
     }
 
     #[test]
+    fn ui_set_turns_the_stroke_trace_on_and_off_at_runtime() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        assert!(!app.stroke_trace.enabled());
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"strokeTrace": true}))["ok"], true);
+        assert!(app.stroke_trace.enabled());
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"strokeTrace": "off"}))["ok"], true);
+        assert!(!app.stroke_trace.enabled());
+        let bad = call(&mut app, &ctx, "ui.set", json!({"strokeTrace": 3, "tool": "Pencil"}));
+        assert_eq!(bad["ok"], false);
+        // A file path isn't accepted over the channel (it would write outside the automation
+        // write root); nothing is created.
+        let path = std::env::temp_dir().join(format!("photocraft-trace-{}.csv", std::process::id()));
+        let bad = call(&mut app, &ctx, "ui.set", json!({"strokeTrace": path.to_str().unwrap(), "tool": "Pencil"}));
+        assert_eq!(bad["ok"], false);
+        assert!(!path.exists());
+        assert!(!app.stroke_trace.enabled() && app.ui.tool != crate::state::Tool::Pencil, "a rejected call applies nothing");
+    }
+
+    #[test]
     fn camera_raw_control_updates_and_commits_or_cancels_an_open_raw() {
         use photocraft_raw::testgen::{DngSpec, mosaic, scene};
         let (w, h) = (48, 32);
@@ -1814,7 +1862,11 @@ mod tests {
             assert!(app.ui.dialogs.is_empty());
             let update = json!({"id":"filter.cameraRaw","params":{"ui":{"set":{"exposure":0.5}}}});
             let original = app.session.active().unwrap().doc.clone();
-            let changed = call(&mut app, &ctx, "ui.menu.invoke", update);
+            let changed = call(&mut app, &ctx, "ui.menu.invoke", update.clone());
+            let undone = call(&mut app, &ctx, "ui.menu.invoke", json!({"id":"filter.cameraRaw","params":{"ui":{"undo":true}}}));
+            assert_eq!(undone["result"]["params"]["exposure"], 0.0, "{undone}");
+            let redone = call(&mut app, &ctx, "ui.menu.invoke", json!({"id":"filter.cameraRaw","params":{"ui":{"redo":true}}}));
+            assert_eq!(redone["result"]["params"]["exposure"], 0.5, "{redone}");
             assert_eq!(changed["ok"], true, "{changed}");
             assert_eq!(changed["result"]["params"]["exposure"], 0.5);
             assert!(app.session.active().unwrap().doc.shares_state(&original), "a preview must not commit");
@@ -2392,6 +2444,36 @@ mod tests {
         assert!(app.ui.tool_options.gradient_classic, "invalid mode must not change options");
     }
 
+    /// #5048: the Layers panel filter is drivable; a bad field changes nothing.
+    #[test]
+    fn ui_set_drives_the_layers_panel_filter() {
+        use crate::layer_filter_ui::FilterBy;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "name", "name": "ink"}}));
+        assert_eq!(ok["ok"], true, "{ok}");
+        assert_eq!((app.ui.layer_filter_by, app.ui.layer_filter_name.as_str()), (FilterBy::Name, "ink"));
+        let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "mode", "mode": "Pass Through", "kinds": ["type", "pixel", "type"]}}));
+        assert_eq!(ok["ok"], true, "{ok}");
+        assert_eq!((app.ui.layer_filter_by, app.ui.layer_filter_mode), (FilterBy::Mode, photocraft_color::BlendMode::PassThrough));
+        assert_eq!(app.ui.layer_filter, ["type", "pixel"], "kinds are kept once each");
+        assert_eq!(app.ui.layer_filter_name, "ink", "fields left out keep their value");
+        for bad in [
+            json!({"layerFilter": "name"}),
+            json!({"layerFilter": {"by": "colour"}}),
+            json!({"layerFilter": {"kinds": ["pixels"]}}),
+            json!({"layerFilter": {"kinds": "pixel"}}),
+            json!({"layerFilter": {"name": 3}}),
+            json!({"layerFilter": {"mode": "Nonsense"}}),
+            json!({"layerFilter": {"by": "kind", "extra": true}}),
+            json!({"layerFilter": {"by": "kind"}, "tileGrid": "yes"}),
+        ] {
+            let r = call(&mut app, &ctx, "ui.set", bad.clone());
+            assert_eq!(r["ok"], false, "{bad} → {r}");
+            assert_eq!(app.ui.layer_filter_by, FilterBy::Mode, "{bad} changed nothing");
+        }
+    }
+
     #[test]
     fn ui_set_toggles_the_developer_tile_grid() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -2452,6 +2534,22 @@ mod tests {
         assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["tool"], "ColorSampler");
         // The `I` key group cycles through the eyedropper tools, so the sampler is on the same key.
         assert_eq!(Tool::ColorSampler.key(), 'I');
+    }
+
+    /// #3823: the Crop tool's Fill over the control channel, reported by `ui.inspect`.
+    #[test]
+    fn ui_set_drives_the_crop_fill() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool": "crop", "cropFill": "contentAware"}))["ok"], true);
+        assert!(app.ui.tool_options.crop_content_aware);
+        assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["toolOptions"]["crop_content_aware"], true);
+        for bad in [json!("generativeExpand"), json!(true), json!(1)] {
+            assert_eq!(call(&mut app, &ctx, "ui.set", json!({"cropFill": bad}))["ok"], false, "{bad}");
+            assert!(app.ui.tool_options.crop_content_aware, "{bad}: unchanged");
+        }
+        assert_eq!(call(&mut app, &ctx, "ui.set", json!({"cropFill": "background"}))["ok"], true);
+        assert!(!app.ui.tool_options.crop_content_aware);
     }
 
     /// #1919: the Crop tool's overlay menu over the control channel, reported by `ui.inspect`.

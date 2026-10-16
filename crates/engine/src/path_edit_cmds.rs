@@ -70,10 +70,55 @@ fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(
     Ok(json!({ "name": name, "pathId":saved_id.map(|id|id.0.to_string()), "path": path }))
 }
 
-fn move_anchors(s:&mut Session,p:&Value)->Result<Value>{controlled::run(s,"path.moveAnchors",p)}
-fn move_handle(s:&mut Session,p:&Value)->Result<Value>{controlled::run(s,"path.moveHandle",p)}
-fn bend_segment(s:&mut Session,p:&Value)->Result<Value>{controlled::run(s,"path.bendSegment",p)}
-fn convert_point(s:&mut Session,p:&Value)->Result<Value>{controlled::run(s,"path.convertPoint",p)}
+fn move_anchors(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "path.moveAnchors";
+    let anchors: Vec<[usize; 2]> = p
+        .get("anchors")
+        .and_then(Value::as_array)
+        .filter(|a| !a.is_empty())
+        .ok_or_else(|| bad(CMD, "`anchors` must list [subpath, knot] pairs"))?
+        .iter()
+        .map(|a| {
+            let n = |i: usize| a.get(i).and_then(Value::as_u64).and_then(|v| usize::try_from(v).ok());
+            n(0).zip(n(1)).map(|(s, k)| [s, k]).ok_or_else(|| bad(CMD, "each anchor is [subpath, knot]"))
+        })
+        .collect::<Result<_>>()?;
+    let d = offset(CMD, p)?;
+    if p.get("curvature").and_then(Value::as_bool).unwrap_or(false) {
+        return edit_path(s, CMD, p, "Drag Anchor Points", |path| edit::move_anchors_curvature(path, &anchors, d));
+    }
+    edit_path(s, CMD, p, "Drag Anchor Points", |path| edit::move_anchors(path, &anchors, d))
+}
+
+fn move_handle(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "path.moveHandle";
+    let k = knot(CMD, p)?;
+    let h = p.get("handle").and_then(Value::as_str).and_then(Handle::parse).ok_or_else(|| bad(CMD, "`handle` must be \"in\" or \"out\""))?;
+    let to = point(CMD, p, "to")?.ok_or_else(|| bad(CMD, "missing `to`"))?;
+    let independent = p.get("independent").and_then(Value::as_bool).unwrap_or(false);
+    edit_path(s, CMD, p, "Drag Direction Point", |path| edit::move_handle(path, k, h, to, independent))
+}
+
+fn bend_segment(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "path.bendSegment";
+    let k = knot(CMD, p)?;
+    let t = match p.get("t") {
+        Some(v) => v.as_f64().filter(|t| (0.0..=1.0).contains(t)).ok_or_else(|| bad(CMD, "`t` must be between 0 and 1"))?,
+        None => 0.5,
+    };
+    let d = offset(CMD, p)?;
+    edit_path(s, CMD, p, "Drag Segment", |path| edit::bend_segment(path, k, t, d))
+}
+
+fn convert_point(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "path.convertPoint";
+    let k = knot(CMD, p)?;
+    if p.get("curvature").and_then(Value::as_bool).unwrap_or(false) {
+        return edit_path(s, CMD, p, "Convert Point", |path| edit::toggle_curvature_point(path, k));
+    }
+    let out = point(CMD, p, "out")?;
+    edit_path(s, CMD, p, "Convert Point", |path| edit::convert_point(path, k, out))
+}
 
 fn add_anchor(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.addAnchor";
@@ -120,7 +165,7 @@ pub fn specs() -> Vec<CommandSpec> {
         journal: true,
     };
     vec![
-        spec("path.moveAnchors", "Drag Anchor Points", r#""anchors":[[subpath,knot],…],"move":[dx,dy] (anchors move with their handles; Direct Selection drag)"#.into(), move_anchors),
+        spec("path.moveAnchors", "Drag Anchor Points", r#""anchors":[[subpath,knot],…],"move":[dx,dy],"curvature":bool=false (anchors move with their handles; Direct Selection drag. curvature = the Curvature Pen's drag: every smooth knot of the touched subpaths gets its handles recomputed so the curve flows through the anchors)"#.into(), move_anchors),
         spec(
             "path.moveHandle",
             "Drag Direction Point",
@@ -136,7 +181,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec(
             "path.convertPoint",
             "Convert Point",
-            r#""subpath":i,"knot":j,"out":[x,y]? (none: corner with retracted handles; given: smooth with this out handle and its mirror)"#.into(),
+            r#""subpath":i,"knot":j,"out":[x,y]? (none: corner with retracted handles; given: smooth with this out handle and its mirror),"curvature":bool=false (the Curvature Pen's double-click: toggles smooth/corner and reflows the smooth knots of the subpath; out ignored)"#.into(),
             convert_point,
         ),
         spec(
@@ -189,6 +234,36 @@ mod tests {
         assert_eq!(s.active().unwrap().history.undo_label(), Some("Drag Anchor Points"));
         assert!(s.undo());
         assert_eq!(work(&s), before);
+    }
+
+    #[test]
+    fn a_curvature_anchor_drag_reflows_the_smooth_knots() {
+        let mut s = session();
+        let smooth = |a: [f64; 2]| json!({"anchor": a, "in": a, "out": a, "smooth": true});
+        let path = json!({"subpaths": [{"closed": true, "knots": [smooth([0.0, 50.0]), smooth([100.0, 0.0]), smooth([200.0, 50.0]), smooth([100.0, 100.0])]}]});
+        s.execute("path.set", json!({"path": path})).unwrap();
+        s.execute("path.moveAnchors", json!({"anchors": [[0, 1]], "move": [0, 60], "curvature": true})).unwrap();
+        let p = work(&s);
+        let pts = [[0.0, 50.0], [100.0, 60.0], [200.0, 50.0], [100.0, 100.0]];
+        let want = photocraft_vector::edit::curvature_knots(&pts, &[false; 4], true);
+        for (k, w) in p.subpaths[0].knots.iter().zip(want) {
+            assert_eq!([[k.anchor.x, k.anchor.y], [k.in_ctrl.x, k.in_ctrl.y], [k.out_ctrl.x, k.out_ctrl.y]], w);
+        }
+        assert_eq!(s.active().unwrap().history.undo_label(), Some("Drag Anchor Points"));
+        assert!(s.execute("path.moveAnchors", json!({"anchors": [[0, 9]], "move": [1, 0], "curvature": true})).is_err());
+    }
+
+    #[test]
+    fn a_curvature_convert_toggles_the_point_and_reflows() {
+        let mut s = session();
+        s.execute("path.set", json!({"path": square()})).unwrap();
+        let before = work(&s);
+        s.execute("path.convertPoint", json!({"subpath": 0, "knot": 1, "curvature": true})).unwrap();
+        let k = work(&s).subpaths[0].knots[1];
+        assert!(k.smooth && k.in_ctrl != k.anchor && k.out_ctrl != k.anchor, "{k:?}");
+        s.execute("path.convertPoint", json!({"subpath": 0, "knot": 1, "curvature": true})).unwrap();
+        assert_eq!(work(&s), before);
+        assert!(s.execute("path.convertPoint", json!({"subpath": 0, "knot": 9, "curvature": true})).is_err());
     }
 
     #[test]

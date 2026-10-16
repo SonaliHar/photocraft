@@ -452,8 +452,16 @@ impl<'a> Reader<'a> {
         Ok(self.u32(off)? as i32 as f64 / 65536.0)
     }
     fn xyz(&self, off: usize) -> Result<[f64; 3], CmsError> {
-        Ok([self.s15f16(off)?, self.s15f16(off + 4)?, self.s15f16(off + 8)?])
+        let r = Reader { b: self.slice(off, 12)? };
+        Ok([r.s15f16(0)?, r.s15f16(4)?, r.s15f16(8)?])
     }
+}
+
+/// `base + n * size` for a count or offset read from the file, or `Truncated` when it does not
+/// fit a `usize`. Such fields reach `u32::MAX`, which overflows on 32-bit targets (wasm32):
+/// a panic with overflow checks on, a wrapped offset that reads the wrong bytes without (#4976).
+fn extent(base: usize, n: usize, size: usize) -> Result<usize, CmsError> {
+    n.checked_mul(size).and_then(|len| base.checked_add(len)).ok_or(CmsError::Truncated)
 }
 
 fn sig(s: &[u8; 4]) -> u32 {
@@ -595,14 +603,15 @@ fn parse_curve(d: &[u8]) -> Result<(Curve, usize), CmsError> {
     match r.slice(0, 4)? {
         b"curv" => {
             let n = r.u32(8)? as usize;
+            // Before any arithmetic on it: `n * 2` overflows a 32-bit `usize` (#4976).
+            if n > 1 << 20 {
+                return Err(CmsError::Invalid("curve too long".into()));
+            }
             let len = 12 + n * 2;
             match n {
                 0 => Ok((Curve::Identity, len)),
                 1 => Ok((Curve::Gamma(r.u16(12)? as f64 / 256.0), len)),
                 _ => {
-                    if n > 1 << 20 {
-                        return Err(CmsError::Invalid("curve too long".into()));
-                    }
                     let s = r.slice(12, n * 2)?;
                     let t = s.as_chunks::<2>().0.iter().map(|c| f64::from(u16::from_be_bytes([c[0], c[1]])) / 65535.0).collect();
                     Ok((Curve::Table64(t), len))
@@ -707,36 +716,8 @@ fn parse_lut(d: &[u8], a2b: bool) -> Result<Lut, CmsError> {
                 return Err(CmsError::Invalid("bad lutAB dimensions".into()));
             }
             let (ob, om, omc, oc, oa) = (r.u32(12)? as usize, r.u32(16)? as usize, r.u32(20)? as usize, r.u32(24)? as usize, r.u32(28)? as usize);
-            let matrix = |off: usize| -> Result<Stage, CmsError> {
-                let mut m = vec![0.0; 9];
-                for (k, v) in m.iter_mut().enumerate() {
-                    *v = r.s15f16(off + k * 4)?;
-                }
-                let offset = vec![r.s15f16(off + 36)?, r.s15f16(off + 40)?, r.s15f16(off + 44)?];
-                Ok(Stage::Matrix { rows: 3, cols: 3, m, offset })
-            };
-            let clut = |off: usize, cin: usize, cout: usize| -> Result<Stage, CmsError> {
-                let mut grid = Vec::with_capacity(cin);
-                for k in 0..cin {
-                    let g = r.u8(off + k)? as usize;
-                    if g < 1 {
-                        return Err(CmsError::Invalid("zero grid points".into()));
-                    }
-                    grid.push(g);
-                }
-                let prec = r.u8(off + 16)? as usize;
-                let nodes: u128 = grid.iter().map(|g| *g as u128).product();
-                if nodes * cout as u128 > MAX_CLUT_VALUES as u128 {
-                    return Err(CmsError::Invalid("CLUT too large".into()));
-                }
-                let total = nodes as usize * cout;
-                let data: Vec<f64> = match prec {
-                    1 => r.slice(off + 20, total)?.iter().map(|b| f64::from(*b) / 255.0).collect(),
-                    2 => r.slice(off + 20, total * 2)?.as_chunks::<2>().0.iter().map(|c| f64::from(u16::from_be_bytes([c[0], c[1]])) / 65535.0).collect(),
-                    _ => return Err(CmsError::Invalid(format!("CLUT precision {prec}"))),
-                };
-                Ok(Stage::Clut(Clut::try_new_f64(grid, cout, data)?))
-            };
+            let matrix = |off: usize| lut_ab_matrix(&r, off);
+            let clut = |off: usize, cin: usize, cout: usize| lut_ab_clut(&r, off, cin, cout);
             let mut stages = Vec::new();
             if ty == b"mAB " {
                 // A curves → CLUT → M curves → matrix → B curves.
@@ -783,6 +764,45 @@ fn parse_lut(d: &[u8], a2b: bool) -> Result<Lut, CmsError> {
     }
 }
 
+/// The 3×3 matrix and offset of a `mAB `/`mBA ` element at `off`, an offset stored in the file.
+fn lut_ab_matrix(r: &Reader, off: usize) -> Result<Stage, CmsError> {
+    // One bounds-checked slice, then offsets inside it: `off + 44` need not fit a `usize`.
+    let e = Reader { b: r.slice(off, 48)? };
+    let mut m = vec![0.0; 9];
+    for (k, v) in m.iter_mut().enumerate() {
+        *v = e.s15f16(k * 4)?;
+    }
+    let offset = vec![e.s15f16(36)?, e.s15f16(40)?, e.s15f16(44)?];
+    Ok(Stage::Matrix { rows: 3, cols: 3, m, offset })
+}
+
+/// The CLUT of a `mAB `/`mBA ` element at `off`, an offset stored in the file.
+fn lut_ab_clut(r: &Reader, off: usize, cin: usize, cout: usize) -> Result<Stage, CmsError> {
+    // Grid points (16 bytes), precision and padding; the samples follow.
+    let head = Reader { b: r.slice(off, 20)? };
+    let mut grid = Vec::with_capacity(cin);
+    for k in 0..cin {
+        let g = head.u8(k)? as usize;
+        if g < 1 {
+            return Err(CmsError::Invalid("zero grid points".into()));
+        }
+        grid.push(g);
+    }
+    let prec = head.u8(16)? as usize;
+    let nodes: u128 = grid.iter().map(|g| *g as u128).product();
+    if nodes * cout as u128 > MAX_CLUT_VALUES as u128 {
+        return Err(CmsError::Invalid("CLUT too large".into()));
+    }
+    let total = nodes as usize * cout;
+    let samples = extent(off, 20, 1)?;
+    let data: Vec<f32> = match prec {
+        1 => r.slice(samples, total)?.iter().map(|b| *b as f32 / 255.0).collect(),
+        2 => r.slice(samples, total * 2)?.as_chunks::<2>().0.iter().map(|c| u16::from_be_bytes([c[0], c[1]]) as f32 / 65535.0).collect(),
+        _ => return Err(CmsError::Invalid(format!("CLUT precision {prec}"))),
+    };
+    Ok(Stage::Clut(Clut::new(grid, cout, data)))
+}
+
 /// Text from `desc` (textDescriptionType), `mluc` (English or first record) or `text`.
 fn parse_text(d: &[u8]) -> String {
     let r = Reader { b: d };
@@ -798,8 +818,10 @@ fn parse_text(d: &[u8]) -> String {
             let (Ok(n), Ok(size)) = (r.u32(8), r.u32(12)) else { return String::new() };
             let mut best: Option<(usize, usize)> = None;
             for k in 0..(n as usize).min(256) {
-                let o = 16 + k * size as usize;
-                let (Ok(lang), Ok(len), Ok(off)) = (r.u16(o), r.u32(o + 4), r.u32(o + 8)) else { break };
+                // The record size comes from the file: `k * size` can overflow a 32-bit `usize`.
+                let Ok(rec) = extent(16, k, size as usize).and_then(|o| r.slice(o, 12)) else { break };
+                let rec = Reader { b: rec };
+                let (Ok(lang), Ok(len), Ok(off)) = (rec.u16(0), rec.u32(4), rec.u32(8)) else { break };
                 if best.is_none() || lang == u16::from_be_bytes(*b"en") {
                     best = Some((off as usize, len as usize));
                     if lang == u16::from_be_bytes(*b"en") {
@@ -817,245 +839,91 @@ fn parse_text(d: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod retained_encoding_tests {
+mod tests {
     use super::*;
+
+    fn be(v: u32) -> [u8; 4] {
+        v.to_be_bytes()
+    }
+
+    /// #4976: offsets and counts stored in a profile reach `u32::MAX`, which is `usize::MAX` on
+    /// 32-bit targets. The arithmetic on them must report a truncated profile, not overflow.
     #[test]
-    fn retained_encoding_borrows_exact_original_bytes_and_never_encodes_an_uncached_model() {
-        let bytes = crate::Builtin::Srgb.profile().to_bytes();
-        let parsed = Profile::parse(&bytes).unwrap();
-        let retained = parsed.encoded_bytes().unwrap();
-        assert_eq!(retained, bytes.as_slice());
-        assert_eq!(retained.as_ptr(), parsed.bytes.as_ref().unwrap().as_ptr());
-        let mut uncached = parsed.clone();
-        uncached.bytes = None;
-        assert!(uncached.encoded_bytes().is_none());
-        assert!(uncached.bytes.is_none());
-        assert_eq!(parsed.encoded_bytes(), Some(bytes.as_slice()));
+    fn offsets_at_the_top_of_the_address_space_are_truncated_not_overflowed() {
+        let bytes = [0u8; 64];
+        let r = Reader { b: &bytes };
+        for off in [usize::MAX, usize::MAX - 3, usize::MAX - 11, usize::MAX - 19, usize::MAX - 47] {
+            assert_eq!(r.xyz(off), Err(CmsError::Truncated), "xyz at {off}");
+            assert!(matches!(lut_ab_matrix(&r, off), Err(CmsError::Truncated)), "matrix at {off}");
+            assert!(matches!(lut_ab_clut(&r, off, 3, 3), Err(CmsError::Truncated)), "clut at {off}");
+        }
+        assert_eq!(extent(16, usize::MAX, 12), Err(CmsError::Truncated));
+        assert_eq!(extent(usize::MAX, 1, 1), Err(CmsError::Truncated));
+        assert_eq!(extent(16, 3, 12), Ok(52));
     }
-}
 
-impl Profile {
- pub(crate) fn controlled_retained_bytes(&self,b:&crate::control::Budget<'_>)->crate::control::Result<usize>{
-  use crate::control::Error;b.poll()?;let mut total=self.description.capacity().checked_add(self.copyright.capacity()).and_then(|n|n.checked_add(self.bytes.as_ref().map_or(0,|v|v.capacity()))).ok_or(Error::Limit("profile retention"))?;
-  for lut in self.a2b.iter().chain(&self.b2a).flatten(){b.poll()?;if lut.stages.len()>4096{return Err(Error::Limit("profile stage count"));}total=total.checked_add(lut.stages.capacity().checked_mul(std::mem::size_of::<Stage>()).ok_or(Error::Limit("profile stage capacity"))?).ok_or(Error::Limit("profile retention"))?;for stage in &lut.stages{b.poll()?;total=total.checked_add(stage.controlled_bytes()?).ok_or(Error::Limit("profile retention"))?;}}
-  for c in self.trc.iter().flatten().chain(self.gray_trc.iter()){b.poll()?;total=total.checked_add(c.controlled_bytes()?).ok_or(Error::Limit("profile curve retention"))?;}Ok(total)
- }
- pub(crate) fn controlled_side_cost(&self,input:bool,b:&crate::control::Budget<'_>)->crate::control::Result<(usize,u64,usize)>{
-  use crate::control::Error;b.poll()?;let luts=if input{&self.a2b}else{&self.b2a};
-  if let Some(lut)=Self::lut_for(luts,Intent::RelativeColorimetric){if lut.stages.len()>4096{return Err(Error::Limit("profile stage count"));}let count=lut.stages.len().checked_add(1).ok_or(Error::Limit("profile stages"))?;let mut bytes=count.checked_mul(std::mem::size_of::<Stage>()).ok_or(Error::Limit("profile stage storage"))?;let mut work=128u64;for stage in &lut.stages{b.poll()?;bytes=bytes.checked_add(stage.controlled_bytes()?).ok_or(Error::Limit("profile copied bytes"))?;work=work.checked_add(stage.controlled_work()?).ok_or(Error::Limit("profile evaluation work"))?;}return Ok((bytes,work,count));}
-  let mut bytes=2*std::mem::size_of::<Stage>()+128;let mut work=256u64;
-  match self.color_space{ColorSpace::Rgb=>{let curves=self.trc.as_ref().ok_or_else(||crate::control::invalid("RGB profile without TRC or LUT"))?;if self.matrix.is_none(){return Err(crate::control::invalid("RGB profile without matrix or LUT"));}bytes+=3*std::mem::size_of::<Curve>();for c in curves{b.poll()?;bytes=bytes.checked_add(c.controlled_bytes()?).ok_or(Error::Limit("profile copied curves"))?;work=work.checked_add(if input{128}else{c.controlled_work()}).ok_or(Error::Limit("profile curve work"))?;}},ColorSpace::Gray=>{let c=self.gray_trc.as_ref().ok_or_else(||crate::control::invalid("gray profile without kTRC"))?;bytes=bytes.checked_add(c.controlled_bytes()?).and_then(|n|n.checked_add(std::mem::size_of::<Curve>())).ok_or(Error::Limit("profile copied curve"))?;work=work.checked_add(if input{128}else{c.controlled_work()}).ok_or(Error::Limit("profile curve work"))?;},ColorSpace::Lab|ColorSpace::Xyz=>{},_=>return Err(crate::CmsError::Unsupported("profile without relative-colorimetric LUT".into()).into())}
-  Ok((bytes,work,2))
- }
- pub(crate) fn relative_side_controlled(&self,input:bool,b:&mut crate::control::Budget<'_>)->crate::control::Result<(Vec<Stage>,Pcs)>{
-  use crate::control::invalid;b.poll()?;let (_,_,count)=self.controlled_side_cost(input,b)?;let mut out=b.reserve(count)?;
-  let luts=if input{&self.a2b}else{&self.b2a};if let Some(lut)=Self::lut_for(luts,Intent::RelativeColorimetric){
-   if input{for stage in &lut.stages{out.push(stage.copy_controlled(b)?);}out.push(decode_pcs(self.pcs,lut.kind));}
-   else{out.push(encode_pcs(self.pcs,lut.kind));for stage in &lut.stages{out.push(stage.copy_controlled(b)?);}}return Ok((out,self.pcs));
-  }
-  let matrix=|rows,cols,m:&[f64],offset:&[f64],b:&mut crate::control::Budget<'_>|->crate::control::Result<Stage>{Ok(Stage::Matrix{rows,cols,m:b.copy(m)?,offset:b.copy(offset)?})};
-  match self.color_space{
-   ColorSpace::Rgb=>{let m=self.matrix.as_ref().ok_or_else(||invalid("RGB profile without matrix"))?;let curves=self.trc.as_ref().ok_or_else(||invalid("RGB profile without TRC"))?;
-    let mut copied=b.reserve(3)?;for curve in curves{copied.push(curve.copy_controlled(b)?);}
-    let m=if input{*m}else{math::invert(m).ok_or_else(||invalid("singular colorant matrix"))?};let mut flat=[0f64;9];for (dst,value) in flat.iter_mut().zip(m.iter().flatten()){*dst=*value;}
-    if input{out.push(Stage::Curves(copied));out.push(matrix(3,3,&flat,&[0.0;3],b)?);}else{out.push(matrix(3,3,&flat,&[0.0;3],b)?);out.push(Stage::InvCurves(copied));}Ok((out,Pcs::Xyz))
-   },ColorSpace::Gray=>{let curve=self.gray_trc.as_ref().ok_or_else(||invalid("gray profile without kTRC"))?;let mut curves=b.reserve(1)?;curves.push(curve.copy_controlled(b)?);
-    if input{out.push(Stage::Curves(curves));let values=if self.pcs==Pcs::Lab{[100.0,0.0,0.0]}else{math::D50};out.push(matrix(3,1,&values,&[0.0;3],b)?);}else{let values=if self.pcs==Pcs::Lab{[0.01,0.0,0.0]}else{[0.0,1.0,0.0]};out.push(matrix(1,3,&values,&[0.0],b)?);out.push(Stage::InvCurves(curves));}Ok((out,self.pcs))
-   },ColorSpace::Lab=>{out.push(if input{Stage::DecodeLabV4}else{Stage::EncodeLabV4});Ok((out,Pcs::Lab))},ColorSpace::Xyz=>{out.push(if input{Stage::DecodeXyz}else{Stage::EncodeXyz});Ok((out,Pcs::Xyz))},_=>Err(crate::CmsError::Unsupported("profile without relative-colorimetric LUT".into()).into())
-  }
- }
-}
-
-/// Public model accounting; cached encoded ICC bytes remain shared, not copied.
-#[derive(Clone,Copy,Debug)]
-pub struct ProfileCloneRequirements {pub retained_bytes:usize,pub cloned_model_bytes:usize,pub work_units:u64}
-impl Profile {
- pub fn clone_requirements_with_control(&self,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<ProfileCloneRequirements>{
-  use crate::control::{Budget,Error};let b=Budget::new(limits,cancelled)?;let retained=self.controlled_retained_bytes(&b)?;
-  let cached=self.bytes.as_ref().map_or(0,|v|v.capacity());let cloned=retained.checked_sub(cached).ok_or(Error::Limit("profile clone accounting"))?;
-  b.admit(retained.checked_add(cloned).ok_or(Error::Limit("profile clone peak"))?,cloned as u64)?;
-  Ok(ProfileCloneRequirements{retained_bytes:retained,cloned_model_bytes:cloned,work_units:cloned as u64})
- }
- /// Fallible cooperative public-model clone. No parsing/encoding/CMS policy is
- /// introduced; retained original ICC Arc and cached hash are preserved.
- pub fn try_clone_with_control(&self,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<Self>{
-  use crate::control::Budget;let r=self.clone_requirements_with_control(limits,cancelled)?;let mut b=Budget::new(limits,cancelled)?;b.retained(r.retained_bytes)?;
-  let string=|v:&str,b:&mut Budget<'_>|->crate::control::Result<String>{String::from_utf8(b.copy(v.as_bytes())?).map_err(|_|crate::control::invalid("profile string encoding"))};
-  let mut trc=None;if let Some(curves)=&self.trc{trc=Some([curves[0].copy_controlled(&mut b)?,curves[1].copy_controlled(&mut b)?,curves[2].copy_controlled(&mut b)?]);}
-  let gray_trc=self.gray_trc.as_ref().map(|c|c.copy_controlled(&mut b)).transpose()?;
-  let lut=|value:&Option<Lut>,b:&mut Budget<'_>|->crate::control::Result<Option<Lut>>{match value{None=>Ok(None),Some(l)=>{let mut stages=b.reserve(l.stages.len())?;for stage in &l.stages{b.poll()?;stages.push(stage.copy_controlled(b)?);}Ok(Some(Lut{kind:l.kind,inputs:l.inputs,outputs:l.outputs,stages}))}}};
-  let a2b=[lut(&self.a2b[0],&mut b)?,lut(&self.a2b[1],&mut b)?,lut(&self.a2b[2],&mut b)?];let b2a=[lut(&self.b2a[0],&mut b)?,lut(&self.b2a[1],&mut b)?,lut(&self.b2a[2],&mut b)?];
-  let result=Self{version:self.version,class:self.class,color_space:self.color_space,pcs:self.pcs,rendering_intent:self.rendering_intent,description:string(&self.description,&mut b)?,copyright:string(&self.copyright,&mut b)?,white_point:self.white_point,black_point:self.black_point,chad:self.chad,matrix:self.matrix,trc,gray_trc,a2b,b2a,bytes:self.bytes.as_ref().map(std::sync::Arc::clone),hash:self.hash.clone()};
-  b.poll()?;Ok(result)
- }
-}
-
-/// Source public-model retention and exact final Gray-as-RGB allocations.
-/// Discarded LUTs/cached ICC bytes remain source-owned and are never copied.
-#[derive(Clone,Copy,Debug)]
-pub struct GrayAsRgbRequirements {pub retained_bytes:usize,pub staged_bytes:usize,pub work_units:u64}
-impl Profile {
- pub fn gray_as_rgb_requirements_with_control(&self,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<Option<GrayAsRgbRequirements>>{
-  use crate::control::{Budget,Error};let b=Budget::new(limits,cancelled)?;
-  let Some(curve)=&self.gray_trc else{return Ok(None);};if self.pcs!=Pcs::Xyz{return Ok(None);}
-  let retained=self.controlled_retained_bytes(&b)?;
-  let text=self.description.len().checked_add(" (as RGB)".len()).and_then(|n|n.checked_add(self.copyright.len())).ok_or(Error::Limit("gray-as-RGB description length"))?;
-  let staged=text.checked_add(curve.controlled_bytes()?.checked_mul(3).ok_or(Error::Limit("gray-as-RGB curves"))?).ok_or(Error::Limit("gray-as-RGB model"))?;
-  let work=staged as u64;b.admit(retained.checked_add(staged).ok_or(Error::Limit("gray-as-RGB peak"))?,work)?;
-  Ok(Some(GrayAsRgbRequirements{retained_bytes:retained,staged_bytes:staged,work_units:work}))
- }
- /// Controlled equivalent of gray_as_rgb for an already-resolved profile.
- /// Preserves its legacy interpretation exactly; performs no parse/encoding.
- pub fn gray_as_rgb_with_control(&self,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<Option<Self>>{
-  use crate::control::{Budget,Error};let Some(r)=self.gray_as_rgb_requirements_with_control(limits,cancelled)? else{return Ok(None);};
-  let mut b=Budget::new(limits,cancelled)?;b.retained(r.retained_bytes)?;
-  let curve=self.gray_trc.as_ref().ok_or_else(||crate::control::invalid("gray-as-RGB curve disappeared"))?;
-  let suffix=" (as RGB)";let count=self.description.len().checked_add(suffix.len()).ok_or(Error::Limit("gray-as-RGB description length"))?;
-  let mut text=b.reserve(count)?;for part in self.description.as_bytes().chunks(1024){b.work(part.len() as u64)?;text.extend_from_slice(part);}b.work(suffix.len() as u64)?;text.extend_from_slice(suffix.as_bytes());
-  let description=String::from_utf8(text).map_err(|_|crate::control::invalid("gray-as-RGB description encoding"))?;
-  let copyright=String::from_utf8(b.copy(self.copyright.as_bytes())?).map_err(|_|crate::control::invalid("gray-as-RGB copyright encoding"))?;
-  let trc=Some([curve.copy_controlled(&mut b)?,curve.copy_controlled(&mut b)?,curve.copy_controlled(&mut b)?]);
-  let w=math::D50;let matrix=Some([[w[0]/3.0;3],[w[1]/3.0;3],[w[2]/3.0;3]]);
-  let result=Self{version:self.version,class:self.class,color_space:ColorSpace::Rgb,pcs:self.pcs,rendering_intent:self.rendering_intent,description,copyright,white_point:self.white_point,black_point:self.black_point,chad:self.chad,matrix,trc,gray_trc:None,a2b:Default::default(),b2a:Default::default(),bytes:None,hash:Default::default()};
-  b.poll()?;Ok(Some(result))
- }
-}
-#[cfg(test)]
-mod controlled_gray_rgb_tests {
- use super::*;
- #[test]
- fn resolved_gray_rgb_matches_legacy_model_and_uncached_encoding_state(){
-  for builtin in [crate::Builtin::SGray,crate::Builtin::GrayGamma22,crate::Builtin::DotGain20Compat]{
-   let source=builtin.profile();let before=source.clone();let expected=source.gray_as_rgb().unwrap();
-   let controlled=source.gray_as_rgb_with_control(crate::control::Limits::default(),&||false).unwrap().unwrap();
-   assert_eq!(controlled,expected);assert!(controlled.encoded_bytes().is_none());assert!(controlled.hash.get().is_none());assert_eq!(source,&before);
-  }
- }
- #[test]
- fn exact_table_curve_and_cached_source_identity_remain_source_owned(){
-  let mut source=crate::Builtin::SGray.profile().clone();source.description="Gray λ".into();source.gray_trc=Some(Curve::Table64(vec![0.0,0.5+2f64.powi(-45),1.0]));let _=source.content_hash();let before=source.clone();
-  let expected=source.gray_as_rgb().unwrap();let controlled=source.gray_as_rgb_with_control(crate::control::Limits::default(),&||false).unwrap().unwrap();
-  assert_eq!(controlled,expected);assert_eq!(controlled.description,"Gray λ (as RGB)");assert!(controlled.bytes.is_none()&&controlled.hash.get().is_none());assert_eq!(source,before);
- }
- #[test]
- fn unsupported_cancel_and_tiny_budget_are_explicit_without_source_mutation(){
-  let source=crate::Builtin::SGray.profile();let before=source.clone();
-  assert!(matches!(source.gray_as_rgb_with_control(crate::control::Limits::default(),&||true),Err(crate::control::Error::Cancelled)));
-  assert!(matches!(source.gray_as_rgb_with_control(crate::control::Limits{resident_bytes:1,work_units:1},&||false),Err(crate::control::Error::Limit(_))));
-  assert!(crate::Builtin::LabD50.profile().gray_as_rgb_with_control(crate::control::Limits::default(),&||false).unwrap().is_none());
-  let mut lab=source.clone();lab.pcs=Pcs::Lab;assert_eq!(lab.gray_as_rgb(),None);assert_eq!(lab.gray_as_rgb_with_control(crate::control::Limits::default(),&||false).unwrap(),None);assert_eq!(source,&before);
- }
-}
-
-impl Profile {
-    /// Borrowed encoding admission, including source model and generated buffers.
-    pub fn encode_requirements_with_control(&self,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<EncodeRequirements> {
-        crate::write::requirements_with_control(self,limits,cancelled)
+    #[test]
+    fn a_curve_count_is_checked_before_its_length_is_computed() {
+        let mut d = b"curv\0\0\0\0".to_vec();
+        d.extend(be(u32::MAX));
+        assert_eq!(parse_curve(&d).map(|c| c.1), Err(CmsError::Invalid("curve too long".into())));
+        // Controls: the identity and a two-point table still parse with their lengths.
+        let mut d = b"curv\0\0\0\0".to_vec();
+        d.extend(be(0));
+        assert_eq!(parse_curve(&d).map(|c| c.1), Ok(12));
+        let mut d = b"curv\0\0\0\0".to_vec();
+        d.extend(be(2));
+        d.extend([0, 0, 0xFF, 0xFF]);
+        assert_eq!(parse_curve(&d).map(|c| c.1), Ok(16));
     }
-    /// Encode exactly the legacy ICC model recipe with controlled admission,
-    /// replacing cached bytes and resetting the hash only after success.
-    pub fn with_encoded_bytes_with_control(mut self,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<Self> {
-        let bytes=crate::write::encode_with_control(&self,limits,cancelled)?;
-        if cancelled(){return Err(crate::control::Error::Cancelled);}
-        self.bytes=Some(std::sync::Arc::new(bytes));
-        self.hash=Default::default();
-        Ok(self)
+
+    #[test]
+    fn lut_ab_elements_at_hostile_offsets_are_rejected() {
+        // A 3→3 lutAtoB with identity B curves at byte 32; then its B-curve, matrix and CLUT
+        // offsets in turn point at the end of a 32-bit file.
+        let lut = |b: u32, matrix: u32, m: u32, clut: u32, a: u32| {
+            let mut d = b"mAB \0\0\0\0".to_vec();
+            d.extend([3, 3, 0, 0]);
+            for v in [b, matrix, m, clut, a] {
+                d.extend(be(v));
+            }
+            for _ in 0..3 {
+                d.extend(b"curv\0\0\0\0");
+                d.extend(be(0));
+            }
+            d
+        };
+        assert!(parse_lut(&lut(32, 0, 0, 0, 0), true).is_ok(), "the control parses");
+        let top = u32::MAX - 8;
+        assert!(parse_lut(&lut(top, 0, 0, 0, 0), true).is_err(), "B curves offset");
+        assert!(parse_lut(&lut(32, top, 32, 0, 0), true).is_err(), "matrix offset");
+        assert!(parse_lut(&lut(32, 0, 0, top, 32), true).is_err(), "CLUT offset");
     }
-    /// Cached bytes are shared exactly; uncached models use the controlled writer.
-    /// Fixed-size Arc wrapper allocation remains standard-library managed.
-    pub fn to_bytes_with_control(&self,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<std::sync::Arc<Vec<u8>>> {
-        let budget=crate::control::Budget::new(limits,cancelled)?;
-        if let Some(bytes)=&self.bytes {budget.admit(bytes.capacity(),0)?;budget.poll()?;return Ok(std::sync::Arc::clone(bytes));}
-        let bytes=crate::write::encode_with_control(self,limits,cancelled)?;
-        budget.poll()?;Ok(std::sync::Arc::new(bytes))
+
+    #[test]
+    fn multilingual_records_with_a_huge_record_size_give_the_first_record() {
+        let record = |lang: &[u8; 2], len: u32, off: u32| {
+            let mut r = lang.to_vec();
+            r.extend(b"US");
+            r.extend(be(len));
+            r.extend(be(off));
+            r
+        };
+        // Two records of the standard 12 bytes: the English one wins.
+        let mut d = b"mluc\0\0\0\0".to_vec();
+        d.extend(be(2));
+        d.extend(be(12));
+        d.extend(record(b"de", 4, 40));
+        d.extend(record(b"en", 4, 44));
+        d.extend([0, b'D', 0, b'E', 0, b'E', 0, b'N']);
+        assert_eq!(parse_text(&d), "EN");
+        // A record size of u32::MAX: the second record lies past any file, so the first is used.
+        d[12..16].copy_from_slice(&be(u32::MAX));
+        assert_eq!(parse_text(&d), "DE");
+        // No records at all.
+        let mut d = b"mluc\0\0\0\0".to_vec();
+        d.extend(be(u32::MAX));
+        d.extend(be(u32::MAX));
+        assert_eq!(parse_text(&d), "");
     }
-}
-
-// Intent-aware additive side recipe for cooperative Transform construction.
-impl Profile {
- pub(crate) fn selected_side_cost(&self,input:bool,intent:Intent,b:&crate::control::Budget<'_>)->crate::control::Result<(usize,u64,usize)>{
-  self.selected_side_cost_override(input,intent,None,b)
- }
- pub(crate) fn selected_side_cost_override(&self,input:bool,intent:Intent,override_curve:Option<&Curve>,b:&crate::control::Budget<'_>)->crate::control::Result<(usize,u64,usize)>{
-  use crate::control::Error;b.poll()?;let luts=if input{&self.a2b}else{&self.b2a};
-  if let Some(lut)=Self::lut_for(luts,intent){if override_curve.is_some(){return Err(crate::control::invalid("effective transfer override of LUT side"));}if lut.stages.len()>4096{return Err(Error::Limit("profile stage count"));}let count=lut.stages.len().checked_add(1).ok_or(Error::Limit("profile stages"))?;let mut bytes=count.checked_mul(std::mem::size_of::<Stage>()).ok_or(Error::Limit("profile stage storage"))?;let mut work=128u64;for stage in &lut.stages{b.poll()?;bytes=bytes.checked_add(stage.controlled_bytes()?).ok_or(Error::Limit("profile copied bytes"))?;work=work.checked_add(stage.controlled_work()?).ok_or(Error::Limit("profile evaluation work"))?;}return Ok((bytes,work,count));}
-  let mut bytes=2*std::mem::size_of::<Stage>()+128;let mut work=256u64;
-  match self.color_space{ColorSpace::Rgb=>{let curves:[&Curve;3]=if let Some(curve)=override_curve{[curve;3]}else{self.trc.as_ref().ok_or_else(||crate::control::invalid("RGB profile without TRC or LUT"))?.each_ref()};if self.matrix.is_none(){return Err(crate::control::invalid("RGB profile without matrix or LUT"));}bytes+=3*std::mem::size_of::<Curve>();for c in curves{b.poll()?;bytes=bytes.checked_add(c.controlled_bytes()?).ok_or(Error::Limit("profile copied curves"))?;work=work.checked_add(if input{128}else{c.controlled_work()}).ok_or(Error::Limit("profile curve work"))?;}},ColorSpace::Gray=>{let c=override_curve.or(self.gray_trc.as_ref()).ok_or_else(||crate::control::invalid("gray profile without kTRC"))?;bytes=bytes.checked_add(c.controlled_bytes()?).and_then(|n|n.checked_add(std::mem::size_of::<Curve>())).ok_or(Error::Limit("profile copied curve"))?;work=work.checked_add(if input{128}else{c.controlled_work()}).ok_or(Error::Limit("profile curve work"))?;},ColorSpace::Lab|ColorSpace::Xyz=>{},_=>return Err(crate::CmsError::Unsupported("profile without relative-colorimetric LUT".into()).into())}
-  Ok((bytes,work,2))
- }
- pub(crate) fn selected_side_controlled(&self,input:bool,intent:Intent,b:&mut crate::control::Budget<'_>)->crate::control::Result<(Vec<Stage>,Pcs)>{
-  use crate::control::invalid;b.poll()?;let (_,_,count)=self.selected_side_cost(input,intent,b)?;let mut out=b.reserve(count)?;
-  let luts=if input{&self.a2b}else{&self.b2a};if let Some(lut)=Self::lut_for(luts,intent){
-   if input{for stage in &lut.stages{out.push(stage.copy_controlled(b)?);}out.push(decode_pcs(self.pcs,lut.kind));}
-   else{out.push(encode_pcs(self.pcs,lut.kind));for stage in &lut.stages{out.push(stage.copy_controlled(b)?);}}return Ok((out,self.pcs));
-  }
-  let matrix=|rows,cols,m:&[f64],offset:&[f64],b:&mut crate::control::Budget<'_>|->crate::control::Result<Stage>{Ok(Stage::Matrix{rows,cols,m:b.copy(m)?,offset:b.copy(offset)?})};
-  match self.color_space{
-   ColorSpace::Rgb=>{let m=self.matrix.as_ref().ok_or_else(||invalid("RGB profile without matrix"))?;let curves=self.trc.as_ref().ok_or_else(||invalid("RGB profile without TRC"))?;
-    let mut copied=b.reserve(3)?;for curve in curves{copied.push(curve.copy_controlled(b)?);}
-    let m=if input{*m}else{math::invert(m).ok_or_else(||invalid("singular colorant matrix"))?};let mut flat=[0f64;9];for (dst,value) in flat.iter_mut().zip(m.iter().flatten()){*dst=*value;}
-    if input{out.push(Stage::Curves(copied));out.push(matrix(3,3,&flat,&[0.0;3],b)?);}else{out.push(matrix(3,3,&flat,&[0.0;3],b)?);out.push(Stage::InvCurves(copied));}Ok((out,Pcs::Xyz))
-   },ColorSpace::Gray=>{let curve=self.gray_trc.as_ref().ok_or_else(||invalid("gray profile without kTRC"))?;let mut curves=b.reserve(1)?;curves.push(curve.copy_controlled(b)?);
-    if input{out.push(Stage::Curves(curves));let values=if self.pcs==Pcs::Lab{[100.0,0.0,0.0]}else{math::D50};out.push(matrix(3,1,&values,&[0.0;3],b)?);}else{let values=if self.pcs==Pcs::Lab{[0.01,0.0,0.0]}else{[0.0,1.0,0.0]};out.push(matrix(1,3,&values,&[0.0],b)?);out.push(Stage::InvCurves(curves));}Ok((out,self.pcs))
-   },ColorSpace::Lab=>{out.push(if input{Stage::DecodeLabV4}else{Stage::EncodeLabV4});Ok((out,Pcs::Lab))},ColorSpace::Xyz=>{out.push(if input{Stage::DecodeXyz}else{Stage::EncodeXyz});Ok((out,Pcs::Xyz))},_=>Err(crate::CmsError::Unsupported("profile without relative-colorimetric LUT".into()).into())
-  }
- }
-}
-impl Profile {
- pub(crate) fn selected_lut(&self,input:bool,intent:Intent)->Option<&Lut>{Self::lut_for(if input{&self.a2b}else{&self.b2a},intent)}
-}
-
-/// Borrowed profile plus prospective selected side storage; no pipeline is copied.
-#[derive(Clone, Copy, Debug)]
-pub struct SidePipelineRequirements {
- pub retained_profile_bytes: usize,
- pub staged_bytes: usize,
- pub peak_resident_bytes: usize,
- pub work_units: u64,
-}
-impl Profile {
- pub fn side_requirements_with_control(&self, input: bool, intent: Intent, limits: crate::control::Limits, cancelled: &dyn Fn() -> bool) -> crate::control::Result<SidePipelineRequirements> {
-  use crate::control::{Budget, Error};
-  let budget=Budget::new(limits,cancelled)?;
-  let retained=self.controlled_retained_bytes(&budget)?;
-  let (staged,side_work,_)=self.selected_side_cost(input,intent,&budget)?;
-  let work=side_work.checked_add(u64::try_from(staged).map_err(|_|Error::Limit("profile side copy work"))?).ok_or(Error::Limit("profile side copy work"))?;
-  let peak=retained.checked_add(staged).ok_or(Error::Limit("profile side storage"))?;
-  budget.admit(peak,work)?;
-  Ok(SidePipelineRequirements{retained_profile_bytes:retained,staged_bytes:staged,peak_resident_bytes:peak,work_units:work})
- }
- fn side_with_control(&self,input:bool,intent:Intent,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<(Vec<Stage>,Pcs)> {
-  let required=self.side_requirements_with_control(input,intent,limits,cancelled)?;
-  let mut budget=crate::control::Budget::new(limits,cancelled)?;
-  budget.retained(required.retained_profile_bytes)?;
-  let output=self.selected_side_controlled(input,intent,&mut budget)?;
-  budget.poll()?;Ok(output)
- }
- /// Exact device_to_pcs recipe with cooperative copying, without optimizer changes.
- pub fn device_to_pcs_with_control(&self,intent:Intent,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<(Vec<Stage>,Pcs)> {self.side_with_control(true,intent,limits,cancelled)}
- /// Exact pcs_to_device recipe with cooperative copying, without optimizer changes.
- pub fn pcs_to_device_with_control(&self,intent:Intent,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<(Vec<Stage>,Pcs)> {self.side_with_control(false,intent,limits,cancelled)}
-}
-
-#[cfg(test)]
-mod side_pipeline_control_tests {
- use super::*;
- #[test]
- fn controlled_sides_preserve_relative_stage_order_and_native_words() {
-  for builtin in [crate::Builtin::Srgb,crate::Builtin::GrayGamma22,crate::Builtin::LabD50] {
-   let p=builtin.profile();
-   for input in [true,false] {
-    let old=if input{p.device_to_pcs(Intent::RelativeColorimetric)}else{p.pcs_to_device(Intent::RelativeColorimetric)}.unwrap();
-    let controlled=if input{p.device_to_pcs_with_control(Intent::RelativeColorimetric,crate::control::Limits::default(),&||false)}else{p.pcs_to_device_with_control(Intent::RelativeColorimetric,crate::control::Limits::default(),&||false)}.unwrap();
-    assert_eq!(old,controlled);
-   }
-  }
- }
- #[test]
- fn side_admission_and_cancellation_do_not_copy_or_change_profile() {
-  let p=crate::Builtin::Srgb.profile();let before=p.to_bytes();
-  assert!(matches!(p.device_to_pcs_with_control(Intent::RelativeColorimetric,crate::control::Limits{resident_bytes:1,work_units:1},&||false),Err(crate::control::Error::Limit(_))));
-  assert!(matches!(p.pcs_to_device_with_control(Intent::RelativeColorimetric,crate::control::Limits::default(),&||true),Err(crate::control::Error::Cancelled)));
-  assert_eq!(p.to_bytes().as_slice(),before.as_slice());
- }
 }

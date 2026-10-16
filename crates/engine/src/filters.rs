@@ -174,8 +174,9 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
 /// Runs filter command `id` with JSON `params` on `surf` (the pixel function behind every
 /// `filter.*` command; smart filters re-run it on re-render). `bounds` frames distortions;
 /// `selection` limits the result. Like layer filters, neighbourhood filters repeat the edge pixels
-/// of `canvas` ∪ the surface's content instead of fading in transparency, and the output is
-/// clipped to it. `None` for ids that aren't pixel filters.
+/// `None` for ids that aren't pixel filters. `Err` when the requesting session's authority denies
+/// the filter's params (an ambient path the session may not read): the caller must surface the
+/// error rather than render unfiltered pixels.
 pub fn apply_filter_to_surface(
     id: &str,
     params: &Value,
@@ -183,44 +184,36 @@ pub fn apply_filter_to_surface(
     bounds: photocraft_geom::Rect,
     selection: Option<&photocraft_raster::Surface>,
     canvas: photocraft_geom::Rect,
-) -> Option<photocraft_raster::Surface> {
-    apply_filter_to_surface_with_transfer(id, params, surf, bounds, selection, canvas, None)
-}
-
-/// As [`apply_filter_to_surface`], with an explicit document transfer for adjustment filters.
-pub fn apply_filter_to_surface_with_transfer(
-    id: &str,
-    params: &Value,
-    surf: &photocraft_raster::Surface,
-    bounds: photocraft_geom::Rect,
-    selection: Option<&photocraft_raster::Surface>,
-    canvas: photocraft_geom::Rect,
-    transfer: Option<photocraft_compose::adjust::Transfer>,
-) -> Option<photocraft_raster::Surface> {
+) -> Result<Option<photocraft_raster::Surface>> {
+    // Replays bypass command dispatch; nested paths must still obey the requesting session's
+    // authority, including adjustment LUTs and plug-ins, before any resolver can read them.
+    crate::jobs::authorize_render_command(id, params)?;
     // Liquify / Puppet Warp / Perspective Warp smart filters (distort_cmds).
     if let Some(out) = crate::distort_cmds::apply_to_surface(id, params, surf, canvas) {
-        return Some(out);
+        return Ok(Some(out));
     }
     // Lens Correction / Adaptive Wide Angle / Camera Raw smart filters (lens_cmds).
     if let Some(out) = crate::lens_cmds::apply_to_surface(id, params, surf, canvas) {
-        return Some(out);
+        return Ok(Some(out));
     }
     // Image › Adjustments recorded as smart filters (Levels, Curves, Shadows/Highlights… from PSD).
     if let Some(kind) = id.strip_prefix("image.adjustments.") {
-        return crate::adjust_cmds::adjust_as_filter(kind, params, surf, transfer);
+        return Ok(crate::adjust_cmds::adjust_as_filter(kind, params, surf));
     }
     // WebAssembly plug-in smart filters (plugin_cmds).
     if id == crate::plugin_cmds::RUN {
-        return crate::plugin_cmds::apply_to_surface(id, params, surf, selection, canvas);
+        return Ok(crate::plugin_cmds::apply_to_surface(id, params, surf, selection, canvas));
     }
-    let fp = params_for(id, params)?;
-    if matches!(surf.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64) && !matches!(fp, FilterParams::Invert) {
-        return None;
+    let Some(mut fp) = params_for(id, params) else { return Ok(None) };
+    // A map that can no longer be read (moved or deleted since) leaves the pixels alone, like an
+    // unknown filter; the command itself already refused an unreadable map when it was added.
+    if crate::filters_ext::resolve_map_path(&mut fp, params).is_err() {
+        return Ok(None);
     }
     let sel_bounds = selection.map(photocraft_raster::Surface::content_bounds);
     let content = surf.content_bounds();
     let area = algo::output_area(&fp, content, bounds, sel_bounds);
-    Some(algo::apply_in(surf, &fp, area, bounds, selection, canvas.union(&content)))
+    Ok(Some(algo::apply_in(surf, &fp, area, bounds, selection, canvas.union(&content))))
 }
 
 pub(crate) fn has_filterable_layer(s: &Session) -> std::result::Result<(), String> {
@@ -478,7 +471,6 @@ mod tests {
         if reveal_selection {
             s.execute("select.all", json!({})).unwrap();
             s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
-            s.execute("select.deselect", json!({})).unwrap();
         } else {
             s.execute("layer.layerMask.revealAll", json!({})).unwrap();
         }

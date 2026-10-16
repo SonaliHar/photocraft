@@ -1334,159 +1334,17 @@ impl Loader<'_> {
                 }
             }
         }
-        let id = if self.preserve_ids {
-            self.max_id = self.max_id.max(m.id);
-            DocId(m.id)
-        } else {
-            DocId::fresh()
-        };
-        let selection_channel_id = m.selection_channel_id.map(|id| self.channel_id(Some(id))).transpose()?;
-        let mut xcf_state = m
-            .xcf_state
-            .as_ref()
-            .map(|hash| -> Result<photocraft_doc::XcfState> {
-                let bytes = self.fetch.blob_bounded_with(hash, 256 << 20, control)?;
-                if bytes.len() > 256 << 20 {
-                    return Err(FormatError::LimitExceeded("XCF editable state".into()));
-                }
-                self.fetch.model_reserve(
-                    (bytes.len() as u64).checked_mul(64).ok_or_else(|| FormatError::LimitExceeded("owned editable-state model envelope".into()))?,
-                )?;
-                decode_xcf_state(&bytes, control)
-            })
-            .transpose()?;
-        if m.xcf_filter_masks.len() > 10000 {
-            return Err(FormatError::LimitExceeded("filter masks".into()));
-        }
-        if (!m.xcf_filter_masks.is_empty() || !m.xcf_source_caches.is_empty()) && xcf_state.is_none() {
-            return Err(FormatError::corrupt("filter masks lack editable state"));
-        }
-        if let Some(state) = &mut xcf_state {
-            if m.xcf_source_caches.len() > 10000 {
-                return Err(FormatError::LimitExceeded("source caches".into()));
-            }
-            let mut owners = std::collections::BTreeSet::new();
-            let mut total = 0usize;
-            for source in &state.source_items {
-                if control.cancelled() {
-                    return Err(FormatError::Cancelled);
-                }
-                if let Some(cache) = &source.cache {
-                    let len = cache.checked_byte_len().map_err(|e| FormatError::corrupt(e.to_string()))?;
-                    total = total.checked_add(len).ok_or_else(|| FormatError::LimitExceeded("source cache bytes".into()))?;
-                    if len != cache.bytes.len() || total > 256 << 20 {
-                        return Err(FormatError::LimitExceeded("source cache bytes".into()));
-                    }
-                }
-            }
-            for cache in &m.xcf_source_caches {
-                if control.cancelled() {
-                    return Err(FormatError::Cancelled);
-                }
-                if !owners.insert(cache.owner) {
-                    return Err(FormatError::corrupt("duplicate source cache owner"));
-                }
-                let len = photocraft_doc::xcf_items::SourceCache::checked_descriptor_len(cache.width, cache.height, cache.format)
-                    .map_err(|e| FormatError::corrupt(e.to_string()))?;
-                total = total.checked_add(len).ok_or_else(|| FormatError::LimitExceeded("source cache bytes".into()))?;
-                if len != cache.byte_len || total > 256 << 20 {
-                    return Err(FormatError::LimitExceeded("source cache bytes".into()));
-                }
-                let source = state
-                    .source_items
-                    .iter_mut()
-                    .find(|source| source.owner == cache.owner)
-                    .ok_or_else(|| FormatError::corrupt("missing source cache owner"))?;
-                if source.cache.is_some() {
-                    return Err(FormatError::corrupt("source cache has both inline and blob payloads"));
-                }
-            }
-            // Keep all legacy inline payloads out of transactional identity remapping.
-            let mut inline_caches = self.model_vec(state.source_items.len())?;
-            for (index, source) in state.source_items.iter_mut().enumerate() {
-                if control.cancelled() {
-                    return Err(FormatError::Cancelled);
-                }
-                if let Some(cache) = source.cache.take() {
-                    inline_caches.push((index, cache));
-                }
-            }
-            if hierarchy.is_none() && coverage_control.is_some() && set_quota.is_none() && m.xcf_filter_masks.len() > 1 {
-                return Err(FormatError::corrupt("coverage purpose requires at most one actual mask"));
-            }
-            for mask in &m.xcf_filter_masks {
-                let surface = self.surface(&mask.surface)?;
-                let current = if coverage_control.is_some() {
-                    // Private candidate only. The closed actual-mask scan and full
-                    // Doc validation below precede any returned archive.
-                    photocraft_doc::FilterMask { id: mask.id, owner: mask.owner, surface, bounds: mask.bounds }
-                } else {
-                    photocraft_doc::FilterMask::try_new(mask.id, mask.owner, surface, mask.bounds).map_err(|e| FormatError::corrupt(e.to_string()))?
-                };
-                state.filter_masks.push(current);
-            }
-            if control.cancelled() {
-                return Err(FormatError::Cancelled);
-            }
-            state.remap_layers(|id| self.id_map.get(&id.0).copied()).map_err(|e| FormatError::corrupt(e.to_string()))?;
-            if control.cancelled() {
-                return Err(FormatError::Cancelled);
-            }
-            state.remap_channels(|id| self.channel_map.get(&id).copied()).map_err(|e| FormatError::corrupt(e.to_string()))?;
-            if control.cancelled() {
-                return Err(FormatError::Cancelled);
-            }
-            state.remap_paths(|id| self.path_map.get(&id).copied()).map_err(|e| FormatError::corrupt(e.to_string()))?;
-            for (index, cache) in inline_caches {
-                if control.cancelled() {
-                    return Err(FormatError::Cancelled);
-                }
-                state.source_items.get_mut(index).ok_or_else(|| FormatError::corrupt("source order changed during remapping"))?.cache = Some(cache);
-            }
-            // Every descriptor/owner and the combined inline/blob budget was qualified above.
-            for cache in &m.xcf_source_caches {
-                if control.cancelled() {
-                    return Err(FormatError::Cancelled);
-                }
-                let photocraft_doc::item_identity::ItemRef::Layer(raw) = cache.owner else {
-                    return Err(FormatError::corrupt("invalid source cache owner"));
-                };
-                let owner =
-                    photocraft_doc::item_identity::ItemRef::Layer(*self.id_map.get(&raw.0).ok_or_else(|| FormatError::corrupt("missing source cache layer"))?);
-                let source = state
-                    .source_items
-                    .iter_mut()
-                    .find(|source| source.owner == owner)
-                    .ok_or_else(|| FormatError::corrupt("missing remapped source cache owner"))?;
-                let bytes = self.fetch.source_cache_bytes(&cache.blob, cache.byte_len, control)?;
-                if bytes.len() != cache.byte_len {
-                    return Err(FormatError::corrupt("source cache blob length mismatch"));
-                }
-                source.cache = Some(photocraft_doc::xcf_items::SourceCache {
-                    bytes,
-                    blake3: self.model_clone(&cache.blob)?,
-                    width: cache.width,
-                    height: cache.height,
-                    format: cache.format,
-                });
+        // Variable targets follow their layers through id remapping; a dangling one keeps a
+        // non-colliding placeholder so it stays a missing-layer skip rather than driving an
+        // unrelated layer (#4969). With preserved ids the map is the identity and defs stay as saved.
+        let mut variables = m.variables.clone();
+        if !self.preserve_ids {
+            for vd in &mut variables.defs {
+                vd.layer = self.id_map.get(&vd.layer.0).copied().unwrap_or(LayerId(u64::MAX - vd.layer.0.min(u64::MAX / 2)));
             }
         }
-        let document = Document {
-            physical_resolution: self.model_clone(&m.physical_resolution)?,
-            working_profile_interpretation: self.model_clone(&m.working_profile_interpretation)?,
-            xcf_state,
-            sample_encoding: m.sample_encoding,
-            source_color_context: m
-                .source_color_context
-                .as_ref()
-                .map(|c| -> Result<_> {
-                    let original_icc = self.opt_blob(&c.original_icc)?;
-                    if original_icc.as_ref().is_some_and(|p| p.len() > 16 << 20) {
-                        return Err(FormatError::LimitExceeded("source ICC profile".into()));
-                    }
-                    Ok(photocraft_doc::SourceColorContext { original_icc, source_precision: c.source_precision })
-                })
-                .transpose()?,
+        let id = if self.preserve_ids { DocId(m.id) } else { DocId::fresh() };
+        Ok(Document {
             id,
             name: self.model_clone(&m.name)?,
             size: m.size,
@@ -1508,10 +1366,10 @@ impl Loader<'_> {
             quick_mask,
             quick_mask_unselected: m.quick_mask_unselected,
             patterns,
-            color_table: self.model_clone(&m.color_table)?,
-            duotone: self.model_clone(&m.duotone)?,
-            variables: self.model_clone(&m.variables)?,
-            timeline: self.model_clone(&m.timeline)?,
+            color_table: m.color_table.clone(),
+            duotone: m.duotone.clone(),
+            variables,
+            timeline: m.timeline.clone(),
             file_encoding: m.file_encoding,
             layer_comps,
             last_applied_comp: m.last_applied_comp,

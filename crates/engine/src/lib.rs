@@ -49,6 +49,7 @@ pub mod color_cmds;
 pub mod color_to_alpha_cmds;
 pub mod commands;
 pub mod comps_cmds;
+mod crop_fill;
 pub mod cutout_cmds;
 pub mod display_color;
 pub mod distort_cmds;
@@ -59,6 +60,7 @@ pub mod edit_cmds;
 pub mod edit_menu_cmds;
 mod edit_validation;
 pub mod eraser_cmds;
+pub mod export_preset_cmds;
 pub mod exr_cmds;
 pub mod extra_cmds;
 pub mod file_cmds;
@@ -86,6 +88,7 @@ pub mod kys;
 pub mod layer_copy_cmds;
 pub mod layer_export_wide;
 pub mod layer_label_cmds;
+pub mod layer_list_cmds;
 pub mod layer_mask_props_cmds;
 pub mod layer_menu_cmds;
 pub mod layer_multi_cmds;
@@ -167,6 +170,8 @@ pub mod sample_cmds;
 pub mod sampler_cmds;
 pub mod select_extra_cmds;
 pub mod selection_cmds;
+pub mod shell_commands;
+pub mod shortcut_sets;
 pub mod slice_cmds;
 pub mod smart_cmds;
 pub mod smartselect_cmds;
@@ -380,103 +385,22 @@ pub struct DocState {
 }
 
 impl DocState {
-    /// Whole editing-state copies are a resident-only compatibility operation.
-    /// Accounted models require typed staged view/history transactions.
-    pub fn try_clone_resident(&self) -> Result<Self> {
-        self.doc.validate_resident()?;
-        Ok(Self {
-            doc: self.doc.clone(),
-            surface_validation: self.surface_validation.clone(),
-            history: self.history.clone(),
-            active_layer: self.active_layer,
-            selected_layers: self.selected_layers.clone(),
-            layer_anchor: self.layer_anchor,
-            path: self.path.clone(),
-            source: self.source.clone(),
-            source_read_only: self.source_read_only,
-            revision: self.revision,
-            view_revision: self.view_revision,
-            saved_revision: self.saved_revision,
-            last_damage: self.last_damage,
-            coalesce: self.coalesce.clone(),
-            channel_view: self.channel_view.clone(),
-            isolated_layers: self.isolated_layers.clone(),
-            symmetry: self.symmetry.clone(),
-            fx_collapsed: self.fx_collapsed.clone(),
-            show_only: self.show_only.clone(),
-            floating: self.floating.clone(),
-            color_samplers: self.color_samplers.clone(),
-            snapshots: self.snapshots.clone(),
-            next_snapshot: self.next_snapshot,
-            accounted_view: None,
-            _accounted_metadata: None,
-            _accounted_save_identity: None,
-            _accounted_metadata_gesture: None,
-        })
-    }
-    /// Record the detected policy without granting filesystem authority.
-    pub fn set_import_origin(&mut self, origin: photocraft_io::ImportOrigin, label: impl Into<String>, path: Option<String>) {
-        self.source = Some(SourceIdentity::new(label, path.clone(), origin));
-        self.source_read_only |= origin.is_read_only();
-        self.path = if self.source_read_only { None } else { path };
+    /// Trim the history to its budget, counting the tiles only History panel snapshots hold
+    /// against it too (#4530). Returns how many states were dropped.
+    pub fn trim_history(&mut self) -> usize {
+        let snaps: Vec<&Document> = self.snapshots.iter().map(|s| &*s.doc).collect();
+        self.history.trim_with(&self.doc, &snaps)
     }
 
-    pub fn new(doc: Document, path: Option<String>) -> Result<Self> {
-        Self::new_with_interrupt(doc, path, &photocraft_raster::Interrupt::NONE)
+    /// Pixel bytes of the document, the tiles only its history holds and the tiles only its
+    /// History panel snapshots hold.
+    pub fn memory_bytes(&self) -> usize {
+        let snaps: Vec<&Document> = self.snapshots.iter().map(|s| &*s.doc).collect();
+        self.history.pixel_bytes(&self.doc).saturating_add(self.history.extra_bytes(&self.doc, &snaps))
     }
-    /// Restore resident editing/history view with cooperative structural work.
-    /// Source decoders retain full model/sample validation responsibility.
-    pub fn new_with_interrupt(doc: Document, path: Option<String>, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
-        let poll = || control.check().map_err(|_| EngineError::Cancelled);
-        poll()?;
-        let doc = DocumentSnapshot::from_resident_with_interrupt(Arc::new(doc), control).map_err(|error| {
-            if matches!(error, photocraft_raster::backing::BackingError::Cancelled) { EngineError::Cancelled } else { EngineError::from(error) }
-        })?;
-        let mut actual = std::collections::HashSet::new();
-        photocraft_doc::resident_structure::visit_layers_with(&doc, control, |layer| {
-            actual.try_reserve(1).map_err(|_| photocraft_raster::RasterInputError::AllocationFailed)?;
-            actual.insert(layer.id);
-            Ok(true)
-        })
-        .map_err(|error| if error == photocraft_raster::RasterInputError::Cancelled { EngineError::Cancelled } else { EngineError::from(error) })?;
-        let selected = doc.xcf_state.as_ref().map_or(&[][..], |state| state.selection.selected.as_slice());
-        if selected.len() > 10_000 {
-            return Err(EngineError::Other("imported layer selection exceeds canonical limit".into()));
-        }
-        let mut selected_layers = Vec::new();
-        poll()?;
-        selected_layers
-            .try_reserve_exact(selected.len().checked_add(1).ok_or_else(|| EngineError::Other("selection allocation limit".into()))?)
-            .map_err(|_| EngineError::Other("selection allocation limit".into()))?;
-        poll()?;
-        for item in selected {
-            poll()?;
-            if let photocraft_doc::item_identity::ItemRef::Layer(id) = item
-                && actual.contains(id)
-            {
-                selected_layers.push(*id);
-            }
-        }
-        let stored_active = doc
-            .xcf_state
-            .as_ref()
-            .and_then(|state| state.selection.active)
-            .and_then(|item| if let photocraft_doc::item_identity::ItemRef::Layer(id) = item { actual.contains(&id).then_some(id) } else { None });
-        let channel_view = channel_cmds::imported_view_with_interrupt(&doc, control)?;
-        let active_layer = channel_view.editing_mask.or(stored_active).or_else(|| selected_layers.first().copied()).or_else(|| doc.top_layer());
-        if let Some(id) = active_layer
-            && !selected_layers.contains(&id)
-        {
-            selected_layers.push(id);
-        }
-        poll()?;
-        let mut history_selected = Vec::new();
-        history_selected.try_reserve_exact(selected_layers.len()).map_err(|_| EngineError::Other("history view allocation limit".into()))?;
-        poll()?;
-        for chunk in selected_layers.chunks(1024) {
-            poll()?;
-            history_selected.extend_from_slice(chunk);
-        }
+
+    pub fn new(doc: Document, path: Option<String>) -> Self {
+        let active_layer = doc.top_layer();
         let mut history = History::default();
         history.set_current_layers(LayerTarget { active: active_layer, selected: history_selected });
         poll()?;
@@ -666,6 +590,29 @@ impl Default for ToolState {
     }
 }
 
+/// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options, as Photoshop
+/// copies them (Paste Layer Style puts them all on each target).
+#[derive(Clone, Debug)]
+pub struct CopiedStyle {
+    pub effects: photocraft_doc::Effects,
+    pub blend: photocraft_color::BlendMode,
+    pub fill: f32,
+    pub advanced: photocraft_doc::AdvancedBlending,
+    pub blend_if: photocraft_doc::BlendIf,
+    pub excluded_channels: u32,
+    /// The colour mode it was copied in: Blend If's channel ranges and the channel restrictions
+    /// only carry over to a document in the same mode.
+    pub mode: photocraft_color::ColorMode,
+}
+
+/// The commands whose [`Session::precheck`] is complete: it accepts what `execute` does (Free
+/// Transform applies its box before these, and only when they will run), but for the group
+/// nesting limit ([`photocraft_doc::MAX_GROUP_DEPTH`]): grouping layers already that deep is
+/// refused only as the edit is made. Layer via Copy and
+/// Cut aren't: whether they have anything to copy (a selection over transparent pixels, a group
+/// or fill layer) is known only when they run.
+pub const PRECHECKED: &[&str] = &["layer.new.layer", "layer.new.group", "layer.new.groupFromLayers", "layer.new.layerFromBackground"];
+
 #[derive(Default)]
 pub struct Session {
     /// Explicit platform capability; only Save for Web may invoke it.
@@ -681,9 +628,9 @@ pub struct Session {
     native_stroke_work: Option<std::sync::Arc<accounted_native_stroke::NativeStrokeWork>>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
     pub clipboard: Option<edit_cmds::Clip>,
-    /// Layer › Layer Style › Copy Layer Style: effects, blend mode, fill opacity and the Advanced
-    /// Blending switches.
-    pub style_clipboard: Option<(photocraft_doc::Effects, photocraft_color::BlendMode, f32, photocraft_doc::AdvancedBlending)>,
+    /// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options
+    /// ([`CopiedStyle`]: blend mode, fill opacity, Advanced Blending, Blend If, channels).
+    pub style_clipboard: Option<CopiedStyle>,
     /// Shape path context menu: copied vector fill and stroke styles.
     pub path_fill_clipboard: Option<photocraft_doc::Fill>,
     pub path_stroke_clipboard: Option<photocraft_doc::ShapeStroke>,
@@ -983,19 +930,51 @@ impl Session {
         self.live_commit = None;
     }
 
-    /// Offer a privately completed native Luminosity preview to the registered
-    /// `paint.colorReplacement` command. The command still validates its captured
-    /// target, settings and points before publishing one history entry.
-    pub fn offer_native_color_replacement(&mut self, commit: brush_cmds::NativeLuminosityCommit) -> Result<()> {
-        self.native_replace_commit = None;
-        commit.validate_for_session(self)?;
-        self.native_replace_commit = Some(commit);
-        Ok(())
+    /// Check a call without running it: the command exists, its params have the shape
+    /// [`Self::execute`] requires (New Layer's fully), and it can run now. For a caller that does
+    /// something first only when the command will go through: Free Transform applies its box
+    /// before a new layer is made.
+    ///
+    /// Complete for the commands in [`PRECHECKED`]: there it accepts what `execute` accepts, but
+    /// for the group nesting limit (a test holds the two together). For others it checks only what they share.
+    pub fn precheck(&mut self, id: &str, params: &Value) -> Result<()> {
+        let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
+        if !(params.is_object() || params.is_null()) {
+            return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });
+        }
+        crate::param_check::check(spec, params)?;
+        crate::filters::validate_params(id, params)?;
+        if id == "layer.new.layer" {
+            crate::new_layer::parse(params)?;
+        }
+        // A command that takes `"layer"` (an id or a name, as it resolves it) fails on one the
+        // document doesn't have.
+        if spec.params.contains("\"layer\":id")
+            && let Some(l) = commands::explicit_layer(self, params)?
+            && self.active().is_none_or(|st| st.doc.layer(l).is_none())
+        {
+            return Err(EngineError::BadParams { cmd: id.to_string(), msg: format!("no layer {}", l.0) });
+        }
+        self.admit(id, spec, params).map(|_| ())
     }
 
-    /// Withdraw a native preview offer without changing the document or history.
-    pub fn clear_native_color_replacement(&mut self) {
-        self.native_replace_commit = None;
+    /// What `dispatch` checks once the params are valid and a floating selection has dropped:
+    /// the precondition (on a named layer for commands that take one), a job running on the
+    /// document, a hidden target. The run params (the Channels panel's target filled in) when it
+    /// may run.
+    pub(crate) fn admit(&mut self, id: &str, spec: &commands::CommandSpec, params: &Value) -> Result<Value> {
+        let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
+        if let Err(why) = self.explicit_layer_enabled(spec, params).unwrap_or_else(|| self.precondition(spec, &run_params)) {
+            return Err(EngineError::Disabled(id.to_string(), why));
+        }
+        if let Some(why) = self.job_conflict(id, spec.journal) {
+            return Err(EngineError::Disabled(id.to_string(), why));
+        }
+        // Painting on or moving a hidden layer is refused, as in Photoshop (#571).
+        if let Some(why) = hidden_target::refusal(self, id, params) {
+            return Err(EngineError::Other(why.into()));
+        }
+        Ok(run_params)
     }
 
     /// Is the command currently runnable? (drives menu enablement)
@@ -1076,133 +1055,9 @@ impl Session {
 
     /// Apply an undoable edit to the active document.
     pub fn edit<R>(&mut self, label: &str, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
-        self.edit_with_interrupt(label, &photocraft_raster::Interrupt::NONE, f)
-    }
-
-    /// Stage an undoable edit with cooperative validation and a cancellation
-    /// fence immediately before document installation and history recording.
-    /// The closure must pass the same control through its own expensive work.
-    pub fn edit_with_interrupt<R>(
-        &mut self,
-        label: &str,
-        control: &photocraft_raster::Interrupt<'_>,
-        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
-    ) -> Result<R> {
-        let index = self.active.ok_or(EngineError::NoDocument)?;
-        self.edit_index_with_interrupt(index, label, control, None, false, f)
-    }
-
-    /// Caller-admitted resident history staging for a synchronous transaction.
-    /// Document/output backing and the complete history envelope remain held by
-    /// the caller through this method. The controlled history is installed only
-    /// with the privately validated document at the final cancellation fence.
-    pub(crate) fn edit_with_controlled_resident_history_with_interrupt<R>(
-        &mut self,
-        label: &str,
-        limits: photocraft_ops::ResidentHistoryLimits,
-        control: &photocraft_raster::Interrupt<'_>,
-        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
-    ) -> Result<R> {
-        if self.coalesce_request.is_some() || self.color_restrict.is_some() {
-            return Err(EngineError::Other("finish transient edits before controlled history publication".into()));
-        }
-        let index = self.active.ok_or(EngineError::NoDocument)?;
-        self.edit_index_font_input(index, label, control, None, false, None, Some(limits), f)
-    }
-
-    /// Reuses a caller-admitted runtime font through the final edit validator.
-    /// The borrowed handle is scoped to this transaction and is never stored in
-    /// the session, document, or history. All normal edit fences still apply.
-    pub fn edit_with_runtime_font_with_interrupt<R>(
-        &mut self,
-        label: &str,
-        font: &photocraft_text::xcf::runtime_font_input::PreparedRuntimeFont<'_>,
-        control: &photocraft_raster::Interrupt<'_>,
-        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
-    ) -> Result<R> {
-        let index = self.active.ok_or(EngineError::NoDocument)?;
-        self.edit_index_font_input(index, label, control, None, false, Some(font), None, f)
-    }
-
-    /// Commit to a caller-fenced resident document without changing tab focus.
-    /// The caller must fence identity/revision and destination jobs before entry.
-    pub(crate) fn edit_document_with_interrupt<R>(
-        &mut self,
-        index: usize,
-        label: &str,
-        control: &photocraft_raster::Interrupt<'_>,
-        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
-    ) -> Result<R> {
-        control.check().map_err(|_| EngineError::Cancelled)?;
-        let target = self.docs.get(index).ok_or(EngineError::NoDocument)?;
-        if target.floating.is_some() || target.coalesce.is_some()
-            || target.doc.xcf_state.as_ref().is_some_and(|state| state.floating.is_some())
-            || self.coalesce_request.is_some() || self.color_restrict.is_some()
-        {
-            return Err(EngineError::Other("finish transient edits before editing this document".into()));
-        }
-        self.edit_index_with_interrupt(index, label, control, None, false, f)
-    }
-
-    /// Commit a prepared selection and its history target with the document.
-    /// No fallible reselection step runs after publication.
-    pub(crate) fn edit_with_layer_target_with_interrupt<R>(
-        &mut self,
-        label: &str,
-        control: &photocraft_raster::Interrupt<'_>,
-        target: LayerTarget,
-        anchor: Option<LayerId>,
-        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
-    ) -> Result<R> {
-        let index = self.active.ok_or(EngineError::NoDocument)?;
-        if self.coalesce_request.is_some() || self.color_restrict.is_some() {
-            return Err(EngineError::Other("finish transient edits before replacing layer selection".into()));
-        }
-        self.edit_index_with_interrupt(index, label, control, Some((target, anchor)), false, f)
-    }
-
-    /// Publish a prepared layer target and reset the channel view at the same
-    /// document/history fence. A cancelled flatten must retain the old view.
-    pub(crate) fn edit_with_layer_target_and_channel_reset_with_interrupt<R>(
-        &mut self,
-        label: &str,
-        control: &photocraft_raster::Interrupt<'_>,
-        target: LayerTarget,
-        anchor: Option<LayerId>,
-        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
-    ) -> Result<R> {
-        let index = self.active.ok_or(EngineError::NoDocument)?;
-        if self.coalesce_request.is_some() || self.color_restrict.is_some() {
-            return Err(EngineError::Other("finish transient edits before replacing layer and channel selection".into()));
-        }
-        self.edit_index_with_interrupt(index, label, control, Some((target, anchor)), true, f)
-    }
-
-    fn edit_index_with_interrupt<R>(
-        &mut self,
-        index: usize,
-        label: &str,
-        control: &photocraft_raster::Interrupt<'_>,
-        target: Option<(LayerTarget, Option<LayerId>)>,
-        reset_channel_view: bool,
-        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
-    ) -> Result<R> {
-        self.edit_index_font_input(index, label, control, target, reset_channel_view, None, None, f)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn edit_index_font_input<R>(
-        &mut self,
-        index: usize,
-        label: &str,
-        control: &photocraft_raster::Interrupt<'_>,
-        target: Option<(LayerTarget, Option<LayerId>)>,
-        reset_channel_view: bool,
-        font: Option<&photocraft_text::xcf::runtime_font_input::PreparedRuntimeFont<'_>>,
-        resident_history: Option<photocraft_ops::ResidentHistoryLimits>,
-        f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>,
-    ) -> Result<R> {
-        control.check().map_err(|_| EngineError::Cancelled)?;
+        // Every mutation path (linked-file refresh, transform, place) re-renders smart objects
+        // through this entry; the requesting session's authority must reach those renders.
+        let _authorization = crate::jobs::render_authorization_scope(self.authorize);
         let restrict = self.color_restrict;
         let sampler_map = if self.active == Some(index) { self.sampler_map.take() } else { None };
         let st = self.docs.get_mut(index).ok_or(EngineError::NoDocument)?;
@@ -1270,14 +1125,12 @@ impl Session {
         let samplers_removed = st.color_samplers.len().saturating_sub(color_samplers.len());
         let damage = layer_multi_cmds::step_damage(&before, &snapshot);
         let key = self.coalesce_request.clone();
-        let st = self.docs.get_mut(index).ok_or(EngineError::NoDocument)?;
-        let history_control = photocraft_raster::backing::ReadControl { interrupt: control, work: &|_| Ok(()) };
-        let history = if let Some(limits) = resident_history {
-            if key.is_some() || st.coalesce.is_some() {
-                return Err(EngineError::Other("controlled history cannot coalesce".into()));
-            }
-            st.history.try_clone_record_trim_with_interrupt(before, &snapshot, label, &prior, &layers, limits, control)
-                .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(format!("controlled resident history: {error}")) })?
+        let st = self.active_mut().ok_or(EngineError::NoDocument)?;
+        let layers = st.layer_target();
+        if key.is_none() || st.coalesce != key || !st.history.can_undo() {
+            st.history.set_current_layers(prior);
+            st.history.record(label, before, layers);
+            st.trim_history();
         } else {
             let mut history = st.history.clone();
             if key.is_none() || st.coalesce != key || !history.can_undo() {

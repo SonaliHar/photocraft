@@ -31,6 +31,43 @@ use crate::{EngineError, Result, Session, WeakDocumentSnapshot};
 
 mod accounted_color_range;
 
+type Authorization = fn(&str, &Value) -> Result<()>;
+
+thread_local! {
+    // Smart-filter rendering has no Session argument. Carry the requesting session's gate
+    // through synchronous rendering and explicitly reinstall it on background workers.
+    static RENDER_AUTHORIZATION: std::cell::Cell<Option<Authorization>> = const { std::cell::Cell::new(None) };
+}
+
+pub(crate) struct AuthorizationScope(Option<Authorization>);
+
+impl AuthorizationScope {
+    fn enter(gate: Option<Authorization>) -> Self {
+        Self(RENDER_AUTHORIZATION.with(|current| current.replace(gate.or(current.get()))))
+    }
+}
+
+impl Drop for AuthorizationScope {
+    fn drop(&mut self) {
+        RENDER_AUTHORIZATION.with(|current| current.set(self.0));
+    }
+}
+
+/// [`AuthorizationScope`] entered with `gate` (or the one already installed, so trusted work on
+/// this thread keeps ambient paths usable). [`Session::edit`] and the job paths use this to carry
+/// the requesting session's authority into every smart-object re-render.
+pub(crate) fn render_authorization_scope(gate: Option<Authorization>) -> AuthorizationScope {
+    AuthorizationScope::enter(gate)
+}
+
+/// Recheck a stored filter's command and parameters before evaluating it or using its cache.
+pub(crate) fn authorize_render_command(id: &str, params: &Value) -> Result<()> {
+    match RENDER_AUTHORIZATION.with(std::cell::Cell::get) {
+        Some(gate) => gate(id, params),
+        None => Ok(()),
+    }
+}
+
 /// Identifies one background job for the session's lifetime.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, serde::Deserialize)]
 pub struct JobId(pub u64);
@@ -339,6 +376,8 @@ pub fn run<T: Send + 'static>(
     work: impl FnOnce(&JobCtx) -> Result<T> + Send + 'static,
     apply: impl FnOnce(&mut Session, T) -> Result<Value> + Send + 'static,
 ) -> Result<Value> {
+    let authorization = s.authorize.or_else(|| RENDER_AUTHORIZATION.with(std::cell::Cell::get));
+    let _authorization = AuthorizationScope::enter(authorization);
     if !s.jobs.spawn || cfg!(target_arch = "wasm32") {
         let t = work(&s.jobs.inline.clone().unwrap_or_default())?;
         return apply(s, t);
@@ -354,6 +393,7 @@ pub fn run<T: Send + 'static>(
     let ctx = JobCtx::new();
     let (tx, rx) = std::sync::mpsc::channel::<Result<Payload>>();
     let erased: Apply = Box::new(move |s, any| {
+        let _authorization = AuthorizationScope::enter(authorization);
         let t = any.downcast::<T>().map_err(|_| EngineError::Other("internal error: job result type mismatch".into()))?;
         apply(s, *t)
     });
@@ -367,6 +407,7 @@ pub fn run<T: Send + 'static>(
         // The work closure is moved into the thread. If spawning fails (thread limits), there is
         // no way to get it back, so the error is reported instead.
         let spawned = std::thread::Builder::new().name(format!("photocraft-job-{}", id.0)).spawn(move || {
+            let _authorization = AuthorizationScope::enter(authorization);
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&wctx).map(|t| Box::new(t) as Payload)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label_w}` failed with an internal error (logged); the document is unchanged"))));
             // The receiver is gone when the job was cancelled: nothing to report.
@@ -441,6 +482,24 @@ pub fn edit_job<R: Send + 'static>(
     )
 }
 
+/// Scan every layer surface's content bounds into the shared tile bounds cache, so the first
+/// draw of a document opened in the background doesn't do it on the UI thread: GPU planning
+/// asks each layer for its bounds, a multi-second scan on a multi-gigabyte PSB (#4024).
+/// `check` runs between layers (cancellation).
+pub fn warm_layer_bounds(doc: &Document, mut check: impl FnMut() -> Result<()>) -> Result<()> {
+    let mut pending: Vec<&photocraft_doc::Layer> = doc.layers.iter().collect();
+    while let Some(layer) = pending.pop() {
+        check()?;
+        if let Some(children) = layer.children() {
+            pending.extend(children);
+        }
+        if let Some(surface) = layer.surface() {
+            photocraft_compose::bounds::content_bounds(surface);
+        }
+    }
+    Ok(())
+}
+
 /// Where a background open reads its file from.
 #[derive(Clone, Debug)]
 pub enum OpenSource {
@@ -502,7 +561,16 @@ impl Session {
                     }
                 };
                 ctx.check()?;
-                Ok((imported, ctx.clone()))
+                ctx.progress(0.02, "Decoding");
+                let imported = ctx
+                    .stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_with_svg_group_depth_and_interrupt(&name_w, &bytes, max_svg_group_depth, ctl))
+                    .map_err(|e| match e {
+                        photocraft_io::IoError::Cancelled => EngineError::Cancelled,
+                        e => EngineError::Other(e.to_string()),
+                    })?;
+                ctx.progress(0.95, "Preparing layers");
+                warm_layer_bounds(&imported.document, || ctx.check())?;
+                Ok(imported)
             },
             move |s, (r, ctx): (photocraft_io::ImportResult, JobCtx)| {
                 ctx.check()?;
@@ -1146,105 +1214,7 @@ impl Session {
         if let Some(gate) = self.authorize {
             gate(id, &params)?;
         }
-        crate::xcf_link_cmds::dispatch_preflight_with_background(self, id, &params, background || self.jobs.spawn)?;
-        if id == "xcf.link.substitute" {
-            crate::xcf_link_substitution_cmds::dispatch_preflight(self, &params, background || self.jobs.spawn)?;
-        }
-        if id == "xcf.link.recover" {
-            crate::xcf_link_substitution_cmds::dispatch_recovery_preflight(self, &params, background || self.jobs.spawn)?;
-        }
-        if accounted_dispatch {
-            if id == "edit.fill" && (background || self.jobs.spawn) {
-                return Err(EngineError::BadParams { cmd: id.into(), msg: "accounted Fill requires synchronous dispatch".into() });
-            }
-            // The new flat composition parser is paid below on the registered
-            // cumulative control. Eligibility here checks class/global context
-            // only, without an unmetered duplicate parse.
-            let enabled_params=if id=="xcf.composition.set" && self.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_flat_composite_storage()) {&Value::Null}else{&params};
-            if let Some(why) = crate::accounted_commands::disabled_reason(self, id, enabled_params)? {
-                return Err(EngineError::Disabled(id.to_string(), why.into()));
-            }
-            if let Some(why) = self.job_conflict(id, spec.journal) {
-                return Err(EngineError::Disabled(id.to_string(), why));
-            }
-            if id == "select.colorRange" {
-                return std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    self.dispatch_accounted_color_range(params, background || self.jobs.spawn)
-                }))
-                .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
-            }
-            // Bounded native pixel, filter and assigned-geometry property preparation share one
-            // immutable registered work ledger; no per-cell allowance reset.
-            let native_brush_standard=matches!(id,"paint.stroke"|"paint.pencil") && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|crate::accounted_native_stroke::candidate(o));
-            let mixed_selection_control=id=="layer.select"&&self.active().and_then(|s|s.doc.accounted()).is_some_and(crate::accounted_commands::programme_select_candidate);
-            let programme_pixels_standard=matches!(id,"edit.clear"|"edit.fill")&&self.active().and_then(|s|s.doc.accounted()).is_some_and(crate::accounted_commands::programme_pixels_candidate);
-            let programme_selection_standard=matches!(id,"select.all"|"select.deselect")&&self.active().and_then(|s|s.doc.accounted()).is_some_and(crate::accounted_commands::programme_pixels_candidate);
-            let accounted_inverse_standard=id=="select.inverse"&&self.active().and_then(|s|s.doc.accounted()).is_some();
-            let hierarchy_expanded_standard=id=="layer.setExpanded" && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage());
-            let bounded_work = accounted_inverse_standard || programme_selection_standard || native_brush_standard || hierarchy_expanded_standard || id=="layer.renameLayer" && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()))
-                || matches!(id, "edit.clear" | "edit.fill" | "layer.translate")
-                || id=="xcf.composition.set" && self.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_flat_composite_storage())
-                || id == "xcf.mask.enabled.set"
-                    && self.active().and_then(|state| state.doc.accounted()).is_some_and(crate::assigned_geometry_metadata_candidate)
-                || id == "layer.setProps"
-                    && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
-                        owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage()
-                            || crate::owned_layer_metadata_candidate(owner)
-                    })
-                || matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove")
-                    && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
-                        owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage()
-                            || matches!(id, "xcf.filter.set" | "xcf.filter.enable")
-                                && (owner.is_readonly_gaussian_group_storage() || owner.is_readonly_assigned_point_storage())
-                            || matches!(id,"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move"|"xcf.filter.remove") && (owner.is_readonly_filtered_flat_point_storage() || (owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage()))
-                    });
-            let inherited_native_work=if native_brush_standard{captured_native_work}else{None};
-            let inherited_native=inherited_native_work.is_some();
-            let fallback_work=photocraft_io::accounted_operation_work::OperationWork::legacy(crate::accounted_clear::REGISTERED_WORK_LIMIT);
-            let registered_work:&photocraft_io::accounted_operation_work::OperationWork=match inherited_native_work.as_deref(){Some(work)=>work,None=>&fallback_work};
-            // This synchronous boundary has no external Interrupt. The same
-            // meter deadline remains active during interrupt-only CMS/mask loops;
-            // externally controlled APIs retain their original caller control.
-            let incoming=self.jobs.inline.clone();
-            let deadline = || registered_work.deadline_expired() || (native_brush_standard||mixed_selection_control||programme_pixels_standard||programme_selection_standard||accounted_inverse_standard) && incoming.as_ref().is_some_and(|ctx|ctx.cancelled());
-            let interrupt = photocraft_raster::Interrupt::cancel_only(&deadline);
-            // The route probe itself debits this very ledger, including for
-            // history/view commands whose old dispatch debit was a no-op.
-            let probe_debit = |units| registered_work.check(units);
-            let probe = photocraft_raster::backing::ReadControl { interrupt: &interrupt, work: &probe_debit };
-            let pure_point_standard = matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove"
-                | "layer.setProps" | "layer.select" | "edit.undo" | "edit.redo" | "history.selectState")
-                && if let Some(owner)=self.active().and_then(|state|state.doc.accounted()) {
-                    crate::accounted_native_open::is_current_pure_point_work_candidate(owner,&probe)?
-                } else { false };
-            let mixed_rename_standard=id=="layer.renameLayer" && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()));
-            // Preserve the original Box command selection exactly.
-            let box_standard = (matches!(id, "xcf.filter.set" | "xcf.filter.enable")
-                || id == "layer.translate" && self.active().and_then(|s|s.doc.accounted()).is_some_and(crate::observed_box_translation_candidate)
-                || id == "layer.setProps" && self.active().and_then(|s|s.doc.accounted()).is_some_and(crate::accounted_session::metadata_gesture::observed_box_layer_metadata_candidate))
-                && if let Some(owner)=self.active().and_then(|state|state.doc.accounted()) {
-                    (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
-                        && crate::accounted_native_open::is_current_box_work_candidate(owner.document(),&probe)?
-                } else {false};
-            if !inherited_native && (pure_point_standard || box_standard || mixed_rename_standard || hierarchy_expanded_standard || native_brush_standard || programme_pixels_standard || programme_selection_standard || accounted_inverse_standard) {
-                let limits=photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|error|EngineError::Other(error.to_string()))?;
-                registered_work.select_standard(&limits)?;
-            }
-            let debit = |units| {
-                if !(bounded_work || pure_point_standard) { return Ok(()); }
-                registered_work.check(units)
-            };
-            let control = photocraft_raster::backing::ReadControl { interrupt: &interrupt, work: &debit };
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::accounted_commands::dispatch(self, id, &params, &control)))
-                .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
-            // The carrier publishes a prepaid journal with the successful
-            // typed edit. Its guarded contexts exclude the resident-only
-            // Fade, action, slice and preset callbacks in after_command.
-            return result.map(Started::Done);
-        }
-        if self.active().is_some_and(|state| state.doc.accounted().is_some()) {
-            return Err(EngineError::Disabled(id.to_string(), "this command has not yet been qualified for an accounted native document".into()));
-        }
+        let _authorization = AuthorizationScope::enter(self.authorize);
         // Last Filter runs as the filter it repeats: journaled, recorded in an action, faded and
         // run as a job like that filter, so a recorded step replays the same filter anywhere
         // (#3089), as Transform Again records its transform (#1440). With no filter yet it falls
@@ -1264,17 +1234,7 @@ impl Session {
             return Ok(Started::Done(v));
         }
         // Pixel commands follow the Channels panel target unless the caller names one.
-        let run_params = crate::channel_cmds::inject_target(self, id, crate::commands::inject_kind(id, params.clone()));
-        if let Err(why) = self.explicit_layer_enabled(spec, &params).unwrap_or_else(|| self.precondition(spec, &run_params)) {
-            return Err(EngineError::Disabled(id.to_string(), why));
-        }
-        if let Some(why) = self.job_conflict(id, spec.journal) {
-            return Err(EngineError::Disabled(id.to_string(), why));
-        }
-        // Painting on or moving a hidden layer is refused, as in Photoshop (#571).
-        if let Some(why) = crate::hidden_target::refusal(self, id, &params) {
-            return Err(EngineError::Other(why.into()));
-        }
+        let run_params = self.admit(id, spec, &params)?;
         self.coalesce_request = params.get("coalesce").and_then(Value::as_str).map(str::to_string);
         self.color_restrict = crate::channel_cmds::color_restriction(self, id, &run_params);
         self.jobs.spawn = background;
@@ -1340,6 +1300,8 @@ impl Session {
             self.journal.truncate(from);
         }
         if !crate::brush_cmds::coalesce_journal(self, id, &params) {
+            let params =
+                if id == "layer.select" && self.actions.recording.is_some() { crate::layer_multi_cmds::recorded_selection(self, params) } else { params };
             self.journal.push((id.to_string(), params));
         }
         Ok(())

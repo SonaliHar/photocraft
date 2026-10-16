@@ -495,23 +495,7 @@ impl Layouter {
     }
 
     pub fn layout(&mut self, fonts: &mut FontDb, t: &TextLayer, dpi: f32) -> TextLayout {
-        self.layout_scalar(fonts, t, dpi, [1.0, 1.0])
-    }
-
-    pub fn layout_with_resolution(
-        &mut self,
-        fonts: &mut FontDb,
-        t: &TextLayer,
-        resolution: &photocraft_doc::PhysicalResolution,
-    ) -> Result<TextLayout, crate::PhysicalLayoutError> {
-        let axes = crate::physical_layout::Axes::checked(t, resolution)?;
-        let mut result = self.layout_scalar(fonts, t, axes.dpi, axes.scale);
-        result.apply_physical_axes(axes.scale)?;
-        Ok(result)
-    }
-
-    fn layout_scalar(&mut self, fonts: &mut FontDb, t: &TextLayer, dpi: f32, physical_scale: [f64; 2]) -> TextLayout {
-        let k = if dpi > 0.0 { dpi / 72.0 } else { 1.0 };
+        let k = if dpi.is_finite() && dpi > 0.0 { dpi / 72.0 } else { 1.0 };
         let runs = t.char_runs();
         let paras = t.paragraph_runs();
         let vertical = t.orientation == Orientation::Vertical;

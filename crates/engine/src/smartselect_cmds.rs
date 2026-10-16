@@ -202,141 +202,23 @@ impl ObjectFinderCache {
     }
 }
 
-/// Fixed-count owned cache witness. No masks/documents are deep-cloned.
-#[derive(Clone)]
-pub(crate) struct ObjectFinderSnapshot {
-    document: Option<std::sync::Arc<Document>>,
-    document_id: Option<photocraft_doc::DocId>,
-    target: Option<LayerId>,
-    regions: [Option<std::sync::Arc<Region>>; OBJECT_FINDER_ENTRIES],
-}
-impl ObjectFinderCache {
-    pub(crate) fn capture_controlled(&self) -> Result<ObjectFinderSnapshot> {
-        if self.regions.len() > OBJECT_FINDER_ENTRIES {
-            return Err(bad("select.object", "finder cache entry limit"));
-        }
-        Ok(ObjectFinderSnapshot {
-            document: self.doc.upgrade(),
-            document_id: self.doc_id,
-            target: self.target,
-            regions: std::array::from_fn(|i| self.regions.get(i).cloned()),
-        })
+/// Object Selection samples only the active layer by default: when that layer has no pixels in
+/// `area`, say so instead of quietly finding nothing (#5246; scripts often add an empty layer
+/// above the photo first).
+fn check_sampled_pixels(doc: &Document, layer: Option<LayerId>, all_layers: bool, area: Rect) -> Result<()> {
+    let Some(surf) = sampled_target(doc, layer, all_layers).and_then(|id| doc.layer(id)).and_then(Layer::surface) else { return Ok(()) };
+    if surf.content_bounds().intersect(&area).is_empty() {
+        let msg = if surf.content_bounds().is_empty() { "the active layer is empty" } else { "the active layer has no pixels in that area" };
+        return Err(bad("select.object", &format!("{msg}; set \"sampleAllLayers\": true or select a layer with pixels")));
     }
-    pub(crate) fn bind_controlled(&mut self, doc: &std::sync::Arc<Document>) {
-        self.doc = std::sync::Arc::downgrade(doc);
-        self.doc_id = Some(doc.id);
-    }
-}
-impl ObjectFinderSnapshot {
-    /// Exact bounded cache-owner fence; no pixels, masks or hashes are scanned.
-    pub(crate) fn is_current_cache(&self, cache: &ObjectFinderCache) -> bool {
-        if self.document_id != cache.doc_id || self.target != cache.target
-            || cache.regions.len() > OBJECT_FINDER_ENTRIES
-            || self.regions.iter().flatten().count() != cache.regions.len()
-        { return false; }
-        let owner = match (&self.document, cache.doc.upgrade()) {
-            (None, None) => true,
-            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, &b),
-            _ => false,
-        };
-        owner && self.regions.iter().flatten().zip(&cache.regions)
-            .all(|(a,b)| std::sync::Arc::ptr_eq(a,b))
-    }
-    pub(crate) fn retained_with_interrupt(&self, control: &photocraft_raster::Interrupt<'_>) -> Result<u64> {
-        let mut bytes = 0u64;
-        for region in self.regions.iter().flatten() {
-            control.check().map_err(|_| EngineError::Cancelled)?;
-            let n = u64::from(region.bbox.width()).checked_mul(u64::from(region.bbox.height())).ok_or_else(|| bad("select.object", "finder mask bounds"))?;
-            if n != region.mask.len() as u64 {
-                return Err(bad("select.object", "finder mask length"));
-            }
-            bytes = bytes.checked_add(region.mask.capacity() as u64).ok_or_else(|| bad("select.object", "finder cache residency"))?;
-        }
-        if let Some(document) = &self.document {
-            let limits = photocraft_io::NativeSaveLimits::default().preparation;
-            let model = photocraft_io::retained_native_model_bytes(document, limits, control).map_err(|e| {
-                if matches!(e, photocraft_io::IoError::Cancelled) || control.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) }
-            })? as u64;
-            let payload = photocraft_io::retained_native_payload_bytes(document, limits, control).map_err(|e| {
-                if matches!(e, photocraft_io::IoError::Cancelled) || control.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) }
-            })? as u64;
-            bytes = bytes.checked_add(model).and_then(|v| v.checked_add(payload)).ok_or_else(|| bad("select.object", "finder document residency"))?;
-            let raster = crate::DocumentSnapshot::resident_raster_footprint_of(document, control)?;
-            bytes = bytes
-                .checked_add(raster.retained_bytes)
-                .and_then(|v| v.checked_add(raster.clone_metadata_bytes))
-                .ok_or_else(|| bad("select.object", "finder raster residency"))?;
-        }
-        control.check().map_err(|_| EngineError::Cancelled)?;
-        Ok(bytes)
-    }
-    pub(crate) fn lookup_controlled(
-        &self,
-        doc: &Document,
-        target: Option<LayerId>,
-        x: f32,
-        y: f32,
-        control: &photocraft_raster::Interrupt<'_>,
-        charge: &mut dyn FnMut(u64) -> Result<()>,
-    ) -> Result<(Option<std::sync::Arc<Region>>, bool)> {
-        control.check().map_err(|_| EngineError::Cancelled)?;
-        let valid = if self.document_id != Some(doc.id) || self.target != target {
-            false
-        } else if let Some(old) = &self.document {
-            std::ptr::eq(old.as_ref(), doc) || crate::layer_multi_cmds::same_plain_pixels_with_interrupt(old, doc, control, charge)?
-        } else {
-            false
-        };
-        if !valid {
-            return Ok((None, false));
-        }
-        for region in self.regions.iter().flatten() {
-            charge(1)?;
-            control.check().map_err(|_| EngineError::Cancelled)?;
-            if region.at(x.floor() as i32, y.floor() as i32) >= 0.5 {
-                return Ok((Some(std::sync::Arc::clone(region)), true));
-            }
-        }
-        Ok((None, true))
-    }
-    pub(crate) fn prepare_update(
-        &self,
-        document_id: photocraft_doc::DocId,
-        target: Option<LayerId>,
-        valid: bool,
-        hit: bool,
-        new: Option<std::sync::Arc<Region>>,
-        control: &photocraft_raster::Interrupt<'_>,
-    ) -> Result<Option<ObjectFinderCache>> {
-        if new.is_none() && !valid {
-            return Ok(None);
-        }
-        let mut regions = Vec::new();
-        regions.try_reserve_exact(OBJECT_FINDER_ENTRIES).map_err(|_| bad("select.object", "finder cache allocation"))?;
-        if regions.capacity() > OBJECT_FINDER_ENTRIES + 16 {
-            return Err(bad("select.object", "finder cache capacity"));
-        }
-        if valid {
-            for region in self.regions.iter().flatten() {
-                control.check().map_err(|_| EngineError::Cancelled)?;
-                regions.push(std::sync::Arc::clone(region));
-            }
-        }
-        if !hit && let Some(region) = new {
-            if regions.len() >= OBJECT_FINDER_ENTRIES {
-                regions.remove(0);
-            }
-            regions.push(region);
-        }
-        control.check().map_err(|_| EngineError::Cancelled)?;
-        Ok(Some(ObjectFinderCache { doc: std::sync::Weak::new(), doc_id: Some(document_id), target, regions }))
-    }
+    Ok(())
 }
 
 /// `select.object` with `"point"`: the Object Finder's object under the point (cached).
 fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Value> {
     let all_layers = b(p, "sampleAllLayers", false);
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    check_sampled_pixels(&d.doc, d.active_layer, all_layers, Rect::from_xywh(x.floor() as i32, y.floor() as i32, 1, 1))?;
     let target = sampled_target(&d.doc, d.active_layer, all_layers);
     let region = match s.object_finder.lookup(d.doc.resident_arc().ok_or(photocraft_raster::backing::BackingError::Unsupported)?, target, x, y) {
         Some(r) => Some(r),
@@ -370,7 +252,10 @@ fn object_selection(s: &mut Session, p: &Value) -> Result<Value> {
         return object_at_point(s, p, pt);
     }
     let rect = rect_param(p).ok_or_else(|| bad("select.object", "needs \"rect\": [x, y, w, h] or \"point\": [x, y]"))?;
-    let region = with_sampler(s, b(p, "sampleAllLayers", false), |smp, doc| grabcut::object_select(smp, doc.bounds(), rect, 160_000))?;
+    let all_layers = b(p, "sampleAllLayers", false);
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    check_sampled_pixels(&d.doc, d.active_layer, all_layers, rect)?;
+    let region = with_sampler(s, all_layers, |smp, doc| grabcut::object_select(smp, doc.bounds(), rect, 160_000))?;
     apply(s, "Object Selection", region.as_ref(), mode(p, "replace"))
 }
 
@@ -582,6 +467,7 @@ fn refine_edge(s: &mut Session, p: &Value) -> Result<Value> {
             s.edit("Select and Mask", |doc, _| {
                 let surface =
                     region.as_ref().map(matting::region_surface).unwrap_or_else(|| photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8));
+                crate::extra_cmds::background_to_layer_for_mask(doc, id);
                 let existing = doc.layer(id).and_then(|l| l.mask.as_ref()).cloned().unwrap_or_else(LayerMask::reveal_all);
                 doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(LayerMask { surface: std::sync::Arc::new(surface), ..existing });
                 doc.selection = None;
@@ -872,7 +758,7 @@ mod tests {
         // Any point on the object hits; the background and another target miss.
         assert!(std::sync::Arc::ptr_eq(&s.object_finder.lookup(&doc, target, 120.0, 90.0).unwrap(), &r));
         assert!(s.object_finder.lookup(&doc, target, 3.0, 3.0).is_none());
-        assert!(s.object_finder.lookup(&doc, Some(LayerId(9999)), 100.0, 80.0).is_none());
+        assert!(s.object_finder.lookup(&doc, Some(LayerId(u64::MAX)), 100.0, 80.0).is_none());
         // The click reuses it, and a selection-only edit keeps it.
         s.execute("select.object", json!({"point": [110, 70]})).unwrap();
         assert_eq!(s.object_finder.len(), 1);
@@ -897,6 +783,26 @@ mod tests {
         // Negative width/height (drag up-left) work too.
         s.execute("select.object", json!({"rect": [160, 140, -120, -120]})).unwrap();
         assert!(cov(&s, 100, 80) >= 0.5);
+    }
+
+    #[test]
+    fn object_selection_on_an_empty_active_layer_says_so() {
+        // #5246: an empty layer above the photo used to find nothing without a word.
+        let (mut s, inside) = disc(8);
+        s.execute("layer.new.layer", json!({})).unwrap();
+        for p in [json!({"rect": [40, 20, 120, 120]}), json!({"point": [100, 80]})] {
+            let e = s.execute("select.object", p.clone()).unwrap_err().to_string();
+            assert!(e.contains("active layer is empty") && e.contains("sampleAllLayers"), "{p}: {e}");
+            assert!(s.active().unwrap().doc.selection.is_none());
+        }
+        // Sampling all layers finds the disc below.
+        s.execute("select.object", json!({"rect": [40, 20, 120, 120], "sampleAllLayers": true})).unwrap();
+        assert!(sel_iou(&s, 200, 160, &inside) > 0.95);
+        // A layer with pixels elsewhere: the rectangle holds none of them.
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("paint.pencil", json!({"points": [[5, 5], [10, 5]], "size": 2, "color": "#000000"})).unwrap();
+        let e = s.execute("select.object", json!({"rect": [60, 60, 100, 80]})).unwrap_err().to_string();
+        assert!(e.contains("no pixels in that area"), "{e}");
     }
 
     #[test]
@@ -1139,7 +1045,6 @@ mod tests {
     fn refine_edge_works_on_layer_mask_without_selection() {
         let mut s = blurred_edge_selected();
         s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
-        s.execute("select.deselect", json!({})).unwrap();
         assert!(s.active().unwrap().doc.selection.is_none());
         assert!(s.active().unwrap().doc.layers[0].mask.is_some());
         assert!(s.is_enabled("select.refineEdge"));
