@@ -3200,3 +3200,13 @@ curves	Smooth	Haluskan
 	This document's layers: {needed} of {budget} for layers	Layer dokumen ini: {needed} dari {budget} untuk layer
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Layer dokumen ini membutuhkan {needed} tetapi boleh memakai {budget}: penggambaran ulang seluruh dokumen memakai CPU
 	GPU Memory (MB, 0 = Automatic)	Memori GPU (MB, 0 = Otomatis)
+	Create Frame Animation	Buat Animasi Frame
+	Make Frames From Layers	Buat Frame dari Layer
+	Forever	Selamanya
+	Once	Sekali
+	No delay	Tanpa jeda
+	First frame	Frame pertama
+	Duplicate Selected Frame	Duplikat frame terpilih
+	Delete Selected Frame	Hapus frame terpilih
+	{seconds} sec.	{seconds} dtk
+	{count} times	{count} kali
