@@ -2115,41 +2115,82 @@ fn empty(ui: &mut egui::Ui, s: &str) {
     ui.add_space(6.0);
 }
 
-/// The Color tab of the themes other than Photoshop's: the same spectrum field (chips, saturation
-/// and brightness field, hue strip and readout) with HSB sliders under it (#4367).
+/// Every theme shares the artist-oriented Color panel and its optional HSB sliders.
 fn color_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     color_field(app, ui);
-    ui.add_space(8.0);
-    hsb_sliders(app, ui);
 }
 
-/// Hue, Saturation and Brightness sliders for the foreground colour.
-fn hsb_sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let fg = app.session.tools.foreground;
+/// Hue, Saturation and Brightness sliders for the selected foreground/background colour.
+pub(crate) fn hsb_sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    hsb_sliders_sized(app, ui, false);
+}
+
+pub(crate) fn hsb_sliders_sized(app: &mut PhotocraftApp, ui: &mut egui::Ui, numeric_only: bool) {
+    let background = app.ui.color_panel.background;
+    let fg = if background { app.session.tools.background } else { app.session.tools.foreground };
     // Keep the last edited HSB while it still gives the foreground: black and greys have no hue or
     // saturation of their own, so recomputing them from RGB would reset what was just typed to 0.
-    let key = egui::Id::new("color-picker-hsva");
+    let key = egui::Id::new(("color-picker-hsva", background));
+    let field_key = egui::Id::new(("color-field-hue", background));
     let stored: Option<egui::ecolor::Hsva> = ui.data(|d| d.get_temp(key));
-    let hsva0 = stored.filter(|h| srgb_bytes(hsva_srgb(*h)) == srgb_bytes(fg)).unwrap_or_else(|| srgb_hsva(fg));
+    let hsva0 = stored.filter(|h| srgb_bytes(hsva_srgb(*h)) == srgb_bytes(fg)).unwrap_or_else(|| {
+        let h = srgb_hsva(fg);
+        field_hsva(h, ui.data(|d| d.get_temp(field_key)).unwrap_or((h.h, h.s)))
+    });
     let mut h = hsva0.h * 360.0;
     let mut s = hsva0.s * 100.0;
     let mut v = hsva0.v * 100.0;
     let hue = widgets::hue_stops();
     // Preferences ▸ Interface ▸ Dynamic Color Sliders: off, the tracks are the plain ones.
     let dynamic = app.session.prefs().interface.dynamic_color_sliders;
-    let mut changed = widgets::slider_row(ui, tl!("Hue"), &mut h, 0.0..=360.0, "°", dynamic.then_some(&hue)).changed();
     let sat_stops =
         [egui::ecolor::Hsva::new(hsva0.h, 0.0, hsva0.v.max(0.2), 1.0), egui::ecolor::Hsva::new(hsva0.h, 1.0, hsva0.v.max(0.2), 1.0)].map(hsva_color32);
-    changed |= widgets::slider_row(ui, tl!("Saturation"), &mut s, 0.0..=100.0, "%", dynamic.then_some(&sat_stops)).changed();
     let val_stops = [Color32::BLACK, hsva_color32(egui::ecolor::Hsva::new(hsva0.h, hsva0.s, 1.0, 1.0))];
-    changed |= widgets::slider_row(ui, tl!("Brightness"), &mut v, 0.0..=100.0, "%", dynamic.then_some(&val_stops)).changed();
+    let mut changed = false;
+    let numeric_field_width = ((ui.available_width() - 54.0) / 3.0).clamp(28.0, 54.0);
+    let mut row = |ui: &mut egui::Ui, label: &str, name: &str, value: &mut f32, maximum: f32, suffix: &str, colors: &[Color32]| {
+        ui.push_id(label, |ui| {
+            let row_width = if numeric_only { numeric_field_width + 16.0 } else { ui.available_width() };
+            ui.allocate_ui_with_layout(vec2(row_width, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                ui.label(label).on_hover_text(name);
+                if !numeric_only {
+                    let width = (ui.available_width() - 58.0).max(60.0);
+                    let response = ui
+                        .allocate_ui_with_layout(vec2(width, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            widgets::slider(ui, value, 0.0..=maximum, dynamic.then_some(colors))
+                        })
+                        .inner;
+                    changed |= response.changed();
+                }
+                let field_width = if numeric_only { ((ui.available_width() - 42.0) / 3.0).clamp(28.0, 54.0) } else { 54.0 };
+                changed |= widgets::value_field(ui, value, 0.0..=maximum, suffix, field_width).on_hover_text(name).changed();
+            });
+        });
+    };
+    if numeric_only {
+        ui.horizontal(|ui| {
+            row(ui, "H", tl!("Hue"), &mut h, 360.0, "°", &hue);
+            row(ui, "S", tl!("Saturation"), &mut s, 100.0, "%", &sat_stops);
+            row(ui, "B", tl!("Brightness"), &mut v, 100.0, "%", &val_stops);
+        });
+    } else {
+        row(ui, "H", tl!("Hue"), &mut h, 360.0, "°", &hue);
+        row(ui, "S", tl!("Saturation"), &mut s, 100.0, "%", &sat_stops);
+        row(ui, "B", tl!("Brightness"), &mut v, 100.0, "%", &val_stops);
+    }
     let hsva = egui::ecolor::Hsva::new(h / 360.0, s / 100.0, v / 100.0, 1.0);
     // Only an edit counts: the h/s/v round trip isn't exact, so comparing values would rewrite
     // the foreground (and recolour selected type) every frame.
     if changed {
-        app.session.tools.foreground = hsva_srgb(hsva);
+        if background {
+            app.session.tools.background = hsva_srgb(hsva);
+        } else {
+            app.session.tools.foreground = hsva_srgb(hsva);
+            crate::type_tool::foreground_changed(app);
+        }
         ui.data_mut(|d| d.insert_temp(key, hsva));
-        crate::type_tool::foreground_changed(app);
+        ui.data_mut(|d| d.insert_temp(field_key, (hsva.h, hsva.s)));
     }
 }
 
@@ -3596,42 +3637,13 @@ fn adjustments_grid(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// The Color panel's foreground and background chips. A click picks the colour the field edits,
-/// framed; a double-click opens the Color Picker on it.
-fn field_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, chips: Rect) {
-    let t = Tokens::get(ui.ctx());
-    let bgr = Rect::from_min_size(chips.min + vec2(13.0, 13.0), vec2(22.0, 22.0));
-    let fgr = Rect::from_min_size(chips.min + vec2(3.0, 3.0), vec2(22.0, 22.0));
-    let frame = Stroke::new(1.0, t.text_dim);
-    let bg_active = app.ui.color_panel.background;
-    let p = ui.painter();
-    p.rect_filled(bgr, 2.0, c32(app.session.tools.background));
-    p.rect_stroke(bgr, 2.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
-    if bg_active {
-        p.rect_stroke(bgr.expand(2.0), 2.0, frame, StrokeKind::Outside);
-    }
-    p.rect_filled(fgr, 2.0, c32(app.session.tools.foreground));
-    p.rect_stroke(fgr, 2.0, Stroke::new(1.0, Color32::from_gray(210)), StrokeKind::Outside);
-    if !bg_active {
-        p.rect_stroke(fgr.expand(2.0), 2.0, frame, StrokeKind::Outside);
-    }
-    // The foreground is on top, so it takes the clicks where the two overlap.
-    let bg_resp = ui.interact(bgr, ui.id().with("field-bg"), Sense::click());
-    let fg_resp = ui.interact(fgr, ui.id().with("field-fg"), Sense::click());
-    let picked = if fg_resp.clicked() { false } else { bg_resp.clicked() || bg_active };
-    app.ui.color_panel.background = picked;
-    if fg_resp.double_clicked() || bg_resp.double_clicked() {
-        crate::color_picker_ui::open(app, if picked { "background" } else { "foreground" });
-    }
-}
-
-/// Where the dock tells the Color field how tall its group body is.
 pub(crate) fn color_field_fill_id() -> egui::Id {
     egui::Id::new("color-field-fill-height")
 }
 
 /// Height of the Color field: the group body's height (when docked) less the hex/RGB readout,
 /// which folds onto a second line in a narrow dock. 120 pt when nothing sets a height.
+#[cfg(test)]
 fn color_field_height(avail: Option<f32>, width: f32) -> f32 {
     let reserve = 32.0 + if width < 280.0 { 26.0 } else { 0.0 };
     avail.filter(|a| a.is_finite()).map_or(120.0, |a| (a - reserve).clamp(120.0, 2000.0))
@@ -3654,8 +3666,12 @@ fn field_hsva(mut hsva: egui::ecolor::Hsva, remembered: (f32, f32)) -> egui::eco
     hsva
 }
 
-/// Photoshop Color panel: saturation/brightness field + hue strip, drawn as shaded meshes.
+/// Shared Color panel entry point, independent of the dock hosting it.
 fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    crate::artist_color::show(app, ui);
+}
+
+pub(crate) fn rectangular_color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui, height: f32) {
     let t = Tokens::get(ui.ctx());
     let bg_active = app.ui.color_panel.background;
     let key = egui::Id::new(("color-field-hue", bg_active));
@@ -3665,17 +3681,11 @@ fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     hsva = field_hsva(hsva, remembered);
     let w = ui.available_width();
     let strip_w = 14.0;
-    // Photoshop's Color panel field fills the panel: take the height the dock offers, less the
-    // hex/RGB readout (which folds onto a second line in a narrow dock). Without a dock, 120 pt.
-    // Only Photoshop's themes stretch it over the group: the other themes put sliders under it.
-    let fill = if t.pro { ui.data(|d| d.get_temp::<f32>(color_field_fill_id())) } else { None };
-    let h = color_field_height(fill, w);
+    let h = height.max(1.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        let (chips, _) = ui.allocate_exact_size(vec2(38.0, h), Sense::hover());
-        field_chips(app, ui, chips);
         // SV field.
-        let field_w = w - 38.0 - strip_w - 16.0;
+        let field_w = (w - strip_w - 8.0).max(1.0);
         let (field, fresp) = ui.allocate_exact_size(vec2(field_w, h), Sense::click_and_drag());
         let mut mesh = egui::Mesh::default();
         let n = 16;
@@ -3741,29 +3751,11 @@ fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.data_mut(|d| d.insert_temp(key, (hsva.h, hsva.s)));
         }
     });
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        let mut c = if bg_active { app.session.tools.background } else { app.session.tools.foreground };
-        if color_readout(ui, ui.id().with(("color-field", bg_active)), &mut c) {
-            if bg_active {
-                app.session.tools.background = c;
-            } else {
-                app.session.tools.foreground = c;
-                crate::type_tool::foreground_changed(app);
-            }
-            // Keep the hue for greys, so the field marker doesn't jump to red; the saturation with
-            // it, so a later black lands on the corner it was last dragged to (#3228).
-            let h = srgb_hsva(c);
-            if h.s >= 0.01 && h.v >= 0.01 {
-                ui.data_mut(|d| d.insert_temp(key, (h.h, h.s)));
-            }
-        }
-    });
 }
 
 /// Tool colours are sRGB-encoded floats; egui's Hsva works on sRGB bytes via these helpers
 /// (its `from_rgba_unmultiplied` expects *linear* RGB, which gave wrong readouts).
-fn srgb_bytes(c: [f32; 4]) -> [u8; 3] {
+pub(crate) fn srgb_bytes(c: [f32; 4]) -> [u8; 3] {
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
     [q(c[0]), q(c[1]), q(c[2])]
 }
@@ -3771,18 +3763,18 @@ fn srgb_bytes(c: [f32; 4]) -> [u8; 3] {
 /// The Color panel's HSB, as Photoshop's and the Color Picker's: on the sRGB-encoded values,
 /// so a 50% grey has Brightness 50%. egui's `Hsva` conversions work in linear light, which put
 /// that grey at 22% and drew the field's middle as 188 (#3323); `Hsva` only holds the numbers.
-fn srgb_hsva(c: [f32; 4]) -> egui::ecolor::Hsva {
+pub(crate) fn srgb_hsva(c: [f32; 4]) -> egui::ecolor::Hsva {
     let [h, s, v] = crate::color_picker_ui::rgb_to_hsv([c[0], c[1], c[2]].map(|v| v.clamp(0.0, 1.0)));
     egui::ecolor::Hsva::new(h / 360.0, s, v, 1.0)
 }
 
-fn hsva_srgb(h: egui::ecolor::Hsva) -> [f32; 4] {
+pub(crate) fn hsva_srgb(h: egui::ecolor::Hsva) -> [f32; 4] {
     let [r, g, b] = crate::color_picker_ui::hsv_to_rgb(h.h * 360.0, h.s.clamp(0.0, 1.0), h.v.clamp(0.0, 1.0));
     [r, g, b, 1.0]
 }
 
 /// The colour to draw for Color panel HSB `h` (see [`srgb_hsva`]).
-fn hsva_color32(h: egui::ecolor::Hsva) -> Color32 {
+pub(crate) fn hsva_color32(h: egui::ecolor::Hsva) -> Color32 {
     let [r, g, b] = srgb_bytes(hsva_srgb(h));
     Color32::from_rgb(r, g, b)
 }
@@ -3790,20 +3782,25 @@ fn hsva_color32(h: egui::ecolor::Hsva) -> Color32 {
 /// The Color panel's editable colour readout: a hex field and R, G, B fields, all drawn like the
 /// dock's [`widgets::value_field`] so they sit in the theme. Editing any of them sets `color`
 /// (sRGB-encoded floats) and returns `true`.
-fn color_readout(ui: &mut egui::Ui, id: egui::Id, color: &mut [f32; 4]) -> bool {
+pub(crate) fn color_readout(ui: &mut egui::Ui, id: egui::Id, color: &mut [f32; 4]) -> bool {
     let t = Tokens::get(ui.ctx());
     let mut changed = false;
     // Wrapped so the fields fold onto a second line in a narrow dock instead of being clipped.
     ui.horizontal_wrapped(|ui| {
         // Docks zero the item spacing; keep the fields apart.
         ui.spacing_mut().item_spacing.x = 4.0;
-        ui.label(RichText::new("#").font(theme::mono(12.0)).color(t.text_faint));
-        changed = hex_edit(ui, id.with("hex"), color);
+        ui.allocate_ui_with_layout(vec2(80.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.label(RichText::new("#").font(theme::mono(12.0)).color(t.text_faint));
+            changed = hex_edit(ui, id.with("hex"), color);
+        });
         let [mut r, mut g, mut b] = srgb_bytes(*color).map(f32::from);
         let mut rgb = false;
         for (label, v) in [("R", &mut r), ("G", &mut g), ("B", &mut b)] {
-            ui.label(RichText::new(label).font(theme::mono(11.0)).color(t.text_faint));
-            rgb |= widgets::value_field(ui, v, 0.0..=255.0, "", 38.0).changed();
+            // Keep a channel label with its field when a narrow panel wraps the row.
+            ui.allocate_ui_with_layout(vec2(54.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.label(RichText::new(label).font(theme::mono(11.0)).color(t.text_faint));
+                rgb |= widgets::value_field(ui, v, 0.0..=255.0, "", 38.0).changed();
+            });
         }
         if rgb {
             *color = [r / 255.0, g / 255.0, b / 255.0, 1.0];

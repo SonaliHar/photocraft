@@ -1049,11 +1049,33 @@ pub struct DockTabs {
 }
 
 /// Color panel state.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ColorPanelState {
     /// The panel edits the background colour (its chip was clicked), not the foreground.
     pub background: bool,
+    pub picker: crate::artist_color::Picker,
+    pub sliders: bool,
+    pub show_recent: bool,
+    pub rotate_triangle: bool,
+    pub harmony_ring: bool,
+    pub harmony_mode: crate::artist_color::HarmonyMode,
+    pub recent: [Option<[f32; 4]>; 12],
+}
+
+impl Default for ColorPanelState {
+    fn default() -> Self {
+        Self {
+            background: false,
+            picker: Default::default(),
+            sliders: true,
+            show_recent: true,
+            rotate_triangle: true,
+            harmony_ring: true,
+            harmony_mode: Default::default(),
+            recent: [None; 12],
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

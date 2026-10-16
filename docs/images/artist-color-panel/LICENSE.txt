@@ -1,0 +1,3 @@
+Original PhotoCraft interface screenshots supplied by @CriaTattoo.
+These documentation assets are contributed under MIT OR Apache-2.0,
+the same terms as PhotoCraft. See ../../../LICENSE-MIT and ../../../LICENSE-APACHE.

@@ -3990,3 +3990,40 @@ layerLabel	No Color	Sem cor
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	A Transformação livre ainda está sendo aplicada; tente novamente quando terminar.
 	The transform couldn't be applied.	Não foi possível aplicar a transformação.
+
+	Wheel	Roda
+	Field	Campo
+	HSB Sliders	Barras HSB
+	Recent Colors	Cores recentes
+	Keep Current Color	Guardar cor atual
+
+	Rotate Triangle	Girar triângulo
+
+	12-Color Ring	Círculo de 12 cores
+	Related Colors	Relações com a cor
+	RGB Circle	Círculo RGB
+	Primary Color	Cor primária
+	Secondary Color	Cor secundária
+	Tertiary Color	Cor terciária
+	Selected Color	Cor selecionada
+	Analogous Color	Cor análoga
+	Complementary / Opposite Color	Cor complementar / oposta
+	Triadic Color	Cor da tríade
+	Tetradic Color	Cor da tétrade
+	Split Complementary Color	Cor complementar dividida
+
+	Harmony Mode	Modo de harmonias
+
+	Latest color: saved with +	Última cor: será salva pelo +
+
+	Save latest color to Swatches	Salvar última cor em Amostras
+
+	Existing group	Grupo existente
+
+	New group	Novo grupo
+
+	Group name	Nome do grupo
+
+	Create group and save color	Criar grupo e salvar cor
+
+	Saved color {color} to group {group}	Cor {color} salva no grupo {group}

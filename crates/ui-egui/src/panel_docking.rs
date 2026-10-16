@@ -544,7 +544,7 @@ fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
     let pro = crate::theme::Tokens::get(ui.ctx()).pro;
     let Some(tab) = group.tabs(pro).iter().position(|name| name == label) else { return };
     *group.tab_mut(&mut app.ui.dock_tabs) = tab;
-    if group.scrolls_itself(tab) {
+    if id == "color" || group.scrolls_itself(tab) {
         crate::panels::dock_body(app, ui, *group, tab);
     } else {
         egui::ScrollArea::vertical()
@@ -846,6 +846,10 @@ struct PanelContent<'a> {
 
 fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
     match panel {
+        "color" => {
+            crate::artist_color::options(app, ui);
+            ui.separator();
+        }
         "layers" => {
             crate::layer_row_ui::panel_menu(app, ui);
             ui.separator();
