@@ -62,6 +62,14 @@ pub fn start() {
         {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
         }
+        let mut invite = match craft_cloud_client::invite::arrive().await {
+            craft_cloud_client::invite::Arrival::Ordinary => None,
+            craft_cloud_client::invite::Arrival::Refused(reason) => {
+                craft_cloud_client::invite::refuse(&reason);
+                return;
+            }
+            craft_cloud_client::invite::Arrival::Invited(invitation) => Some(invitation),
+        };
         // Hydrate before constructing an interactive session: a late load must never undo a
         // user deletion/reorder. Storage denial or timeout still opens a usable session.
         let (database, presets, mut preset_warnings) = match crate::indexed_presets::load().await {
@@ -103,9 +111,12 @@ pub fn start() {
                         app.share.connect(share.for_app("photocraft"));
                     }
                     photocraft_ui_egui::cloud::start(&mut app);
+                    let pending_file = if invite.is_some() { None } else { query_param("file") };
+                    if let Some(invitation) = invite.take() {
+                        open_invite(&mut app, invitation);
+                    }
                     // `?file=<id>` is the deep link CollabCraft passes when opening a document from
                     // a cloud file list (the provider's own handle, opaque here).
-                    let pending_file = query_param("file");
                     let unsaved = Arc::new(AtomicBool::new(false));
                     guard_unload(unsaved.clone());
                     Ok(Box::new(WebShell { app, inbox, unsaved, served, database, presets, pending_file, opened_file: false }))
@@ -166,6 +177,29 @@ fn guard_unload(unsaved: Arc<AtomicBool>) {
     });
     if window.add_event_listener_with_callback("beforeunload", cb.as_ref().unchecked_ref()).is_ok() {
         cb.forget();
+    }
+}
+
+fn open_invite(app: &mut PhotocraftApp, invitation: craft_cloud_client::invite::Invitation) {
+    let name = invitation.name.clone();
+    match photocraft_ui_egui::cloud::CloudApp::open_bytes(app, &name, invitation.document.clone()) {
+        Ok(Some(_)) => {
+            let mode = if invitation.read_only() { " (view only)" } else { "" };
+            let who = if invitation.recipient.is_empty() { String::new() } else { format!(" (shared with {})", invitation.recipient) };
+            app.ui.status = format!("Opened \"{name}\"{mode}{who}");
+            app.ui.status_error = false;
+            if let Err(e) = invitation.join() {
+                log::warn!("invite relay join failed: {e}");
+            }
+        }
+        Ok(None) => {
+            app.ui.status = format!("Shared \"{name}\" needs a choice before it opens");
+            app.ui.status_error = false;
+        }
+        Err(e) => {
+            log::error!("invite open failed: {e}");
+            craft_cloud_client::invite::refuse(&format!("The shared document could not be opened. {e}"));
+        }
     }
 }
 
