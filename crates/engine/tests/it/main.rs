@@ -3,6 +3,7 @@
 //! not into a new top-level `tests/*.rs` file (each of those links a binary of its own).
 
 mod affinity;
+mod artboard_export_names;
 mod background_layer_consistency;
 mod brush_smoothing;
 mod camera_raw_noise_clamp;

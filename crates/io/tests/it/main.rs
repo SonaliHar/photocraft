@@ -23,6 +23,7 @@ mod corpus_regressions;
 mod effects_multi;
 mod exif_resolution;
 mod export_progress;
+mod exr_part_profile;
 mod flat;
 mod gif_frames;
 mod heif;
