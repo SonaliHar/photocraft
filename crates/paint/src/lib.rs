@@ -20,7 +20,6 @@ use serde::{Deserialize, Serialize};
 
 pub mod bg_erase;
 pub mod brush;
-pub mod curve;
 pub mod dynamics;
 pub mod mixer;
 pub mod outline;
@@ -37,7 +36,6 @@ pub use brush::{
     BrushPreset, BrushSettings, ColorDynamics, Control, DualBrush, Dynamic, MAX_BRUSH_SIZE, MAX_SCATTER, MaskMode, Pattern, PatternStyle, Pose, PresetCaptures,
     Scattering, SectionLocks, ShapeDynamics, Smoothing, Texture, TipShape, Transfer,
 };
-pub use curve::ResponseCurve;
 pub use mixer::MixerSettings;
 pub use render::{BrushContext, StrokeRenderer, UnionLive, grid_center, grid_square, render_stroke};
 pub use tile::{GrayTile, StoredTile};
@@ -159,12 +157,18 @@ pub fn tip_shape(radius: f32, hardness: f32) -> (f32, f32) {
     let t = h - i as f32;
     let (a, b) = (TIP_SHAPE[i], TIP_SHAPE[i + 1]);
     let (r0, s) = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+
     let radius = if radius.is_finite() { radius.max(0.0) } else { 0.0 };
     // A tip of a few pixels keeps a narrower edge, so a small hard dab stays solid in the middle.
     // Never sharper than a quarter pixel, the small-tip supersampling step.
-    let edge = TIP_EDGE_PX.min(0.3 * radius).max(0.25);
+    let edge = if radius < 0.83 {
+        (0.3 * radius).max(0.02)
+    } else {
+        TIP_EDGE_PX.min(0.3 * radius).max(0.25)
+    };
     ((r0 * radius).min(radius - edge).max(0.0), (s * radius).max(edge).max(1e-3))
 }
+
 
 /// `exp(-u)` as `(1 − u/64)⁶⁴` by six squarings: within 1/255 of `exp` where it matters, exact
 /// arithmetic (the same on every platform) and exactly 0 from `u = 64`.

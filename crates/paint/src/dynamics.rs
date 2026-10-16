@@ -100,24 +100,36 @@ impl Smoother {
         let dt = prev_input.map_or(0.0, |q| p.time - q.time);
         let still = prev_input.is_some_and(|q| q.x == p.x && q.y == p.y);
         if still && !self.cfg.catch_up {
-            // Without Stroke Catch-Up the brush stops while the pointer pauses (Photoshop).
             return;
         }
         let (iters, step) = if dt > 0.0 && dt.is_finite() {
             let steps = dt / SMOOTHING_STEP_MS;
             let iters = steps.ceil().clamp(1.0, 64.0);
-            // Each of `iters` moves covers `steps / iters` steps' worth of pull.
             (iters as usize, 1.0 - (1.0 - a).powf(steps.min(64.0) / iters))
         } else {
             (1, a)
         };
+
         let mut cur = pos;
+        let f = step as f32;
         for _ in 0..iters {
-            cur = StrokePoint { x: cur.x + (p.x - cur.x) * step, y: cur.y + (p.y - cur.y) * step, ..p };
+            // Interpolate position AND pressure (and tilt/rotation/wheel, for correctness).
+            cur = StrokePoint {
+                x: cur.x + (p.x - cur.x) * step,
+                y: cur.y + (p.y - cur.y) * step,
+                pressure: cur.pressure + (p.pressure - cur.pressure) * f,
+                tilt_x: cur.tilt_x + (p.tilt_x - cur.tilt_x) * f,
+                tilt_y: cur.tilt_y + (p.tilt_y - cur.tilt_y) * f,
+                rotation: cur.rotation + (p.rotation - cur.rotation) * f,
+                wheel: cur.wheel + (p.wheel - cur.wheel) * f,
+                time: p.time,
+            };
             out.push(cur);
         }
         self.pos = Some(cur);
     }
+
+
 
     /// Is Stroke Catch-Up still pulling the brush towards a pointer that has stopped? Then the
     /// stroke needs time to keep passing (repeats of the last point) while the pointer is held.
@@ -136,11 +148,13 @@ impl Smoother {
         (self.active() && (pos.x != last.x || pos.y != last.y)).then_some(([pos.x, pos.y], [last.x, last.y]))
     }
 
-    /// End of stroke: with Catch-Up On Stroke End the brush finishes at the last pointer position.
+
+
     pub fn finish(&mut self, out: &mut Vec<StrokePoint>) {
         if !self.active() || !self.cfg.catch_up_on_end {
             return;
         }
+        // (Option<StrokePoint>, Option<StrokePoint>) — match the tuple, not `Some((..))`.
         if let (Some(pos), Some(last)) = (self.pos, self.last_input)
             && (pos.x != last.x || pos.y != last.y)
         {
@@ -278,17 +292,21 @@ impl PathWalker {
             self.emit(f, out);
         }
         if len > 1e-9 {
-            // Speed spacing needs the segment's duration; without timestamps (a straight ⇧-click
-            // line, or input that carries no times) the segment is spaced by distance instead.
+
+            // FIX Instead of accumulating next_at, keep an absolute "distance along the segment" cursor
             let dt = p.time - a.time;
             match self.speed.filter(|_| dt > 0.0 && dt.is_finite()) {
                 None => {
                     if !self.grid.is_some_and(|g| self.grid_steps(&a, &p, g, out)) {
+                        // First dab of this segment sits `next_at` pixels from `a` —
+                        // it continues the previous segment's spacing.
                         while self.next_at <= len + 1e-9 {
-                            let q = lerp_pt(&a, &p, (self.next_at / len).min(1.0));
+                            let f = (self.next_at / len).min(1.0);
+                            let q = lerp_pt(&a, &p, f);
                             self.emit(q, out);
                             self.next_at += step_len(&q).max(0.25);
                         }
+                        // What is left over carries into the next segment.
                         self.next_at -= len;
                     }
                 }
@@ -356,16 +374,6 @@ pub fn control_value(c: Control, fade_steps: u32, s: &StepInput) -> f32 {
     }
 }
 
-/// A dynamic's control value passed through its own response curve ([`Dynamic::curve`]). Controls
-/// with no 0..1 input (Off, the direction controls) read 1 and skip the curve.
-pub fn dynamic_value(d: &Dynamic, s: &StepInput) -> f32 {
-    let v = control_value(d.control, d.fade_steps, s);
-    match d.control {
-        Control::Off | Control::InitialDirection | Control::Direction => v,
-        Control::Fade | Control::PenPressure | Control::PenTilt | Control::StylusWheel | Control::Rotation => d.curve.eval(v),
-    }
-}
-
 /// Angle contributed by a control, in degrees (counter-clockwise).
 pub fn control_angle(c: Control, fade_steps: u32, s: &StepInput) -> f32 {
     let p = &s.point;
@@ -394,7 +402,7 @@ fn scalar(d: &Dynamic, s: &StepInput, r: f32) -> f32 {
         return 1.0;
     }
     let min = d.minimum.clamp(0.0, 1.0);
-    let cv = dynamic_value(d, s);
+    let cv = control_value(d.control, d.fade_steps, s);
     let v = (min + (1.0 - min) * cv) * (1.0 - d.jitter.clamp(0.0, 1.0) * r);
     v.max(min)
 }
@@ -435,7 +443,7 @@ pub fn dynamic_color(b: &BrushSettings, s: &StepInput, seed: u64, index: u64) ->
     let cd = &b.color_dynamics;
     let (fg, bg) = (b.color, b.background);
     let r = |st: u64| rand01(seed, index, st);
-    let base = if cd.fg_bg.control != Control::Off { 1.0 - dynamic_value(&cd.fg_bg, s) } else { 0.0 };
+    let base = if cd.fg_bg.control != Control::Off { 1.0 - control_value(cd.fg_bg.control, cd.fg_bg.fade_steps, s) } else { 0.0 };
     let t = (base + (1.0 - base) * cd.fg_bg.jitter.clamp(0.0, 1.0) * r(stream::FG_BG)).clamp(0.0, 1.0);
     let rgb = [fg[0] + (bg[0] - fg[0]) * t, fg[1] + (bg[1] - fg[1]) * t, fg[2] + (bg[2] - fg[2]) * t];
     let [mut h, mut sat, mut v] = rgb_to_hsv(rgb);
@@ -454,7 +462,7 @@ pub fn base_diameter(b: &BrushSettings, s: &StepInput) -> f32 {
     let mut f = 1.0;
     if sd.enabled && sd.size.control != Control::Off {
         let min = sd.size.minimum.clamp(0.0, 1.0);
-        f = min + (1.0 - min) * dynamic_value(&sd.size, s);
+        f = min + (1.0 - min) * control_value(sd.size.control, sd.size.fade_steps, s);
     } else if b.pressure_size {
         f = s.point.pressure.clamp(0.0, 1.0);
     }
@@ -476,10 +484,12 @@ impl DabBuilder {
         Self { brush: brush.clone(), seed: brush.seed, stroke_color: None, next_index: 0 }
     }
 
+    /// FIX: don't floor base_diameter to 1.0 for spacing purposes
     pub fn step_len(&self, p: &StrokePoint) -> f64 {
         let s = StepInput { point: *p, direction: 0.0, initial_direction: 0.0, step: 0 };
-        let d = base_diameter(&self.brush, &s).max(1.0);
-        f64::from(d * self.brush.spacing.max(0.01)).max(0.5)
+        // No `.max(1.0)` here — the size drives spacing, however small.
+        let d = base_diameter(&self.brush, &s);
+        f64::from(d * self.brush.spacing.max(0.01)).max(0.25)
     }
 
     pub fn build(&mut self, s: &StepInput, out: &mut Vec<Dab>) {
@@ -536,11 +546,31 @@ impl DabBuilder {
                     }
                 }
             }
-            let radius = (diameter / 2.0).max(0.5);
-            // Scatter.
+            let radius = diameter / 2.0;          // no floor
+            if radius < 0.1 {
+                // Not drawn: too small to make a difference. Still advance the
+                // RNG stream so the rest of the stroke is deterministic.
+                continue;
+            }
+
+            // Photoshop/Krita/CSP stop painting sub-pixel dabs entirely; they do not fade
+            // them out. A 0.5 px radius is one pixel across — below it the dab contributes
+            // so little ink that it only shows up as a hair. Skip it.
+            const MIN_PAINT_RADIUS: f32 = 0.05;
+            if radius < MIN_PAINT_RADIUS {
+                // RNG stream already advanced at the top of the loop; no extra bump here.
+                continue;
+            }
+
+            // Dab area relative to a 1-px-radius dab (radius 1 = full paint).
+            // Radius 0.5 → 0.25, radius 0.15 → 0.0225. Both alpha and opacity scale,
+            // so overlapping tiny dabs saturate at the tiny-dab ceiling instead of
+            // building to solid black — the way Photoshop's min-size brushes fade.
+            let area_scale = (radius / 1.0).clamp(0.0, 1.0).powi(2);
+
             let mut c = Point::new(s.point.x, s.point.y);
             if sc.enabled && sc.scatter.jitter > 0.0 {
-                let cv = dynamic_value(&sc.scatter, s);
+                let cv = control_value(sc.scatter.control, sc.scatter.fade_steps, s);
                 let amt = f64::from(sc.scatter.jitter * cv * radius);
                 let (ox, oy) = (rand_signed(seed, i, stream::SCATTER_X) as f64 * amt, rand_signed(seed, i, stream::SCATTER_Y) as f64 * amt);
                 if sc.both_axes {
@@ -577,12 +607,18 @@ impl DabBuilder {
             out.push(Dab {
                 center: c,
                 radius,
-                alpha: flow.clamp(0.0, 1.0),
-                angle: angle.to_radians(),
+
+                // was:
+                // alpha: flow.clamp(0.0, 1.0),
+                // opacity: opacity.clamp(0.0, 1.0),
+                alpha:   (flow     * area_scale).clamp(0.0, 1.0),
+                opacity: (opacity  * area_scale).clamp(0.0, 1.0),
+
+                angle:   angle.to_radians(),
+
                 roundness,
                 flip_x: fx,
                 flip_y: fy,
-                opacity: opacity.clamp(0.0, 1.0),
                 color,
                 depth,
                 index: i,
