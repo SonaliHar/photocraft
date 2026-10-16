@@ -276,6 +276,7 @@ pub fn import_with_svg_group_depth_and_interrupt(
 fn import_psd(
     name: &str,
     ctl: &photocraft_raster::Interrupt,
+    lazy_hidden: bool,
     parse: impl FnOnce(&dyn Fn(&PsdFile) -> bool, &dyn Fn(&PsdFile) -> bool) -> photocraft_psd::Result<(PsdFile, Option<photocraft_psd::Result<Vec<u8>>>)>,
 ) -> Result<ImportResult, IoError> {
     // A merged image the import reads is decoded with the parse: a ZIP one is inflated once.
@@ -285,10 +286,29 @@ fn import_psd(
     psd_import::check_group_depth(&file)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(0.05);
-    let (mut document, warnings) = psd_import::psd_to_document_owned(file, ctl, merged).ok_or(IoError::Cancelled)?;
+    let (mut document, warnings) = psd_import::psd_to_document_owned(file, ctl, merged, lazy_hidden).ok_or(IoError::Cancelled)?;
     document.name = name.to_string();
     text_import::prepare(&mut document);
     Ok(ImportResult { document, warnings, source_read_only: false, preview_only: false })
+}
+
+pub use photocraft_psd::Preview as PsdPreview;
+
+/// A small picture of the PSD/PSB at `path` from its merged image (see
+/// [`PsdFile::merged_preview`]), reading only the file's structure and the rows it samples: for a
+/// multi-gigabyte file a few megabytes, so it can show while the file is still opening. `None`
+/// for other files, and PSDs without a merged image it can sample.
+#[cfg(any(unix, windows))]
+pub fn psd_preview(path: &std::path::Path, max_side: u32) -> Option<PsdPreview> {
+    let source = photocraft_psd::FileSource::open(path).ok()?;
+    let mut magic = [0u8; 4];
+    photocraft_psd::ReadAt::read_at(&source, 0, &mut magic).ok()?;
+    if !is_psd(&magic) {
+        return None;
+    }
+    // Every global block of any size stays in the file: only the merged image is read.
+    let (file, _) = PsdFile::from_source_deferring(photocraft_psd::Source::new(source), |_, len| len >= 1 << 16, |_| false, |_| false).ok()?;
+    file.merged_preview(max_side).ok().flatten()
 }
 
 /// Global blocks [`import_file`] leaves in the file: embedded smart-object files of at least a
@@ -318,7 +338,8 @@ pub fn import_file(name: &str, path: &std::path::Path, max_group_depth: usize, c
         return import_with_svg_group_depth_and_interrupt(name, &bytes, max_group_depth, ctl);
     }
     let source = photocraft_psd::Source::new(source);
-    let r = import_psd(name, ctl, |want, recover| PsdFile::from_source_deferring(source, defer_block, want, recover))?;
+    // Hidden layers are decoded when first used, from the open file (Unix: see `defer_block`).
+    let r = import_psd(name, ctl, cfg!(unix), |want, recover| PsdFile::from_source_deferring(source, defer_block, want, recover))?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
     Ok(r)
@@ -330,7 +351,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, m
         return Ok(ImportResult { document: photocraft_format::load_from_bytes(bytes)?, warnings: Vec::new(), source_read_only: false, preview_only: false });
     }
     if is_psd(bytes) {
-        return import_psd(name, ctl, |want, recover| PsdFile::from_bytes_and_merged_recovering(bytes, want, recover));
+        return import_psd(name, ctl, false, |want, recover| PsdFile::from_bytes_and_merged_recovering(bytes, want, recover));
     }
     if affinity::is_affinity(bytes) || affinity::has_extension(name) {
         return affinity::import(name, bytes);
@@ -414,6 +435,9 @@ pub fn export_with(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl:
     } else {
         doc
     };
+    // Hidden layers still in the opened file are read now; one that can't be is an error, not
+    // an empty layer in the file written.
+    doc.decode_lazy_layers().map_err(IoError::Read)?;
     let r = export_stages(doc, name_or_ext, opts, ctl)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
