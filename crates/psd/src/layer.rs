@@ -4,7 +4,7 @@ use crate::blend::BlendMode;
 use crate::compression::{Compression, PlaneLayout, decode_planes, encode_planes};
 use crate::error::{PsdError, Result};
 use crate::header::{MAX_DIMENSION, Version};
-use crate::io::{Reader, WriteExt, decode_legacy_name, read_pascal, write_pascal};
+use crate::io::{Reader, Sink, WriteExt, append_with, decode_legacy_name, read_pascal, write_pascal};
 use crate::tagged::{BlockData, SectionDivider, SectionType, TaggedBlock, read_blocks, uses_long_length, write_blocks};
 
 /// Channel id of the transparency mask.
@@ -764,35 +764,46 @@ impl LayerInfo {
 
     /// Serializes the body without any trailing padding (the padding field is ignored).
     pub(crate) fn write_unpadded(&self, out: &mut Vec<u8>, version: Version) -> Result<()> {
+        append_with(out, |s| self.write_unpadded_to(s, version))
+    }
+
+    /// Serializes the body (without a length field).
+    #[cfg(test)]
+    pub(crate) fn write_body(&self, out: &mut Vec<u8>, version: Version) -> Result<()> {
+        append_with(out, |s| self.write_body_to(s, version))
+    }
+
+    /// [`Self::write_unpadded`] to a streaming [`Sink`]: the records are staged, the channel data
+    /// goes straight through.
+    pub(crate) fn write_unpadded_to<W: std::io::Write + std::io::Seek + ?Sized>(&self, out: &mut Sink<'_, W>, version: Version) -> std::io::Result<()> {
         let n = i16::try_from(self.layers.len()).map_err(|_| PsdError::LimitExceeded("more than 32767 layers"))?;
-        out.put_i16(if self.merged_alpha { -n } else { n });
+        out.small(|o| {
+            o.put_i16(if self.merged_alpha { -n } else { n });
+            Ok(())
+        })?;
         for l in &self.layers {
-            l.write(out, version)?;
+            out.small(|o| l.write(o, version))?;
         }
-        for l in &self.layers {
-            for c in &l.channels {
-                if let Some(comp) = c.compression {
-                    out.put_u16(comp.as_u16());
-                    out.put(&c.data);
-                }
+        for c in self.layers.iter().flat_map(|l| &l.channels) {
+            if let Some(comp) = c.compression {
+                out.small(|o| {
+                    o.put_u16(comp.as_u16());
+                    Ok(())
+                })?;
+                out.put(&c.data)?;
             }
         }
         Ok(())
     }
 
-    /// Serializes the body (without a length field).
-    pub(crate) fn write_body(&self, out: &mut Vec<u8>, version: Version) -> Result<()> {
-        let start = out.len();
-        self.write_unpadded(out, version)?;
+    /// [`Self::write_body`] to a streaming [`Sink`].
+    pub(crate) fn write_body_to<W: std::io::Write + std::io::Seek + ?Sized>(&self, out: &mut Sink<'_, W>, version: Version) -> std::io::Result<()> {
+        let start = out.pos();
+        self.write_unpadded_to(out, version)?;
         match &self.padding {
             Some(p) => out.put(p),
-            None => {
-                if (out.len() - start) % 2 == 1 {
-                    out.put_u8(0);
-                }
-            }
+            None => out.zeros(((out.pos() - start) % 2) as usize),
         }
-        Ok(())
     }
 }
 
