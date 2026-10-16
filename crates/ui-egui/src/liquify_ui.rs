@@ -1263,10 +1263,15 @@ mod tests {
             app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 65, "height": 80})).unwrap();
             app.session.execute("select.modify.feather", json!({"radius": 4})).unwrap();
             let selection = app.session.active().unwrap().doc.selection.as_ref().unwrap();
-            let edge = selection.read_pixel(64, 40)[0];
+            let coverage = |x| {
+                let mut pixel = [0.0];
+                selection.read_pixel(x, 40, &mut pixel);
+                pixel[0]
+            };
+            let edge = coverage(64);
             assert!(edge > 0.0 && edge < 1.0, "actual feathered edge: {edge}");
-            assert!(selection.read_pixel(50, 40)[0] > edge);
-            assert!(selection.read_pixel(80, 40)[0] < edge);
+            assert!(coverage(50) > edge);
+            assert!(coverage(80) < edge);
             open(&mut app, &ctx).unwrap();
             let before = app.distort.liquify.as_ref().unwrap().out.clone();
             control(&mut app, &json!({"tool": "forwardWarp", "size": 24})).unwrap();
