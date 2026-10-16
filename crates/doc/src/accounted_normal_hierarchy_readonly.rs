@@ -22,6 +22,8 @@ mod filter_remove;
 pub(super) mod metadata;
 #[path = "accounted_normal_hierarchy_plain.rs"]
 mod plain;
+#[path="accounted_normal_hierarchy_native.rs"]
+mod native;
 fn refused<T>() -> Result<T, BackingError> {
     Err(BackingError::Unsupported)
 }
@@ -734,6 +736,7 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, c: &ReadControl<'_>
 #[derive(Clone, Copy)]
 enum CopyKind<'a> {
     Title(&'a str),
+    Native(native::Plan<'a>),
     Filter(filter::Plan),
     Move(filter_move::Plan),
     Remove(filter_remove::Plan),
@@ -744,7 +747,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     owner.document().checked_normal_hierarchy_mask_index_requirements(NormalHierarchyLimits::STANDARD, c.interrupt, &|n| c.check(n))?;
     let name_bytes = match kind {
         CopyKind::Title(name) => (name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
-        CopyKind::Filter(_) | CopyKind::Move(_) | CopyKind::Remove(_) | CopyKind::Expanded { .. } => 0,
+        CopyKind::Native(_) | CopyKind::Filter(_) | CopyKind::Move(_) | CopyKind::Remove(_) | CopyKind::Expanded { .. } => 0,
         CopyKind::Metadata(plan) => plan.replacement_name_bytes()?,
     };
     let archive_bytes = match kind {
@@ -752,6 +755,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         _ => 0,
     };
     let extra_work = match kind {
+        CopyKind::Native(plan) => plan.copy_work(),
         CopyKind::Remove(plan) => plan.copy_work()?,
         _ => 0,
     };
@@ -791,6 +795,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     }
     match kind {
         CopyKind::Title(name) => staged.document.name = imported_edits::copy_name(name, c)?,
+        CopyKind::Native(plan) => native::apply(&mut staged.document,plan,c)?,
         CopyKind::Filter(plan) => filter::apply(&mut staged.document, plan, c)?,
         CopyKind::Move(plan) => filter_move::apply(&mut staged.document, plan, c)?,
         CopyKind::Remove(plan) => filter_remove::apply(&mut staged.document, plan, c)?,

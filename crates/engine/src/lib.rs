@@ -1561,3 +1561,11 @@ mod u32_plain_hierarchy_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="accounted_u32_normal_hierarchy_native_tests.rs"]
 mod u32_normal_hierarchy_native_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_plain_hierarchy_paint_source_tests.rs"]
+mod plain_hierarchy_paint_source_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_hierarchy_native_stroke_native_tests.rs"]
+mod hierarchy_native_stroke_native_tests;

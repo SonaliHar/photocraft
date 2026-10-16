@@ -8756,3 +8756,7 @@ mod native_stroke_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="canvas_native_wide_stroke_tests.rs"]
 mod native_wide_stroke_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="canvas_normal_hierarchy_stroke_tests.rs"]
+mod normal_hierarchy_stroke_tests;

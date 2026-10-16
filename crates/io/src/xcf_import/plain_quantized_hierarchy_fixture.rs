@@ -16,15 +16,22 @@ fn prop(v: &mut Vec<u8>, tag: u32, payload: &[u8]) {
     v.extend_from_slice(payload);
 }
 pub fn dimensions(layout: usize) -> (u32, u32) {
-    assert!(layout < 2);
-    if layout == 0 { (8, 6) } else { (130, 65) }
+    assert!(layout < 3);
+    match layout {
+        0 => (8, 6),
+        1 => (130, 65),
+        _ => (257, 259),
+    }
 }
 /// Native endian RGBA codes, unequalRGB and alpha0/fraction/max. External input.
 pub fn native(depth: usize, layout: usize, leaf: usize) -> Vec<u8> {
+    if depth >= 3 {
+        return native_float(depth, layout, leaf);
+    }
     if depth == 2 {
         return native_u32(layout, leaf);
     }
-    assert!(depth < 2 && layout < 2 && leaf < 3);
+    assert!(depth < 2 && layout < 3 && leaf < 3);
     let (w, h) = dimensions(layout);
     let mut v = Vec::new();
     for y in 0..h {
@@ -55,7 +62,7 @@ pub fn native(depth: usize, layout: usize, leaf: usize) -> Vec<u8> {
 /// U32-only additive seed. Adjacent first red words0x80000000/0x80000001
 /// intentionally differ below normalizedF32 precision; old0/1 seeds unchanged.
 pub fn words_u32(layout: usize, leaf: usize, x: u32, y: u32) -> [u32; 4] {
-    assert!(layout < 2 && leaf < 3);
+    assert!(layout < 3 && leaf < 3);
     let (w, h) = dimensions(layout);
     assert!(x < w && y < h);
     let n = x + y * w + leaf as u32 * 13;
@@ -83,9 +90,62 @@ fn native_u32(layout: usize, leaf: usize) -> Vec<u8> {
     }
     v
 }
+/// Additive finite-unit floating seeds. Raw words retain signed zero and bits
+/// below F32 precision for F64. No producer/render oracle.
+pub fn words_float(depth: usize, layout: usize, leaf: usize, x: u32, y: u32) -> [u64; 4] {
+    assert!(matches!(depth, 3 | 4) && layout < 3 && leaf < 3);
+    let (w, h) = dimensions(layout);
+    assert!(x < w && y < h);
+    let n = x + y * w + leaf as u32 * 13;
+    if depth == 3 {
+        [
+            if n % 17 == 0 { 0x80000000 } else { 0x3e800001 + u64::from(n % 31) },
+            0x3f000001 + u64::from(n % 23),
+            0x3f400001 + u64::from(n % 19),
+            match n % 5 {
+                0 => 0x80000000,
+                1 => 0,
+                2 => 0x3e800001,
+                3 => 0x3f000001,
+                _ => 0x3f800000,
+            },
+        ]
+    } else {
+        [
+            if n % 17 == 0 { 0x8000000000000000 } else { 0x3fd0000000000001 + u64::from(n % 31) },
+            0x3fe0000000002001 + u64::from(n % 23),
+            0x3fe8000000000001 + u64::from(n % 19),
+            match n % 5 {
+                0 => 0x8000000000000000,
+                1 => 0,
+                2 => 0x3fd0000000000001,
+                3 => 0x3fe0000000000001,
+                _ => 0x3ff0000000000000,
+            },
+        ]
+    }
+}
+fn native_float(depth: usize, layout: usize, leaf: usize) -> Vec<u8> {
+    let (w, h) = dimensions(layout);
+    let mut v = Vec::new();
+    for y in 0..h {
+        for x in 0..w {
+            for word in words_float(depth, layout, leaf, x, y) {
+                if depth == 3 {
+                    v.extend_from_slice(&(word as u32).to_ne_bytes());
+                } else {
+                    v.extend_from_slice(&word.to_ne_bytes());
+                }
+            }
+        }
+    }
+    v
+}
 fn hierarchy(v: &mut Vec<u8>, depth: usize, layout: usize, leaf: usize) {
     let (w, h) = dimensions(layout);
-    let word = if depth == 2 {
+    let word = if depth == 4 {
+        8usize
+    } else if matches!(depth, 2 | 3) {
         4usize
     } else if depth == 0 {
         1usize
@@ -121,6 +181,10 @@ fn hierarchy(v: &mut Vec<u8>, depth: usize, layout: usize, leaf: usize) {
                 let bytes = &raw[start..start + tw as usize * bpp];
                 if word == 1 {
                     v.extend_from_slice(bytes);
+                } else if word == 8 {
+                    for c in bytes.chunks_exact(8) {
+                        v.extend_from_slice(&u64::from_ne_bytes(c.try_into().unwrap()).to_be_bytes());
+                    }
                 } else if word == 4 {
                     for c in bytes.chunks_exact(4) {
                         v.extend_from_slice(&u32::from_ne_bytes(c.try_into().unwrap()).to_be_bytes());
@@ -137,7 +201,7 @@ fn hierarchy(v: &mut Vec<u8>, depth: usize, layout: usize, leaf: usize) {
 /// layout0 is exactly4records/firstgroup without nesting, exercising the paid
 /// modern implicit priority partition. layout1 has nested+emptygroups.
 pub fn image_version(depth: usize, layout: usize, version: u32) -> Vec<u8> {
-    assert!(depth < 3 && layout < 2 && matches!(version, 12 | 13 | 22));
+    assert!(depth < 5 && layout < 3 && matches!(version, 12 | 13 | 22));
     let (w, h) = dimensions(layout);
     let rows: Vec<(&str, bool, Vec<u32>, Option<usize>)> = if layout == 0 {
         vec![
@@ -162,7 +226,11 @@ pub fn image_version(depth: usize, layout: usize, version: u32) -> Vec<u8> {
     u32be(&mut v, 0);
     u32be(
         &mut v,
-        if depth == 2 {
+        if depth == 4 {
+            750
+        } else if depth == 3 {
+            650
+        } else if depth == 2 {
             350
         } else if depth == 0 {
             150
@@ -231,4 +299,9 @@ pub fn image_layout(depth: usize, layout: usize) -> Vec<u8> {
 }
 pub fn image(depth: usize) -> Vec<u8> {
     image_layout(depth, 1)
+}
+
+/// New painting layout; old image(depth) stays layout1.
+pub fn image_paint(depth: usize) -> Vec<u8> {
+    image_layout(depth, 2)
 }

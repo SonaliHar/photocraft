@@ -943,7 +943,7 @@ impl Session {
         if id == "layer.new.layer" {
             crate::new_layer::captured_preflight(self, &params)?;
         }
-        if matches!(id, "paint.stroke" | "paint.pencil") && !self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_legacy_storage()) {
+        if matches!(id, "paint.stroke" | "paint.pencil") && !self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|crate::accounted_native_stroke::candidate(o)) {
             crate::brush_cmds::stroke_dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         }
         if matches!(id, "path.clippingPath.set" | "path.clippingPath.clear") {
@@ -1175,7 +1175,7 @@ impl Session {
             }
             // Bounded native pixel, filter and assigned-geometry property preparation share one
             // immutable registered work ledger; no per-cell allowance reset.
-            let native_brush_standard=matches!(id,"paint.stroke"|"paint.pencil") && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_legacy_storage());
+            let native_brush_standard=matches!(id,"paint.stroke"|"paint.pencil") && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|crate::accounted_native_stroke::candidate(o));
             let hierarchy_expanded_standard=id=="layer.setExpanded" && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage());
             let bounded_work = native_brush_standard || hierarchy_expanded_standard || id=="layer.renameLayer" && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()))
                 || matches!(id, "edit.clear" | "edit.fill" | "layer.translate")

@@ -223,7 +223,7 @@ pub(super) fn synchronize(doc: &mut Document, edit: AccountedEdit<'_>, c: &ReadC
     Ok(())
 }
 
-fn validate_native(backed: &crate::BackedLayer, rect: Rect, bytes: &[u8], c: &ReadControl<'_>) -> Result<usize, BackingError> {
+pub(super) fn validate_native(backed: &crate::BackedLayer, rect: Rect, bytes: &[u8], c: &ReadControl<'_>) -> Result<usize, BackingError> {
     c.check(1)?;
     if rect.is_empty() || !backed.operative_bounds().contains_rect(&rect) {
         return Err(BackingError::Bounds);

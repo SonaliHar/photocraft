@@ -90,11 +90,11 @@ fn bad(id: &str, message: &str) -> EngineError {
 
 /// Preserve the old global command set; rename is admitted only on this actual class.
 pub(crate) fn supports_for_session(session:&Session,id:&str)->bool{
- supports(id) || matches!(id,"paint.stroke"|"paint.pencil") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_legacy_storage()) || id=="layer.setExpanded" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()) || id=="layer.renameLayer" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()))
+ supports(id) || matches!(id,"paint.stroke"|"paint.pencil") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|crate::accounted_native_stroke::candidate(o)) || id=="layer.setExpanded" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()) || id=="layer.renameLayer" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()))
 }
 /// No editing or selection route is granted by readonly mixed-root storage.
 pub(crate) fn filtered_flat_mutation_refused(session:&Session,id:&str)->bool{
-    if matches!(id,"layer.select"|"layer.setExpanded") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()){return false}
+    if matches!(id,"layer.select"|"layer.setExpanded"|"paint.stroke"|"paint.pencil") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()){return false}
     supports_for_session(session,id) && !matches!(id,"edit.undo"|"edit.redo"|"history.selectState"|"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move"|"xcf.filter.remove"|"layer.setProps"|"layer.renameLayer")
         && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()))
 }
@@ -171,7 +171,7 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
         crate::accounted_clear::validate_request(session, params)?;
         return Ok(Request::Clear(params));
     }
-    if matches!(id,"paint.stroke"|"paint.pencil") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_legacy_storage()) {
+    if matches!(id,"paint.stroke"|"paint.pencil") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|crate::accounted_native_stroke::candidate(o)) {
         return Ok(Request::NativeStroke(crate::accounted_native_stroke::Request::parse(session,id,params,control)?));
     }
     if id=="layer.setExpanded" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()) {

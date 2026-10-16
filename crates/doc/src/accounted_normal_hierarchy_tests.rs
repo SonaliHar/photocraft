@@ -410,3 +410,6 @@ mod plain_quantized_tests;
 
 #[path="accounted_normal_hierarchy_u32_tests.rs"]
 mod u32_plain_tests;
+
+#[path="accounted_normal_hierarchy_native_tests.rs"]
+mod native_edit_tests;

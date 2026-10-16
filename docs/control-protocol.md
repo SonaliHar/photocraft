@@ -3225,3 +3225,26 @@ No readonly hierarchy pixel-edit permission is implied by the separate Legacy
 U32 brush support. Gray/assigned profiles, other encodings/geometries and stored
 integer filter/mask support remain open. Behavioral tests/test compilation and
 numerical/native/UI/performance acceptance remain deferred.
+
+
+Existing paint.stroke/paint.pencil can also paint a real leaf in an actual plain
+NormalHierarchy owner across U8/U16/U32/F32/F64. The existing nonlinear RGB,
+implicit-sRGB, full-origin and isolated Normal domain remains; all stored filter
+nodes and masks must be absent globally, including disabled/hidden entries.
+Group targets refuse. Nested leaf identity, parent/canonical row, native provider
+and defaults are captured against the immutable snapshot; inherited ancestor
+content/pixel/alpha locks remain effective. Native COW changes only CURRENT
+pixels and keeps original XCF bytes, provenance, protected paths and siblings.
+Retained empty stack owners/revisions survive painting and native13 .pcraft.
+
+Both OLD and STAGED trees undergo complete operative Current validation even
+for raw no-ops and at final publication. All logical native leaf RGBA stays in
+the existing finite-unit domain; out-of-domain HDR results fail atomically.
+The same borrowed narrow/wide Round producer, controlled profile conversion,
+raw-alpha proof, original gesture work/deadline, history and captured UI fences
+are used. Raw no-ops preserve redo/revision. Generic NativePixels and other
+readonly mutation APIs gain no permission from the structural class/marker.
+Initial16MiB fixed-extent patches remain; selection/symmetry/advanced assets,
+filtered/masked hierarchy painting, geometry growth and live preview stay open.
+Generated all-depth Source/native workflow contracts remain UNRUN/uncompiled;
+no numerical, native/UI/performance or full-stock acceptance is claimed.

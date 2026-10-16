@@ -2121,3 +2121,14 @@ and zero-mask proof, original/current profile rules, full-origin geometry,
 source epochs, group limits, bands, fees and native13 continuation remain.
 This is a declared compatibility extension; generated low-bit contracts remain
 unrun and do not establish external numerical or native workflow acceptance.
+
+
+Actual plain Normal hierarchies now support bounded native Round painting of a
+real raster leaf across all five admitted depths. The named structural COW path
+preserves the complete tree, original source and native defaults, while the
+existing full Current compositor validates OLD and STAGED trees, including hidden
+leaves and raw no-ops. Its finite-unit RGBA contract remains unchanged: finite
+HDR paint accepted by the wide brush kernel can still be refused atomically by
+that complete hierarchy check. Logical operative validation is distinct from
+arbitrary physical-padding scans. No Normal math or band implementation changes.
+Stored filters/masks remain outside this plain-tree painting permission.

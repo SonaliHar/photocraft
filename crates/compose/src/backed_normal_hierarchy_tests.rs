@@ -493,3 +493,6 @@ mod integer;
 
 #[path="backed_normal_hierarchy_u32_tests.rs"]
 mod u32_plain;
+
+#[path="backed_normal_hierarchy_native_tests.rs"]
+mod native_edit;
