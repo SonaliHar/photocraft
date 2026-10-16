@@ -2824,3 +2824,27 @@ curves	Smooth	平滑
 	This document's layers: {needed} of {budget} for layers	此文档的图层：图层可用 {budget} 中的 {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	此文档的图层需要 {needed}，但只能占用 {budget}：整个文档的重绘使用 CPU
 	GPU Memory (MB, 0 = Automatic)	GPU 内存（MB，0 = 自动）
+	Arrow color	箭头颜色
+	Arrowheads	箭头
+	Concavity	凹度
+	Direction:	方向:
+	Drag left or right across the part to remove; the sides join	左右拖过要删除的部分，两侧会拼接在一起
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	拖动绘制 · 拖动蓝点使其弯曲 · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	上下拖过要删除的部分，两侧会拼接在一起
+	Edge color	边缘颜色
+	Edge:	边缘:
+	Head length	箭头长度
+	Head width	箭头宽度
+	Heads:	箭头:
+	Line:	线条:
+	Quick styles:	快速样式:
+	Export for Publication	导出用于出版
+	Export for Publication…	导出用于出版…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	拖过要删除的部分：左右拖动删除竖条，上下拖动删除横条
+	Outline	轮廓
+	Curved	弯曲
+	Marker:	标记:
+	Marker color	标记颜色
+	Click to place a marker	单击放置标记
+	Make Figure	制作插图
+	Make Figure…	制作插图…

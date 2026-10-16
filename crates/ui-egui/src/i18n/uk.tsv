@@ -3907,3 +3907,27 @@ curves	Smooth	Згладити
 	This document's layers: {needed} of {budget} for layers	Шари цього документа: {needed} з {budget} для шарів
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Шарам цього документа потрібно {needed}, але займати вони можуть {budget}: увесь документ перемальовується на CPU
 	GPU Memory (MB, 0 = Automatic)	Пам'ять GPU (МБ, 0 = автоматично)
+	Arrow color	Колір стрілки
+	Arrowheads	Наконечники
+	Concavity	Увігнутість
+	Direction:	Напрямок:
+	Drag left or right across the part to remove; the sides join	Проведіть ліворуч або праворуч по частині, яку треба видалити; краї з'єднаються
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Перетягніть, щоб намалювати · Тягніть синю точку, щоб вигнути · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Проведіть угору або вниз по частині, яку треба видалити; краї з'єднаються
+	Edge color	Колір краю
+	Edge:	Край:
+	Head length	Довжина наконечника
+	Head width	Ширина наконечника
+	Heads:	Наконечники:
+	Line:	Лінія:
+	Quick styles:	Швидкі стилі:
+	Export for Publication	Експорт для публікації
+	Export for Publication…	Експорт для публікації…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Проведіть по частині, яку треба видалити: ліворуч-праворуч — вертикальна смуга, угору-вниз — горизонтальна
+	Outline	Обведення
+	Curved	Вигнута
+	Marker:	Маркер:
+	Marker color	Колір маркера
+	Click to place a marker	Клацніть, щоб поставити маркер
+	Make Figure	Створити рисунок
+	Make Figure…	Створити рисунок…

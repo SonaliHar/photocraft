@@ -4281,3 +4281,27 @@ shape	Appearance	Izgled
 	This document's layers: {needed} of {budget} for layers	Slojevi ovog dokumenta: {needed} od {budget} za slojeve
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Slojevima ovog dokumenta treba {needed}, a smeju da zauzmu {budget}: ceo dokument se ponovo iscrtava na CPU-u
 	GPU Memory (MB, 0 = Automatic)	GPU memorija (MB, 0 = Automatski)
+	Arrow color	Боја стрелице
+	Arrowheads	Врхови стрелице
+	Concavity	Удубљеност
+	Direction:	Смер:
+	Drag left or right across the part to remove; the sides join	Превуците лево или десно преко дела који уклањате; стране се спајају
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Превуците да нацртате · Превуците плаву тачку да савијете · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Превуците горе или доле преко дела који уклањате; стране се спајају
+	Edge color	Боја ивице
+	Edge:	Ивица:
+	Head length	Дужина врха
+	Head width	Ширина врха
+	Heads:	Врхови:
+	Line:	Линија:
+	Quick styles:	Брзи стилови:
+	Export for Publication	Извоз за објављивање
+	Export for Publication…	Извоз за објављивање…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Превуците преко дела који уклањате: бочно сече усправну траку, горе-доле водоравну
+	Outline	Обрис
+	Curved	Закривљена
+	Marker:	Ознака:
+	Marker color	Боја ознаке
+	Click to place a marker	Кликните да поставите ознаку
+	Make Figure	Направи слику
+	Make Figure…	Направи слику…

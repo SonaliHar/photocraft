@@ -3210,3 +3210,27 @@ curves	Smooth	Glätten
 	This document's layers: {needed} of {budget} for layers	Ebenen dieses Dokuments: {needed} von {budget} für Ebenen
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Die Ebenen dieses Dokuments brauchen {needed}, dürfen aber {budget} belegen: Das ganze Dokument wird auf der CPU neu gezeichnet
 	GPU Memory (MB, 0 = Automatic)	GPU-Speicher (MB, 0 = Automatisch)
+	Arrow color	Pfeilfarbe
+	Arrowheads	Pfeilspitzen
+	Concavity	Wölbung
+	Direction:	Richtung:
+	Drag left or right across the part to remove; the sides join	Nach links oder rechts über den zu entfernenden Teil ziehen; die Seiten werden verbunden
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Ziehen zum Zeichnen · Blauen Punkt ziehen zum Biegen · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Nach oben oder unten über den zu entfernenden Teil ziehen; die Seiten werden verbunden
+	Edge color	Kantenfarbe
+	Edge:	Kante:
+	Head length	Spitzenlänge
+	Head width	Spitzenbreite
+	Heads:	Spitzen:
+	Line:	Linie:
+	Quick styles:	Schnellstile:
+	Export for Publication	Für Publikation exportieren
+	Export for Publication…	Für Publikation exportieren…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Über den zu entfernenden Teil ziehen: seitlich schneidet einen senkrechten Streifen, nach oben oder unten einen waagerechten
+	Outline	Kontur
+	Curved	Gebogen
+	Marker:	Markierung:
+	Marker color	Markierungsfarbe
+	Click to place a marker	Klicken, um eine Markierung zu setzen
+	Make Figure	Abbildung erstellen
+	Make Figure…	Abbildung erstellen…

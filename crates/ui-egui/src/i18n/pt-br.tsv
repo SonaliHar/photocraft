@@ -3998,3 +3998,27 @@ layerLabel	No Color	Sem cor
 	This document's layers: {needed} of {budget} for layers	Camadas deste documento: {needed} de {budget} para camadas
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	As camadas deste documento precisam de {needed} mas podem ocupar {budget}: o documento inteiro é redesenhado na CPU
 	GPU Memory (MB, 0 = Automatic)	Memória da GPU (MB, 0 = Automático)
+	Arrow color	Cor da seta
+	Arrowheads	Pontas de seta
+	Concavity	Concavidade
+	Direction:	Direção:
+	Drag left or right across the part to remove; the sides join	Arraste para a esquerda ou direita sobre a parte a remover; os lados se juntam
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Arraste para desenhar · Arraste o ponto azul para curvar · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Arraste para cima ou para baixo sobre a parte a remover; os lados se juntam
+	Edge color	Cor da borda
+	Edge:	Borda:
+	Head length	Comprimento da ponta
+	Head width	Largura da ponta
+	Heads:	Pontas:
+	Line:	Linha:
+	Quick styles:	Estilos rápidos:
+	Export for Publication	Exportar para publicação
+	Export for Publication…	Exportar para publicação…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Arraste sobre a parte a remover: para o lado corta uma faixa vertical, para cima ou baixo uma horizontal
+	Outline	Contorno
+	Curved	Curva
+	Marker:	Marcador:
+	Marker color	Cor do marcador
+	Click to place a marker	Clique para colocar um marcador
+	Make Figure	Criar figura
+	Make Figure…	Criar figura…

@@ -4127,3 +4127,27 @@ cameraRaw	Yellow	Sárga
 	This document's layers: {needed} of {budget} for layers	A dokumentum rétegei: {needed} / {budget} a rétegeknek
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	A dokumentum rétegeinek {needed} kell, de {budget} foglalhatnak: a teljes dokumentum újrarajzolása a CPU-n fut
 	GPU Memory (MB, 0 = Automatic)	GPU-memória (MB, 0 = Automatikus)
+	Arrow color	Nyíl színe
+	Arrowheads	Nyílhegyek
+	Concavity	Homorúság
+	Direction:	Irány:
+	Drag left or right across the part to remove; the sides join	Húzza balra vagy jobbra az eltávolítandó részen; az oldalak összeillesztődnek
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Húzással rajzol · A kék pont húzásával hajlít · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Húzza fel vagy le az eltávolítandó részen; az oldalak összeillesztődnek
+	Edge color	Szél színe
+	Edge:	Szél:
+	Head length	Hegy hossza
+	Head width	Hegy szélessége
+	Heads:	Hegyek:
+	Line:	Vonal:
+	Quick styles:	Gyorsstílusok:
+	Export for Publication	Exportálás publikációhoz
+	Export for Publication…	Exportálás publikációhoz…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Húzza át az eltávolítandó részen: oldalra függőleges, fel-le vízszintes sávot vág ki
+	Outline	Körvonal
+	Curved	Ívelt
+	Marker:	Jelölő:
+	Marker color	Jelölő színe
+	Click to place a marker	Kattintson a jelölő elhelyezéséhez
+	Make Figure	Ábra készítése
+	Make Figure…	Ábra készítése…

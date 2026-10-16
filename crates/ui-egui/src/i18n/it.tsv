@@ -4329,3 +4329,27 @@ shape	Appearance	Aspetto
 	This document's layers: {needed} of {budget} for layers	Livelli di questo documento: {needed} su {budget} per i livelli
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	I livelli di questo documento richiedono {needed} ma possono occupare {budget}: i ridisegni dell'intero documento usano la CPU
 	GPU Memory (MB, 0 = Automatic)	Memoria GPU (MB, 0 = Automatico)
+	Arrow color	Colore della freccia
+	Arrowheads	Punte di freccia
+	Concavity	Concavità
+	Direction:	Direzione:
+	Drag left or right across the part to remove; the sides join	Trascina a sinistra o a destra sulla parte da rimuovere; i lati si uniscono
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Trascina per disegnare · Trascina il punto blu per curvare · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Trascina in alto o in basso sulla parte da rimuovere; i lati si uniscono
+	Edge color	Colore del bordo
+	Edge:	Bordo:
+	Head length	Lunghezza della punta
+	Head width	Larghezza della punta
+	Heads:	Punte:
+	Line:	Linea:
+	Quick styles:	Stili rapidi:
+	Export for Publication	Esporta per pubblicazione
+	Export for Publication…	Esporta per pubblicazione…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Trascina sulla parte da rimuovere: di lato taglia una fascia verticale, in alto o in basso una orizzontale
+	Outline	Contorno
+	Curved	Curva
+	Marker:	Indicatore:
+	Marker color	Colore dell'indicatore
+	Click to place a marker	Fai clic per inserire un indicatore
+	Make Figure	Crea figura
+	Make Figure…	Crea figura…

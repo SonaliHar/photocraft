@@ -3938,3 +3938,27 @@ cameraData	Lens	Lens
 	This document's layers: {needed} of {budget} for layers	Bu belgenin katmanları: katmanlar için {budget} içinden {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Bu belgenin katmanlarının {needed} belleğe ihtiyacı var ama en fazla {budget} kullanabilirler: tüm belgenin yeniden çizimi CPU'yu kullanır
 	GPU Memory (MB, 0 = Automatic)	GPU Belleği (MB, 0 = Otomatik)
+	Arrow color	Ok rengi
+	Arrowheads	Ok uçları
+	Concavity	İçbükeylik
+	Direction:	Yön:
+	Drag left or right across the part to remove; the sides join	Kaldırılacak kısım boyunca sola veya sağa sürükleyin; kenarlar birleşir
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Çizmek için sürükleyin · Bükmek için mavi noktayı sürükleyin · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Kaldırılacak kısım boyunca yukarı veya aşağı sürükleyin; kenarlar birleşir
+	Edge color	Kenar rengi
+	Edge:	Kenar:
+	Head length	Uç uzunluğu
+	Head width	Uç genişliği
+	Heads:	Uçlar:
+	Line:	Çizgi:
+	Quick styles:	Hızlı stiller:
+	Export for Publication	Yayın için dışa aktar
+	Export for Publication…	Yayın için dışa aktar…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Kaldırılacak kısım boyunca sürükleyin: yana dikey, yukarı veya aşağı yatay bir şerit keser
+	Outline	Dış çizgi
+	Curved	Eğri
+	Marker:	İşaret:
+	Marker color	İşaret rengi
+	Click to place a marker	İşaret koymak için tıklayın
+	Make Figure	Şekil oluştur
+	Make Figure…	Şekil oluştur…

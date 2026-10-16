@@ -3200,3 +3200,27 @@ curves	Smooth	Haluskan
 	This document's layers: {needed} of {budget} for layers	Layer dokumen ini: {needed} dari {budget} untuk layer
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Layer dokumen ini membutuhkan {needed} tetapi boleh memakai {budget}: penggambaran ulang seluruh dokumen memakai CPU
 	GPU Memory (MB, 0 = Automatic)	Memori GPU (MB, 0 = Otomatis)
+	Arrow color	Warna panah
+	Arrowheads	Kepala panah
+	Concavity	Kecekungan
+	Direction:	Arah:
+	Drag left or right across the part to remove; the sides join	Seret ke kiri atau kanan melintasi bagian yang dihapus; kedua sisi tersambung
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Seret untuk menggambar · Seret titik biru untuk melengkungkan · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Seret ke atas atau bawah melintasi bagian yang dihapus; kedua sisi tersambung
+	Edge color	Warna tepi
+	Edge:	Tepi:
+	Head length	Panjang kepala
+	Head width	Lebar kepala
+	Heads:	Kepala:
+	Line:	Garis:
+	Quick styles:	Gaya cepat:
+	Export for Publication	Ekspor untuk Publikasi
+	Export for Publication…	Ekspor untuk Publikasi…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Seret melintasi bagian yang dihapus: ke samping memotong pita vertikal, ke atas atau bawah pita horizontal
+	Outline	Garis luar
+	Curved	Melengkung
+	Marker:	Penanda:
+	Marker color	Warna penanda
+	Click to place a marker	Klik untuk menaruh penanda
+	Make Figure	Buat Gambar
+	Make Figure…	Buat Gambar…

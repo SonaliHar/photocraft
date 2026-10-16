@@ -3213,3 +3213,27 @@ curves	Smooth	Lisser
 	This document's layers: {needed} of {budget} for layers	Calques de ce document : {needed} sur {budget} pour les calques
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Les calques de ce document ont besoin de {needed} mais peuvent occuper {budget} : le document entier se redessine sur le CPU
 	GPU Memory (MB, 0 = Automatic)	Mémoire GPU (Mo, 0 = Automatique)
+	Arrow color	Couleur de la flèche
+	Arrowheads	Pointes de flèche
+	Concavity	Concavité
+	Direction:	Direction :
+	Drag left or right across the part to remove; the sides join	Faites glisser à gauche ou à droite sur la partie à retirer ; les côtés se rejoignent
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Faites glisser pour dessiner · Faites glisser le point bleu pour courber · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Faites glisser vers le haut ou le bas sur la partie à retirer ; les côtés se rejoignent
+	Edge color	Couleur du bord
+	Edge:	Bord :
+	Head length	Longueur de la pointe
+	Head width	Largeur de la pointe
+	Heads:	Pointes :
+	Line:	Ligne :
+	Quick styles:	Styles rapides :
+	Export for Publication	Exporter pour publication
+	Export for Publication…	Exporter pour publication…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Faites glisser sur la partie à retirer : de côté coupe une bande verticale, vers le haut ou le bas une horizontale
+	Outline	Contour
+	Curved	Courbe
+	Marker:	Marqueur :
+	Marker color	Couleur du marqueur
+	Click to place a marker	Cliquez pour placer un marqueur
+	Make Figure	Créer une figure
+	Make Figure…	Créer une figure…

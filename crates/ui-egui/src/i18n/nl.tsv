@@ -3968,3 +3968,27 @@ curves	Smooth	Vloeiend maken
 	This document's layers: {needed} of {budget} for layers	Lagen van dit document: {needed} van {budget} voor lagen
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	De lagen van dit document hebben {needed} nodig maar mogen {budget} gebruiken: het hele document wordt op de CPU opnieuw getekend
 	GPU Memory (MB, 0 = Automatic)	GPU-geheugen (MB, 0 = Automatisch)
+	Arrow color	Pijlkleur
+	Arrowheads	Pijlpunten
+	Concavity	Holheid
+	Direction:	Richting:
+	Drag left or right across the part to remove; the sides join	Sleep naar links of rechts over het deel dat weg moet; de zijden sluiten aan
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Sleep om te tekenen · Sleep de blauwe stip om te buigen · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Sleep omhoog of omlaag over het deel dat weg moet; de zijden sluiten aan
+	Edge color	Randkleur
+	Edge:	Rand:
+	Head length	Puntlengte
+	Head width	Puntbreedte
+	Heads:	Punten:
+	Line:	Lijn:
+	Quick styles:	Snelle stijlen:
+	Export for Publication	Exporteren voor publicatie
+	Export for Publication…	Exporteren voor publicatie…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Sleep over het deel dat weg moet: zijwaarts knipt een verticale strook, omhoog of omlaag een horizontale
+	Outline	Omtrek
+	Curved	Gebogen
+	Marker:	Markering:
+	Marker color	Markeringskleur
+	Click to place a marker	Klik om een markering te plaatsen
+	Make Figure	Figuur maken
+	Make Figure…	Figuur maken…

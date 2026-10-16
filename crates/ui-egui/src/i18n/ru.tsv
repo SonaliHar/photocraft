@@ -3178,3 +3178,27 @@ curves	Smooth	Сгладить
 	This document's layers: {needed} of {budget} for layers	Слои этого документа: {needed} из {budget} для слоёв
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Слоям этого документа нужно {needed}, но занимать они могут {budget}: весь документ перерисовывается на CPU
 	GPU Memory (MB, 0 = Automatic)	Память GPU (МБ, 0 = автоматически)
+	Arrow color	Цвет стрелки
+	Arrowheads	Наконечники
+	Concavity	Вогнутость
+	Direction:	Направление:
+	Drag left or right across the part to remove; the sides join	Проведите влево или вправо по удаляемой части; края соединятся
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Перетащите, чтобы нарисовать · Тяните синюю точку, чтобы изогнуть · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Проведите вверх или вниз по удаляемой части; края соединятся
+	Edge color	Цвет края
+	Edge:	Край:
+	Head length	Длина наконечника
+	Head width	Ширина наконечника
+	Heads:	Наконечники:
+	Line:	Линия:
+	Quick styles:	Быстрые стили:
+	Export for Publication	Экспорт для публикации
+	Export for Publication…	Экспорт для публикации…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Проведите по удаляемой части: влево-вправо — вертикальная полоса, вверх-вниз — горизонтальная
+	Outline	Обводка
+	Curved	Изогнутая
+	Marker:	Маркер:
+	Marker color	Цвет маркера
+	Click to place a marker	Щёлкните, чтобы поставить маркер
+	Make Figure	Создать рисунок
+	Make Figure…	Создать рисунок…

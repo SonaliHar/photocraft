@@ -3694,3 +3694,27 @@ curves	Smooth	Làm mượt
 	This document's layers: {needed} of {budget} for layers	Các lớp của tài liệu này: {needed} trên {budget} dành cho lớp
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Các lớp của tài liệu này cần {needed} nhưng chỉ được dùng {budget}: vẽ lại toàn bộ tài liệu dùng CPU
 	GPU Memory (MB, 0 = Automatic)	Bộ nhớ GPU (MB, 0 = Tự động)
+	Arrow color	Màu mũi tên
+	Arrowheads	Đầu mũi tên
+	Concavity	Độ lõm
+	Direction:	Hướng:
+	Drag left or right across the part to remove; the sides join	Kéo sang trái hoặc phải qua phần cần xóa; hai bên sẽ nối lại
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Kéo để vẽ · Kéo chấm xanh để uốn cong · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Kéo lên hoặc xuống qua phần cần xóa; hai bên sẽ nối lại
+	Edge color	Màu viền
+	Edge:	Viền:
+	Head length	Chiều dài đầu
+	Head width	Chiều rộng đầu
+	Heads:	Đầu:
+	Line:	Đường:
+	Quick styles:	Kiểu nhanh:
+	Export for Publication	Xuất để xuất bản
+	Export for Publication…	Xuất để xuất bản…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Kéo qua phần cần xóa: kéo ngang cắt dải dọc, kéo lên hoặc xuống cắt dải ngang
+	Outline	Viền
+	Curved	Cong
+	Marker:	Dấu:
+	Marker color	Màu dấu
+	Click to place a marker	Nhấp để đặt dấu
+	Make Figure	Tạo hình
+	Make Figure…	Tạo hình…

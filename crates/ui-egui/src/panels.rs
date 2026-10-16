@@ -21,7 +21,7 @@ const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::RectMarquee, Tool::EllipseMarquee, Tool::SingleRowMarquee, Tool::SingleColumnMarquee],
         &[Tool::Lasso, Tool::PolygonLasso, Tool::MagneticLasso],
         &[Tool::ObjectSelection, Tool::QuickSelection, Tool::MagicWand],
-        &[Tool::Crop, Tool::PerspectiveCrop, Tool::Slice, Tool::SliceSelect],
+        &[Tool::Crop, Tool::PerspectiveCrop, Tool::CutOut, Tool::Slice, Tool::SliceSelect],
         &[Tool::Frame],
         &[Tool::Eyedropper, Tool::ColorSampler, Tool::Ruler, Tool::Note, Tool::Count],
     ],
@@ -39,7 +39,7 @@ const TOOL_SECTIONS: &[&[&[Tool]]] = &[
         &[Tool::Pen, Tool::FreeformPen, Tool::CurvaturePen, Tool::AddAnchorPoint, Tool::DeleteAnchorPoint, Tool::ConvertPoint],
         &[Tool::Type, Tool::VerticalType, Tool::VerticalTypeMask, Tool::HorizontalTypeMask],
         &[Tool::PathSelection, Tool::DirectSelection],
-        &[Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Line, Tool::CustomShape],
+        &[Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Line, Tool::Arrow, Tool::Marker, Tool::CustomShape],
     ],
     &[&[Tool::Hand, Tool::RotateView], &[Tool::Zoom]],
 ];
@@ -974,6 +974,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if crate::eraser_ui::options_bar(app, ui, tool)
                     || crate::retouch_ui::options_bar(app, ui, tool)
                     || crate::vector_ui::options_bar(app, ui, tool)
+                    || crate::cutout_ui::options_bar(app, ui, tool)
                     || crate::analysis_ui::options_bar(app, ui, tool)
                     || crate::slice_ui::options_bar(app, ui, tool)
                     || crate::frame_tool::options_bar(app, ui, tool)
