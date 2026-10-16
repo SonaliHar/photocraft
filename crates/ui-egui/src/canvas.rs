@@ -1720,6 +1720,16 @@ fn budget_allowance(app: &PhotocraftApp) -> (u64, u64) {
     (u64::from(performance.memory_usage_mb).saturating_mul(1 << 20), u64::from(performance.gpu_memory_mb).saturating_mul(1 << 20))
 }
 
+/// The proxy factor of a live preview of filter `cmd` with `params` on `doc`, the active
+/// document: reduced on a large document (Preferences › Performance › Low Resolution Previews),
+/// except for filters whose features don't scale with a proxy (#2063), and never coarser than the
+/// active view, so at 100 % the preview shows every pixel instead of k-pixel blocks (#6326, as
+/// adjustments do since #5764). Zoomed out, the proxy keeps previews of large documents fast.
+pub(crate) fn filter_preview_factor(app: &PhotocraftApp, doc: &Document, cmd: &str, params: &serde_json::Value) -> u32 {
+    let k = crate::filter_dialog::preview_factor(cmd, params, crate::proxy::preview_factor(doc, crate::proxy::reduced_previews(app)));
+    crate::proxy::view_factor(k, app.current_zoom())
+}
+
 /// Live preview for an open filter dialog: run the filter on the proxy and upload it. With
 /// background jobs (the desktop app) it computes on one background worker
 /// (`filter_preview_worker`); otherwise (web, tests, `PHOTOCRAFT_INLINE_JOBS`) it keeps the
@@ -1751,8 +1761,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         params = crate::select_mask_view::request_params(&d.fields, params);
     }
     let st = app.session.documents().get(idx)?;
-    // Filters whose features don't scale with a proxy preview at full resolution (#2063).
-    let k = crate::filter_dialog::preview_factor(&cmd, &params, crate::proxy::preview_factor(&st.doc, crate::proxy::reduced_previews(app)));
+    let k = filter_preview_factor(app, &st.doc, &cmd, &params);
     let request = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
@@ -6105,6 +6114,30 @@ mod tests {
         let d = color.canvas_display(&doc).unwrap();
         assert!(!d.is_identity());
         assert_eq!(super::display_image(Some(&d), &buf).pixels, reference(d.to_rgba8(&buf)).pixels);
+    }
+
+    /// #6326: a filter's live preview on a large document ran on a reduced copy at every zoom,
+    /// so at 100 % Unsharp Mask, High Pass or Smart Blur showed the image in blocks. Like the
+    /// adjustments (#5764) its proxy is now never coarser than the view.
+    #[test]
+    fn filter_previews_are_never_coarser_than_the_view() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        // 9 MP: reduced previews halve it (empty tiles: nothing is allocated).
+        app.run("file.new", json!({"width": 3000, "height": 3000, "background": "transparent"})).unwrap();
+        let doc = app.session.active().unwrap().doc.clone();
+        let params = json!({"amount": 100, "radius": 4.0, "threshold": 0});
+        let k = |app: &mut PhotocraftApp, zoom: f32| {
+            app.ui.views[0].zoom = zoom;
+            super::filter_preview_factor(app, &doc, "filter.sharpen.unsharpMask", &params)
+        };
+        assert_eq!(k(&mut app, 0.25), 2, "zoomed out the preview stays reduced");
+        assert_eq!(k(&mut app, 0.5), 2);
+        assert_eq!(k(&mut app, 1.0), 1, "at 100 % it shows every pixel");
+        assert_eq!(k(&mut app, 0.75), 1);
+        assert_eq!(k(&mut app, 4.0), 1);
+        // Low Resolution Previews off: full resolution at any zoom.
+        app.run("prefs.set", json!({"path": "performance.lowResolutionPreviews", "value": false})).unwrap();
+        assert_eq!(k(&mut app, 0.25), 1);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

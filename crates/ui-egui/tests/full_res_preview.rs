@@ -145,6 +145,10 @@ fn adjustment_layer_drag_previews_at_full_resolution_when_low_res_is_off() {
     assert!((full - committed).abs() < 8.0, "low-res previews off: the drag matches the committed view ({full} vs {committed})");
 }
 
+/// A filter dialog's preview, like an adjustment's (#5764), is never coarser than the view
+/// (#6326): at 100 % every column shows even with low-resolution previews on; zoomed out to 50 %
+/// the default preview runs on the reduced copy (only the black columns), and with them off it
+/// shows the columns' mipmapped grey.
 #[test]
 fn filter_dialog_previews_at_full_resolution_when_low_res_is_off() {
     let _gpu = photocraft_testkit::gpu_lock();
@@ -155,11 +159,14 @@ fn filter_dialog_previews_at_full_resolution_when_low_res_is_off() {
     }
     // Offset 0, 0 leaves the pixels as they are: any change is the preview's resolution.
     photocraft_ui_egui::filter_dialog::open(h.state_mut(), "filter.other.offset").expect("Offset dialog");
-    let reduced = row(&mut h);
-    assert!(columns(&reduced) < 0.1, "default: the reduced copy loses the columns ({})", columns(&reduced));
+    let at_100 = row(&mut h);
+    assert!(columns(&at_100) > 0.9, "default at 100 %: the preview is never coarser than the screen ({})", columns(&at_100));
+    control(&mut h, "ui.set", json!({"zoom": 0.5, "center": [W / 2, H / 2]}));
+    let reduced = mean(&row(&mut h));
+    assert!(reduced < 30.0, "default at 50 %: the reduced copy keeps only the black columns ({reduced})");
     low_res(&mut h, false);
-    let full = row(&mut h);
-    assert!(columns(&full) > 0.9, "low-res previews off: every column shows ({})", columns(&full));
+    let full = mean(&row(&mut h));
+    assert!(full > 60.0, "low-res previews off: the columns average to grey ({full})");
 }
 
 #[test]
