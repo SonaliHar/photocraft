@@ -218,6 +218,7 @@ fn letters_type_while_editing_text() {
         dragging: false,
         resize: None,
         preedit: None,
+        document: None,
     });
     h.run_steps(2);
     h.event(Event::Key { key: Key::B, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });

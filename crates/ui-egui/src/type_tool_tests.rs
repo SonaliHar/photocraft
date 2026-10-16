@@ -28,6 +28,7 @@ fn focused_font_search_does_not_type_into_the_canvas_layer() {
         dragging: false,
         resize: None,
         preedit: None,
+        document: None,
     });
     let mut h = Harness::builder().build_ui_state(
         |ui, app: &mut PhotocraftApp| {
@@ -365,6 +366,7 @@ fn size_applies_at_layer_and_selection_scope() {
             dragging: false,
             resize: None,
             preedit: None,
+            document: None,
         });
         super::apply(&mut app, &ctx, json!({"size": 10.0}));
         assert_eq!((size_at(&app, id, 0), size_at(&app, id, 5), size_at(&app, id, 6), size_at(&app, id, 10)), (30.0, 30.0, 10.0, 10.0), "psd {psd}");
@@ -512,6 +514,7 @@ fn foreground_colour_recolours_only_selected_type() {
         dragging: false,
         resize: None,
         preedit: None,
+        document: None,
     };
     app.ui.text_edit = Some(edit(3, 3));
     super::foreground_changed(&mut app);
@@ -601,6 +604,7 @@ fn text_color_dialog_edits_only_the_selected_range_and_cancel_is_inert() {
         dragging: false,
         resize: None,
         preedit: None,
+        document: None,
     });
     let foreground = app.session.tools.foreground;
     let before = app.session.active().unwrap().history.entries().len();
@@ -658,6 +662,7 @@ fn empty_ime_events_never_delete_the_selection() {
         dragging: false,
         resize: None,
         preedit: None,
+        document: None,
     });
     let mut h = harness(1.0, app);
     let ime = |h: &mut Harness<'static, PhotocraftApp>, e: egui::ImeEvent| {
@@ -1435,6 +1440,7 @@ mod multi_layer_formatting {
             dragging: false,
             resize: None,
             preedit: None,
+            document: None,
         });
     }
 
@@ -2022,6 +2028,7 @@ fn multi_click_without_a_session_does_nothing() {
         dragging: false,
         resize: None,
         preedit: None,
+        document: None,
     });
     for egui in [1, 2, 3, 3, 3, 3] {
         super::multi_click(&mut app, egui, f64::NAN, f64::INFINITY);
@@ -2142,9 +2149,66 @@ mod leaving_the_layer {
             dragging: false,
             resize: None,
             preedit: None,
+            document: None,
         });
         super::super::end_if_left(&mut app);
         assert!(app.ui.text_edit.is_none());
+    }
+
+    /// A new type session in the first of two documents, typed into, then the second
+    /// document's tab is picked. Returns the second document's own type layer.
+    fn editing_then_switching() -> (PhotocraftApp, LayerId, LayerId) {
+        let mut app = new_app();
+        app.run("file.new", json!({"width": 1600, "height": 900})).unwrap();
+        let theirs = LayerId(app.run("type.create", json!({"text": "Theirs", "size": 24, "x": 20, "y": 80})).unwrap()["layer"].as_u64().unwrap());
+        assert!(app.session.set_active(0));
+        app.sync_views();
+        super::super::pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+        let ed = app.ui.text_edit.clone().expect("new type session");
+        app.run("type.edit", json!({"layer": ed.layer, "text": "Mine", "coalesce": ed.session})).unwrap();
+        assert!(app.session.set_active(1));
+        (app, LayerId(ed.layer), theirs)
+    }
+
+    fn text_in(app: &PhotocraftApp, doc: usize, id: LayerId) -> (String, String) {
+        let layer = app.session.documents()[doc].doc.layer(id).unwrap();
+        let LayerContent::Text(t) = &layer.content else { panic!("a type layer") };
+        (t.text.clone(), layer.name.clone())
+    }
+
+    #[test]
+    fn switching_documents_commits_in_the_edited_document() {
+        let (mut app, mine, theirs) = editing_then_switching();
+        super::super::end_if_left(&mut app);
+        assert!(app.ui.text_edit.is_none());
+        assert_eq!(app.session.active_index(), Some(1), "the document switched to stays active");
+        assert_eq!(text_in(&app, 0, mine), ("Mine".into(), "Mine".into()), "named after its text in its own document");
+        assert_eq!(text_in(&app, 1, theirs), ("Theirs".into(), "Theirs".into()), "the other document is untouched");
+    }
+
+    #[test]
+    fn an_empty_new_layer_is_removed_from_its_own_document() {
+        let (mut app, mine, theirs) = editing_then_switching();
+        assert!(app.session.set_active(0));
+        let session = app.ui.text_edit.as_ref().unwrap().session.clone();
+        app.run("type.edit", json!({"layer": mine.0, "text": "", "coalesce": session})).unwrap();
+        assert!(app.session.set_active(1));
+        super::super::end_if_left(&mut app);
+        assert!(app.ui.text_edit.is_none());
+        assert!(app.session.documents()[0].doc.layer(mine).is_none(), "deleted where it was made");
+        assert!(app.session.documents()[1].doc.layer(theirs).is_some());
+    }
+
+    #[test]
+    fn a_closed_document_ends_the_session_without_touching_the_others() {
+        let (mut app, _, theirs) = editing_then_switching();
+        if let Some(ed) = app.ui.text_edit.as_mut() {
+            ed.document = Some(u64::MAX);
+        }
+        super::super::end_if_left(&mut app);
+        assert!(app.ui.text_edit.is_none());
+        assert_eq!(app.session.active_index(), Some(1));
+        assert_eq!(text_in(&app, 1, theirs), ("Theirs".into(), "Theirs".into()));
     }
 
     /// The whole app: a layer selected outside the Layers panel (here the control channel, like

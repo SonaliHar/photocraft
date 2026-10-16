@@ -989,6 +989,10 @@ pub struct TextEdit {
     /// layer so it lays out like typed text; each IME update replaces it.
     #[serde(skip)]
     pub preedit: Option<(usize, usize)>,
+    /// The document being edited (its `DocId`); `None` means the active one. Switching documents
+    /// commits the session in this document, not in the one switched to (#6483).
+    #[serde(default)]
+    pub document: Option<u64>,
 }
 
 /// Temporary Type-tool drag. The document is unchanged until release; this frame is view state.
