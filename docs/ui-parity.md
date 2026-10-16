@@ -1,6 +1,6 @@
 # UI parity: tools, handles, modifiers and feel
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (Pen Auto Add/Delete on the path being drawn, #6140; Show Transform Controls frames every selected layer; guide keys and clicks; menu bar from the keyboard, #4988; Crop tool Content-Aware Fill; on-canvas corner radius widgets, TOOL-214-12; Curvature Pen edits the active path; Clip Thumbnails to Layer Bounds; Pen ⇧ 45°; last selected tool restored at launch; Layers panel filter-type dropdown with Kind, Name and Mode, #5048; Free Transform box and marching ants follow the selection, #5297; History: the trash deletes the selected snapshot, rows drag onto the trash, #5324; smart filter reordering by drag; smart object perspective row corrected to done, #426; Free Transform H/V skew fields; toolbar tool shortcuts can be reassigned; ⇧-dragged guides land on ruler ticks; layer and selection keys; tool keys; spring-loaded tool letters; type formatting keys; Pen Auto Add/Delete, #4144; smart filter rows; stale missing-tool rows corrected: Color Replacement, Red Eye and the Add/Delete Anchor Point pair are live toolbar tools, Frame landed; no percentage changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (crop preset and non-destructive crop status corrected against code, #6562; Pen Auto Add/Delete on the path being drawn, #6140; Show Transform Controls frames every selected layer; guide keys and clicks; menu bar from the keyboard, #4988; Crop tool Content-Aware Fill; on-canvas corner radius widgets, TOOL-214-12; Curvature Pen edits the active path; Clip Thumbnails to Layer Bounds; Pen ⇧ 45°; last selected tool restored at launch; Layers panel filter-type dropdown with Kind, Name and Mode, #5048; Free Transform box and marching ants follow the selection, #5297; History: the trash deletes the selected snapshot, rows drag onto the trash, #5324; smart filter reordering by drag; smart object perspective row corrected to done, #426; Free Transform H/V skew fields; toolbar tool shortcuts can be reassigned; ⇧-dragged guides land on ruler ticks; layer and selection keys; tool keys; spring-loaded tool letters; type formatting keys; Pen Auto Add/Delete, #4144; smart filter rows; stale missing-tool rows corrected: Color Replacement, Red Eye and the Add/Delete Anchor Point pair are live toolbar tools, Frame landed; no percentage changed) · **Target:** Adobe Photoshop 2026
 
 How PhotoCraft's direct manipulation compares with Photoshop 2026 (27.11.0): the toolbox, the
 handles and modifier keys of each gesture, nudging, snapping, numeric precision, navigation,
@@ -142,9 +142,9 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Crop shield, Show Cropped Area (H) | done | TOOL-214-22 |
 | Default mode: the image turns and moves behind an upright box; Auto Center Preview; Use Classic Mode | done | TOOL-214-23 |
 | W × H × Resolution with units, built-in size presets, Front Image | done | TOOL-214-9 (`crop_size.rs`) |
-| Saved custom crop presets | missing | TOOL-214-9 |
+| Saved custom crop presets | done | TOOL-214-9; `crop_presets.rs` New / Delete Crop Preset uses persisted `tool.presets.*` entries for `crop` (#2723). Export/import portability is tracked separately in #6560. |
 | Fill: Content-Aware Fill: a turned or extending crop fills the uncovered corners and strips from the image (each piece with its own sampling window), on the Background or else the active pixel layer, in the crop's one undo step; Generative Expand not offered | done | `tests/crop_content_aware.rs`, `crop_ui.rs::commit_passes_the_fill_choice` (#3823, 2026-10-12) |
-| Delete Cropped Pixels off | partial | |
+| Delete Cropped Pixels off | done | `image_cmds.rs::crop` passes `deleteCroppedPixels` to `crop_doc`, which retains off-canvas pixels when false; `crop_mode.rs::a_recrop_handle_snaps_exactly_to_the_hidden_pixels_edge` exercises recropping the retained pixels (#3638, #3640). |
 
 ## Snapping, guides, rulers, precision
 
@@ -227,6 +227,7 @@ Paragraph; the rest open as in-app floating windows.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | minor | Corrected saved crop presets and Delete Cropped Pixels off to done, with current code and recrop-test evidence; preset portability stays tracked separately (#6560, #6562). No percentage changed. |
 | 2026-10-13 | minor | Menu bar from the keyboard: Alt / F10 focus, Alt+letter, underlined mnemonics (#4988) |
 | 2026-10-13 | minor | Layers panel filter row: Kind is a real dropdown with Kind, Name and Mode filters, drivable by `ui.set {layerFilter}` (#5048); row added as partial |
 | 2026-10-13 | minor | Stale "missing tool" rows corrected against main: Color Replacement (`paint.colorReplacement`), Red Eye (`paint.redEye`) and Add/Delete Anchor Point (the P flyout cycle) are live toolbar tools, so only Art History Brush is missing; no percentage or estimate changed |
