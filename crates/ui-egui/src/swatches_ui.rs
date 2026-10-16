@@ -335,6 +335,7 @@ mod tests {
             dragging: false,
             resize: None,
             preedit: None,
+            document: None,
         });
         // Recolour with a visible colour: put Red first.
         app.run("swatches.move", json!({"swatch": "Red", "to": "Grays", "position": 0})).unwrap();

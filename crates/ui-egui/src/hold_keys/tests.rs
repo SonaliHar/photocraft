@@ -194,6 +194,7 @@ fn space_while_editing_type_is_not_the_hand_tool() {
         dragging: false,
         resize: None,
         preedit: None,
+        document: None,
     });
     key(&mut h, Key::Space, true, Modifiers::NONE);
     assert!(h.state().ui.text_edit.is_some(), "type session stays open");

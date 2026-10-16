@@ -369,6 +369,7 @@ fn hovering_a_font_previews_only_the_selected_characters() {
         dragging: false,
         resize: None,
         preedit: None,
+        document: None,
     });
 
     crate::type_font_preview::set(&mut app, "Inter".into());

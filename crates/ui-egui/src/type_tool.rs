@@ -115,7 +115,7 @@ pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
         let key = session_key(app);
         begin_edit(app, id, &key)?;
         app.ui.text_edit =
-            Some(TextEdit { layer: id.0, caret: n, anchor: 0, session: key, created: false, mask: false, dragging: false, resize: None, preedit: None });
+            Some(TextEdit { layer: id.0, caret: n, anchor: 0, session: key, created: false, mask: false, dragging: false, resize: None, preedit: None, document: doc_id(app) });
     } else if let Some(ed) = app.ui.text_edit.as_mut() {
         ed.anchor = 0;
         ed.caret = n;
@@ -144,7 +144,7 @@ pub fn edit_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     }
     let off = hit_offset(app, id, x, y);
     app.ui.text_edit =
-        Some(TextEdit { layer: id.0, caret: off, anchor: off, session: key, created: false, mask: false, dragging: false, resize: None, preedit: None });
+        Some(TextEdit { layer: id.0, caret: off, anchor: off, session: key, created: false, mask: false, dragging: false, resize: None, preedit: None, document: doc_id(app) });
     let vertical = app.session.active().and_then(|st| text_layer(&st.doc, id)).is_some_and(|t| t.orientation == photocraft_doc::text::Orientation::Vertical);
     if !previous_tool.is_type() {
         app.ui.text_edit_return_tool = Some(previous_tool);
@@ -275,7 +275,7 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
         }
         let off = hit_offset(app, id, x, y);
         app.ui.text_edit =
-            Some(TextEdit { layer: id.0, caret: off, anchor: off, session: key, created: false, mask: false, dragging: true, resize: None, preedit: None });
+            Some(TextEdit { layer: id.0, caret: off, anchor: off, session: key, created: false, mask: false, dragging: true, resize: None, preedit: None, document: doc_id(app) });
         app.ui.text_edit_return_tool = None;
         return true;
     }
@@ -340,7 +340,7 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         }
         // Like Photoshop: the placeholder is selected, so typing replaces it.
         let n = text.chars().count();
-        app.ui.text_edit = Some(TextEdit { layer: id, caret: n, anchor: 0, session: key, created: true, mask, dragging: false, resize: None, preedit: None });
+        app.ui.text_edit = Some(TextEdit { layer: id, caret: n, anchor: 0, session: key, created: true, mask, dragging: false, resize: None, preedit: None, document: doc_id(app) });
         app.ui.text_edit_return_tool = None;
     }
 }
@@ -957,6 +957,46 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 /// End the editing session. A new layer left empty is deleted; a new layer is named after its text.
 pub fn commit(app: &mut PhotocraftApp) {
     commit_with(app, egui::Modifiers::NONE);
+}
+
+/// A type session whose layer is no longer the active one commits, as in Photoshop: selecting
+/// another layer from anywhere (the canvas, a menu, the control channel, not only a Layers-panel
+/// row) ends text editing, so the caret never stays on a layer that is not targeted and the
+/// shortcuts work again (#6483). Switching to another document commits in the document being
+/// edited, then comes back; if that document was closed the session just ends. Checked every frame.
+pub fn end_if_left(app: &mut PhotocraftApp) {
+    let Some(ed) = &app.ui.text_edit else { return };
+    let (layer, document) = (ed.layer, ed.document);
+    let active = app.session.active_index();
+    let edited = match document {
+        Some(id) => app.session.documents().iter().position(|st| st.doc.id.0 == id),
+        None => active,
+    };
+    let (Some(edited), Some(active)) = (edited, active) else {
+        // Its document (or every document) is gone: nothing left to commit to.
+        crate::type_transform::reset(app);
+        app.ui.text_edit = None;
+        if let Some(tool) = app.ui.text_edit_return_tool.take()
+            && app.ui.tool.is_type()
+        {
+            app.ui.tool = tool;
+        }
+        return;
+    };
+    if active == edited {
+        if app.session.active().and_then(|st| st.active_layer).is_none_or(|a| a.0 != layer) {
+            commit(app);
+        }
+        return;
+    }
+    app.session.set_active(edited);
+    commit(app);
+    app.session.set_active(active);
+}
+
+/// The active document's id, recorded on a new type session.
+fn doc_id(app: &PhotocraftApp) -> Option<u64> {
+    app.session.active().map(|st| st.doc.id.0)
 }
 
 /// [`commit`] with the modifiers held while committing: a Type Mask adds its glyphs to the

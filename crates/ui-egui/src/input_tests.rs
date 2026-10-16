@@ -482,6 +482,7 @@ fn type_tool_alt_arrows_kern_the_pair() {
         dragging: false,
         resize: None,
         preedit: None,
+        document: None,
     });
     h.run_steps(2);
     let s0 = steps(&h);
@@ -532,6 +533,7 @@ fn edit_type(h: &mut Harness<'static, PhotocraftApp>, layer: u64, anchor: usize,
         dragging: false,
         resize: None,
         preedit: None,
+        document: None,
     });
     h.run_steps(2);
 }
@@ -750,6 +752,7 @@ fn type_tool_format_keys_survive_hostile_state() {
             dragging: false,
             resize: None,
             preedit: None,
+            document: None,
         });
         crate::type_tool::toggle_char_style(&mut app, crate::type_tool::CharToggle::AllCaps);
         crate::type_tool::step_char_metric(&mut app, "leadingBy", 2.0);
