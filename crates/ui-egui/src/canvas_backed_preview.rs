@@ -29,7 +29,7 @@ fn backed_display_image_with_owner(
 ) -> Result<(egui::ColorImage, QuotaLease), String> {
     let render = || -> Result<_, String> {
         let builtin_basis = owner
-            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage() || owner.is_readonly_gaussian_group_storage() || owner.is_readonly_flat_composite_storage());
+            .is_some_and(|owner| owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage() || owner.is_readonly_gaussian_group_storage() || owner.is_readonly_flat_composite_storage());
         // Ordinary profiles require explicit current ICC interpretation. Typed
         // runtime classes validate their own current/source relation below.
         if !builtin_basis && !matches!(doc.working_profile_interpretation, WorkingProfileInterpretation::Icc) {

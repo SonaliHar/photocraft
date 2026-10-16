@@ -31,6 +31,8 @@ mod point_readonly;
 mod gaussian_group_readonly;
 #[path = "accounted_flat_composite_readonly.rs"]
 mod flat_composite_readonly;
+#[path = "accounted_filtered_flat_readonly.rs"]
+mod filtered_flat_readonly;
 pub use flat_composite_readonly::FlatCompositeCompositionPatch;
 pub use gaussian_group_readonly::{GaussianGroupEnabledPatch, GaussianGroupPatch};
 pub use point_readonly::{AssignedPointEnabledPatch, PointArgumentPatch, PointArgumentValue, PointFilterMovePatch, PointFilterPatch, PointFilterRemovePatch};
@@ -86,6 +88,7 @@ enum StorageClass {
     ReadonlyAssignedPoint,
     ReadonlyGaussianGroup,
     ReadonlyFlatComposite,
+    ReadonlyFilteredFlatPoint,
 }
 struct ModelOwner {
     _storage_class: StorageClass,
@@ -666,16 +669,29 @@ pub struct AccountedLayerAccess<'a> {
     pub imported_locks: crate::xcf_state::ItemLocks,
 }
 pub fn accounted_layer_access<'a>(doc: &'a Document, id: LayerId, control: &ReadControl<'_>) -> Result<Option<AccountedLayerAccess<'a>>, BackingError> {
+    accounted_layer_access_with_limit(doc, id, control, 4096)
+}
+impl AccountedDocument {
+    /// Borrow actual immutable custody for initial view/readonly lookup. The
+    /// larger canonical-row bound belongs only to the new runtime class and
+    /// does not grant selection or command mutation authority.
+    pub fn accounted_layer_access(&self, id: LayerId, control: &ReadControl<'_>) -> Result<Option<AccountedLayerAccess<'_>>, BackingError> {
+        let limit = if self.is_readonly_filtered_flat_point_storage() { 8192 } else { 4096 };
+        accounted_layer_access_with_limit(self.document(), id, control, limit)
+    }
+}
+fn accounted_layer_access_with_limit<'a>(doc: &'a Document, id: LayerId, control: &ReadControl<'_>, item_limit: usize) -> Result<Option<AccountedLayerAccess<'a>>, BackingError> {
     control.check(1)?;
-    if doc.xcf_state.as_ref().is_some_and(|state| state.items.len() > 4096) {
+    if doc.xcf_state.as_ref().is_some_and(|state| state.items.len() > item_limit) {
         return Err(BackingError::Length);
     }
-    let mut visitor = AccessVisitor { id, state: doc.xcf_state.as_ref(), count: 0, found: None, control };
+    let mut visitor = AccessVisitor { id, state: doc.xcf_state.as_ref(), count: 0, found: None, control, item_limit };
     visitor.walk(&doc.layers, crate::Locks::default(), crate::xcf_state::ItemLocks::default(), None, 0)?;
     Ok(visitor.found)
 }
 struct AccessVisitor<'a, 'b, 'c> {
     id: LayerId,
+    item_limit: usize,
     state: Option<&'a crate::xcf_state::XcfState>,
     count: usize,
     found: Option<AccountedLayerAccess<'a>>,
@@ -700,7 +716,7 @@ impl<'a> AccessVisitor<'a, '_, '_> {
                 return Err(BackingError::Length);
             }
             let locks = locks.union(layer.locks);
-            let imported_locks = imported_locks.union(imported_item_locks(self.state, layer.id, parent, self.control)?);
+            let imported_locks = imported_locks.union(imported_item_locks_with_limit(self.state, layer.id, parent, self.control, self.item_limit)?);
             if layer.id == self.id {
                 if self.found.is_some() {
                     return Err(BackingError::Integrity);
@@ -720,18 +736,20 @@ impl<'a> AccessVisitor<'a, '_, '_> {
         Ok(())
     }
 }
-fn imported_item_locks(
+fn imported_item_locks_with_limit(
     state: Option<&crate::xcf_state::XcfState>,
     id: LayerId,
     parent: Option<crate::item_identity::ItemRef>,
     control: &ReadControl<'_>,
+    item_limit: usize,
 ) -> Result<crate::xcf_state::ItemLocks, BackingError> {
     let Some(state) = state else {
         return Ok(crate::xcf_state::ItemLocks::default());
     };
+    if state.items.len() > item_limit { return Err(BackingError::Length); }
     let mut found = None;
     for (index, item) in state.items.iter().enumerate() {
-        if index % 64 == 0 {
+        if item_limit == 8192 || index % 64 == 0 {
             control.check(1)?;
         }
         if item.item == crate::item_identity::ItemRef::Layer(id) {
@@ -1161,7 +1179,7 @@ fn sync_current_item(document: &mut Document, edit: AccountedEdit<'_>) -> Result
 /// an evaluator. The codec/importer retains the original source and validation
 /// evidence; clones copy owned buffers and share immutable Arc payloads.
 #[derive(Clone, Copy)]
-enum ReadonlyMaskPolicy { None, Threshold, Point }
+enum ReadonlyMaskPolicy { None, Threshold, Point, FilteredFlat }
 struct CanonicalCensus<'a, 'i> {
     readonly_masks: ReadonlyMaskPolicy,
     counted: ModelCensus,
@@ -1321,6 +1339,7 @@ impl<'a, 'i> CanonicalCensus<'a, 'i> {
             ReadonlyMaskPolicy::None => {},
             ReadonlyMaskPolicy::Threshold => filter_readonly::mask_census(filter_masks, self)?,
             ReadonlyMaskPolicy::Point => point_readonly::mask_census(filter_masks, self)?,
+            ReadonlyMaskPolicy::FilteredFlat => filtered_flat_readonly::mask_census(filter_masks, self)?,
         }
         let ProjectProvenance {
             format,
@@ -1344,7 +1363,7 @@ impl<'a, 'i> CanonicalCensus<'a, 'i> {
         for value in protected_source_fingerprints {
             self.string(value)?;
         }
-        self.vec(items, 4096)?;
+        self.vec(items, if matches!(self.readonly_masks, ReadonlyMaskPolicy::FilteredFlat) { 8192 } else { 4096 })?;
         for ItemState {
             item: _,
             name,

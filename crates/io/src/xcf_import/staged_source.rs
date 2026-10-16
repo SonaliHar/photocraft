@@ -42,6 +42,7 @@ trait StagePolicy {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SelectedStagedFamily {
     Plain,
+    FilteredFlat,
     SeparableBlend,
     AnalyticGeometry,
     IsolatedNormalGroup,
@@ -62,6 +63,7 @@ impl std::fmt::Debug for SelectedStagedFamily {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Plain => "Plain",
+            Self::FilteredFlat => "FilteredFlat",
             Self::SeparableBlend => "SeparableBlend",
             Self::AnalyticGeometry => "AnalyticGeometry",
             Self::IsolatedNormalGroup => "IsolatedNormalGroup",
@@ -90,6 +92,7 @@ impl StagePolicy for SourceSelectedPolicy {
         let old=Self::family(file);
         if old!=SelectedStagedFamily::Plain{return Ok(old)}
         let budget=shared.ok_or_else(||IoError::Unsupported("selected source requires accounting".into()))?;
+        if staged_filtered_flat::hint(file,ctl,budget)?{return Ok(SelectedStagedFamily::FilteredFlat)}
         if separable_blend::general_hint(file,ctl,budget)?{Ok(SelectedStagedFamily::SeparableBlend)}else{Ok(old)}
     }
     fn family<Q: ExactParsedPlane>(file: &XcfFile<Q>) -> SelectedStagedFamily {
@@ -446,6 +449,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn requires_budgeted_rendering_preparation_for(threshold_alpha_domain: bool) -> bool {
         if P::SOURCE_SELECTED { threshold_alpha_domain } else { Self::requires_budgeted_rendering_preparation() }
     }
+    fn requires_budgeted_filtered_flat_preparation(domain:bool)->bool{P::SOURCE_SELECTED && domain}
     fn requires_budgeted_point_preparation(point_domain: bool) -> bool {
         P::SOURCE_SELECTED && point_domain
     }
@@ -473,6 +477,8 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
         let family = P::family_controlled(file,ctl,shared)?;
+        let filtered_flat=family==SelectedStagedFamily::FilteredFlat;
+        if filtered_flat {staged_filtered_flat::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("filtered flat accounting".into()))?)?;}
         let separable = family == SelectedStagedFamily::SeparableBlend;
         let separable_domain = if separable {
             Some(separable_blend::qualify_selected(file,ctl,shared.ok_or_else(||IoError::Unsupported("separable source requires accounting".into()))?)?
@@ -532,7 +538,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             }
             Some(expected)
         } else { None };
-        if separable || gaussian_group || group || geometry || point.is_some() || owned_point.is_some() || neighborhood.is_some() {
+        if filtered_flat || separable || gaussian_group || group || geometry || point.is_some() || owned_point.is_some() || neighborhood.is_some() {
             // Full original source, precision, geometry, mask flags and unit
             // domains were just checked by the unchanged classifier policy.
         } else if histogram {
@@ -561,7 +567,8 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         }
         for d in &file.layers {
             ctl.check().map_err(|_| IoError::Cancelled)?;
-            if !threshold
+            if !filtered_flat
+                && !threshold
                 && !geometry
                 && !group
                 && !gaussian_group
@@ -608,6 +615,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             validate_drawable_alpha(d, point.is_some(), false, ctl, 0)?;
         }
         let mut domains = admission::AdmissionDomains {
+            filtered_flat_domain:filtered_flat,
             lab_separable_domain: separable_domain == Some(separable_blend::SourceKind::LabStrict),
             alpha_separable_domain: separable_domain == Some(separable_blend::SourceKind::AlphaStrict),
             component_separable_domain: separable_domain == Some(separable_blend::SourceKind::ComponentStrict),

@@ -197,7 +197,7 @@ impl Session {
         control.check(1)?;
         // A structural Point owner is not a current semantic/render receipt.
         // Only the typed source/native handoffs validate its operative recipe.
-        if document.is_readonly_assigned_point_storage() || document.is_readonly_flat_composite_storage() || document.is_readonly_point_storage() || document.is_readonly_gaussian_group_storage()
+        if document.is_readonly_filtered_flat_point_storage() || document.is_readonly_assigned_point_storage() || document.is_readonly_flat_composite_storage() || document.is_readonly_point_storage() || document.is_readonly_gaussian_group_storage()
             || crate::accounted_native_open::is_current_separable_blend_candidate(document.document(),control)?
             || crate::accounted_native_open::is_current_isolated_gaussian_group_candidate(document.document(),control)?
             || crate::accounted_native_open::is_current_isolated_normal_group_candidate(document.document(), control)? {

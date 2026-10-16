@@ -147,3 +147,37 @@ fn finite_arguments(arguments: &[FilterArgument], budget: &photocraft_xcf::Budge
     }
     Ok(())
 }
+
+/// Separate whole-document storage check for the sealed filtered-flat source.
+/// Reuses the exhaustive capacity walker, never singleton source semantics.
+pub(super) fn measure_filtered_flat(doc:&Document,budget:&photocraft_xcf::Budget<'_>,control:&Interrupt<'_>)->Result<Census,IoError>{
+ let state=doc.xcf_state.as_ref().ok_or_else(||invalid("filtered flat state"))?;
+ if !(2..=4096).contains(&doc.layers.len()) || state.filter_stacks.is_empty() || state.filter_stacks.len()>doc.layers.len() || state.filter_masks.len()!=state.filter_stacks.len() || state.items.len()!=doc.layers.len()+state.filter_masks.len()
+ ||state.selection.selected.len()>doc.layers.len()||!state.selection.selected_paths.is_empty()||!state.item_sets.is_empty()||!state.resources.is_empty(){return Err(invalid("filtered flat closed counts"))}
+ let rows=state.items.len().checked_add(state.filter_stacks.len()).and_then(|n|n.checked_add(state.filter_masks.len())).ok_or_else(||invalid("filtered flat joins"))?;
+ for (index,layer) in doc.layers.iter().enumerate(){
+ control.check().map_err(|_|IoError::Cancelled)?;
+ budget.consume_work((rows+index+1) as u64,"filtered flat measured joins").map_err(accounting_error)?;
+ if doc.layers.iter().take(index).any(|p|p.id==layer.id)||layer.mask.is_some()||layer.vector_mask.is_some(){return Err(invalid("filtered flat layer identity"))}
+ let mut items=state.items.iter().filter(|p|p.item==ItemRef::Layer(layer.id));
+ let item=items.next().ok_or_else(||invalid("filtered flat layer row"))?;
+ if items.next().is_some()||item.parent.is_some()||item.mask.is_some()||item.raster_bounds!=Some(doc.bounds()){return Err(invalid("filtered flat canonical bounds"))}
+ let mut stacks=state.filter_stacks.iter().filter(|p|p.owner==ItemRef::Layer(layer.id));
+ if let Some(stack)=stacks.next(){
+ if stacks.next().is_some()||stack.nodes.len()!=1{return Err(invalid("filtered flat stack"))}
+ let node=stack.nodes.first().ok_or_else(||invalid("filtered flat node"))?;
+ let Some(ItemRef::Mask(id))=node.mask else{return Err(invalid("filtered flat mask reference"))};
+ let mut masks=state.filter_masks.iter().filter(|m|m.id==id&&m.owner==node.id);
+ if masks.next().is_none()||masks.next().is_some(){return Err(invalid("filtered flat physical mask owner"))}
+ finite_arguments(&node.arguments,budget,control)?;
+ }
+ }
+ for (index,mask) in state.filter_masks.iter().enumerate(){
+ control.check().map_err(|_|IoError::Cancelled)?;
+ budget.consume_work((state.filter_stacks.len()+state.items.len()+index+1) as u64,"filtered flat mask joins").map_err(accounting_error)?;
+ if state.filter_masks.iter().take(index).any(|p|p.id==mask.id||p.owner==mask.owner)||mask.id.0==0||mask.bounds!=doc.bounds()||mask.surface.format()!=PixelFormat::new(ColorMode::Grayscale,doc.depth,false)
+ ||state.filter_stacks.iter().filter(|s|s.nodes.first().is_some_and(|n|n.id==mask.owner&&n.mask==Some(ItemRef::Mask(mask.id)))).count()!=1
+ ||state.items.iter().filter(|p|p.item==ItemRef::Mask(mask.id)).count()!=1{return Err(invalid("filtered flat unique mask"))}
+ }
+ shared::measure_point_storage(doc,budget,control)
+}

@@ -13,6 +13,9 @@ pub(crate) mod gaussian_group;
 #[path = "accounted_xcf_open/separable_blend.rs"]
 pub(crate) mod separable_blend;
 
+#[path = "accounted_xcf_open/filtered_flat.rs"]
+pub(crate) mod filtered_flat;
+
 struct ImportedModel<'a> {
     document: &'a photocraft_doc::accounted_document::AccountedDocument,
     origin: photocraft_io::ImportOrigin,
@@ -51,7 +54,7 @@ impl Session {
         source_path: Option<&str>,
         control: &ReadControl<'_>,
     ) -> Result<usize> {
-        if imported.document().is_readonly_flat_composite_storage() || crate::accounted_native_open::is_current_separable_blend_candidate(imported.document().document(),control)?
+        if imported.document().is_readonly_filtered_flat_point_storage() || crate::accounted_native_open::is_current_filtered_flat_candidate(imported.document().document(),control)? || imported.document().is_readonly_flat_composite_storage() || crate::accounted_native_open::is_current_separable_blend_candidate(imported.document().document(),control)?
             || crate::accounted_native_open::is_current_isolated_normal_group_candidate(imported.document().document(), control)?
             || crate::accounted_native_open::is_current_isolated_gaussian_group_candidate(imported.document().document(), control)? {
             return Err(BackingError::Unsupported.into());

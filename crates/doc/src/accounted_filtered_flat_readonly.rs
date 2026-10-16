@@ -1,0 +1,718 @@
+//! Readonly filtered-flat structural custody. This is not an operation, source,
+//! profile or render grant. Generic edits and selection remain closed.
+use super::*;
+use crate::{
+    FilterMask, FilterOutputPrecision,
+    item_identity::ItemRef,
+    xcf_filters::{FilterArgument, FilterNode, FilterStack, FilterValue, OperationIdentity},
+};
+use photocraft_raster::Surface;
+fn refused<T>() -> Result<T, BackingError> {
+    Err(BackingError::Unsupported)
+}
+fn native_sample(sample: crate::SampleType) -> bool {
+    matches!(sample, crate::SampleType::F32 | crate::SampleType::F64)
+}
+fn rectangle(r: Rect) -> Result<(), BackingError> {
+    if r.x0 != 0
+        || r.y0 != 0
+        || r.is_empty()
+        || r.width() > 262144
+        || r.height() > 262144
+        || u64::from(r.width()).checked_mul(u64::from(r.height())).ok_or(BackingError::Length)? > 1 << 30
+    {
+        return Err(BackingError::Bounds);
+    }
+    Ok(())
+}
+fn text(value: &str, c: &ReadControl<'_>) -> Result<(), BackingError> {
+    if value.len() > 1 << 20 {
+        return Err(BackingError::Length);
+    }
+    for chunk in value.as_bytes().chunks(32 << 10) {
+        c.check(chunk.len() as u64)?;
+        if chunk.contains(&0) {
+            return Err(BackingError::Integrity);
+        }
+    }
+    c.check(1)
+}
+fn hash(value: &str, c: &ReadControl<'_>) -> Result<(), BackingError> {
+    if value.len() != 64 {
+        return Err(BackingError::Integrity);
+    }
+    c.check(64)?;
+    if !value.bytes().all(|v| v.is_ascii_hexdigit()) {
+        return Err(BackingError::Integrity);
+    }
+    Ok(())
+}
+fn digest(bytes: &[u8], expected: &str, c: &ReadControl<'_>) -> Result<(), BackingError> {
+    if bytes.len() > 64 << 20 {
+        return Err(BackingError::Length);
+    }
+    hash(expected, c)?;
+    c.check(std::mem::size_of::<blake3::Hasher>() as u64 + 128)?;
+    let mut digest = blake3::Hasher::new();
+    for chunk in bytes.chunks(32 << 10) {
+        c.check(chunk.len() as u64 + 1)?;
+        digest.update(chunk);
+    }
+    c.check(128)?;
+    if digest.finalize().to_hex().as_str() != expected {
+        return Err(BackingError::Integrity);
+    }
+    c.check(1)
+}
+pub(super) struct MaskPlan {
+    bytes: u64,
+    bounds: Rect,
+    entries: usize,
+    format: crate::PixelFormat,
+}
+impl MaskPlan {
+    fn new(surface: &Surface, bounds: Rect, control: &ReadControl<'_>) -> Result<Self, BackingError> {
+        control.check(1)?;
+        rectangle(bounds)?;
+        if surface.tile_count() > 4096 {
+            return Err(BackingError::Length);
+        }
+        if bounds.x0 != 0 || bounds.y0 != 0 {
+            return Err(BackingError::Bounds);
+        }
+        let format = surface.format();
+        if format.mode != crate::ColorMode::Grayscale
+            || format.alpha
+            || !native_sample(format.sample)
+            || surface.default_bytes().len() != format.bytes_per_pixel()
+        {
+            return refused();
+        }
+        let side = u64::try_from(photocraft_geom::TILE_SIZE).map_err(|_| BackingError::Length)?;
+        let ceiling = side.checked_sub(1).ok_or(BackingError::Length)?;
+        let columns = u64::from(bounds.width()).checked_add(ceiling).ok_or(BackingError::Length)? / side;
+        let rows = u64::from(bounds.height()).checked_add(ceiling).ok_or(BackingError::Length)? / side;
+        let maximum = columns.checked_mul(rows).ok_or(BackingError::Length)?;
+        if u64::try_from(surface.tile_count()).map_err(|_| BackingError::Length)? > maximum {
+            return Err(BackingError::Length);
+        }
+        let length = side.checked_mul(side).and_then(|n| n.checked_mul(format.bytes_per_pixel() as u64)).ok_or(BackingError::Length)?;
+        for (coordinate, tile) in surface.tiles() {
+            control.check(1)?;
+            if u64::try_from(coordinate.tx).map_err(|_| BackingError::Bounds)? >= columns
+                || u64::try_from(coordinate.ty).map_err(|_| BackingError::Bounds)? >= rows
+            {
+                return Err(BackingError::Bounds);
+            }
+            for v in [coordinate.tx, coordinate.ty] {
+                let begin = v.checked_mul(photocraft_geom::TILE_SIZE).ok_or(BackingError::Bounds)?;
+                let end = begin.checked_add(photocraft_geom::TILE_SIZE).ok_or(BackingError::Bounds)?;
+                if begin < -(1 << 29) || end > 1 << 29 {
+                    return Err(BackingError::Bounds);
+                }
+            }
+            if tile.bytes().len() as u64 != length {
+                return Err(BackingError::Integrity);
+            }
+        }
+        let bytes = (surface.default_bytes().len() as u64)
+            .checked_mul(2)
+            .and_then(|n| n.checked_add((surface.tile_count() as u64).checked_mul(256)?))
+            .and_then(|n| n.checked_add(std::mem::size_of::<Surface>() as u64 + 128))
+            .ok_or(BackingError::Length)?;
+        Ok(Self { bytes, bounds, entries: surface.tile_count(), format })
+    }
+    fn copy(&self, source: &Surface, control: &ReadControl<'_>) -> Result<Surface, BackingError> {
+        let actual = Self::new(source, self.bounds, control)?;
+        if actual.bytes != self.bytes || actual.entries != self.entries || actual.format != self.format {
+            return Err(BackingError::Integrity);
+        }
+        control.check(source.default_bytes().len() as u64 + 1)?;
+        let mut copied = Surface::try_with_default_bytes(source.format(), source.default_bytes()).map_err(|_| BackingError::Allocation)?;
+        for (coordinate, tile) in source.tiles() {
+            control.check(1)?;
+            copied.put_tiles(std::iter::once((*coordinate, Arc::clone(tile))));
+        }
+        control.check(1)?;
+        Ok(copied)
+    }
+}
+fn node_shape(node: &FilterNode, control: &ReadControl<'_>) -> Result<PointArgumentShape, BackingError> {
+    control.check(1)?;
+    let opacity = f64::from_bits(node.opacity_f64_bits);
+    if node.id.0 == 0
+        || node.arguments.len() > 10
+        || !node.auxiliary.is_empty()
+        || !opacity.is_finite()
+        || !(0.0..=1.0).contains(&opacity)
+        || node.source_clipping != Some(0)
+        || node.source_region != Some(0)
+    {
+        return refused();
+    }
+    // No operation-name/version/schema registry lives at L1. These bounded
+    // strings and raw arguments are retained for the separate exact evaluator.
+    for text in [&node.operation.name, &node.operation.stored_version, &node.operation.schema_epoch] {
+        control.check(1)?;
+        if text.is_empty() || text.len() > 4096 {
+            return refused();
+        }
+    }
+    let composition = node.composition.as_ref().ok_or(BackingError::Unsupported)?;
+    if composition.compatibility_epoch.is_empty()
+        || composition.compatibility_epoch.len() > 4096
+        || composition.source_mode != 62
+        || composition.legacy
+        || composition.pass_through
+        || composition.resolved.is_some()
+    {
+        return refused();
+    }
+    for (index, argument) in node.arguments.iter().enumerate() {
+        text(&argument.name, control)?;
+        for old in node.arguments.get(..index).ok_or(BackingError::Length)? {
+            control.check(1)?;
+            if old.name == argument.name {
+                return Err(BackingError::Integrity);
+            }
+        }
+        match &argument.value {
+            FilterValue::Number(_) | FilterValue::Bool(_) | FilterValue::Color { .. } => {}
+            FilterValue::Enum { domain, .. } => text(domain, control)?,
+            _ => return refused(),
+        }
+    }
+    text(&composition.compatibility_epoch, control)?;
+    point_argument_shape(&node.arguments, control)
+}
+
+fn present(doc: &Document, id: ItemRef, c: &ReadControl<'_>) -> Result<(), BackingError> {
+    let state = doc.xcf_state.as_ref().ok_or(BackingError::Integrity)?;
+    for item in &state.items {
+        c.check(1)?;
+        if item.item == id {
+            return Ok(());
+        }
+    }
+    Err(BackingError::Integrity)
+}
+pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<(), BackingError> {
+    c.check(1)?;
+    if !(2..=4096).contains(&doc.layers.len())
+        || doc.mode != crate::ColorMode::Rgb
+        || !native_sample(doc.depth)
+        || doc.sample_encoding != Some(crate::SampleEncoding::NonlinearProfile)
+        || doc.selection.is_some()
+        || doc.selection_channel_id.is_some()
+    {
+        return refused();
+    }
+    let canvas = doc.bounds();
+    rectangle(canvas)?;
+    if canvas.size() != doc.size {
+        return Err(BackingError::Bounds);
+    }
+    let source = doc.source_color_context.as_ref().ok_or(BackingError::Unsupported)?;
+    if source.original_icc.is_some()
+        || !matches!((doc.depth, source.source_precision), (crate::SampleType::F32, 650) | (crate::SampleType::F64, 750))
+        || doc.icc_profile.as_ref().is_none_or(|v| v.is_empty() || v.len() > 16 << 20)
+    {
+        return refused();
+    }
+    let WorkingProfileInterpretation::ImplicitSrgb { icc_blake3 } = &doc.working_profile_interpretation else { return refused() };
+    hash(icc_blake3, c)?;
+    let state = doc.xcf_state.as_ref().ok_or(BackingError::Unsupported)?;
+    if state.provenance.format != "xcf"
+        || state.provenance.format_version != 22
+        || state.current_filter_output_precision != FilterOutputPrecision::Canonical
+        || state.filter_stacks.is_empty()
+        || state.filter_stacks.len() > doc.layers.len()
+        || state.filter_masks.len() != state.filter_stacks.len()
+        || state.items.len() != doc.layers.len().checked_add(state.filter_masks.len()).ok_or(BackingError::Length)?
+        || !state.source_items.is_empty()
+        || !state.editable_indexed.is_empty()
+        || !state.resources.is_empty()
+        || !state.item_sets.is_empty()
+        || state.floating.is_some()
+        || state.selection.selected.len() > doc.layers.len()
+        || !state.selection.selected_paths.is_empty()
+        || state.selection.mask_target.is_some()
+        || state.opaque.len() > 4096
+        || state.provenance.protected_source_fingerprints.len() > 4096
+    {
+        return refused();
+    }
+    // Aggregate retained physical map facts and their work are checked before
+    // scans; each root retains its existing4096 tile bound, with no cap raise.
+    let mut total_tiles = 0u64;
+    let mut map_bytes = 0u64;
+    for mask in &state.filter_masks {
+        c.check(1)?;
+        if mask.surface.tile_count() > 4096 {
+            return Err(BackingError::Length);
+        }
+        total_tiles = total_tiles.checked_add(mask.surface.tile_count() as u64).ok_or(BackingError::Length)?;
+        map_bytes = map_bytes
+            .checked_add((mask.surface.tile_count() as u64).checked_mul(256).ok_or(BackingError::Length)?)
+            .and_then(|n| n.checked_add((mask.surface.default_bytes().len() as u64).checked_mul(2)?))
+            .and_then(|n| n.checked_add(std::mem::size_of::<Surface>() as u64 + 128))
+            .ok_or(BackingError::Length)?;
+    }
+    c.check(total_tiles.checked_add(map_bytes).ok_or(BackingError::Length)?)?;
+    if doc.metadata.text.len() > 4096 || doc.metadata.psd_resources.len() > 4096 {
+        return Err(BackingError::Length);
+    }
+    if let Some(resolution) = &doc.physical_resolution
+        && let crate::physical_resolution::PhysicalUnit::Custom(unit) = &resolution.unit
+    {
+        for value in [&unit.name, &unit.symbol, &unit.abbreviation] {
+            text(value, c)?;
+        }
+    }
+    text(&doc.name, c)?;
+    for value in [&doc.metadata.xmp].into_iter().flatten() {
+        text(value, c)?;
+    }
+    for (key, value) in &doc.metadata.text {
+        c.check(1)?;
+        text(key, c)?;
+        text(value, c)?;
+    }
+    for (_, name, _) in &doc.metadata.psd_resources {
+        c.check(1)?;
+        text(name, c)?;
+    }
+    text(&doc.measurement.scale.units, c)?;
+    text(&doc.text_styles.basic.name, c)?;
+    text(&doc.slices.group_name, c)?;
+    for (i, layer) in doc.layers.iter().enumerate() {
+        c.check(1)?;
+        let LayerContent::BackedRaster(backed) = &layer.content else { return refused() };
+        if layer.id.0 == 0
+            || !backed.quota().shares_ledger(q)
+            || backed.operative_bounds() != canvas
+            || backed.format() != crate::PixelFormat::new(doc.mode, doc.depth, true)
+            || !layer.opacity.is_finite()
+            || !(0.0..=1.0).contains(&layer.opacity)
+            || layer.fill_opacity.to_bits() != 1f32.to_bits()
+            || layer.mask.is_some()
+            || layer.vector_mask.is_some()
+            || layer.indexed_source.is_some()
+            || !layer.effects.items.is_empty()
+            || layer.effects.psd_raw.is_some()
+            || layer.fill_cache.is_some()
+            || layer.video.is_some()
+            || layer.link_group.is_some()
+            || layer.clipped
+            || layer.excluded_channels != 0
+            || layer.blend_if != Default::default()
+            || layer.advanced != Default::default()
+        {
+            return refused();
+        }
+        text(&layer.name, c)?;
+        for old in doc.layers.get(..i).ok_or(BackingError::Length)? {
+            c.check(1)?;
+            if old.id == layer.id {
+                return Err(BackingError::Integrity);
+            }
+        }
+        let mut item = None;
+        for row in &state.items {
+            c.check(1)?;
+            if row.item == ItemRef::Layer(layer.id) {
+                if item.is_some() {
+                    return Err(BackingError::Integrity);
+                }
+                item = Some(row)
+            }
+        }
+        let item = item.ok_or(BackingError::Integrity)?;
+        if item.parent.is_some()
+            || item.mask.is_some()
+            || item.raster_bounds != Some(canvas)
+            || item.visible != layer.visible
+            || !imported_edits::names_equal(&item.name, &layer.name, c)?
+        {
+            return Err(BackingError::Integrity);
+        }
+    }
+    for (i, stack) in state.filter_stacks.iter().enumerate() {
+        c.check(1)?;
+        let ItemRef::Layer(id) = stack.owner else { return Err(BackingError::Integrity) };
+        if !doc.layers.iter().try_fold(false, |found, l| {
+            c.check(1)?;
+            Ok::<_, BackingError>(found || l.id == id)
+        })? {
+            return Err(BackingError::Integrity);
+        }
+        for old in state.filter_stacks.get(..i).ok_or(BackingError::Length)? {
+            c.check(1)?;
+            if old.owner == stack.owner {
+                return Err(BackingError::Integrity);
+            }
+        }
+        let [node] = stack.nodes.as_slice() else { return refused() };
+        node_shape(node, c)?;
+        for old in state.filter_stacks.get(..i).ok_or(BackingError::Length)? {
+            c.check(1)?;
+            if old.nodes.first().is_some_and(|n| n.id == node.id || n.mask == node.mask) {
+                return Err(BackingError::Integrity);
+            }
+        }
+        for value in [&node.operation.name, &node.operation.stored_version, &node.operation.schema_epoch] {
+            text(value, c)?;
+        }
+        for value in [node.source_display_name.as_deref(), node.source_icon.as_deref()].into_iter().flatten() {
+            text(value, c)?;
+        }
+        let ItemRef::Mask(mask_id) = node.mask.ok_or(BackingError::Integrity)? else { return Err(BackingError::Integrity) };
+        let mut matched = None;
+        for mask in &state.filter_masks {
+            c.check(1)?;
+            if mask.id == mask_id {
+                if matched.is_some() {
+                    return Err(BackingError::Integrity);
+                }
+                matched = Some(mask);
+            }
+        }
+        let mask = matched.ok_or(BackingError::Integrity)?;
+        if mask.id.0 == 0 || mask.owner != node.id || mask.bounds != canvas || mask.surface.format().sample != doc.depth {
+            return Err(BackingError::Integrity);
+        }
+    }
+    for (i, mask) in state.filter_masks.iter().enumerate() {
+        for old in state.filter_masks.get(..i).ok_or(BackingError::Length)? {
+            c.check(1)?;
+            if old.id == mask.id {
+                return Err(BackingError::Integrity);
+            }
+        }
+        MaskPlan::new(&mask.surface, canvas, c)?;
+        let mut metadata = None;
+        for item in &state.items {
+            c.check(1)?;
+            if item.item == ItemRef::Mask(mask.id) {
+                if metadata.is_some() {
+                    return Err(BackingError::Integrity);
+                }
+                metadata = Some(item)
+            }
+        }
+        let item = metadata.ok_or(BackingError::Integrity)?;
+        let policy = item.mask.as_ref().ok_or(BackingError::Integrity)?;
+        let mut stack = None;
+        for candidate in &state.filter_stacks {
+            c.check(1)?;
+            if candidate.nodes.first().is_some_and(|n| n.id == mask.owner) {
+                stack = Some(candidate);
+            }
+        }
+        let stack = stack.ok_or(BackingError::Integrity)?;
+        if item.parent.is_some()
+            || item.composition.is_some()
+            || item.raster_bounds != Some(canvas)
+            || !item.visible
+            || item.source_flags != 0
+            || policy.owner != stack.owner
+            || policy.bounds != canvas
+            || policy.offset != [0, 0]
+            || policy.outside_f64_bits != 0f64.to_bits()
+            || !policy.enabled
+            || policy.shown
+            || policy.editing
+            || policy.linked
+        {
+            return Err(BackingError::Integrity);
+        }
+    }
+    for (i, item) in state.items.iter().enumerate() {
+        c.check(1)?;
+        text(&item.name, c)?;
+        for old in state.items.get(..i).ok_or(BackingError::Length)? {
+            c.check(1)?;
+            if old.item == item.item {
+                return Err(BackingError::Integrity);
+            }
+        }
+        match item.item {
+            ItemRef::Layer(id) => {
+                let mut found = false;
+                for layer in &doc.layers {
+                    c.check(1)?;
+                    found |= layer.id == id;
+                }
+                if !found {
+                    return Err(BackingError::Integrity);
+                }
+            }
+            ItemRef::Mask(id) => {
+                let mut found = false;
+                for mask in &state.filter_masks {
+                    c.check(1)?;
+                    found |= mask.id == id;
+                }
+                if !found {
+                    return Err(BackingError::Integrity);
+                }
+            }
+            _ => return Err(BackingError::Integrity),
+        }
+        if let Some(p) = &item.composition {
+            text(&p.compatibility_epoch, c)?;
+            c.check(128)?;
+            p.checked_resolved().map_err(|_| BackingError::Integrity)?;
+        }
+    }
+    for (i, selected) in state.selection.selected.iter().enumerate() {
+        c.check(1)?;
+        let ItemRef::Layer(id) = selected else { return Err(BackingError::Integrity) };
+        let mut found = false;
+        for layer in &doc.layers {
+            c.check(1)?;
+            found |= layer.id == *id;
+        }
+        if !found {
+            return Err(BackingError::Integrity);
+        }
+        for previous in state.selection.selected.get(..i).ok_or(BackingError::Length)? {
+            c.check(1)?;
+            if previous == selected {
+                return Err(BackingError::Integrity);
+            }
+        }
+    }
+    if let Some(active) = state.selection.active {
+        let mut found = false;
+        for selected in &state.selection.selected {
+            c.check(1)?;
+            found |= *selected == active;
+        }
+        if !found {
+            return Err(BackingError::Integrity);
+        }
+    }
+    let p = &state.provenance;
+    for v in [&p.format, &p.container, &p.source_label] {
+        text(v, c)?;
+    }
+    for v in [&p.producer, &p.release_id, &p.original_locator].into_iter().flatten() {
+        text(v, c)?;
+    }
+    if let Some(h) = &p.source_hash {
+        hash(h, c)?;
+    }
+    for h in &p.protected_source_fingerprints {
+        hash(h, c)?;
+    }
+    let mut payload = 0usize;
+    for raw in &state.opaque {
+        c.check(1)?;
+        if raw.rendering_required {
+            return refused();
+        }
+        if let Some(id) = raw.owner {
+            present(doc, id, c)?;
+        }
+        text(&raw.namespace, c)?;
+        text(&raw.identity, c)?;
+        payload = payload.checked_add(raw.bytes.len()).ok_or(BackingError::Length)?;
+        if payload > 256 << 20 {
+            return Err(BackingError::Length);
+        }
+        digest(&raw.bytes, &raw.blake3, c)?;
+    }
+    Ok(())
+}
+fn measured(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+    shape(doc, q, c)?;
+    census_with_mask_policy(doc, true, true, None, q, c, ReadonlyMaskPolicy::FilteredFlat)
+}
+pub(super) fn mask_census(masks: &Vec<FilterMask>, census: &mut CanonicalCensus<'_, '_>) -> Result<(), BackingError> {
+    census.vec(masks, 4096)?;
+    for mask in masks {
+        let plan = MaskPlan::new(&mask.surface, mask.bounds, census.control)?;
+        census.counted.index = census.counted.index.checked_add(plan.bytes).ok_or(BackingError::Length)?;
+    }
+    Ok(())
+}
+impl AccountedDocument {
+    /// Additional owner header only. Existing whole model/source/native/profile
+    /// allocations must already be genuinely retained on the same quota.
+    pub fn readonly_filtered_flat_point_storage_requirements(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<u64, BackingError> {
+        measured(doc, q, c)?;
+        Ok(Self::owned_model_reservation_bytes())
+    }
+    pub fn new_readonly_filtered_flat_point_storage(
+        document: Document,
+        retention: Arc<dyn Any + Send + Sync>,
+        quota: BackingQuota,
+        c: &ReadControl<'_>,
+    ) -> Result<Self, BackingError> {
+        struct Incoming {
+            document: Document,
+            retention: Arc<dyn Any + Send + Sync>,
+        }
+        let incoming = Incoming { document, retention };
+        let required = Self::readonly_filtered_flat_point_storage_requirements(&incoming.document, &quota, c)?;
+        let allocation = quota.reserve(QuotaKind::Index, required).map_err(|_| BackingError::Quota)?;
+        c.check(1)?;
+        let Incoming { document, retention } = incoming;
+        Ok(Self {
+            owner: Arc::new(ModelOwner {
+                _storage_class: StorageClass::ReadonlyFilteredFlatPoint,
+                document,
+                _selection: None,
+                _selection_view: None,
+                retention,
+                quota,
+                _model: None,
+                _allocation: Arc::new(allocation),
+            }),
+        })
+    }
+    pub fn is_readonly_filtered_flat_point_storage(&self) -> bool {
+        self.owner._storage_class == StorageClass::ReadonlyFilteredFlatPoint
+    }
+    pub fn validate_readonly_filtered_flat_point_storage(&self, c: &ReadControl<'_>) -> Result<(), BackingError> {
+        if !self.is_readonly_filtered_flat_point_storage() {
+            return refused();
+        }
+        measured(self.document(), self.quota(), c)?;
+        Ok(())
+    }
+}
+fn vector<T>(len: usize) -> Result<Vec<T>, BackingError> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(len).map_err(|_| BackingError::Allocation)?;
+    if v.capacity() > len.checked_mul(2).ok_or(BackingError::Length)? {
+        return Err(BackingError::Allocation);
+    }
+    Ok(v)
+}
+fn copy_value(v: &FilterValue, c: &ReadControl<'_>) -> Result<FilterValue, BackingError> {
+    c.check(1)?;
+    Ok(match v {
+        FilterValue::Number(n) => FilterValue::Number(n.clone()),
+        FilterValue::Bool(b) => FilterValue::Bool(*b),
+        FilterValue::Enum { domain, value } => FilterValue::Enum { domain: imported_edits::copy_name(domain, c)?, value: *value },
+        FilterValue::Color { components, encoding, profile } => {
+            let mut out = vector(components.len())?;
+            for word in components {
+                c.check(1)?;
+                out.push(word.clone());
+            }
+            FilterValue::Color { components: out, encoding: *encoding, profile: *profile }
+        }
+        _ => return refused(),
+    })
+}
+fn copy_node(node: &FilterNode, control: &ReadControl<'_>) -> Result<FilterNode, BackingError> {
+    node_shape(node, control)?;
+    let mut arguments = Vec::new();
+    arguments.try_reserve_exact(node.arguments.len()).map_err(|_| BackingError::Allocation)?;
+    if arguments.capacity() > node.arguments.len().checked_mul(2).ok_or(BackingError::Length)? {
+        return Err(BackingError::Allocation);
+    }
+    for argument in &node.arguments {
+        control.check(1)?;
+        let value = copy_value(&argument.value, control)?;
+        arguments.push(FilterArgument { name: imported_edits::copy_name(&argument.name, control)?, value });
+    }
+    let old = node.composition.as_ref().ok_or(BackingError::Integrity)?;
+    let composition = crate::import_compositing::GimpComposition {
+        compatibility_epoch: imported_edits::copy_name(&old.compatibility_epoch, control)?,
+        source_mode: old.source_mode,
+        legacy: old.legacy,
+        stored_blend_space: old.stored_blend_space,
+        stored_composite_space: old.stored_composite_space,
+        stored_operator: old.stored_operator,
+        resolved: old.resolved.clone(),
+        pass_through: old.pass_through,
+    };
+    Ok(FilterNode {
+        id: node.id,
+        operation: OperationIdentity {
+            name: imported_edits::copy_name(&node.operation.name, control)?,
+            stored_version: imported_edits::copy_name(&node.operation.stored_version, control)?,
+            schema_epoch: imported_edits::copy_name(&node.operation.schema_epoch, control)?,
+        },
+        source_display_name: node.source_display_name.as_deref().map(|v| imported_edits::copy_name(v, control)).transpose()?,
+        source_icon: node.source_icon.as_deref().map(|v| imported_edits::copy_name(v, control)).transpose()?,
+        arguments,
+        enabled: node.enabled,
+        opacity_f64_bits: node.opacity_f64_bits,
+        source_clipping: node.source_clipping,
+        source_region: node.source_region,
+        mask: node.mask,
+        auxiliary: Vec::new(),
+        composition: Some(composition),
+    })
+}
+
+pub(super) fn renamed(owner: &AccountedDocument, name: &str, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
+    if name.len() > 4096 {
+        return Err(BackingError::Length);
+    }
+    imported_edits::validate_name(name, c)?;
+    let logical = measured(owner.document(), owner.quota(), c)?;
+    if imported_edits::names_equal(&owner.document().name, name, c)? {
+        return Ok(owner.clone());
+    }
+    let header = AccountedDocument::owned_model_reservation_bytes();
+    let envelope = logical
+        .index
+        .checked_sub(header)
+        .and_then(|v| v.checked_add((name.len() as u64).checked_mul(2)?))
+        .and_then(|v| v.checked_mul(2))
+        .and_then(|v| v.checked_add(4096))
+        .ok_or(BackingError::Length)?;
+    let payload = logical.payload.checked_mul(2).ok_or(BackingError::Length)?;
+    let allocation = owner.quota().reserve(QuotaKind::Index, header).map_err(|_| BackingError::Quota)?;
+    let mut index = owner.quota().reserve(QuotaKind::Index, envelope).map_err(|_| BackingError::Quota)?;
+    let mut payload_lease = owner.quota().reserve(QuotaKind::Resident, payload).map_err(|_| BackingError::Quota)?;
+    c.check(logical.total()?)?;
+    let mut staged = ModelStaging { document: imported_selection::copy_filtered_flat(owner.document(), owner.quota(), c)?, selection_view: None };
+    let source = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
+    let destination = staged.document.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
+    destination.filter_stacks = vector(source.filter_stacks.len())?;
+    destination.filter_masks = vector(source.filter_masks.len())?;
+    for stack in &source.filter_stacks {
+        c.check(1)?;
+        let mut nodes = vector(stack.nodes.len())?;
+        for node in &stack.nodes {
+            nodes.push(copy_node(node, c)?);
+        }
+        destination.filter_stacks.push(FilterStack { owner: stack.owner, nodes, revision: stack.revision });
+    }
+    for mask in &source.filter_masks {
+        let plan = MaskPlan::new(&mask.surface, mask.bounds, c)?;
+        destination.filter_masks.push(FilterMask { id: mask.id, owner: mask.owner, bounds: mask.bounds, surface: plan.copy(&mask.surface, c)? });
+    }
+    staged.document.name = imported_edits::copy_name(name, c)?;
+    let actual = measured(&staged.document, owner.quota(), c)?;
+    let actual_index = actual.index.checked_sub(header).ok_or(BackingError::Integrity)?;
+    if actual_index > envelope || actual.payload > payload {
+        return Err(BackingError::Allocation);
+    }
+    index.reconcile_capacity(actual_index).map_err(|_| BackingError::Quota)?;
+    payload_lease.reconcile_capacity(actual.payload).map_err(|_| BackingError::Quota)?;
+    c.check(1)?;
+    Ok(AccountedDocument {
+        owner: Arc::new(ModelOwner {
+            _storage_class: StorageClass::ReadonlyFilteredFlatPoint,
+            document: staged.document,
+            _selection: None,
+            _selection_view: None,
+            retention: owner.owner.retention.clone(),
+            quota: owner.quota().clone(),
+            _model: Some(ModelCharges { _index: index, _payload: payload_lease }),
+            _allocation: Arc::new(allocation),
+        }),
+    })
+}
+
+#[cfg(test)]
+#[path = "accounted_filtered_flat_readonly_tests.rs"]
+mod tests;

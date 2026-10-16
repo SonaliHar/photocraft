@@ -739,6 +739,9 @@ impl Session {
         if id == "document.pixel.inspect" {
             crate::inspect_pixel_cmds::dispatch_preflight(&params)?;
         }
+        if crate::accounted_commands::filtered_flat_mutation_refused(self,id) {
+            return Err(EngineError::Disabled(id.into(),"this filtered-flat document is read-only".into()));
+        }
         if crate::accounted_commands::observed_box_mutation_refused(self, id) {
             return Err(EngineError::Disabled(id.into(), "this observed Box geometry recipe is read-only".into()));
         }

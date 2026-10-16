@@ -277,6 +277,20 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     let id = crate::xcf_filter_cmds::id(COMMAND, params)?;
     let active = session.active().ok_or(EngineError::NoDocument)?;
     let owner = active.doc.accounted().ok_or(BackingError::Unsupported)?;
+    if owner.is_readonly_filtered_flat_point_storage(){
+        owner.validate_readonly_filtered_flat_point_storage(control)?;
+        let state=owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
+        if state.filter_stacks.len()>4096{return Err(BackingError::Length.into())}
+        let mut found=None;
+        for stack in &state.filter_stacks{control.check(1)?;let [node]=stack.nodes.as_slice() else{return Err(BackingError::Integrity.into())};if node.id==id{if found.is_some(){return Err(BackingError::Integrity.into())}found=Some((stack,node));}}
+        let (stack,node)=found.ok_or_else(||bad("unknown filterId"))?;
+        let text=point_metadata(node,control)?;let planned=point_envelope(text)?;
+        return paid_reply(owner.quota(),ReplyKind::Filter,POINT_FILTER_BOUNDS,planned,text,control,||{
+            let mut reply=crate::xcf_filter_cmds::build_point_storage_inspect_reply(id,stack,node)?;
+            *reply.get_mut("scalarEditCandidate").ok_or(BackingError::Integrity)?=Value::Bool(false);
+            Ok(reply)
+        });
+    }
     let gaussian_group=owner.is_readonly_gaussian_group_storage();
     let point = if owner.is_readonly_threshold_alpha_storage() {
         owner.validate_readonly_threshold_alpha_storage(control)?;

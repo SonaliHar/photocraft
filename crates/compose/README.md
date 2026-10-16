@@ -1174,3 +1174,58 @@ Exact seven operation/schema/compatibility/version tuples select finite work
 service only. Existing typed controls remain fully qualified; Move, remove,
 direct compound metadata and new empty roles gain no permission. Regression
 drafts remain ignored, unrun and uncompiled; full acceptance remains deferred.
+
+
+### Mixed ordinary roots with existing point filters
+
+`ReadonlyFilteredFlatPoint` is a separate actual storage class for2..4096
+ordinary full-canvas origin roots, with at least one filtered root. Each root
+is plain or has one existing Semi-Flatten, Hue-Chroma or Vibrance node and its
+own saved zero effect mask. Initial precision is implicit RGB nonlinear
+F32/650 or F64/750. Assigned profiles, groups, offsets, layer masks, links,
+auxiliary inputs, pixel selection and other filter stacks remain outside this
+class. Structural L1 custody is distinct from source and CURRENT qualification.
+Its consuming requirements report additional owner headers; incoming genuine
+model/native/profile/mask receipts remain mandatory on the same ledger.
+
+Whole-document source mapping selects each actual root's leaf policy without
+manufacturing singleton documents. SOURCE retains visible/full-opacity layers
+and enabled/unit-opacity filters. Inert bounded selected/active root records
+remain exact; pixel/path/mask editing selection is closed. Root linked and
+selection flags that this path cannot preserve operatively are refused. CURRENT
+finite-unit activity is independently qualified, including full native/default/
+profile/mask proof for every root and operative output validation under its
+retained enabled state. Hidden and zero-opacity layers still evaluate their
+enabled leaf output.
+Native word storage and original profile/raw identity are not derived pixels.
+
+The compiler binds one actual current profile and global canonical relationships,
+then prepares root-scoped leaf math. Document roots are already bottom-to-top
+(the importer reverses XCF storage order once); composition uses that order.
+It reuses the existing singleton evaluator
+body without changing arithmetic or relaxing those singleton factories. Root
+Normal28 raw(0,-1,-1), exact xcf-22-normal policy and the existing mapper's
+Linear/Linear/Union resolution remain distinct from nonlinear sample storage.
+Masks for the three filter families retain their existing numeric-zero/default/full
+physical padding policy and4096 stored-tile bound per root. Checked aggregate
+map/default/header/native work and all real fees precede scans; a per-root cap
+does not provide an uncharged aggregate allowance.
+
+Filtered output stays wide until combined through the existing Normal/Union
+equations with actual layer opacity. It is never encoded back to native F32
+between layers or independently composited over transparent before stacking.
+Prior accumulator, raw filtered source and next accumulator coexist under
+separate real quota receipts, along with all retained Parts/current profile,
+maps, native pins and scratch. No new32MiB component cap or whole-process memory
+guarantee is introduced. Complete decoded input Surfaces remain retained.
+
+`PreparedBackedFilteredFlatPointDocument` exposes controlled operative validation,
+wide bands, bounds and current interpretation. Generic accounted composition
+selects this class first, reserves its outer header before construction and
+checks the supplied known sRGB basis separately from actual current-profile
+binding. Native reopen selects the strict class before Point; selected failures
+never retry a generic endpoint. Native save, title, preview and paid inspection
+retain their original source, quota, deadline, reply and publication fences.
+Generic adoption, mutations, Move (including zero), filter/selection edits and
+editable UI controls are closed for this initial class. Existing classes retain
+their policies. Regression groups are ignored, unrun and uncompiled.

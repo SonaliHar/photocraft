@@ -137,7 +137,7 @@ fn prepay(budget: &photocraft_xcf::Budget<'_>, units: u64) -> Result<(), IoError
 /// supported Point branches before this consuming custody handoff. This is not
 /// a caller-supplied Document or a source/renderer grant from census statistics.
 #[derive(Clone,Copy)]
-enum PointStorage { Implicit,Assigned }
+enum PointStorage { Implicit,Assigned,FilteredFlat }
 pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
     source: S,
     budget: &'b photocraft_xcf::Budget<'a>,
@@ -150,6 +150,9 @@ pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
 pub(in crate::xcf_import) fn promote_assigned_source<'b,'a,S:PromotionSource<'b,'a>>(source:S,budget:&'b photocraft_xcf::Budget<'a>,quota:BackingQuota,control:&ReadControl<'_>,preparation:&mut Option<PreparationHold>)->Result<OwnedPointXcfImport,IoError>{
     promote_with_storage(source,budget,quota,control,preparation,PointStorage::Assigned)
 }
+pub(in crate::xcf_import) fn promote_filtered_flat_source<'b,'a,S:PromotionSource<'b,'a>>(source:S,budget:&'b photocraft_xcf::Budget<'a>,quota:BackingQuota,control:&ReadControl<'_>,preparation:&mut Option<PreparationHold>)->Result<OwnedPointXcfImport,IoError>{
+ promote_with_storage(source,budget,quota,control,preparation,PointStorage::FilteredFlat)
+}
 fn promote_with_storage<'b,'a,S:PromotionSource<'b,'a>>(source:S,budget:&'b photocraft_xcf::Budget<'a>,quota:BackingQuota,control:&ReadControl<'_>,preparation:&mut Option<PreparationHold>,storage:PointStorage)->Result<OwnedPointXcfImport,IoError>{
     struct Incoming<'b, 'a, S> {
         source: S,
@@ -158,7 +161,8 @@ fn promote_with_storage<'b,'a,S:PromotionSource<'b,'a>>(source:S,budget:&'b phot
         bridge: Option<photocraft_xcf::Reservation<'b, 'a>>,
     }
     let mut incoming = Incoming { source, model: None, payload: None, bridge: None };
-    let measured = census::measure(incoming.source.document(), budget, control.interrupt)?;
+    let filtered=matches!(storage,PointStorage::FilteredFlat);
+    let measured = if filtered {census::measure_filtered_flat(incoming.source.document(),budget,control.interrupt)?}else{census::measure(incoming.source.document(), budget, control.interrupt)?};
     // The holder's result is exposed only as borrowed fields; this sibling
     // report census does not acquire a public extraction or source grant.
     let reports = incoming.source.report_capacity_with_budget(&budget)?;
@@ -166,10 +170,14 @@ fn promote_with_storage<'b,'a,S:PromotionSource<'b,'a>>(source:S,budget:&'b phot
     incoming.payload = Some(budget.reserve(BudgetKind::Resident, measured.payload, "point raw/profile capacities").map_err(accounting_error)?);
     let bridge_bytes = add(
         add(std::mem::size_of::<Retention>() as u64, std::mem::size_of::<OwnedPointXcfImport>() as u64)?,
-        add(std::mem::size_of::<store::SurfaceStore<Retention>>() as u64, 4096)?,
+        add((std::mem::size_of::<store::SurfaceStore<Retention>>() as u64).checked_mul(if filtered{measured.layers as u64}else{1}).ok_or_else(||invalid("filtered store headers"))?, 4096)?,
     )?;
     incoming.bridge = Some(budget.reserve(BudgetKind::Index, bridge_bytes, "point owned bridge headers").map_err(accounting_error)?);
-    let phase = phase_work(incoming.source.document(), measured.model, measured.payload, incoming.source.original_bytes().len() as u64, &budget)?;
+    let mut phase = phase_work(incoming.source.document(), measured.model, measured.payload, incoming.source.original_bytes().len() as u64, &budget)?;
+    if filtered {
+      let n=incoming.source.document().layers.len() as u64;
+      phase=add(phase,n.checked_mul(n).and_then(|v|v.checked_mul(64)).ok_or_else(||invalid("filtered phase joins"))?)?;
+    }
     prepay(&budget, phase)?;
     let remaining = AtomicU64::new(phase);
     let work = |units| remaining.try_update(Ordering::AcqRel, Ordering::Relaxed, |left| left.checked_sub(units)).map(|_| ()).map_err(|_| BackingError::Work);
@@ -181,7 +189,7 @@ fn promote_with_storage<'b,'a,S:PromotionSource<'b,'a>>(source:S,budget:&'b phot
     let read = ReadControl { interrupt: control.interrupt, work: &work };
     for layer in &incoming.source.document().layers {
         let LayerContent::Raster(surface) = &layer.content else { return Err(invalid("point staged layer")) };
-        let bounds = census::raster_bounds(incoming.source.document(), layer.id)?;
+        let bounds = if filtered {incoming.source.document().bounds()}else{census::raster_bounds(incoming.source.document(), layer.id)?};
         store::validate(surface, bounds, &read, &poll).map_err(backing)?;
     }
     if let Some(state) = &incoming.source.document().xcf_state {
@@ -226,7 +234,7 @@ fn promote_with_storage<'b,'a,S:PromotionSource<'b,'a>>(source:S,budget:&'b phot
     // Resolve the singleton's original operative rectangle before taking a
     // mutable layer borrow; it may differ from the canvas and cross zero.
     let id = promoting.result.document.layers.first().ok_or_else(|| invalid("point layer missing"))?.id;
-    let bounds = census::raster_bounds(&promoting.result.document, id)?;
+    let bounds = if filtered {promoting.result.document.bounds()}else{census::raster_bounds(&promoting.result.document, id)?};
     for layer in &mut promoting.result.document.layers {
         poll().map_err(backing)?;
         read.check(1).map_err(backing)?;
@@ -248,7 +256,7 @@ fn promote_with_storage<'b,'a,S:PromotionSource<'b,'a>>(source:S,budget:&'b phot
     let retention_guard = promoting.retention.clone();
     let Promoting { result, retention } = promoting;
     let ImportResult { document, warnings, origin, assessment, source_read_only, preview_only } = result;
-    let document = if matches!(storage,PointStorage::Assigned) { AccountedDocument::new_readonly_assigned_point_storage(document,retention.clone(),quota,&read) } else { AccountedDocument::new_readonly_point_storage(document, retention.clone(), quota, &read) }.map_err(backing)?;
+    let document = if filtered {AccountedDocument::new_readonly_filtered_flat_point_storage(document,retention.clone(),quota,&read)} else if matches!(storage,PointStorage::Assigned) { AccountedDocument::new_readonly_assigned_point_storage(document,retention.clone(),quota,&read) } else { AccountedDocument::new_readonly_point_storage(document, retention.clone(), quota, &read) }.map_err(backing)?;
     poll().map_err(backing)?;
     control.interrupt.check().map_err(|_| IoError::Cancelled)?;
     let output = OwnedPointXcfImport { document, warnings, origin, assessment, source_read_only, preview_only, _retention: retention };

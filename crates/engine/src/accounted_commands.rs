@@ -83,6 +83,12 @@ fn bad(id: &str, message: &str) -> EngineError {
     EngineError::BadParams { cmd: id.into(), msg: message.into() }
 }
 
+/// No editing or selection route is granted by readonly mixed-root storage.
+pub(crate) fn filtered_flat_mutation_refused(session:&Session,id:&str)->bool{
+    supports(id) && !matches!(id,"edit.undo"|"edit.redo"|"history.selectState")
+        && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage())
+}
+
 enum Request<'a> {
     FlatComposition(flat_composition::Request<'a>),
     PreparedFlatComposition(flat_composition::Prepared<'a>),
@@ -128,7 +134,7 @@ fn require_history_selection_enabled(session: &Session) -> Result<()> {
 }
 
 fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadControl<'_>) -> Result<Request<'a>> {
-    if observed_box_mutation_refused(session, id) {
+    if observed_box_mutation_refused(session, id) || filtered_flat_mutation_refused(session,id) {
         return Err(BackingError::Unsupported.into());
     }
     if id == "xcf.composition.set" {

@@ -133,6 +133,8 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
         app.session.add_owned_native_isolated_normal_group_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_analytic_geometry_candidate(archive.document(), &control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_analytic_geometry_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
+    } else if photocraft_engine::accounted_native_open::is_current_filtered_flat_candidate(archive.document(), &control).map_err(|e| e.to_string())? {
+        app.session.add_owned_native_filtered_flat_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_point_candidate(archive.document(), &control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_point_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
     } else {
@@ -181,6 +183,8 @@ pub(crate) fn adopt_bytes(
         app.session.add_owned_native_isolated_normal_group_archive(archive, name, None, control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_analytic_geometry_candidate(archive.document(), control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_analytic_geometry_archive(archive, name, None, control).map_err(|e| e.to_string())?;
+    } else if photocraft_engine::accounted_native_open::is_current_filtered_flat_candidate(archive.document(), control).map_err(|e| e.to_string())? {
+        app.session.add_owned_native_filtered_flat_archive(archive, name, None, control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_point_candidate(archive.document(), control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_point_archive(archive, name, None, control).map_err(|e| e.to_string())?;
     } else {

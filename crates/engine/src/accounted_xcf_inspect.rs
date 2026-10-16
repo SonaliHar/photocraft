@@ -90,7 +90,9 @@ pub(crate) fn validate_resolution(resolution: &photocraft_doc::PhysicalResolutio
 pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> Result<OwnedFilterInspectReply> {
     let (offset, limit) = pagination(params, control)?;
     let owner = session.active().ok_or(EngineError::NoDocument)?.doc.accounted().ok_or(BackingError::Unsupported)?;
-    if owner.is_readonly_flat_composite_storage() {
+    if owner.is_readonly_filtered_flat_point_storage() {
+        return filtered_flat::prepare(owner,offset,limit,control);
+    } else if owner.is_readonly_flat_composite_storage() {
         return crate::accounted_plain_xcf_inspect::prepare_flat_composite(owner,offset,limit,control);
     } else if owner.is_readonly_threshold_alpha_storage() {
         owner.validate_readonly_threshold_alpha_storage(control)?;
@@ -243,3 +245,6 @@ mod point_stack_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_empty_point_inspect_tests.rs"]
 mod empty_point_tests;
+
+#[path="accounted_xcf_inspect_filtered_flat.rs"]
+mod filtered_flat;

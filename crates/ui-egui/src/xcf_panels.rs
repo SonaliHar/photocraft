@@ -304,6 +304,10 @@ fn text_color_patch(document: &photocraft_doc::Document, layer: LayerId, color: 
 }
 
 pub(crate) fn filter_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: LayerId) {
+    if app.session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage()) {
+        ui.label(tl!("Filter editing is unavailable"));
+        return;
+    }
     filter_mask::properties(app, ui, layer);
     filter_insert::properties(app, ui, layer);
     filter_stack::properties(app, ui, layer);
@@ -1503,3 +1507,7 @@ mod nine_point_geometry_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "xcf_panels/residual_point_geometry_tests.rs"]
 mod residual_point_geometry_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "xcf_panels/filtered_flat_tests.rs"]
+mod filtered_flat_tests;

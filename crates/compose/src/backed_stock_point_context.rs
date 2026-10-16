@@ -27,6 +27,8 @@ use photocraft_raster::backing::{
 
 #[path = "backed_stock_point_empty.rs"]
 mod empty;
+#[path = "backed_stock_point_root.rs"]
+pub(crate) mod root;
 #[path = "backed_stock_point_hue_chroma.rs"]
 mod owned_hue;
 #[path = "backed_stock_point_vibrance.rs"]
@@ -781,17 +783,25 @@ impl PreparedStockPointPipeline {
         position: (i32, i32),
         control: &ReadControl<'_>,
     ) -> Result<[f64; 4], BackedNormalError> {
+        evaluate_bound_point(&self.plan.stack, self.plan.format, self.plan.unit_input, self.plan.half_input, self.plan.opaque_input, &self.quota, raw, format, position, control)
+    }
+}
+
+
+/// Same numeric/control body as the singleton native evaluator. Only sealed
+/// paid compilers select these flags; no public arbitrary callback is retained.
+pub(crate) fn evaluate_bound_point(stack: &OrderedStack, expected: PixelFormat, unit_input: bool, half_input: bool, opaque_input: bool, quota: &BackingQuota, raw: &[u8], format: PixelFormat, position: (i32,i32), control: &ReadControl<'_>) -> Result<[f64;4],BackedNormalError> {
         control.check(format.bytes_per_pixel() as u64 + 1).map_err(BackedNormalError::Backing)?;
-        if format != self.plan.format || raw.len() != format.bytes_per_pixel() {
+        if format != expected || raw.len() != format.bytes_per_pixel() {
             return Err(scope());
         }
         let read = |channel| try_read_sample_f64(raw, format.sample, channel).map_err(|_| length());
         let rgb = if format.mode == ColorMode::Grayscale { [read(0)?; 3] } else { [read(0)?, read(1)?, read(2)?] };
         let input = [rgb[0], rgb[1], rgb[2], read(format.mode.color_channels())?];
-        if self.plan.unit_input && input.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
+        if unit_input && input.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
             return Err(BackedNormalError::Unsupported("unit CURRENT stock Point native samples"));
         }
-        if self.plan.half_input
+        if half_input
             && input.iter().any(|value| {
                 !photocraft_color::try_round_f32_to_f16_bits(*value as f32)
                     .is_ok_and(|bits| photocraft_color::widen_f16_to_f32_bits(bits) == (*value as f32).to_bits())
@@ -799,7 +809,7 @@ impl PreparedStockPointPipeline {
         {
             return Err(BackedNormalError::Unsupported("Color Balance exact widened Half current input"));
         }
-        if self.plan.opaque_input && input[3] != 1.0 {
+        if opaque_input && input[3] != 1.0 {
             return Err(BackedNormalError::Unsupported("Posterize opaque current input"));
         }
         let mut failed = None;
@@ -808,7 +818,7 @@ impl PreparedStockPointPipeline {
             let result = match event {
                 WideWork::SampleUnits(units) => control.check(units).map_err(BackedNormalError::Backing),
                 WideWork::ReserveBytes(bytes) if temporary.is_none() => {
-                    self.quota.reserve(QuotaKind::Resident, bytes).map(|lease| temporary = Some(lease)).map_err(BackedNormalError::Quota)
+                    quota.reserve(QuotaKind::Resident, bytes).map(|lease| temporary = Some(lease)).map_err(BackedNormalError::Quota)
                 }
                 WideWork::ReleaseBytes(bytes) if temporary.as_ref().is_some_and(|lease| lease.bytes() == bytes) => {
                     temporary = None;
@@ -822,9 +832,9 @@ impl PreparedStockPointPipeline {
             }
             Ok(())
         };
-        let validated = self.plan.stack.validate_stock_input(position, input, control.interrupt, &mut poll);
+        let validated = stack.validate_stock_input(position, input, control.interrupt, &mut poll);
         let evaluated = match validated {
-            Ok(()) => self.plan.stack.point_at(input, position, &mut poll),
+            Ok(()) => stack.point_at(input, position, &mut poll),
             Err(error) => Err(error),
         };
         if let Some(error) = failed {
@@ -839,7 +849,6 @@ impl PreparedStockPointPipeline {
         }
         control.check(0).map_err(BackedNormalError::Backing)?;
         Ok(output)
-    }
 }
 
 /// Tightly packed straight RGBA64 operative result in the current stored

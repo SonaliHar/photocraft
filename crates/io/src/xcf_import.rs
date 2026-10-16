@@ -64,6 +64,11 @@ pub use owned_plain_source::{OwnedPlainXcfImport, import_owned_staged_plain_byte
 mod owned_threshold_source;
 #[path = "xcf_import/owned_histogram_threshold_source.rs"]
 mod owned_histogram_threshold_source;
+#[path = "xcf_import/staged_filtered_flat.rs"]
+mod staged_filtered_flat;
+#[path = "xcf_import/owned_filtered_flat_source.rs"]
+mod owned_filtered_flat_source;
+pub use owned_filtered_flat_source::OwnedFilteredFlatXcfImport;
 #[path = "xcf_import/owned_point_source.rs"]
 mod owned_point_source;
 pub use owned_point_source::OwnedPointXcfImport;
@@ -1687,6 +1692,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
     authorized_font: Option<&PreparedRuntimeFont<'_>>,
 ) -> Result<(ImportResult, usize), IoError> {
     let admission::AdmissionDomains {
+        filtered_flat_domain,
         observed_box_geometry_domain,
         owned_assigned_box_domain,
         owned_assigned_median_domain,
@@ -1876,6 +1882,8 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         } else {
             modified_context.as_ref().map(|context| crate::xcf_modified_sources::validate_modified_source_with_storage(d, context, ctl)).transpose()?
         };
+        let filtered_root_domain=if filtered_flat_domain {Some(staged_filtered_flat::root_domain(d,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered flat accounting"))?)?)} else {None};
+        let point_replace_domain=filtered_root_domain.flatten().or(point_replace_domain);
         let effects_candidate = !d.effects.is_empty()
             && (point_replace_domain.is_some()
                 || owned_point_domain.is_some()
@@ -2594,6 +2602,14 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 .map(accounting_error)
                 .unwrap_or_else(|| if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF rendering consumer: {error}")) }));
         }
+    } else if P::requires_budgeted_filtered_flat_preparation(filtered_flat_domain) {
+        // One real multi-root document, one shared source ledger and no leaf
+        // singleton facade or filtered native intermediary. The mandatory
+        // compiler proves every physical input/default/mask before promotion.
+        let (shared, source_lease) = preparation.ok_or_else(||IoError::Unsupported("filtered flat source preparation accounting".into()))?;
+        let mut adapter = SharedPreparation {shared,failure:None};
+        let checked = photocraft_compose::backed_filtered_flat_point_context::LeasedFilteredFlatPointPipeline::new_budgeted(&doc,ctl,&mut adapter,source_lease);
+        if let Err(error)=checked {return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("filtered flat source preparation: {error}"))}));}
     } else if P::requires_budgeted_point_preparation(point_replace_domain.is_some() || owned_point_domain.is_some()) {
         // The original exact classifier and qualified_stack already succeeded.
         // This sealed path must also hold the actual controlled source->working

@@ -3,6 +3,9 @@
 use super::*;
 impl AccountedDocument {
     pub fn try_with_document_name(&self, name: &str, control: &ReadControl<'_>) -> Result<Self, BackingError> {
+        if self.owner._storage_class == StorageClass::ReadonlyFilteredFlatPoint {
+            return filtered_flat_readonly::renamed(self, name, control);
+        }
         if self.owner._storage_class == StorageClass::ReadonlyFlatComposite {
             return flat_composite_readonly::renamed(self, name, control);
         }

@@ -2286,3 +2286,22 @@ Larger masks use an explicit actual-grid allowance capped at16MiB, admitted
 before full physical/default/padding byte-zero proof. Old8x6 mask behavior is
 preserved. No new Move/remove/compound/empty continuation is added. Native
 continuation remains `.pcraft`; behavior and performance gates are deferred.
+
+
+Mixed filtered ordinary roots use a separate readonly `FilteredFlat` handoff.
+The current scope is2..4096 full-canvas origin implicit nonlinear RGB F32/F64
+layers, each plain or carrying one existing Semi-Flatten, Hue-Chroma or Vibrance
+filter, with at least one filter. Source layers are visible/full-opacity and
+filters enabled/unit-opacity; CURRENT activity still receives complete proof.
+Stored sample encoding is separate from root Linear/Linear/Normal Union policy.
+
+Source intake and native reopen retain actual whole-document native/profile/raw
+owners, and strict mixed classification precedes the singleton Point route.
+Failure is final. Existing preview, native save/reopen, title and paid paginated
+project/filter inspection are connected through this actual class and the same
+cumulative controls. Selected/active root metadata is preserved; pixel-selection
+editing is unavailable. Generic owner adoption, filter/layer/selection mutations
+and Move zero shortcuts cannot publish or modify this class. The panel presents
+readonly controls instead of falling through to editable registry widgets.
+This initial handoff adds no new command or write authority. Behavioral/native/
+visual/performance acceptance and complete stock/multilayer editing remain open.

@@ -21,6 +21,7 @@ enum NativeHandoff {
     CurrentIsolatedNormalGroup,
     CurrentIsolatedGaussianGroup,
     CurrentSeparableBlend,
+    CurrentFilteredFlat,
 }
 
 /// Bounded work-policy routing hint only. Selecting the standard profile work
@@ -34,6 +35,30 @@ pub fn is_current_box_work_candidate(document: &photocraft_doc::Document, contro
 mod standard_work;
 pub use standard_work::is_current_standard_work_candidate;
 pub use standard_work::is_current_pure_point_work_candidate;
+
+/// Multi-root filtered identity hint only. A selected refusal is final and
+/// must precede the older singleton Point hint in explicit owned native routes.
+pub fn is_current_filtered_flat_candidate(document: &photocraft_doc::Document, control: &ReadControl<'_>) -> std::result::Result<bool, BackingError> {
+    control.check(1)?;
+    if document.layers.len() < 2 { return Ok(false); }
+    let Some(state)=&document.xcf_state else {return Ok(false)};
+    // Oversized mixed filter shapes select this refusing endpoint in O(1),
+    // rather than falling through or walking hostile unbounded metadata.
+    if document.layers.len()>4096 || state.filter_stacks.len()>4096 {
+        return Ok(!state.filter_stacks.is_empty());
+    }
+    for stack in &state.filter_stacks { control.check(1)?;
+        if stack.nodes.len()>1 {return Ok(true)}
+
+        for node in &stack.nodes { control.check(1)?;
+            for text in [&node.operation.name,&node.operation.schema_epoch] {control.check(text.len() as u64)?;}
+            let epoch=|s:&str|matches!(s,photocraft_compose::SEMI_FLATTEN_EPOCH|photocraft_compose::HUE_CHROMA_EPOCH|photocraft_compose::VIBRANCE_EPOCH);
+            if matches!(node.operation.name.as_str(),"gimp:semi-flatten"|"gegl:hue-chroma"|"gegl:vibrance") || epoch(&node.operation.schema_epoch) {return Ok(true)}
+            if let Some(p)=&node.composition {control.check(p.compatibility_epoch.len() as u64)?;if epoch(&p.compatibility_epoch){return Ok(true)}}
+        }
+    }
+    Ok(false)
+}
 
 /// Allocation-free route hint selecting the stricter current Point endpoint.
 /// Version, arguments, profile and storage still require the typed handoff;
@@ -452,6 +477,11 @@ impl Session {
     pub fn add_owned_native_separable_blend_archive(&mut self,archive:OwnedDocumentArchive,label:&str,authorized_native_path:Option<&str>,control:&ReadControl<'_>)->Result<usize>{
         self.add_owned_native_with(archive,label,authorized_native_path,control,NativeHandoff::CurrentSeparableBlend)
     }
+    /// Explicit consuming readonly mixed filtered-root handoff; no fallback.
+    pub fn add_owned_native_filtered_flat_archive(&mut self,archive:OwnedDocumentArchive,label:&str,authorized_native_path:Option<&str>,control:&ReadControl<'_>)->Result<usize>{
+        self.add_owned_native_with(archive,label,authorized_native_path,control,NativeHandoff::CurrentFilteredFlat)
+    }
+
     fn add_owned_native_with(
         &mut self,
         archive: OwnedDocumentArchive,
@@ -477,7 +507,7 @@ impl Session {
             }
         }
         if matches!(handoff, NativeHandoff::Document)
-            && (is_current_point_candidate(archive.document(), control)?
+            && (is_current_filtered_flat_candidate(archive.document(),control)? || is_current_point_candidate(archive.document(), control)?
                 || is_current_analytic_geometry_candidate(archive.document(), control)?
                 || is_current_isolated_normal_group_candidate(archive.document(), control)?
                 || is_current_isolated_gaussian_group_candidate(archive.document(), control)?
@@ -495,9 +525,10 @@ impl Session {
             NativeHandoff::CurrentAssignedPoint => archive.into_accounted_readonly_assigned_point_storage(control),
             NativeHandoff::CurrentIsolatedGaussianGroup => archive.into_accounted_readonly_gaussian_group_storage(control),
             NativeHandoff::CurrentSeparableBlend => archive.into_accounted_readonly_flat_composite_storage(control),
+            NativeHandoff::CurrentFilteredFlat => archive.into_accounted_readonly_filtered_flat_storage(control),
         }
         .map_err(|error| {
-            if matches!(handoff, NativeHandoff::CurrentAssignedPoint | NativeHandoff::CurrentPoint | NativeHandoff::CurrentAnalyticGeometry | NativeHandoff::CurrentIsolatedNormalGroup | NativeHandoff::CurrentIsolatedGaussianGroup | NativeHandoff::CurrentSeparableBlend) {
+            if matches!(handoff, NativeHandoff::CurrentAssignedPoint | NativeHandoff::CurrentPoint | NativeHandoff::CurrentAnalyticGeometry | NativeHandoff::CurrentIsolatedNormalGroup | NativeHandoff::CurrentIsolatedGaussianGroup | NativeHandoff::CurrentSeparableBlend | NativeHandoff::CurrentFilteredFlat) {
                 if let photocraft_format::FormatError::Io(io) = &error {
                     if let Some(backing) = io.get_ref().and_then(|source| source.downcast_ref::<BackingError>()) {
                         return EngineError::from(*backing);
@@ -510,6 +541,9 @@ impl Session {
                 EngineError::Other(format!("owned native reopen: {error}"))
             }
         })?;
+        if let NativeHandoff::CurrentFilteredFlat = handoff {
+            crate::accounted_xcf_open::filtered_flat::validate_current_filtered_flat_storage(&document,control)?;
+        }
         if let NativeHandoff::CurrentSeparableBlend = handoff {
             crate::accounted_xcf_open::separable_blend::validate_current_separable_blend_storage(&document,control)?;
         }
@@ -652,3 +686,7 @@ mod assigned_median_workflow_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_assigned_gaussian_workflow_tests.rs"]
 mod assigned_gaussian_workflow_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "accounted_filtered_flat_workflow_tests.rs"]
+mod filtered_flat_workflow_tests;

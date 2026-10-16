@@ -28,6 +28,7 @@ enum DocumentCompositor<'a> {
     Threshold(crate::backed_threshold_document::PreparedBackedThresholdDocument<'a>),
     ThresholdAlpha(crate::backed_threshold_alpha_document::PreparedBackedThresholdAlphaDocument<'a>),
     Point(crate::backed_stock_point_document::PreparedBackedStockPointDocument<'a>),
+    FilteredFlatPoint(crate::backed_filtered_flat_point_document::PreparedBackedFilteredFlatPointDocument<'a>),
     Neighborhood(crate::backed_neighborhood_document::PreparedBackedNeighborhoodDocument<'a>),
     BoxBlur(crate::backed_box_document::PreparedBackedBoxDocument<'a>),
 }
@@ -85,6 +86,29 @@ impl<'a> PreparedBackedDocument<'a> {
         limits: NormalBandLimits,
         control: &ReadControl<'_>,
     ) -> Result<Self, BackedNormalError> {
+        if owner.is_readonly_filtered_flat_point_storage() {
+            control.check(1).map_err(BackedNormalError::Backing)?;
+            // The supplied implicit basis is a caller contract. The new factory
+            // independently binds the actual current encoded profile and every
+            // root; it never substitutes this argument for that interpretation.
+            let index = owner.quota().reserve(QuotaKind::Index, std::mem::size_of::<Self>() as u64).map_err(BackedNormalError::Quota)?;
+            let known = photocraft_cms::Builtin::Srgb.profile();
+            control.check(1).map_err(BackedNormalError::Backing)?;
+            let supplied = profile.encoded_bytes().ok_or(BackedNormalError::Unsupported("filtered flat requires retained implicit basis"))?;
+            let expected = known.encoded_bytes().ok_or(BackedNormalError::Unsupported("filtered flat implicit basis encoding missing"))?;
+            if supplied.len() > 65536 || supplied.len() != expected.len() || profile.color_space != photocraft_cms::ColorSpace::Rgb || profile.channels() != 3 {
+                return Err(BackedNormalError::Unsupported("filtered flat implicit basis mismatch"));
+            }
+            control.check((supplied.len() as u64).checked_mul(2).ok_or(BackedNormalError::Invalid("filtered flat basis size"))?)
+                .map_err(BackedNormalError::Backing)?;
+            if supplied != expected {
+                return Err(BackedNormalError::Unsupported("filtered flat implicit basis mismatch"));
+            }
+            let prepared = crate::backed_filtered_flat_point_document::PreparedBackedFilteredFlatPointDocument::new(owner, limits, control)?;
+            let bounds = prepared.bounds();
+            control.check(0).map_err(BackedNormalError::Backing)?;
+            return Ok(Self { stack: DocumentCompositor::FilteredFlatPoint(prepared), limits, quota: owner.quota().clone(), bounds, _index: index });
+        }
         if owner.is_readonly_flat_composite_storage() {
             control.check(1).map_err(BackedNormalError::Backing)?;
             let basis = photocraft_cms::Builtin::Srgb.profile();
@@ -416,6 +440,7 @@ impl<'a> PreparedBackedDocument<'a> {
             DocumentCompositor::Threshold(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::ThresholdAlpha(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::Point(prepared) => prepared.render_band(rect, control),
+            DocumentCompositor::FilteredFlatPoint(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::Neighborhood(prepared) => prepared.render_band(rect, control),
             DocumentCompositor::BoxBlur(prepared) => prepared.render_band(rect, control),
         }

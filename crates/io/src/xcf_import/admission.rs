@@ -3,6 +3,7 @@ use super::*;
 
 #[derive(Default)]
 pub(super) struct AdmissionDomains {
+    pub(super) filtered_flat_domain: bool,
     pub(super) observed_box_geometry_domain: bool,
     pub(super) owned_assigned_box_domain: bool,
     pub(super) owned_assigned_median_domain: bool,
@@ -78,6 +79,7 @@ pub(super) fn classify(file: &XcfFile, ctl: &Interrupt<'_>, preparation: Option<
     let multiply_spaces_domain = qualified_multiply_spaces(file);
     let composition_command_domain = qualified_composition_command(file);
     Ok(AdmissionDomains {
+        filtered_flat_domain:false,
         observed_box_geometry_domain:false,
         owned_assigned_box_domain:false,
         owned_assigned_median_domain:false,

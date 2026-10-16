@@ -82,6 +82,7 @@ enum AccountedHandoff {
     ReadonlyAssignedPointStorage,
     ReadonlyGaussianGroupStorage,
     ReadonlyFlatCompositeStorage,
+    ReadonlyFilteredFlatStorage,
 }
 impl OwnedDocumentArchive {
     /// The actual ledger retaining this archive's model and encoded storage.
@@ -146,6 +147,12 @@ impl OwnedDocumentArchive {
         self.into_accounted_with(control, AccountedHandoff::ReadonlyFlatCompositeStorage)
     }
 
+    /// Consume the archive into the distinct readonly filtered-flat class.
+    /// Original source/profile/render authority is not restored by this handoff.
+    pub fn into_accounted_readonly_filtered_flat_storage(self, control: &ReadControl<'_>) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
+        self.into_accounted_with(control, AccountedHandoff::ReadonlyFilteredFlatStorage)
+    }
+
     fn into_accounted_with(self, control: &ReadControl<'_>, handoff: AccountedHandoff) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
         struct NativeRetention {
             _archive: Arc<dyn ImmutableCanonicalArchive>,
@@ -168,6 +175,7 @@ impl OwnedDocumentArchive {
             AccountedHandoff::ReadonlyPointStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_point_storage(document, retention, quota, control),
             AccountedHandoff::ReadonlyAssignedPointStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_assigned_point_storage(document, retention, quota, control),
             AccountedHandoff::ReadonlyGaussianGroupStorage => photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_gaussian_group(document, retention, quota, control),
+            AccountedHandoff::ReadonlyFilteredFlatStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_filtered_flat_point_storage(document, retention, quota, control),
             AccountedHandoff::ReadonlyFlatCompositeStorage => photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_flat_composite(document, retention, quota, control),
         }.map_err(error)
     }
