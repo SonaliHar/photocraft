@@ -3386,3 +3386,24 @@ curves	Smooth	매끄럽게
 	This document's layers: {needed} of {budget} for layers	이 문서의 레이어: 레이어용 {budget} 중 {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	이 문서의 레이어에 {needed}가 필요하지만 {budget}만 사용할 수 있습니다: 문서 전체 다시 그리기는 CPU를 사용합니다
 	GPU Memory (MB, 0 = Automatic)	GPU 메모리(MB, 0 = 자동)
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	버튼 추가…
+	Add Divider	구분선 추가
+	Add Heading	제목 추가
+	Click an item to change or move it.	항목을 클릭하면 변경하거나 이동할 수 있습니다.
+	Custom Panel	사용자 정의 패널
+	Custom Panels	사용자 정의 패널
+	Delete Panel	패널 삭제
+	Divider	구분선
+	Edit Panel	패널 편집
+	Move Down	아래로 이동
+	Move Up	위로 이동
+	New Custom Panel	새 사용자 정의 패널
+	No matches	일치하는 항목 없음
+	Search commands, tools and actions…	명령, 도구 및 액션 검색…
+	Section	섹션
+	This panel is empty. Click the pencil to add buttons.	이 패널은 비어 있습니다. 연필을 클릭하여 버튼을 추가하세요.
+	{name} isn't available right now	{name}을(를) 지금 사용할 수 없습니다
+	Import Panel…	패널 가져오기…
+	Export Panel…	패널 내보내기…

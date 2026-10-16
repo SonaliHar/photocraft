@@ -241,6 +241,7 @@ pub fn load(app: &mut PhotocraftApp) {
     }
     crate::dock::restore(app);
     crate::brush_picker::restore(app);
+    crate::custom_panels::restore(app);
     crate::last_brush::restore(app);
     sync_rulers(app);
     crate::tool_memory::restore(app);

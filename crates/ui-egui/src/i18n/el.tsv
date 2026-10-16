@@ -3908,3 +3908,24 @@ curves	Smooth	Εξομάλυνση
 	This document's layers: {needed} of {budget} for layers	Επίπεδα αυτού του εγγράφου: {needed} από {budget} για επίπεδα
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Τα επίπεδα αυτού του εγγράφου χρειάζονται {needed} αλλά μπορούν να καταλάβουν {budget}: η επανασχεδίαση όλου του εγγράφου γίνεται στη CPU
 	GPU Memory (MB, 0 = Automatic)	Μνήμη GPU (MB, 0 = Αυτόματο)
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	Προσθήκη κουμπιού…
+	Add Divider	Προσθήκη διαχωριστικού
+	Add Heading	Προσθήκη επικεφαλίδας
+	Click an item to change or move it.	Κάντε κλικ σε ένα στοιχείο για να το αλλάξετε ή να το μετακινήσετε.
+	Custom Panel	Προσαρμοσμένο πάνελ
+	Custom Panels	Προσαρμοσμένα πάνελ
+	Delete Panel	Διαγραφή πάνελ
+	Divider	Διαχωριστικό
+	Edit Panel	Επεξεργασία πάνελ
+	Move Down	Μετακίνηση κάτω
+	Move Up	Μετακίνηση πάνω
+	New Custom Panel	Νέο προσαρμοσμένο πάνελ
+	No matches	Δεν βρέθηκαν αποτελέσματα
+	Search commands, tools and actions…	Αναζήτηση εντολών, εργαλείων και ενεργειών…
+	Section	Ενότητα
+	This panel is empty. Click the pencil to add buttons.	Αυτό το πάνελ είναι κενό. Κάντε κλικ στο μολύβι για να προσθέσετε κουμπιά.
+	{name} isn't available right now	Το {name} δεν είναι διαθέσιμο αυτή τη στιγμή
+	Import Panel…	Εισαγωγή πάνελ…
+	Export Panel…	Εξαγωγή πάνελ…

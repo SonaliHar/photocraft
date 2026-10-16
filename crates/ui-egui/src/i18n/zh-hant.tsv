@@ -2809,3 +2809,25 @@ curves	Smooth	平滑
 	This document's layers: {needed} of {budget} for layers	此文件的圖層：圖層可用 {budget} 中的 {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	此文件的圖層需要 {needed}，但只能佔用 {budget}：整份文件的重繪使用 CPU
 	GPU Memory (MB, 0 = Automatic)	GPU 記憶體（MB，0 = 自動）
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	加入按鈕…
+	Add Divider	加入分隔線
+	Add Heading	加入標題
+	Click an item to change or move it.	按一下項目即可變更或移動。
+	Custom Panel	自訂面板
+	Custom Panels	自訂面板
+	Delete Panel	刪除面板
+	Divider	分隔線
+	Edit Panel	編輯面板
+	Move Down	下移
+	Move Up	上移
+	New Custom Panel	新增自訂面板
+	No matches	沒有符合的項目
+	Search commands, tools and actions…	搜尋指令、工具和動作…
+	Section	區段
+	This panel is empty. Click the pencil to add buttons.	此面板是空的。按一下鉛筆圖示以加入按鈕。
+	{name} isn't available right now	{name} 目前無法使用
+	Label	標籤
+	Import Panel…	匯入面板…
+	Export Panel…	匯出面板…

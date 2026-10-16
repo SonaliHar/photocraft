@@ -3806,3 +3806,24 @@ curves	Smooth	Wygładź
 	This document's layers: {needed} of {budget} for layers	Warstwy tego dokumentu: {needed} z {budget} na warstwy
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Warstwy tego dokumentu potrzebują {needed}, ale mogą zająć {budget}: odświeżanie całego dokumentu używa CPU
 	GPU Memory (MB, 0 = Automatic)	Pamięć GPU (MB, 0 = Automatycznie)
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	Dodaj przycisk…
+	Add Divider	Dodaj separator
+	Add Heading	Dodaj nagłówek
+	Click an item to change or move it.	Kliknij element, aby go zmienić lub przenieść.
+	Custom Panel	Panel niestandardowy
+	Custom Panels	Panele niestandardowe
+	Delete Panel	Usuń panel
+	Divider	Separator
+	Edit Panel	Edytuj panel
+	Move Down	Przenieś w dół
+	Move Up	Przenieś w górę
+	New Custom Panel	Nowy panel niestandardowy
+	No matches	Brak dopasowań
+	Search commands, tools and actions…	Szukaj poleceń, narzędzi i akcji…
+	Section	Sekcja
+	This panel is empty. Click the pencil to add buttons.	Ten panel jest pusty. Kliknij ołówek, aby dodać przyciski.
+	{name} isn't available right now	{name} jest teraz niedostępne
+	Import Panel…	Importuj panel…
+	Export Panel…	Eksportuj panel…

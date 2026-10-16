@@ -3968,3 +3968,24 @@ curves	Smooth	Vloeiend maken
 	This document's layers: {needed} of {budget} for layers	Lagen van dit document: {needed} van {budget} voor lagen
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	De lagen van dit document hebben {needed} nodig maar mogen {budget} gebruiken: het hele document wordt op de CPU opnieuw getekend
 	GPU Memory (MB, 0 = Automatic)	GPU-geheugen (MB, 0 = Automatisch)
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	Knop toevoegen…
+	Add Divider	Scheidingslijn toevoegen
+	Add Heading	Kop toevoegen
+	Click an item to change or move it.	Klik op een item om het te wijzigen of te verplaatsen.
+	Custom Panel	Aangepast paneel
+	Custom Panels	Aangepaste panelen
+	Delete Panel	Paneel verwijderen
+	Divider	Scheidingslijn
+	Edit Panel	Paneel bewerken
+	Move Down	Omlaag
+	Move Up	Omhoog
+	New Custom Panel	Nieuw aangepast paneel
+	No matches	Geen overeenkomsten
+	Search commands, tools and actions…	Opdrachten, gereedschappen en acties zoeken…
+	Section	Sectie
+	This panel is empty. Click the pencil to add buttons.	Dit paneel is leeg. Klik op het potlood om knoppen toe te voegen.
+	{name} isn't available right now	{name} is nu niet beschikbaar
+	Import Panel…	Paneel importeren…
+	Export Panel…	Paneel exporteren…

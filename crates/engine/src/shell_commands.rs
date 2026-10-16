@@ -59,6 +59,9 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.toggle.brushes", "Brushes", &["Window"], None),
     ("window.toggle.navigator", "Navigator", &["Window"], None),
     ("window.toggle.toolbar", "Tools", &["Window"], None),
+    // Window › Custom Panels: user-built button panels (ui-egui `custom_panels`); each panel is listed below.
+    ("window.customPanel.new", "New Custom Panel", &["Window", "Custom Panels"], None),
+    ("window.customPanel.importFile", "Import Panel…", &["Window", "Custom Panels"], None),
     // Photoshop's Tab and ⇧Tab: all panels (Tools, options bar and the dock), or only the dock.
     ("window.togglePanels", "Show/Hide All Panels", &[], Some("Tab")),
     ("window.toggle.dock", "Show/Hide Panels", &[], Some("Shift+Tab")),

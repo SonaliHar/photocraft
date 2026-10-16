@@ -3694,3 +3694,24 @@ curves	Smooth	Làm mượt
 	This document's layers: {needed} of {budget} for layers	Các lớp của tài liệu này: {needed} trên {budget} dành cho lớp
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Các lớp của tài liệu này cần {needed} nhưng chỉ được dùng {budget}: vẽ lại toàn bộ tài liệu dùng CPU
 	GPU Memory (MB, 0 = Automatic)	Bộ nhớ GPU (MB, 0 = Tự động)
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	Thêm nút…
+	Add Divider	Thêm đường phân cách
+	Add Heading	Thêm tiêu đề
+	Click an item to change or move it.	Nhấp vào một mục để thay đổi hoặc di chuyển mục đó.
+	Custom Panel	Bảng tùy chỉnh
+	Custom Panels	Các bảng tùy chỉnh
+	Delete Panel	Xóa bảng
+	Divider	Đường phân cách
+	Edit Panel	Sửa bảng
+	Move Down	Di chuyển xuống
+	Move Up	Di chuyển lên
+	New Custom Panel	Bảng tùy chỉnh mới
+	No matches	Không có kết quả phù hợp
+	Search commands, tools and actions…	Tìm lệnh, công cụ và thao tác…
+	Section	Phần
+	This panel is empty. Click the pencil to add buttons.	Bảng này đang trống. Nhấp vào bút chì để thêm nút.
+	{name} isn't available right now	{name} hiện không khả dụng
+	Import Panel…	Nhập bảng…
+	Export Panel…	Xuất bảng…

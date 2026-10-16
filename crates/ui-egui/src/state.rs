@@ -1200,6 +1200,9 @@ pub struct UiState {
     /// Modifier Keys panel, custom pixel aspect ratios, workspace dialogs (see `workspace_ui`).
     #[serde(default)]
     pub shell: crate::workspace_ui::ShellUi,
+    /// Window › Custom Panels: the user's button panels and edit mode (see `custom_panels`).
+    #[serde(default)]
+    pub custom_panels: crate::custom_panels::CustomPanelsUi,
     /// View extras: rulers (⌘R), grid (⌘'), guides (⌘;), snapping (⇧⌘;), locked guides (⌥⌘;).
     #[serde(default)]
     pub extras: Extras,
@@ -1341,6 +1344,7 @@ impl Default for UiState {
             frame_tool: Default::default(),
             artboard_tool: Default::default(),
             shell: Default::default(),
+            custom_panels: Default::default(),
             layer_filter: Vec::new(),
             layer_filter_by: Default::default(),
             layer_filter_name: String::new(),

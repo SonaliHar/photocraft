@@ -4281,3 +4281,24 @@ shape	Appearance	Izgled
 	This document's layers: {needed} of {budget} for layers	Slojevi ovog dokumenta: {needed} od {budget} za slojeve
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Slojevima ovog dokumenta treba {needed}, a smeju da zauzmu {budget}: ceo dokument se ponovo iscrtava na CPU-u
 	GPU Memory (MB, 0 = Automatic)	GPU memorija (MB, 0 = Automatski)
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	Dodaj dugme…
+	Add Divider	Dodaj razdelnik
+	Add Heading	Dodaj naslov
+	Click an item to change or move it.	Kliknite stavku da biste je izmenili ili pomerili.
+	Custom Panel	Prilagođeni panel
+	Custom Panels	Prilagođeni paneli
+	Delete Panel	Obriši panel
+	Divider	Razdelnik
+	Edit Panel	Uredi panel
+	Move Down	Pomeri nadole
+	Move Up	Pomeri nagore
+	New Custom Panel	Novi prilagođeni panel
+	No matches	Nema podudaranja
+	Search commands, tools and actions…	Pretraži komande, alatke i radnje…
+	Section	Odeljak
+	This panel is empty. Click the pencil to add buttons.	Ovaj panel je prazan. Kliknite olovku da biste dodali dugmad.
+	{name} isn't available right now	{name} trenutno nije dostupno
+	Import Panel…	Uvezi panel…
+	Export Panel…	Izvezi panel…

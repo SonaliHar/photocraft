@@ -3213,3 +3213,25 @@ curves	Smooth	Lisser
 	This document's layers: {needed} of {budget} for layers	Calques de ce document : {needed} sur {budget} pour les calques
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Les calques de ce document ont besoin de {needed} mais peuvent occuper {budget} : le document entier se redessine sur le CPU
 	GPU Memory (MB, 0 = Automatic)	Mémoire GPU (Mo, 0 = Automatique)
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	Ajouter un bouton…
+	Add Divider	Ajouter un séparateur
+	Add Heading	Ajouter un titre
+	Click an item to change or move it.	Cliquez sur un élément pour le modifier ou le déplacer.
+	Custom Panel	Panneau personnalisé
+	Custom Panels	Panneaux personnalisés
+	Delete Panel	Supprimer le panneau
+	Divider	Séparateur
+	Edit Panel	Modifier le panneau
+	Move Down	Descendre
+	Move Up	Monter
+	New Custom Panel	Nouveau panneau personnalisé
+	No matches	Aucun résultat
+	Search commands, tools and actions…	Rechercher des commandes, outils et actions…
+	Section	Section
+	This panel is empty. Click the pencil to add buttons.	Ce panneau est vide. Cliquez sur le crayon pour ajouter des boutons.
+	{name} isn't available right now	{name} n'est pas disponible pour le moment
+	Label	Libellé
+	Import Panel…	Importer un panneau…
+	Export Panel…	Exporter le panneau…

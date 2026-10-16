@@ -3998,3 +3998,24 @@ layerLabel	No Color	Sem cor
 	This document's layers: {needed} of {budget} for layers	Camadas deste documento: {needed} de {budget} para camadas
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	As camadas deste documento precisam de {needed} mas podem ocupar {budget}: o documento inteiro é redesenhado na CPU
 	GPU Memory (MB, 0 = Automatic)	Memória da GPU (MB, 0 = Automático)
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	Adicionar botão…
+	Add Divider	Adicionar divisor
+	Add Heading	Adicionar título
+	Click an item to change or move it.	Clique em um item para alterá-lo ou movê-lo.
+	Custom Panel	Painel personalizado
+	Custom Panels	Painéis personalizados
+	Delete Panel	Excluir painel
+	Divider	Divisor
+	Edit Panel	Editar painel
+	Move Down	Mover para baixo
+	Move Up	Mover para cima
+	New Custom Panel	Novo painel personalizado
+	No matches	Nenhuma correspondência
+	Search commands, tools and actions…	Pesquisar comandos, ferramentas e ações…
+	Section	Seção
+	This panel is empty. Click the pencil to add buttons.	Este painel está vazio. Clique no lápis para adicionar botões.
+	{name} isn't available right now	{name} não está disponível no momento
+	Import Panel…	Importar painel…
+	Export Panel…	Exportar painel…
