@@ -3968,3 +3968,9 @@ curves	Smooth	Vloeiend maken
 	This document's layers: {needed} of {budget} for layers	Lagen van dit document: {needed} van {budget} voor lagen
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	De lagen van dit document hebben {needed} nodig maar mogen {budget} gebruiken: het hele document wordt op de CPU opnieuw getekend
 	GPU Memory (MB, 0 = Automatic)	GPU-geheugen (MB, 0 = Automatisch)
+# Plug-in panels (ABI v2)
+	Restart Plug-in	Plug-in opnieuw starten
+	The plug-in has disabled this.	De plug-in heeft dit uitgeschakeld.
+	This plug-in stopped.	Deze plug-in is gestopt.
+	This plug-in has not drawn anything yet.	Deze plug-in heeft nog niets getekend.
+	This host does not capture documents for plug-ins yet, so a panel has no images.	Deze host legt nog geen documenten vast voor plug-ins, waardoor een paneel geen afbeeldingen heeft.

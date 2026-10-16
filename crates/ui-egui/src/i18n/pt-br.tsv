@@ -3998,3 +3998,9 @@ layerLabel	No Color	Sem cor
 	This document's layers: {needed} of {budget} for layers	Camadas deste documento: {needed} de {budget} para camadas
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	As camadas deste documento precisam de {needed} mas podem ocupar {budget}: o documento inteiro é redesenhado na CPU
 	GPU Memory (MB, 0 = Automatic)	Memória da GPU (MB, 0 = Automático)
+# Plug-in panels (ABI v2)
+	Restart Plug-in	Reiniciar plug-in
+	The plug-in has disabled this.	O plug-in desativou isto.
+	This plug-in stopped.	Este plug-in parou.
+	This plug-in has not drawn anything yet.	Este plug-in ainda não desenhou nada.
+	This host does not capture documents for plug-ins yet, so a panel has no images.	Este host ainda não captura documentos para plug-ins, então um painel não tem imagens.

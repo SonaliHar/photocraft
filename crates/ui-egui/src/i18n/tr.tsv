@@ -3938,3 +3938,9 @@ cameraData	Lens	Lens
 	This document's layers: {needed} of {budget} for layers	Bu belgenin katmanları: katmanlar için {budget} içinden {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Bu belgenin katmanlarının {needed} belleğe ihtiyacı var ama en fazla {budget} kullanabilirler: tüm belgenin yeniden çizimi CPU'yu kullanır
 	GPU Memory (MB, 0 = Automatic)	GPU Belleği (MB, 0 = Otomatik)
+# Plug-in panels (ABI v2)
+	Restart Plug-in	Eklentiyi Yeniden Başlat
+	The plug-in has disabled this.	Eklenti bunu devre dışı bıraktı.
+	This plug-in stopped.	Bu eklenti durdu.
+	This plug-in has not drawn anything yet.	Bu eklenti henüz hiçbir şey çizmedi.
+	This host does not capture documents for plug-ins yet, so a panel has no images.	Bu ana uygulama henüz eklentiler için belge yakalamıyor, bu nedenle bir panelde görüntü yok.

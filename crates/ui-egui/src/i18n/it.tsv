@@ -4329,3 +4329,9 @@ shape	Appearance	Aspetto
 	This document's layers: {needed} of {budget} for layers	Livelli di questo documento: {needed} su {budget} per i livelli
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	I livelli di questo documento richiedono {needed} ma possono occupare {budget}: i ridisegni dell'intero documento usano la CPU
 	GPU Memory (MB, 0 = Automatic)	Memoria GPU (MB, 0 = Automatico)
+# Plug-in panels (ABI v2)
+	Restart Plug-in	Riavvia plug-in
+	The plug-in has disabled this.	Il plug-in ha disabilitato questo.
+	This plug-in stopped.	Questo plug-in si è fermato.
+	This plug-in has not drawn anything yet.	Questo plug-in non ha ancora disegnato nulla.
+	This host does not capture documents for plug-ins yet, so a panel has no images.	Questo host non acquisisce ancora documenti per i plug-in, quindi un pannello non ha immagini.

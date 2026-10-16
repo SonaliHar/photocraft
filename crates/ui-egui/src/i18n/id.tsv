@@ -3200,3 +3200,9 @@ curves	Smooth	Haluskan
 	This document's layers: {needed} of {budget} for layers	Layer dokumen ini: {needed} dari {budget} untuk layer
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Layer dokumen ini membutuhkan {needed} tetapi boleh memakai {budget}: penggambaran ulang seluruh dokumen memakai CPU
 	GPU Memory (MB, 0 = Automatic)	Memori GPU (MB, 0 = Otomatis)
+# Plug-in panels (ABI v2)
+	Restart Plug-in	Mulai Ulang Plug-in
+	The plug-in has disabled this.	Plug-in telah menonaktifkan ini.
+	This plug-in stopped.	Plug-in ini berhenti.
+	This plug-in has not drawn anything yet.	Plug-in ini belum menggambar apa pun.
+	This host does not capture documents for plug-ins yet, so a panel has no images.	Host ini belum menangkap dokumen untuk plug-in, jadi panel tidak memiliki gambar.

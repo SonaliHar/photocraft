@@ -4281,3 +4281,9 @@ shape	Appearance	Izgled
 	This document's layers: {needed} of {budget} for layers	Slojevi ovog dokumenta: {needed} od {budget} za slojeve
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Slojevima ovog dokumenta treba {needed}, a smeju da zauzmu {budget}: ceo dokument se ponovo iscrtava na CPU-u
 	GPU Memory (MB, 0 = Automatic)	GPU memorija (MB, 0 = Automatski)
+# Plug-in panels (ABI v2)
+	Restart Plug-in	Ponovo pokreni dodatak
+	The plug-in has disabled this.	Dodatak je onemogućio ovo.
+	This plug-in stopped.	Ovaj dodatak se zaustavio.
+	This plug-in has not drawn anything yet.	Ovaj dodatak još ništa nije nacrtao.
+	This host does not capture documents for plug-ins yet, so a panel has no images.	Ovaj host još ne snima dokumente za dodatke, pa panel nema slika.

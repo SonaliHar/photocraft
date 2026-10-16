@@ -3884,3 +3884,9 @@ curves	Smooth	スムーズ
 	This document's layers: {needed} of {budget} for layers	このドキュメントのレイヤー: レイヤー用 {budget} のうち {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	このドキュメントのレイヤーには {needed} が必要ですが、使えるのは {budget} です: ドキュメント全体の再描画は CPU で行われます
 	GPU Memory (MB, 0 = Automatic)	GPU メモリ（MB、0 = 自動）
+# Plug-in panels (ABI v2)
+	Restart Plug-in	プラグインを再起動
+	The plug-in has disabled this.	この項目はプラグインによって無効にされています。
+	This plug-in stopped.	このプラグインは停止しました。
+	This plug-in has not drawn anything yet.	このプラグインはまだ何も描画していません。
+	This host does not capture documents for plug-ins yet, so a panel has no images.	このホストはまだプラグイン用のドキュメントを取り込まないため、パネルに画像がありません。

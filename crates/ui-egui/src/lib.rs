@@ -159,6 +159,7 @@ pub mod pattern_preview;
 pub mod perspective_crop_ui;
 pub mod perspective_ui;
 pub mod pixel_grid;
+pub mod plugin_panel_ui;
 pub mod plugin_ui;
 pub mod point_curve;
 pub mod prefs_ui;
@@ -1040,6 +1041,24 @@ impl PhotocraftApp {
             self.sync_mask_targets();
         }
         result
+    }
+
+    /// Run an engine command the application drives by itself — a frame-by-frame poll, a timer, a
+    /// plug-in panel's tick — rather than one the user picked.
+    ///
+    /// The same as [`run`], except that a command that succeeds without having anything to say leaves
+    /// the status bar exactly as it was. [`run_command`] clears a refusal the user may still be
+    /// reading, which is right when the command is what they just asked for and wrong for something
+    /// running every frame behind them: a panel being open must not wipe the reason an action was
+    /// refused. A background command that *fails* still reports, like any other.
+    pub fn run_background(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let kept = (self.ui.status.clone(), self.ui.status_error);
+        let r = self.run(id, params);
+        if r.is_ok() && self.ui.status.is_empty() && !self.ui.status_error {
+            self.ui.status = kept.0;
+            self.ui.status_error = kept.1;
+        }
+        r
     }
 
     fn run_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
@@ -1992,6 +2011,7 @@ impl eframe::App for PhotocraftApp {
         preset_panels::windows(self, &ctx);
         gradient_ui::editor_window(self, &ctx);
         type_panels_ui::windows(self, &ctx);
+        plugin_panel_ui::windows(self, &ctx);
         analysis_ui::windows(self, &ctx);
         timeline_ui::windows(self, &ctx);
         workspace_ui::windows(self, &ctx);
