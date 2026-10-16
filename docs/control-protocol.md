@@ -3270,3 +3270,41 @@ explicit numeric raster targets use the shared command route. Advanced brushes,
 selection/symmetry, growth, live preview and full stock support remain unfinished.
 All new behavioral/native/host contracts are ignored UNRUN/uncompiled. Production
 compilation and static review do not establish numerical/native/UI acceptance.
+
+
+Shared editing consumers now reuse programme-preserving native COW for Clear and
+ordinary solid Fill across the nine existing storage classes. Clear retains the
+five native sample depths; Fill retains U8/U16/F32 RGB/Gray. Actual class-specific
+Current rules still decide OLD and STAGED validity, including hidden/inactive
+inputs and raw no-ops. For example, a recipe requiring opaque input can refuse
+Clear atomically. Routing a class does not promise every operation succeeds for
+every recipe. The new programme branch accepts numeric or active raster targets,
+inherits ancestor locks and preserves exact programmes/masks/source/profile/native
+defaults/siblings. It remains free of pixel selections; the original Legacy
+selection and reverse-name Clear/Fill behavior retains its existing implementation.
+The same16MiB contained cell staging, original kernels/work ledger, independent
+raw-alpha proof for preserving Fill, history/source/view/tool and final target
+fences apply. No new model field, native marker, Source policy or render math.
+
+FilteredFlatPoint and MaskedFilteredFlatPoint also accept the existing numeric
+replace-only layer.select view operation. A paid captured-context witness and
+full Current proof wrap the unchanged upstream selector: document/programme data
+is unchanged, and view/current-history metadata, revision/saved-revision and
+journal behavior follow that selector. The existing finite operation meter is
+reused; cancellation and deadline remain active. This grants layer focus for
+ordinary canvas painting without expanding other readonly mutations.
+
+For already-installed guarded Legacy pixel selections, bounded native Round
+brush/Pencil now reads actual Gray8 or matching-depth coverage through a borrowed
+checked view. U32/F64 mask words stay native. The narrow branch follows upstream
+F32 (maskCoverage * opacity * selection); the wide branch retains the existing
+F32 coverage/opacity base, promotes once and multiplies exact F64 selection before
+the existing wide pixel helper. This is the declared native schedule, without a
+Surface-wide bit-equivalence claim. No-selection arithmetic is retained; zero
+coverage leaves raw pixels unchanged. Complete native/default validation,
+independent retained-view/pin fees, prospective operation caps and per-read work
+use the original quota/control. COW/native continuation retains the real guarded
+selection. Programme-owned pixel selections, selection channels, advanced brushes,
+extent growth and live preview remain unfinished. New contracts are ignored
+UNRUN/uncompiled; production compilation/static review remain separate from all
+deferred behavioral, numerical/native/UI/performance and full-stock acceptance.

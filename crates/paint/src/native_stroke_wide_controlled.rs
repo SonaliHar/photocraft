@@ -37,6 +37,7 @@ pub struct PreparedNativeWideStroke<'s> {
     limits: NativeStrokeLimits,
     quota: BackingQuota,
     prepared_bytes: u64,
+    selection: Option<selection::CheckedNativeSelection<'s>>,
     _coverage: QuotaLease,
     _generation: QuotaLease,
 }
@@ -137,6 +138,7 @@ pub fn prepare_clipped_native_wide_stroke<'s>(
         limits,
         quota: q.clone(),
         prepared_bytes: sum(gen_bytes, coverage_bytes)?,
+        selection: None,
         _coverage: coverage_fee,
         _generation: generation_fee,
     })
@@ -163,7 +165,7 @@ impl PreparedNativeWideStroke<'_> {
             .checked_add(std::mem::size_of::<photocraft_raster::checked_view::CheckedTilePin>() as u64)
             .and_then(|n| n.checked_add(1024))
             .ok_or(BackingError::Length)?;
-        let runtime_bytes = sum(product(bytes as u64, 2)?, fixed)?;
+        let runtime_bytes = sum(sum(product(bytes as u64, 2)?, fixed)?, self.selection.as_ref().map_or(0, selection::CheckedNativeSelection::runtime_bytes))?;
         if sum(self.prepared_bytes, runtime_bytes)? > self.limits.resident {
             return Err(BackingError::Quota.into());
         }
@@ -207,6 +209,13 @@ impl PreparedNativeWideStroke<'_> {
                     if k <= 0.0 {
                         continue;
                     }
+                    let selected_weight = if let Some(selection) = &self.selection {
+                        c.check(128)?;
+                        let weight = f64::from(k) * selection.wide(x, y, c)?;
+                        if !weight.is_finite() { return invalid("nonfinite selected native wide coverage"); }
+                        if weight <= 0.0 { continue; }
+                        Some(weight)
+                    } else { None };
                     let at = ((y - self.bounds.y0) as usize * self.bounds.width() as usize + (x - self.bounds.x0) as usize) * bpp;
                     let out = output.get_mut(at..at + bpp).ok_or(BackingError::Length)?;
                     if brush.erase {
@@ -214,11 +223,17 @@ impl PreparedNativeWideStroke<'_> {
                         if !fmt.alpha {
                             continue;
                         }
-                        crate::wide_erase::try_erase_native_pixel(out, fmt, f64::from(k), self.lock_alpha, crate::wide_erase::EraseColorPolicy::Preserve)
-                            .map_err(|_| NativeStrokeError::Invalid("native wide erase arithmetic"))?;
+                        if let Some(weight) = selected_weight {
+                            crate::wide_erase::try_erase_native_pixel(out, fmt, weight, self.lock_alpha, crate::wide_erase::EraseColorPolicy::Preserve)
+                        } else {
+                            crate::wide_erase::try_erase_native_pixel(out, fmt, f64::from(k), self.lock_alpha, crate::wide_erase::EraseColorPolicy::Preserve)
+                        }.map_err(|_| NativeStrokeError::Invalid("native wide erase arithmetic"))?;
                     } else {
-                        crate::wide::try_normal_native_pixel(out, fmt, paint, f64::from(k), self.lock_alpha)
-                            .map_err(|_| NativeStrokeError::Invalid("native wide normal arithmetic"))?;
+                        if let Some(weight) = selected_weight {
+                            crate::wide::try_normal_native_pixel(out, fmt, paint, weight, self.lock_alpha)
+                        } else {
+                            crate::wide::try_normal_native_pixel(out, fmt, paint, f64::from(k), self.lock_alpha)
+                        }.map_err(|_| NativeStrokeError::Invalid("native wide normal arithmetic"))?;
                     }
                 }
             }
@@ -237,3 +252,15 @@ impl PreparedNativeWideStroke<'_> {
 #[cfg(test)]
 #[path="native_stroke_wide_tests.rs"]
 mod tests;
+
+/// Additive exact native selection path; no selection words pass through F32.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_clipped_native_wide_stroke_selected<'s>(source:CheckedRasterView<'s>,clip:Rect,brush:&BrushSettings,points:&[StrokePoint],color:NativeWideColor,selection:&'s Surface,lock_transparency:bool,zoom:f32,limits:NativeStrokeLimits,q:&BackingQuota,c:&ReadControl<'_>)->NResult<PreparedNativeWideStroke<'s>>{
+ let selected=selection::CheckedNativeSelection::new(selection,source,q,limits.resident,c)?;
+ let inner_limits=NativeStrokeLimits{resident:limits.resident.checked_sub(selected.retained_bytes()).ok_or(BackingError::Quota)?,..limits};
+ let mut prepared=prepare_clipped_native_wide_stroke(source,clip,brush,points,color,lock_transparency,zoom,inner_limits,q,c)?;
+ prepared.limits=limits;
+ prepared.prepared_bytes=sum(prepared.prepared_bytes,selected.retained_bytes())?;
+ if prepared.prepared_bytes>limits.resident{return Err(BackingError::Quota.into())}
+ prepared.selection=Some(selected);Ok(prepared)
+}

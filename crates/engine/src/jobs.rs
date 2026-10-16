@@ -1176,6 +1176,8 @@ impl Session {
             // Bounded native pixel, filter and assigned-geometry property preparation share one
             // immutable registered work ledger; no per-cell allowance reset.
             let native_brush_standard=matches!(id,"paint.stroke"|"paint.pencil") && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|crate::accounted_native_stroke::candidate(o));
+            let mixed_selection_control=id=="layer.select"&&self.active().and_then(|s|s.doc.accounted()).is_some_and(crate::accounted_commands::programme_select_candidate);
+            let programme_pixels_standard=matches!(id,"edit.clear"|"edit.fill")&&self.active().and_then(|s|s.doc.accounted()).is_some_and(crate::accounted_commands::programme_pixels_candidate);
             let hierarchy_expanded_standard=id=="layer.setExpanded" && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage());
             let bounded_work = native_brush_standard || hierarchy_expanded_standard || id=="layer.renameLayer" && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()))
                 || matches!(id, "edit.clear" | "edit.fill" | "layer.translate")
@@ -1202,7 +1204,7 @@ impl Session {
             // meter deadline remains active during interrupt-only CMS/mask loops;
             // externally controlled APIs retain their original caller control.
             let incoming=self.jobs.inline.clone();
-            let deadline = || registered_work.deadline_expired() || native_brush_standard && incoming.as_ref().is_some_and(|ctx|ctx.cancelled());
+            let deadline = || registered_work.deadline_expired() || (native_brush_standard||mixed_selection_control||programme_pixels_standard) && incoming.as_ref().is_some_and(|ctx|ctx.cancelled());
             let interrupt = photocraft_raster::Interrupt::cancel_only(&deadline);
             // The route probe itself debits this very ledger, including for
             // history/view commands whose old dispatch debit was a no-op.
@@ -1222,7 +1224,7 @@ impl Session {
                     (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
                         && crate::accounted_native_open::is_current_box_work_candidate(owner.document(),&probe)?
                 } else {false};
-            if !inherited_native && (pure_point_standard || box_standard || mixed_rename_standard || hierarchy_expanded_standard || native_brush_standard) {
+            if !inherited_native && (pure_point_standard || box_standard || mixed_rename_standard || hierarchy_expanded_standard || native_brush_standard || programme_pixels_standard) {
                 let limits=photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|error|EngineError::Other(error.to_string()))?;
                 registered_work.select_standard(&limits)?;
             }

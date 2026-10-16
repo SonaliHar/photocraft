@@ -150,7 +150,7 @@ fn assigned_median_readonly_and_failed_publication() {
         ("xcf.filter.set", json!({"filterId":id,"enabled":true})),
         ("xcf.filter.enable", json!({"filterId":id,"enabled":false})),
         ("select.all", Value::Null),
-        ("edit.clear", Value::Null),
+        ("edit.clear", json!({"target":"mask"})),
     ] {
         assert!(s.execute(cmd, p).is_err(), "{cmd}");
         assert!(s.active().unwrap().doc.shares_state(&before));

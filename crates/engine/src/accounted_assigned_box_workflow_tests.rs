@@ -137,7 +137,7 @@ fn assigned_readonly_and_failed_publication() {
         ("xcf.filter.set", json!({"filterId":id,"enabled":true,"arguments":[]})),
         ("xcf.filter.move", json!({"filterId":id,"index":0})),
         ("select.all", Value::Null),
-        ("edit.clear", Value::Null),
+        ("edit.clear", json!({"target":"mask"})),
     ] {
         assert!(s.execute(cmd, p).is_err(), "{cmd}");
         assert!(s.active().unwrap().doc.shares_state(&before));

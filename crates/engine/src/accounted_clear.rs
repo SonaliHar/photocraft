@@ -35,7 +35,8 @@ pub(crate) fn validate_request(session: &Session, p: &Value) -> Result<()> {
         return Err(bad("Clear layer name is too long"));
     }
     let st = session.active().ok_or(EngineError::NoDocument)?;
-    if st.doc.accounted().is_none_or(|o| o.is_readonly_threshold_alpha_storage() || o.is_readonly_threshold_storage()) || st.doc.xcf_state.is_none() {
+    if !crate::accounted_native_pixels::programme_candidate(session)
+        && (st.doc.accounted().is_none_or(|o| o.is_readonly_threshold_alpha_storage() || o.is_readonly_threshold_storage()) || st.doc.xcf_state.is_none()) {
         return Err(bad("accounted Clear requires the plain imported native owner"));
     }
     match (p.get("documentId"), p.get("expectedRevision")) {

@@ -28,7 +28,8 @@ pub(crate) fn validate_request(session: &Session, params: &Value) -> Result<()> 
         return Err(bad("Fill layer name is too long"));
     }
     let state = session.active().ok_or(EngineError::NoDocument)?;
-    if state.doc.accounted().is_none_or(|v| v.is_readonly_threshold_alpha_storage() || v.is_readonly_threshold_storage())
+    if !crate::accounted_native_pixels::programme_candidate(session)
+        && state.doc.accounted().is_none_or(|v| v.is_readonly_threshold_alpha_storage() || v.is_readonly_threshold_storage())
         || state.doc.xcf_state.is_none()
         || !matches!(state.doc.mode, ColorMode::Rgb | ColorMode::Grayscale)
         || !matches!(state.doc.depth, SampleType::U8 | SampleType::U16 | SampleType::F32)

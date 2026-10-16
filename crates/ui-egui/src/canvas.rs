@@ -8761,6 +8761,6 @@ mod native_wide_stroke_tests;
 #[path="canvas_normal_hierarchy_stroke_tests.rs"]
 mod normal_hierarchy_stroke_tests;
 
-#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
+#[cfg(all(test,not(target_arch="wasm32")))]
 #[path="canvas_programme_stroke_tests.rs"]
 mod programme_stroke_tests;

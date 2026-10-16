@@ -27,6 +27,35 @@ use serde_json::Value;
 // This synchronous first lane owns one contiguous native region, not a whole
 // image materialization. Larger requests require a separately owned transaction.
 const MAX_NATIVE_BYTES: usize = 16 << 20;
+#[path = "accounted_programme_native_pixels.rs"]
+mod programme;
+
+// Exact runtime-class routing only. OLD/STAGED semantic proof is performed by
+// the private programme transaction; Legacy admission and bodies stay separate.
+pub(crate) fn programme_candidate(session: &Session) -> bool {
+    session.active().and_then(|s| s.doc.accounted()).and_then(crate::accounted_programme_current::kind).is_some()
+}
+pub(crate) enum Prepared<'a> {
+    Legacy(LegacyPrepared<'a>),
+    Programme(programme::Prepared<'a>),
+}
+impl<'a> Prepared<'a> {
+    pub(crate) fn prepare_clear(s: &Session, p: &'a Value, c: &ReadControl<'_>) -> Result<Self> {
+        if programme_candidate(s) { return Ok(Self::Programme(programme::Prepared::prepare(s, p, c, Operation::Clear)?)); }
+        Ok(Self::Legacy(LegacyPrepared::prepare_clear(s, p, c)?))
+    }
+    pub(crate) fn prepare_fill(s: &Session, p: &'a Value, c: &ReadControl<'_>) -> Result<Self> {
+        if programme_candidate(s) {
+            let recipe = crate::fill_cmds::solid_fill_recipe(s, p, c)?;
+            return Ok(Self::Programme(programme::Prepared::prepare(s, p, c, Operation::Fill(recipe))?));
+        }
+        Ok(Self::Legacy(LegacyPrepared::prepare_fill(s, p, c)?))
+    }
+    pub(crate) fn execute(self, s: &mut Session, c: &ReadControl<'_>) -> Result<Value> {
+        match self { Self::Legacy(p) => p.execute(s, c), Self::Programme(p) => p.execute(s, c) }
+    }
+}
+
 fn bad(command: &str, s: &str) -> EngineError {
     EngineError::BadParams { cmd: command.into(), msg: if command == "edit.fill" { s.replace("Clear", "Fill").replace("clear", "fill") } else { s.into() } }
 }
@@ -182,7 +211,7 @@ impl Operation {
         matches!(self, Self::Fill(v) if v.keeps_alpha())
     }
 }
-pub(crate) struct Prepared<'a> {
+pub(crate) struct LegacyPrepared<'a> {
     params: &'a Value,
     operation: Operation,
     preserve_alpha: bool,
@@ -201,7 +230,7 @@ pub(crate) struct Prepared<'a> {
     source_read_only: bool,
     _lease: QuotaLease,
 }
-impl<'a> Prepared<'a> {
+impl<'a> LegacyPrepared<'a> {
     pub(crate) fn prepare_clear(s: &Session, p: &'a Value, c: &ReadControl<'_>) -> Result<Self> {
         Self::prepare(s, p, c, Operation::Clear)
     }

@@ -70,8 +70,8 @@ fn point_start_refuses_before_closed_wire_and_keeps_snapshot_history_and_journal
 }
 
 #[test]
-#[ignore = "UNRUN: Point routing must not enroll unrelated accounted commands"]
-fn point_routing_does_not_grant_clear_fill_or_selection() {
+#[ignore = "UNRUN: translated drawable does not contain the full Clear/Fill ROI; pixel-selection installation remains unsupported"]
+fn point_fixed_native_roi_and_selection_refuse_out_of_scope_commands() {
     let mut s = session();
     let before = s.active().unwrap().doc.clone();
     let journal = s.journal.len();

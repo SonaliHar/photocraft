@@ -31,7 +31,7 @@ fn accepted(b:&BrushSettings)->NResult<()>{
 /// not cloned. This is neither source nor document-edit authority.
 pub fn checked_round_brush(brush:&BrushSettings)->NResult<BrushSettings>{accepted(brush)?;Ok(numeric_brush(brush))}
 // All payload fields precede their conservative admitted ownership envelopes.
-pub struct PreparedNativeStroke<'s>{source:CheckedRasterView<'s>,ctx:BrushContext,cov:CoverageMap,bounds:Rect,lock_alpha:bool,limits:NativeStrokeLimits,quota:BackingQuota,prepared_bytes:u64,_coverage:QuotaLease,_generation:QuotaLease}
+pub struct PreparedNativeStroke<'s>{source:CheckedRasterView<'s>,ctx:BrushContext,cov:CoverageMap,bounds:Rect,lock_alpha:bool,limits:NativeStrokeLimits,quota:BackingQuota,prepared_bytes:u64,selection:Option<selection::CheckedNativeSelection<'s>>,_coverage:QuotaLease,_generation:QuotaLease}
 pub struct NativeStrokePatch{bytes:Vec<u8>,bounds:Rect,format:PixelFormat,changed:bool,_fee:QuotaLease}
 impl NativeStrokePatch{pub fn bytes(&self)->&[u8]{&self.bytes}pub fn bounds(&self)->Rect{self.bounds}pub fn format(&self)->PixelFormat{self.format}pub fn changed(&self)->bool{self.changed}}
 fn generation(brush:&BrushSettings,points:&[StrokePoint],c:&ReadControl<'_>)->NResult<(usize,usize,u64)>{
@@ -58,7 +58,7 @@ pub fn prepare_clipped_native_stroke<'s>(source:CheckedRasterView<'s>,clip:Rect,
  c.check(1)?;accepted(brush)?;let fmt=source.format();if selection.is_some(){return invalid("native stroke selection is not yet supported")}
  if !matches!(fmt.mode,photocraft_color::ColorMode::Rgb|photocraft_color::ColorMode::Grayscale)||!matches!(fmt.sample,SampleType::U8|SampleType::U16|SampleType::F32)||fmt.channels()>8||!zoom.is_finite()||zoom<=0.0{return invalid("native brush format/zoom")}
  check_rect(clip)?;if clip.intersect(&source.logical_bounds())!=clip{return invalid("clip outside native operative bounds")}
- let(steps,primary,gen_bytes)=generation(brush,points,c)?;let generation_fee=reserve(q,gen_bytes,limits.resident,c)?;
+ let(steps,primary,gen_bytes)=generation(brush,points,c)?;let gen_bytes=sum(gen_bytes,std::mem::size_of::<PreparedNativeStroke<'_>>()as u64)?;let generation_fee=reserve(q,gen_bytes,limits.resident,c)?;
  let failure=Cell::new(None);let forward=|n|c.check(n).map_err(|e|{failure.set(Some(e));StrokeError::Limit});
  let mut budget=Budget{control:c.interrupt,limits:StrokeLimits{resident_bytes:limits.resident,work_units:limits.work},work:0,forward:Some(&forward)};
  c.check(product(steps as u64,256)?)?;let numeric=numeric_brush(brush);let result=generate(&numeric,points,zoom,steps,primary,0,&mut budget);let(primary,dual)=result.map_err(|e|failure.take().map_or(NativeStrokeError::Stroke(e),NativeStrokeError::Backing))?;drop(dual);
@@ -70,7 +70,7 @@ pub fn prepare_clipped_native_stroke<'s>(source:CheckedRasterView<'s>,clip:Rect,
  c.check(sum(product(tiles,(COV_TILE*COV_TILE*4)as u64)?,product(tiles,2048)?)?)?;let mut cov=CoverageMap::new(0);cov.tiles.try_reserve(usize::try_from(tiles).map_err(|_|BackingError::Length)?).map_err(|_|BackingError::Allocation)?;
  if (cov.tiles.capacity()as u64).checked_mul(128).is_none_or(|n|n>tiles.saturating_mul(2048).saturating_add(4096)){return Err(BackingError::Allocation.into())}
  c.check(product(total_pixels,256)?)?;let result=clipped_raster(&ctx,&primary,clip,&mut cov,maximum,&mut budget);result.map_err(|e|failure.take().map_or(NativeStrokeError::Stroke(e),NativeStrokeError::Backing))?;drop(primary);c.check(1)?;
- Ok(PreparedNativeStroke{source,ctx,cov,bounds,lock_alpha:lock_transparency,limits,quota:q.clone(),prepared_bytes:sum(gen_bytes,coverage_bytes)?,_coverage:coverage_fee,_generation:generation_fee})
+ Ok(PreparedNativeStroke{source,ctx,cov,bounds,lock_alpha:lock_transparency,limits,quota:q.clone(),prepared_bytes:sum(gen_bytes,coverage_bytes)?,selection:None,_coverage:coverage_fee,_generation:generation_fee})
 }
 impl PreparedNativeStroke<'_>{
  pub fn bounds(&self)->Rect{self.bounds}pub fn format(&self)->PixelFormat{self.source.format()}
@@ -78,13 +78,13 @@ impl PreparedNativeStroke<'_>{
   let q=&self.quota;
   c.check(1)?;let fmt=self.source.format();let n=fmt.channels();let bpp=fmt.bytes_per_pixel();let bytes=usize::try_from(product(product(self.bounds.width()as u64,self.bounds.height()as u64)?,bpp as u64)?).map_err(|_|BackingError::Length)?;
   if bytes>self.limits.native_bytes{return invalid("native patch cap")}
-  let runtime_bytes=sum(product(bytes as u64,2)?,std::mem::size_of::<NativeStrokePatch>()as u64+1024)?;if sum(self.prepared_bytes,runtime_bytes)?>self.limits.resident{return Err(BackingError::Quota.into())}let fee=reserve(q,runtime_bytes,self.limits.resident,c)?;
+  let runtime_bytes=sum(sum(product(bytes as u64,2)?,std::mem::size_of::<NativeStrokePatch>()as u64+1024)?,self.selection.as_ref().map_or(0,selection::CheckedNativeSelection::runtime_bytes))?;if sum(self.prepared_bytes,runtime_bytes)?>self.limits.resident{return Err(BackingError::Quota.into())}let fee=reserve(q,runtime_bytes,self.limits.resident,c)?;
   c.check(product(bytes as u64,2)?)?;let mut input=vector(bytes,c)?;input.resize(bytes,0);let mut output=vector(bytes,c)?;output.resize(bytes,0);
   for coord in self.bounds.tiles(){let pin=self.source.pin_tile(coord,c)?;let part=coord.rect().intersect(&self.bounds);for y in part.y0..part.y1{for x in part.x0..part.x1{let at=((y-self.bounds.y0)as usize*self.bounds.width()as usize+(x-self.bounds.x0)as usize)*bpp;pin.read_pixel_native_into(x,y,input.get_mut(at..at+bpp).ok_or(BackingError::Length)?,c)?}}}
   for(a,b)in output.chunks_mut(4096).zip(input.chunks(4096)){c.check(b.len()as u64)?;a.copy_from_slice(b)}
   let brush=&self.ctx.brush;let mut src=[0.0f32;8];from_rgba_into(&fmt,brush.color,&mut src);if let Some(a)=alpha_index(&fmt){*src.get_mut(a).ok_or(BackingError::Length)?=brush.color[3]}
   for(&(tx,ty),tile)in &self.cov.tiles{let rect=Rect::new(tx*COV_TILE,ty*COV_TILE,(tx+1)*COV_TILE,(ty+1)*COV_TILE).intersect(&self.bounds);for y in rect.y0..rect.y1{for x in rect.x0..rect.x1{c.check(256)?;let ti=((y-ty*COV_TILE)*COV_TILE+(x-tx*COV_TILE))as usize;let coverage=*tile.cov.get(ti).ok_or(BackingError::Length)?;if coverage<=0.0{continue}
-   let k=(self.ctx.stroke_mask_wet(coverage,None,None,x,y)*brush.opacity.clamp(0.0,1.0)).min(1.0);if !k.is_finite(){return invalid("nonfinite native coverage")}if k<=0.0{continue}
+   let k=if let Some(selection)=&self.selection{c.check(128)?;let m=self.ctx.stroke_mask_wet(coverage,None,None,x,y);let opacity=brush.opacity.clamp(0.0,1.0);let s=selection.narrow(x,y,c)?;(m*opacity*s).min(1.0)}else{(self.ctx.stroke_mask_wet(coverage,None,None,x,y)*brush.opacity.clamp(0.0,1.0)).min(1.0)};if !k.is_finite(){return invalid("nonfinite native coverage")}if k<=0.0{continue}
    let at=((y-self.bounds.y0)as usize*self.bounds.width()as usize+(x-self.bounds.x0)as usize)*bpp;let before=input.get(at..at+bpp).ok_or(BackingError::Length)?;let mut px=[0.0f32;8];for(i,v)in px.iter_mut().take(n).enumerate(){*v=read_sample(before,fmt.sample,i)}
    if px.iter().take(n).any(|v|!v.is_finite())||alpha_index(&fmt).is_some_and(|a|px.get(a).is_none_or(|v|!(0.0..=1.0).contains(v))){return invalid("unsupported native source arithmetic")}
    if brush.erase{if let(Some(a),false)=(alpha_index(&fmt),self.lock_alpha){*px.get_mut(a).ok_or(BackingError::Length)?*=1.0-k}}
@@ -105,4 +105,20 @@ mod tests;
 
 #[path="native_stroke_wide_controlled.rs"]
 mod wide_native;
-pub use wide_native::{NativeWideColor, PreparedNativeWideStroke, prepare_clipped_native_wide_stroke};
+pub use wide_native::{NativeWideColor, PreparedNativeWideStroke, prepare_clipped_native_wide_stroke,prepare_clipped_native_wide_stroke_selected};
+
+#[path="native_selection.rs"]
+mod selection;
+
+/// Additive selected producer. The caller retains the actual installed owner;
+/// this borrowed selection proof supplies no document-edit authority.
+#[allow(clippy::too_many_arguments)]
+pub fn prepare_clipped_native_stroke_selected<'s>(source:CheckedRasterView<'s>,clip:Rect,brush:&BrushSettings,points:&[StrokePoint],selection:&'s Surface,lock_transparency:bool,zoom:f32,limits:NativeStrokeLimits,q:&BackingQuota,c:&ReadControl<'_>)->NResult<PreparedNativeStroke<'s>>{
+ let selected=selection::CheckedNativeSelection::new(selection,source,q,limits.resident,c)?;
+ let inner_limits=NativeStrokeLimits{resident:limits.resident.checked_sub(selected.retained_bytes()).ok_or(BackingError::Quota)?,..limits};
+ let mut prepared=prepare_clipped_native_stroke(source,clip,brush,points,None,lock_transparency,zoom,inner_limits,q,c)?;
+ prepared.limits=limits;
+ prepared.prepared_bytes=sum(prepared.prepared_bytes,selected.retained_bytes())?;
+ if prepared.prepared_bytes>limits.resident{return Err(BackingError::Quota.into())}
+ prepared.selection=Some(selected);Ok(prepared)
+}

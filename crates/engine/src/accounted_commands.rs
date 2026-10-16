@@ -24,6 +24,7 @@ mod imported_translate;
 mod point;
 mod filtered_flat;
 mod hierarchy_expanded;
+mod programme_select;
 pub use filtered_flat::candidate as filtered_flat_filter_edit_candidate;
 pub use filtered_flat::masked_candidate as masked_filtered_flat_filter_edit_candidate;
 pub use filtered_flat::hierarchy_candidate as normal_hierarchy_filter_edit_candidate;
@@ -75,6 +76,7 @@ pub fn supports(id: &str) -> bool {
 /// Observed Box admits only its sealed CURRENT filter edit lane, viewing and
 /// history navigation. Other mutations retain the original refusal.
 pub(crate) fn observed_box_mutation_refused(session: &Session, id: &str) -> bool {
+    if matches!(id,"edit.clear"|"edit.fill")&&session.active().and_then(|s|s.doc.accounted()).is_some_and(programme_pixels_candidate){return false}
     supports(id)
         && !matches!(id, "layer.select" | "edit.undo" | "edit.redo" | "history.selectState")
         && session.active().and_then(|state| state.doc.accounted()).is_some_and(point::observed_box_readonly)
@@ -94,11 +96,16 @@ pub(crate) fn supports_for_session(session:&Session,id:&str)->bool{
 }
 /// No editing or selection route is granted by readonly mixed-root storage.
 pub(crate) fn filtered_flat_mutation_refused(session:&Session,id:&str)->bool{
+    if (id=="layer.select"&&session.active().and_then(|s|s.doc.accounted()).is_some_and(programme_select_candidate))||(matches!(id,"edit.clear"|"edit.fill")&&session.active().and_then(|s|s.doc.accounted()).is_some_and(programme_pixels_candidate)){return false}
     if matches!(id,"paint.stroke"|"paint.pencil")&&session.active().and_then(|s|s.doc.accounted()).is_some_and(crate::accounted_native_stroke::candidate){return false}
     if matches!(id,"layer.select"|"layer.setExpanded"|"paint.stroke"|"paint.pencil") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()){return false}
     supports_for_session(session,id) && !matches!(id,"edit.undo"|"edit.redo"|"history.selectState"|"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move"|"xcf.filter.remove"|"layer.setProps"|"layer.renameLayer")
         && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()))
 }
+
+/// O(1) registered routing hints, never document/native edit capabilities.
+pub(crate) fn programme_select_candidate(owner:&photocraft_doc::accounted_document::AccountedDocument)->bool{programme_select::kind(owner).is_some()}
+pub(crate) fn programme_pixels_candidate(owner:&photocraft_doc::accounted_document::AccountedDocument)->bool{crate::accounted_programme_current::kind(owner).is_some()}
 
 enum Request<'a> {
     NativeStroke(crate::accounted_native_stroke::Request<'a>),
@@ -131,6 +138,7 @@ enum Request<'a> {
     PreparedFill(crate::accounted_fill::Prepared<'a>),
     Select(LayerId),
     HierarchySelect(LayerId,hierarchy_expanded::SelectionWitness),
+    ProgrammeSelect(LayerId,programme_select::SelectionWitness),
     Edit(AccountedEdit<'a>),
     ClearSelection,
     SelectAll(&'a Value),
@@ -265,6 +273,8 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
             let layer=LayerId(layer);
             if session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()) {
                 Ok(Request::HierarchySelect(layer,hierarchy_expanded::SelectionWitness::prepare(session,layer,control)?))
+            }else if session.active().and_then(|s|s.doc.accounted()).is_some_and(programme_select_candidate){
+                Ok(Request::ProgrammeSelect(layer,programme_select::SelectionWitness::prepare(session,layer,control)?))
             }else{Ok(Request::Select(layer))}
         }
         "layer.setProps" => {
@@ -364,13 +374,13 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     }
     if id == "edit.clear"
         && (state.doc.xcf_state.is_none()
-            || state.doc.accounted().is_none_or(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage()))
+            || state.doc.accounted().is_none_or(|owner|!programme_pixels_candidate(owner)&&(owner.is_readonly_threshold_alpha_storage()||owner.is_readonly_threshold_storage())))
     {
         return Ok(Some("accounted Clear requires the plain imported native owner"));
     }
     if id == "edit.fill"
         && (state.doc.xcf_state.is_none()
-            || state.doc.accounted().is_none_or(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage()))
+            || state.doc.accounted().is_none_or(|owner|!programme_pixels_candidate(owner)&&(owner.is_readonly_threshold_alpha_storage()||owner.is_readonly_threshold_storage())))
     {
         return Ok(Some("accounted Fill requires the plain imported native owner"));
     }
@@ -742,6 +752,9 @@ impl<'a> PreparedAccountedCommand<'a> {
             census.string(id)?;
             census.command_value(id, params, control)?;
         }
+        if matches!(&request,Request::ProgrammeSelect(_,_)){
+            census.add(0,std::mem::size_of::<PreparedAccountedCommand<'_>>().checked_add(1024).ok_or(BackingError::Length)?)?;
+        }
         if matches!(&request, Request::PreparedAssignedMask(_)) {
             census.add(0, usize::try_from(assigned_mask::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
         }
@@ -818,6 +831,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::HistorySelect(_)
                 | Request::PreparedNativeStroke(_)
                 | Request::HierarchySelect(_,_)
+                | Request::ProgrammeSelect(_,_)
                 | Request::PreparedImportedTranslate(_)
                 | Request::PreparedFilteredFlat(_)
                 | Request::PreparedPoint(_)
@@ -872,6 +886,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::ClearSelection
                 | Request::PreparedNativeStroke(_)
                 | Request::HierarchySelect(_,_)
+                | Request::ProgrammeSelect(_,_)
                 | Request::PreparedHierarchyExpanded(_)
                 | Request::PreparedImportedTranslate(_)
                 | Request::SelectAll(_)
@@ -951,6 +966,11 @@ impl<'a> PreparedAccountedCommand<'a> {
                 session.select_accounted_with_control(layer,control)?;
                 Value::Null
             }
+            Request::ProgrammeSelect(layer,witness)=>{
+                witness.validate(session,layer,control)?;
+                session.select_accounted_with_control(layer,control)?;
+                Value::Null
+            }
             Request::Select(layer) => {
                 session.select_accounted_with_control(layer, control)?;
                 Value::Null
@@ -995,6 +1015,11 @@ impl Session {
         if owner.is_readonly_normal_hierarchy_storage(){
             if !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
             crate::accounted_xcf_open::normal_hierarchy::validate_current_normal_hierarchy_storage(owner,control)?;
+        }
+        if let Some(kind)=programme_select::kind(owner){
+            if !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
+            crate::accounted_programme_current::validate(owner,kind,control)?;
+            owner.accounted_layer_access(id,control)?.ok_or(EngineError::NoLayer(id))?;
         }
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
         if state.active_layer != view.target().active || state.layer_anchor != view.anchor() || !state.selected_layers.is_empty() {

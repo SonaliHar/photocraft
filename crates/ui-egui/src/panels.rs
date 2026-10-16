@@ -6169,3 +6169,7 @@ mod history_panel_select_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "observed_box_metadata_ui_tests.rs"]
 mod observed_box_metadata_ui_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="programme_layer_select_tests.rs"]
+mod programme_layer_select_tests;
