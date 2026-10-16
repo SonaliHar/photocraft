@@ -231,3 +231,24 @@ work before `construct_with_control`; keep the fee with every returned owner.
 The existing `Parts` composite work field retains its meaning. Point callers
 derive and charge their own actual direction, transfer and stage work instead.
 This API grants no document/source/profile equivalence or numerical acceptance.
+
+
+### Prepared fixed implicit encoding transfer
+
+`xcf_color::prepared_implicit_transfer` validates the actual immutable
+`Builtin::Srgb` or `Builtin::SGray` basis once per constructed token. It accepts
+no caller profile. Canonical operative sRGB curves are required; arbitrary
+analytic profiles, assigned profiles and inverse-search fallbacks are outside
+this API. The token uses the exact existing f64 transfer arithmetic, including
+separate nonlinear/perceptual conversion and finite-validated identity copies.
+Output is copied only after the final cancellation check.
+
+Prepay planning and constructor work on the caller's operation, reserve the
+reported new state/scratch peak plus caller holder overhead before construction,
+and hold that fee through all use. Each conversion still pays its reported work
+and scratch. Component admission includes the borrowed profile; its retained
+bytes are disclosed separately from new job-owned state. Lazy builtin setup is
+a fixed process-global provider boundary, not a new per-job profile clone.
+Requirements and local limits are facts, not caller allocation receipts. The
+legacy public converter still performs its original profile validation.
+Seven new CMS/source regression groups remain ignored, unrun and uncompiled.

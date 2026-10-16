@@ -2,7 +2,7 @@
 use super::*;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
-const INPUTS: [(&str, &str, PointReplaceFamily); 13] = [
+pub(super) const INPUTS: [(&str, &str, PointReplaceFamily); 13] = [
     (
         "corpus/xcf/full/point-absolute-evidence/absolute-rgb-float_linear.small.source.xcf",
         "58ed83cb4285068bf0335d9deb5892572ebe5eb44bba7d47d495122381cee0cc",
@@ -75,7 +75,7 @@ fn original(index: usize) -> XcfFile {
     assert_eq!(Sha256::digest(&b).iter().map(|v| format!("{v:02x}")).collect::<String>(), sha);
     photocraft_xcf::decode(&b, &Default::default()).unwrap()
 }
-fn file(index: usize, w: u32, h: u32) -> XcfFile {
+pub(super) fn file(index: usize, w: u32, h: u32) -> XcfFile {
     let mut f = original(index);
     f.width = w;
     f.height = h;
@@ -97,10 +97,10 @@ fn file(index: usize, w: u32, h: u32) -> XcfFile {
     p.bytes = vec![0; (w as usize) * (h as usize) * p.sample.source_bytes()];
     f
 }
-fn budget() -> photocraft_xcf::Budget<'static> {
+pub(super) fn budget() -> photocraft_xcf::Budget<'static> {
     photocraft_xcf::Budget::new_persistent(photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(), None).unwrap()
 }
-fn expected(i: usize) -> Option<NeighborhoodDomain> {
+pub(super) fn expected(i: usize) -> Option<NeighborhoodDomain> {
     Some(NeighborhoodDomain::PointReplace(INPUTS[i].2))
 }
 #[test]
@@ -168,16 +168,22 @@ fn unchanged_source_refusals() {
     }
 }
 #[test]
-#[ignore = "UNRUN: full per-pixel source CMS semantic+two-direction transfer prepay remains cumulative, sourcecancel/work failures publish nothing"]
+#[ignore = "UNRUN: prepared source CMS once-per-qualifier plus per-pixel conversion prepay remains cumulative, sourcecancel/work failures publish nothing"]
 fn actual_source_work_and_cancellation() {
     for i in 0..INPUTS.len() {
         let f = file(i, 65, 1);
         let b = budget();
         assert!(classify(&f, &Interrupt::NONE, Some(&b)).unwrap() == expected(i));
-        let profile = if f.model == Model::Gray { photocraft_cms::Builtin::SGray.profile() } else { photocraft_cms::Builtin::Srgb.profile() };
-        let channels = if f.model == Model::Gray { 1 } else { 3 };
-        let semantic = photocraft_cms::xcf_color::semantic_analytic_profile_work_ceiling(profile).unwrap();
-        assert!(b.used(photocraft_xcf::BudgetKind::Work) >= 65 * (semantic + 128 + 2 * channels * 128));
+        let space = if f.model == Model::Gray { photocraft_cms::ColorSpace::Gray } else { photocraft_cms::ColorSpace::Rgb };
+        let required =
+            photocraft_cms::xcf_color::prepared_implicit_transfer::requirements_with_control(space, photocraft_cms::control::Limits::default(), &|| false)
+                .unwrap();
+        assert!(
+            b.used(photocraft_xcf::BudgetKind::Work)
+                >= photocraft_cms::xcf_color::prepared_implicit_transfer::planning_work_ceiling()
+                    + required.preparation_work_units
+                    + 65 * (required.conversion_work_units + 128)
+        );
         let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap().lowered(&[("sampleWorkUnits", 32)]).unwrap();
         let lower = photocraft_xcf::Budget::new_persistent(limits, None).unwrap();
         assert!(classify(&f, &Interrupt::NONE, Some(&lower)).is_err());

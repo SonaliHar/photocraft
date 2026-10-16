@@ -2262,3 +2262,13 @@ the unchanged conversion. Structural size bounds, finite work and deadlines are
 admission ceilings rather than a supported-image-size or completion promise.
 All behavioral, numerical, native/widget, timing and performance gates remain
 deferred.
+
+
+For the nine expanded point domains, source qualification now prepares the
+same immutable implicit RGB/Gray transfer once per invocation, using the
+original cumulative work, deadline and cancellation controls. This eliminates
+repeated profile validation; each pixel still pays transfer/decode work and
+all existing native and mask checks. No command, caller limit, source profile,
+CURRENT rendering rule or publication authority changes. Cancellation remains
+a cancellation error, including before output copy. This is an implementation
+change with behavioral, native and performance acceptance still deferred.

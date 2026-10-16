@@ -1135,3 +1135,14 @@ under standard work; geometry bounds promise neither completion nor throughput.
 No physical source/default/padding identity, exact GIMP numerics, large-image,
 visual, native workflow or performance acceptance follows from this expansion.
 All new regression groups remain ignored, unrun and uncompiled.
+
+
+The nine-domain source path now prepares its same fixed implicit RGB/Gray
+transfer basis once per qualification invocation. This supersedes the repeated
+source-validation cost described above; it changes no CURRENT renderer math or
+work, source eligibility, profile interpretation, depth/encoding rules, masks or
+command permissions. Per-pixel source transfer and decode remain charged on the
+original operation. Constructor work and actual token/facts/guard/scratch state
+are admitted before construction and held through physical mask proof. The
+complete decoded source Surface remains retained. Geometry and reduced repeated
+work do not establish large-image throughput, memory fit or completion.

@@ -8,6 +8,8 @@ pub use assigned_effective_plan::{assigned_effective_planning_work_ceiling, sema
 mod implicit_planner;
 pub use implicit_planner::effective_implicit_rgb_nonlinear_planner_work_with_control;
 
+pub mod prepared_implicit_transfer;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Encoding {
     Linear,
@@ -479,6 +481,12 @@ fn model_curve(profile: &Profile, channel: usize) -> Option<&Curve> {
 /// Transfer-only conversion in the source primaries; no alpha, narrowing or default curve.
 pub fn convert_encoding_f64(p: &Profile, from: Encoding, to: Encoding, samples: &[f64], output: &mut [f64]) -> Result<(), CmsError> {
     validate_profile(p)?;
+    convert_encoding_f64_validated(p, from, to, samples, output)
+}
+
+// The caller must hold an immutable profile whose full validation succeeded.
+// Only this module and its sealed prepared implicit transfer child use this.
+fn convert_encoding_f64_validated(p: &Profile, from: Encoding, to: Encoding, samples: &[f64], output: &mut [f64]) -> Result<(), CmsError> {
     if samples.len() != p.channels() || output.len() != p.channels() || samples.iter().any(|v| !v.is_finite()) {
         return Err(CmsError::Invalid("XCF transfer sample count or nonfinite input".into()));
     }
