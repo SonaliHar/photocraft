@@ -2,6 +2,8 @@
 use super::*;
 use photocraft_doc::{item_identity::FilterId, xcf_filters::FilterNode};
 use photocraft_engine::DocumentSnapshot;
+#[path = "affine_mixed.rs"]
+mod affine;
 
 struct Target {
     snapshot: DocumentSnapshot,
@@ -93,6 +95,7 @@ fn family_controls(ui: &mut egui::Ui, node: &FilterNode, enabled_ui: bool) -> Op
     let mut enabled = node.enabled;
     let caption: String = node.source_display_name.as_deref().filter(|name| !name.is_empty()).unwrap_or(&node.operation.name).chars().take(128).collect();
     match node.operation.name.as_str() {
+        "gegl:brightness-contrast" | "gegl:levels" => affine::edit(ui, node, enabled_ui, &caption),
         "gegl:invert-linear" | "gegl:invert-gamma" => {
             if !node.arguments.is_empty(){return None}
             ui.add_enabled_ui(enabled_ui,|ui|{
@@ -274,3 +277,7 @@ mod opacity_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_point_source_opacity_tests.rs"]
 mod source_opacity_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "filtered_flat_point_affine_tests.rs"]
+mod affine_tests;

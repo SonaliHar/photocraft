@@ -26,7 +26,7 @@ pub(super) fn hint<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &p
         if count>4096 {return Err(IoError::Unsupported("filtered flat node count".into()));}
         for e in &d.effects {
             work(i,b,e.operation.len() as u64+1)?;
-            known |= matches!(e.operation.as_str(),"gimp:semi-flatten"|"gegl:hue-chroma"|"gegl:vibrance"|"gegl:exposure"|"gegl:invert-linear"|"gegl:invert-gamma");
+            known |= matches!(e.operation.as_str(),"gimp:semi-flatten"|"gegl:hue-chroma"|"gegl:vibrance"|"gegl:exposure"|"gegl:invert-linear"|"gegl:invert-gamma"|"gegl:brightness-contrast"|"gegl:levels");
         }
     }
     Ok(known)
@@ -242,3 +242,7 @@ pub(super) mod opacity;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_filtered_flat_opacity_tests.rs"]
 mod opacity_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "staged_filtered_flat_affine_tests.rs"]
+mod affine_tests;

@@ -1626,3 +1626,47 @@ or performance acceptance. All PhotoCraft tests and final gates remain deferred;
 SC-002 matched-display <=2/255 and exact source/native/ICC/structure fidelity
 still apply. Nonzero masks, broader stock filters, ordinary Point opacity,
 assigned profiles, offsets and source HDR remain separate implementation work.
+
+
+Mixed filtered-flat roots support exact `gegl:brightness-contrast` and
+`gegl:levels` version0:0 with separate `xcf22-gegl-brightness-contrast-mixed-wide-v1`
+and `xcf22-gegl-levels-mixed-wide-v1` identities. Brightness/Contrast stores two
+unique F32 parameters; GEGL Levels stores four. Mapping and edits retain their
+original argument order. Ordinary Point, old PointStack and structured
+`gimp:levels` keep their existing identities and priority.
+
+The paid affine stage transfers known nonlinear sRGB to Linear, applies the
+existing unfused F64 scalar, then transfers back with wide alpha unchanged.
+It adds no leaf Float cast. Brightness/Contrast uses (x-.5)*contrast+.5+brightness;
+GEGL Levels uses (x-inlow)/(inhigh-inlow)*(outhigh-outlow)+outlow. Native input is
+unit; derived RGB may be finite signed/HDR with finite unit alpha. Nonfinite
+results refuse. After full proof, BC numeric0/1 and literal Levels0,1->0,1 retain
+native identity; other equal Levels ranges retain their transfer roundtrip.
+Actual ordered roots, sole affine stages, enabled counts and NL Float bridges
+use the existing paid path. Per-pixel scratch512 and active1536/disabled-or-native-
+identity256 work are independent from any nonunit-opacity mix costs.
+
+Source/current geometry, native/default/profile/zero-mask proofs and existing
+caps remain. Full positive-origin geometry and CURRENT/SourceOpacity cross-
+products are explicit compatibility extensions beyond the four representative
+unit-opacity GIMP sources (two depths, 8x6 and130x65). SourceOpacity still needs
+its exact raw33/group proof; these observations do not claim affine partial-
+opacity producer behavior. Source HDR, offsets, assigned profiles and nonzero
+masks remain separate. Old accepted numerical paths are unchanged.
+
+The existing xcf.filter.set command permits four argument patches only for the
+exact new GEGL Levels target. Other kinds retain the prior three-patch ceiling;
+the kind is rechecked after complete OLD validation. A separate actual four-
+patch array/lease reservation remains through STAGED validation. Whole tuples,
+strict incoming words, compound activation/opacity, locks, no-ops, history,
+source protection, replies and publication fences remain. Captured controls
+offer Brightness/Contrast and Input/Output low/high, preserve passive words and
+source order, and reuse the existing opacity and stale-target fences. Native10
+continues these actual mixed owners without another field or epoch migration.
+
+Three GIMP-only runs preserve source/native/configuration/order evidence;
+F32 RGB varied up to4.768372e-7 while compared F64 roles were exact. These are
+producer observations, not PhotoCraft numerical acceptance. Fourteen new ignored
+contracts remain UNRUN/uncompiled. All PhotoCraft tests, numerical/native/UI/
+performance and final gates remain deferred; SC002 display<=2/255 and exact
+source/native/ICC/structure criteria still apply. Full stock support is unfinished.

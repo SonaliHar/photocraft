@@ -254,3 +254,6 @@ fn inactive_source_proof_and_control_are_unconditional() {
     assert_eq!(q.usage().unwrap(), before);
     f.fails[1].store(false, Ordering::Relaxed);
 }
+
+#[path="backed_filtered_flat_point_affine_tests.rs"]
+mod affine;

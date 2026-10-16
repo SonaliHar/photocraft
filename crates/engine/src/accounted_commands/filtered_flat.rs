@@ -156,6 +156,8 @@ fn family(node: &photocraft_doc::xcf_filters::FilterNode) -> Option<u8> {
         "gegl:exposure" => (3, "1:0", if node.operation.schema_epoch==photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH {photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH}else{photocraft_compose::EXPOSURE_MIXED_EPOCH}),
         "gegl:invert-linear" => (4, "0:0", photocraft_compose::INVERT_LINEAR_MIXED_EPOCH),
         "gegl:invert-gamma" => (5, "0:0", photocraft_compose::INVERT_GAMMA_MIXED_EPOCH),
+        "gegl:brightness-contrast" => (6, "0:0", photocraft_compose::BRIGHTNESS_CONTRAST_MIXED_EPOCH),
+        "gegl:levels" => (7, "0:0", photocraft_compose::GEGL_LEVELS_MIXED_EPOCH),
         _ => return None,
     };
     (node.operation.stored_version == version && node.operation.schema_epoch == epoch && node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == epoch)).then_some(kind)
@@ -165,12 +167,15 @@ fn range(kind: u8, name: &str) -> Option<(f32, f32)> {
         (1, "hue") => Some((-180., 180.)),
         (1, "chroma" | "lightness") | (2, "vibrance") => Some((-100., 100.)),
         (2, "saturation") => Some((0., 10.)),
+        (6, "brightness") => Some((-3., 3.)),
+        (6, "contrast") => Some((-5., 5.)),
         _ => None,
     }
 }
 fn number_in_domain(kind:u8,name:&str,bits:u32)->bool {
     let value=f32::from_bits(bits);
     if !value.is_finite(){return false}
+    if kind==7 {return matches!(name,"in-low"|"in-high"|"out-low"|"out-high")}
     if kind==3 {
         return match name {
             "exposure"=>true,
@@ -185,6 +190,8 @@ fn number_in_domain(kind:u8,name:&str,bits:u32)->bool {
 fn valid_node(node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
     use photocraft_doc::xcf_filters::{ExactNumber, FilterValue};
     let Some(kind) = family(node) else { return false };
+    if kind == 6 { return photocraft_compose::brightness_contrast_mixed_parameters(&node.arguments).is_ok(); }
+    if kind == 7 { return photocraft_compose::gegl_levels_mixed_parameters(&node.arguments).is_ok(); }
     if matches!(kind,4|5) { return node.arguments.is_empty(); }
     if kind == 0 {
         return matches!(node.arguments.as_slice(),[a] if a.name=="color"&&matches!(&a.value,FilterValue::Color{components,encoding:photocraft_doc::SampleEncoding::Linear|photocraft_doc::SampleEncoding::NonlinearProfile,profile:None} if components.len()==4&&components.iter().all(|v|matches!(v,ExactNumber::Float32Bits(b) if f32::from_bits(*b).is_finite()&&(0.0..=1.0).contains(&f32::from_bits(*b))))));
@@ -299,10 +306,17 @@ impl<'a> Request<'a> {
             .as_object()
             .filter(|o| o.len() <= 4 && o.keys().all(|k| matches!(k.as_str(), "filterId" | "arguments" | "enabled" | "opacityF64Bits")))
             .ok_or_else(|| bad(id, "only filterId,arguments,enabled,opacityF64Bits supported"))?;
-        if object.get("arguments").is_some_and(|v| v.as_array().is_none_or(|a| a.is_empty() || a.len() > 3)) {
-            return Err(bad(id, "one to three patches required"));
+        if object.get("arguments").is_some_and(|v| v.as_array().is_none_or(|a| a.is_empty() || a.len() > 4)) {
+            return Err(bad(id, "bounded nonempty argument patches required"));
         }
         let fields = wire_with_literal(id, params, true).ok_or_else(|| bad(id, "typed mixed filter patch required"))?;
+        // Only the exact new GEGL Levels family needs four scalar patches.
+        // Keep the previous outer ceiling for every other actual target.
+        if fields.count > 3 {
+            let owner = session.active().and_then(|s| s.doc.accounted()).ok_or(BackingError::Unsupported)?;
+            let (_, node, _, _) = target(owner, fields.filter, c)?;
+            if family(node) != Some(7) { return Err(bad(id, "four patches require mixed GEGL Levels")); }
+        }
         Ok(Self { id, params, fields, move_to:None })
     }
     pub(super) fn prepare(self, session: &Session, ctl: &ReadControl<'_>) -> Result<Prepared<'a>> {
@@ -315,6 +329,10 @@ impl<'a> Request<'a> {
         }
         validate_recipe(owner, ctl)?;
         let (stack, node, layer,node_index) = target(owner, self.fields.filter, ctl)?;
+        let kind = family(node).ok_or(BackingError::Unsupported)?;
+        if self.fields.count > if kind == 7 { 4 } else { 3 } {
+            return Err(bad(self.id, "argument count exceeds the target family"));
+        }
         if (self.move_to.is_some() || self.id=="xcf.filter.remove") && stack.revision==u64::MAX {return Err(BackingError::Length.into())}
         let visibility_changed = self.fields.enabled.is_some_and(|v| v != node.enabled);
         locks(owner, layer, visibility_changed, ctl)?;
@@ -368,8 +386,14 @@ impl<'a> Request<'a> {
             .ok_or(BackingError::Length)?;
         lease.reconcile_capacity(actual as u64).map_err(|_| BackingError::Allocation)?;
 
-        let kind = family(node).ok_or(BackingError::Unsupported)?;
-        let mut patches = [PointArgumentPatch { name: "", value: PointArgumentValue::Bool(false) }; 3];
+        let staged = {
+        // This scratch is additional to OLD/history/STAGED and the reply fees.
+        // Declare the fee before the real array and retain it through full proof.
+        let patch_bytes = std::mem::size_of::<[PointArgumentPatch<'_>; 4]>()
+            .checked_add(std::mem::size_of::<photocraft_raster::backing::quota::QuotaLease>())
+            .and_then(|n| n.checked_add(128)).ok_or(BackingError::Length)?;
+        let _patch_fee = owner.quota().reserve(QuotaKind::Index, patch_bytes as u64).map_err(|_| BackingError::Quota)?;
+        let mut patches = [PointArgumentPatch { name: "", value: PointArgumentValue::Bool(false) }; 4];
         for (slot, argument) in patches.iter_mut().zip(self.fields.arguments.iter().take(self.fields.count)) {
             let argument = argument.as_ref().ok_or(BackingError::Integrity)?;
             ctl.check(4096)?;
@@ -406,6 +430,8 @@ impl<'a> Request<'a> {
             ctl,
         )? };
         validate_recipe(&staged, ctl)?;
+        staged
+        };
         let updated = !staged.shares_model(owner);
         let mut history = state.history.clone();
         let snapshot = if updated {
@@ -609,3 +635,7 @@ mod opacity_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_source_opacity_tests.rs"]
 mod source_opacity_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "filtered_flat_affine_tests.rs"]
+mod affine_tests;
