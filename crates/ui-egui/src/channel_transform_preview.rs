@@ -164,13 +164,9 @@ mod tests {
         warp::{BezierMesh, Warp},
     };
 
-    // These oracles each submit thousands of readbacks. Overlapping their independent devices
-    // with the rest of the UI suite can crash the native driver at default test parallelism.
-    static GPU_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     #[test]
     fn gpu_pixel_stretch_matches_native_channel_commit_across_tile_edges() {
-        let _gpu_test = GPU_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _gpu_test = photocraft_testkit::gpu_lock();
         let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
         })) else {
@@ -238,7 +234,7 @@ mod tests {
 
     #[test]
     fn gpu_sparse_and_high_frequency_channels_match_the_cpu_or_fall_back() {
-        let _gpu_test = GPU_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _gpu_test = photocraft_testkit::gpu_lock();
         let Ok(rs) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
         })) else {
@@ -344,7 +340,7 @@ mod tests {
 
     #[test]
     fn gpu_stretched_thin_channel_warp_matches_native_sampling() {
-        let _gpu_test = GPU_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _gpu_test = photocraft_testkit::gpu_lock();
         let rs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
         }));
@@ -428,7 +424,7 @@ mod tests {
 
     #[test]
     fn gpu_colour_preview_matches_cpu_for_depth_selection_geometry_and_eyes() {
-        let _gpu_test = GPU_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _gpu_test = photocraft_testkit::gpu_lock();
         let rs = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())
         }));
@@ -614,6 +610,32 @@ mod tests {
         assert!(photocraft_engine::channel_transform::locked(&a.session));
         crate::transform_tool::cancel(&mut a);
         assert!(crate::layer_style::open(&mut a, Some("dropShadow")).is_some());
+    }
+
+    #[test]
+    fn new_layer_prechecks_never_apply_an_isolated_channel_transform() {
+        let mut a = app();
+        a.run("channel.target", json!({"channel":"green"})).unwrap();
+        let ctx = egui::Context::default();
+        crate::transform_tool::begin(&mut a, &ctx).unwrap();
+        let t = a.ui.transform.as_mut().unwrap();
+        t.quad = t.quad.map(|[x, y]| [x + 3.0, y + 2.0]);
+        let captured = a.ui.transform.clone();
+        let before = a.session.active().unwrap().doc.clone();
+        let history = a.session.active().unwrap().history.past_len();
+        for id in photocraft_engine::PRECHECKED {
+            assert!(a.run(id, json!({})).unwrap_err().contains(photocraft_engine::channel_transform::LOCKED), "{id}");
+            assert_eq!(a.ui.transform, captured);
+            assert!(Arc::ptr_eq(&before, &a.session.active().unwrap().doc));
+            assert_eq!(a.session.active().unwrap().history.past_len(), history);
+            assert!(photocraft_engine::channel_transform::locked(&a.session));
+        }
+        a.run("channel.setVisible", json!({"channel":"green","visible":false})).unwrap();
+        assert_eq!(a.ui.transform, captured);
+        crate::transform_tool::cancel(&mut a);
+        assert!(Arc::ptr_eq(&before, &a.session.active().unwrap().doc));
+        assert!(!a.session.active().unwrap().channel_view.color_visible(1));
+        assert!(!photocraft_engine::channel_transform::locked(&a.session));
     }
 
     #[test]

@@ -229,6 +229,33 @@ fn interactive_guard_blocks_retargeting_but_all_eyes_remain_available() {
     s.execute("channel.target", json!({"channel":"blue"})).unwrap();
 }
 
+#[test]
+fn prechecks_cannot_bypass_the_captured_channel_target() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut s = session(ColorMode::Rgb, depth);
+        s.execute("channel.target", json!({"channel":"red"})).unwrap();
+        let st = s.active_mut().unwrap();
+        let layer = st.active_layer.unwrap();
+        st.channel_transform = Some(Guard { layer: Some(layer), target: json!({"color":0}) });
+        let before = st.doc.clone();
+        let history = st.history.past_len();
+        for id in crate::PRECHECKED.iter().copied().chain(["layer.renameLayer"]) {
+            let p = if id == "layer.renameLayer" { json!({"layer":layer.0,"name":"must not rename"}) } else { json!({}) };
+            assert!(s.precheck(id, &p).unwrap_err().to_string().contains(LOCKED), "{id}");
+            assert!(s.execute(id, p).unwrap_err().to_string().contains(LOCKED), "{id}");
+            assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+            assert_eq!(s.active().unwrap().history.past_len(), history);
+            assert_eq!(s.active().unwrap().channel_view.target, ChannelTarget::Color(0));
+            assert!(locked(&s));
+        }
+        let eye = json!({"channel":"red","visible":false});
+        s.precheck("channel.setVisible", &eye).unwrap();
+        s.execute("channel.setVisible", eye).unwrap();
+        assert!(locked(&s));
+        assert!(!visible(&s, &json!({"target":{"color":0}})).unwrap());
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn panel_channel_background_jobs_hold_the_target_until_commit_or_cancel() {
