@@ -1590,3 +1590,9 @@ mod common_edit_native_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="accounted_programme_selection_native_tests.rs"]
 mod programme_selection_native_tests;
+
+mod accounted_select_inverse;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_inverse_fractional_clear_native_tests.rs"]
+mod inverse_fractional_clear_native_tests;

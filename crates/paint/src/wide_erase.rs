@@ -47,6 +47,22 @@ pub(crate) fn try_erase_native_pixel(out: &mut [u8], format: photocraft_color::P
     Ok(changed)
 }
 
+/// Clear one encoded pixel without decoding unrelated color samples.
+/// Zero preserves every bit; full coverage clears even otherwise invalid samples.
+/// Fractional coverage validates only alpha and uses the native eraser schedule.
+pub fn try_clear_native_pixel(out: &mut [u8], format: photocraft_color::PixelFormat, weight: f64) -> Result<bool, RasterInputError> {
+    if out.len() != format.bytes_per_pixel() || out.len() > 40 { return Err(RasterInputError::LengthMismatch); }
+    if !format.alpha { return Err(RasterInputError::UnsupportedConversion); }
+    if !weight.is_finite() || !(0.0..=1.0).contains(&weight) { return Err(RasterInputError::InvalidSample); }
+    if weight == 0.0 { return Ok(false); }
+    if weight == 1.0 {
+        let changed = out.iter().any(|v| *v != 0);
+        out.fill(0);
+        return Ok(changed);
+    }
+    try_erase_native_pixel(out, format, weight, false, EraseColorPolicy::ClearAtZero)
+}
+
 /// Coverage/opacity/selection are bounded unit weights. Commits once after all checks.
 /// No-alpha background erasing needs a separate background-color operation.
 #[allow(clippy::too_many_arguments)]
@@ -159,3 +175,7 @@ pub fn try_erase_coverage(
     *target = staged;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "wide_clear_tests.rs"]
+mod clear_tests;

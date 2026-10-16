@@ -395,6 +395,12 @@ impl<'a> LegacyPrepared<'a> {
                 // the ordinary kernel's own per-cell rayon body is unchanged.
                 let mask_metadata = selection.map_or(Ok(0), |m| add(mul(m.tile_count(), 512)?, m.default_bytes().len()))?;
                 prepay(c, units(add(add(mul(tile_bytes, 16)?, mul(local_length, 64)?)?, mask_metadata)?)?)?;
+                // Additional selected-wide Clear work: both coverage walks, native
+                // alpha-only preflight and fractional fixed-pixel arithmetic.
+                // Existing provider/copy debits are not credit for this work.
+                if matches!(operation, Operation::Clear) && selection.is_some() && matches!(format.sample, SampleType::U32 | SampleType::F64) {
+                    prepay(c, units(mul(mul(part.width() as usize, part.height() as usize)?, 1024)?)?)?;
+                }
                 if let Operation::Fill(v) = operation {
                     prepay(c, v.cell_requirements(part, bpp)?.1)?;
                 }

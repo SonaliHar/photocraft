@@ -5,12 +5,17 @@ use photocraft_raster::backing::{BackingError,ReadControl,quota::{QuotaKind,Quot
 use crate::{DocumentSnapshot,accounted_view::AccountedView,channel_cmds::ChannelView,document_history::DocumentHistory,source_policy::SourceIdentity,accounted_programme_current::{self,ProgrammeKind}};
 use photocraft_doc::accounted_document::AccountedDocument;
 fn kind(owner:&AccountedDocument)->Option<ProgrammeKind>{accounted_programme_current::kind(owner)}
-fn recipe(owner:&AccountedDocument,expected:ProgrammeKind,c:&ReadControl<'_>)->Result<()>{
- if kind(owner)!=Some(expected){return Err(BackingError::Unsupported.into())}
- owner.validate_programme_selection_replacement(c)?;
- let guard=owner.checked_programme_selection(c)?;
- if !guard.matches_owner(owner)||guard.storage_kind()!=expected{return Err(BackingError::Integrity.into())}
- accounted_programme_current::validate(owner,expected,c)
+fn recipe(owner:&AccountedDocument,expected:Option<ProgrammeKind>,c:&ReadControl<'_>)->Result<()>{
+ if kind(owner)!=expected{return Err(BackingError::Unsupported.into())}
+ if let Some(expected)=expected{
+  owner.validate_programme_selection_replacement(c)?;
+  let guard=owner.checked_programme_selection(c)?;
+  if !guard.matches_owner(owner)||guard.storage_kind()!=expected{return Err(BackingError::Integrity.into())}
+  accounted_programme_current::validate(owner,expected,c)
+ }else{
+  if !owner.is_legacy_storage(){return Err(BackingError::Unsupported.into())}
+  owner.validate_selection_replacement(c).map_err(Into::into)
+ }
 }
 fn copy(v: &str) -> Result<String> {
     let mut s = String::new();
@@ -53,20 +58,21 @@ fn idle(session: &Session) -> Result<()> {
         || session.command_has_pending_job()
         || session.has_jobs()
     {
-        return Err(EngineError::Other("programme selection requires an idle synchronous color context without coalescing".into()));
+        return Err(EngineError::Other("accounted selection requires an idle synchronous color context without coalescing".into()));
     }
     Ok(())
 }
 pub(super) struct ProgrammeSelectionCapture{
- kind:ProgrammeKind,captured:DocumentSnapshot,old_history:DocumentHistory,view:AccountedView,
+ kind:Option<ProgrammeKind>,captured:DocumentSnapshot,old_history:DocumentHistory,view:AccountedView,
  revision:u64,view_revision:u64,active:Option<photocraft_doc::LayerId>,anchor:Option<photocraft_doc::LayerId>,
  channel:ChannelView,path:Option<String>,source:Option<SourceIdentity>,read_only:bool,
  history_states:u32,history_bytes:usize,_lease:QuotaLease,
 }
 impl ProgrammeSelectionCapture{
+ pub(super) fn is_programme(&self)->bool{self.kind.is_some()}
  pub(super) fn prepare(session:&Session,ctl:&ReadControl<'_>)->Result<Self>{
   idle(session)?;let state=session.active().ok_or(EngineError::NoDocument)?;
-  let owner=state.doc.accounted().ok_or(BackingError::Unsupported)?;let kind=kind(owner).ok_or(BackingError::Unsupported)?;
+  let owner=state.doc.accounted().ok_or(BackingError::Unsupported)?;let kind=kind(owner);
   if !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
   recipe(owner,kind,ctl)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
@@ -148,11 +154,11 @@ impl ProgrammeSelectionCapture{
             || session.prefs().performance.history_states != self.history_states
             || session.prefs().performance.history_budget_bytes() != self.history_bytes
         {
-            return Err(EngineError::Other("the prepared programme focus targets older Session state".into()));
+            return Err(EngineError::Other("the prepared accounted selection targets older Session state".into()));
         }
 
   let owner=state.doc.accounted().ok_or(BackingError::Unsupported)?;
-  if kind(owner)!=Some(self.kind)||!state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
+  if kind(owner)!=self.kind||!state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
   recipe(owner,self.kind,ctl)?;
   ctl.check(1)?;Ok(())
  }

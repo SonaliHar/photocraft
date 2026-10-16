@@ -14,13 +14,10 @@ pub struct AccountedSelectionTarget {
     programme: Option<std::sync::Arc<programme::ProgrammeSelectionCapture>>,
 }
 impl AccountedSelectionTarget {
-    /// Capture a paid immutable programme selection context using the original operation control.
+    /// Capture a paid immutable accounted selection context using the original operation control.
     pub fn capture_with_control(session:&Session,c:&ReadControl<'_>)->Result<Self>{
         let mut target=Self::capture(session)?;
-        let owner=session.active().and_then(|s|s.doc.accounted()).ok_or(BackingError::Unsupported)?;
-        if crate::accounted_programme_current::kind(owner).is_some(){
-            target.programme=Some(std::sync::Arc::new(programme::ProgrammeSelectionCapture::prepare(session,c)?));
-        }
+        target.programme=Some(std::sync::Arc::new(programme::ProgrammeSelectionCapture::prepare(session,c)?));
         Ok(target)
     }
     pub fn validate_with_control(&self,session:&Session,c:&ReadControl<'_>)->Result<()>{
@@ -78,7 +75,7 @@ impl Session {
         }
         let mut history = state.history.clone();
         history.set_current_layers_borrowed(view.target(), control)?;
-        let snapshot = if target.programme.is_some(){
+        let snapshot = if target.programme.as_ref().is_some_and(|capture|capture.is_programme()){
             let owner=state.doc.accounted().ok_or(BackingError::Integrity)?;
             let kind=crate::accounted_programme_current::kind(owner).ok_or(BackingError::Unsupported)?;
             crate::accounted_programme_current::validate(owner,kind,control)?;
@@ -114,3 +111,7 @@ mod programme;
 #[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
 #[path="accounted_programme_selection_tests.rs"]
 mod tests;
+
+#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
+#[path="accounted_selection_inverse_command_tests.rs"]
+mod inverse_tests;

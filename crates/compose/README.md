@@ -2230,3 +2230,34 @@ Source selection channels/saved sets, broader selection generators, unsupported
 brush/geometry contexts and full stock support remain unfinished. New contracts
 are ignored UNRUN/uncompiled; compilation/static review do not establish any
 deferred numerical/native/UI/performance or full task acceptance.
+
+
+Selected U32/F64 Clear now accepts fractional finite-unit coverage with native
+alpha precision. Zero coverage retains raw pixels, and full coverage/no selection
+retain the existing canonical-zero path before alpha decode. Fractional coverage
+preflights only native alpha, then uses the existing unfused native erase
+alpha*(1-coverage) helper without decoding or narrowing RGB. A computed zero
+clears the whole pixel; an integer alpha that merely encodes to zero does not
+trigger that canonicalization. Existing ordinary Clear and no-selection behavior
+are retained. Accounted native-cell consumers independently prepay the added work
+before per-cell kernel staging. Full actual Current/domain/source/lock/history fences still apply.
+
+Existing select.inverse now supports accounted Legacy and all nine programme
+classes with an existing guarded selection. Its original ID, required Some
+selection and null/empty-or-captured-pair grammar remain. This additive native
+path retains Gray U8/U16/U32/F32/F64: integers use MAX-code, floating values use
+same-precision unfused1-value. The old unaccounted narrow path retains its Gray8
+result policy; no bit-equivalence between these distinct output policies is
+claimed. A bounded native band builder owns actual physical tiles/maps/defaults
+and headers prospectively with fixed scratch and independently paid row reads,
+math, coverage checks and copies. Complete native storage equality repeats
+charged default/ordered-coordinate/full-tile comparison; raw-equal output retains
+the original guard/model/revision/history/redo after full Current/target proofs.
+
+Controlled Legacy and programme captures bind source/path/history/view/channel/
+preferences before inverse staging. The same finite operation ledger, deadline,
+cancel and final publication fences remain. Native .pcraft continuation preserves
+native selection words and complete programme/mask/source custody; no Source
+selection-channel, image-sampling, profile, schema/marker/floor or renderer grant
+follows. New contracts remain ignored UNRUN/uncompiled. All behavioral, numerical,
+native/UI/performance and full-stock acceptance remain deferred or unfinished.

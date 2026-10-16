@@ -39,7 +39,7 @@ fn install(s: &mut Session, value: f64) {
     s.replace_accounted_selection(target, "guarded selection", Some(&selected), &f::ctl()).unwrap();
 }
 #[test]
-#[ignore = "UNRUN/uncompiled: genuine four-class F32/F64 Sources, guarded zero/fractional F32 Clear/Fill and binary-only F64 Clear, raw no-op/redo, registered All/Deselect, complete programme/source custody; internal compatibility not producer selection math"]
+#[ignore = "UNRUN/uncompiled: genuine four-class F32/F64 Sources, guarded zero/fractional native Clear and F32 Fill, raw no-op/redo, registered All/Deselect, complete programme/source custody; internal compatibility not producer selection math"]
 fn guarded_selection_consumers_preserve_programmes_and_history() {
     for case in f::CASES {
         for depth in 0..2 {
@@ -74,24 +74,23 @@ fn guarded_selection_consumers_preserve_programmes_and_history() {
                 assert!(current.shares_state(&s.active().unwrap().doc));
             }
             install(&mut s, 0.5 + 2f64.powi(-24));
-            if depth == 1 {
-                // Existing wide Clear accepts only exact binary weights. A
-                // real fractional guard grants custody, not new kernel math.
-                let fractional = s.active().unwrap().doc.clone();
-                let history = s.active().unwrap().history.clone();
-                let journal = s.journal.clone();
-                assert!(s.execute("edit.clear", json!({"layer":id.0})).is_err());
-                assert!(fractional.shares_state(&s.active().unwrap().doc));
-                assert!(history.shares_accounted_history(&s.active().unwrap().history));
-                assert_eq!(s.journal, journal);
-                install(&mut s, 1.0);
-            }
             let selected = s.active().unwrap().doc.clone();
             let revision = s.active().unwrap().revision;
             let past = s.active().unwrap().history.past_len();
             s.execute("edit.clear", json!({"layer":id.0})).unwrap();
             let cleared = f::raw(&s.active().unwrap().doc, id);
             assert_ne!(cleared, raw);
+            if depth==1{
+                // Fractional native Clear preserves RGB while computed alpha
+                // is nonzero. Actual zero-alpha/results canonicalize the whole
+                // pixel, before encoding; this is not an encoded-zero test.
+                for (before,after) in raw.chunks_exact(32).zip(cleared.chunks_exact(32)){
+                    let alpha=f64::from_ne_bytes(before[24..32].try_into().unwrap());
+                    let expected=alpha*(1.0-(0.5+2f64.powi(-24)));
+                    if expected==0.0{assert!(after.iter().all(|v|*v==0));}
+                    else{assert_eq!(&before[..24],&after[..24]);assert_eq!(&after[24..32],&expected.to_ne_bytes());}
+                }
+            }
             assert_eq!(s.active().unwrap().revision, revision + 1);
             assert_eq!(s.active().unwrap().history.past_len(), past + 1);
             f::same_selection(&selected, &s.active().unwrap().doc);
@@ -106,7 +105,6 @@ fn guarded_selection_consumers_preserve_programmes_and_history() {
                 let before = s.active().unwrap().doc.clone();
                 assert!(s.execute("edit.fill", json!({"layer":id.0,"contents":"black"})).is_err());
                 assert!(before.shares_state(&s.active().unwrap().doc));
-                install(&mut s, 0.25);
             }
             let before = s.active().unwrap().doc.clone();
             let native = f::raw(&before, id);
@@ -133,7 +131,7 @@ fn guarded_selection_consumers_preserve_programmes_and_history() {
     }
 }
 #[test]
-#[ignore = "UNRUN/uncompiled: registered selection captured source/path/readOnly/view/channel/history/preferences fences, real guard and same-ledger rejection, uncontrolled capture closure, early Work/cancel; no late-cancellation claim or broader selection command grant"]
+#[ignore = "UNRUN/uncompiled: registered selection captured source/path/readOnly/view/channel/history/preferences fences, real guard and same-ledger rejection, uncontrolled capture closure, early Work/cancel; no late-cancellation claim or broader Color Range command grant"]
 fn programme_selection_refuses_unpaid_or_stale_context_atomically() {
     for case in f::CASES {
         for variant in 0..7 {
@@ -199,7 +197,8 @@ fn programme_selection_refuses_unpaid_or_stale_context_atomically() {
     let installed = selection(&s, 1.0);
     assert!(s.replace_accounted_selection(target, "equal field", Some(&installed), &f::ctl()).is_err());
     assert!(all.shares_state(&s.active().unwrap().doc));
-    // Unsupported broader commands retain their old raw-sample/Legacy policy.
-    assert!(s.execute("select.inverse", json!({})).is_err());
+    // Inverse is now admitted only with its existing closed parameter grammar;
+    // Color Range retains its prior independent raw-sample/Legacy policy.
+    assert!(s.execute("select.inverse", json!({"unexpected":true})).is_err());
     assert!(s.execute("select.colorRange", json!({})).is_err());
 }

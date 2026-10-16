@@ -327,16 +327,14 @@ fn clear_error(error: impl std::fmt::Display) -> crate::EngineError {
     crate::EngineError::Other(format!("wide clear: {error}"))
 }
 
-fn boolean_clear_weight(selection: Option<&Surface>, x: i32, y: i32) -> crate::Result<bool> {
-    let Some(selection) = selection else { return Ok(true) };
+fn native_clear_weight(selection: Option<&Surface>, x: i32, y: i32) -> crate::Result<f64> {
+    let Some(selection) = selection else { return Ok(1.0) };
     let mut samples = [0.0_f64; 5];
     let samples = samples.get_mut(..selection.channels()).ok_or_else(|| clear_error("invalid selection channels"))?;
     selection.try_read_pixel_f64(x, y, samples).map_err(clear_error)?;
-    match samples.first().copied() {
-        Some(0.0) => Ok(false),
-        Some(1.0) => Ok(true),
-        _ => Err(clear_error("fractional or invalid selection coverage for authoritative U32/F64 samples is unsupported")),
-    }
+    let weight = samples.first().copied().ok_or_else(|| clear_error("invalid selection channels"))?;
+    if !weight.is_finite() || !(0.0..=1.0).contains(&weight) { return Err(clear_error("invalid selection coverage")); }
+    Ok(weight)
 }
 
 /// Validate wide selection semantics and conservative simultaneous raster storage
@@ -378,14 +376,21 @@ pub fn preflight_clear_surface(s: &Surface, area: Rect, selection: Option<&Surfa
                 if (i64::from(x) - i64::from(area.x0)) % 256 == 0 {
                     control.check().map_err(|_| crate::EngineError::Cancelled)?;
                 }
-                boolean_clear_weight(selection, x, y)?;
+                let weight = native_clear_weight(selection, x, y)?;
+                if weight > 0.0 && weight < 1.0 {
+                    let mut raw = [0u8; 40];
+                    let pixel = raw.get_mut(..s.format().bytes_per_pixel()).ok_or_else(|| clear_error("invalid pixel length"))?;
+                    s.try_read_pixel_bytes(x, y, pixel).map_err(clear_error)?;
+                    let alpha = photocraft_color::try_read_sample_f64(pixel, s.format().sample, s.format().mode.color_channels()).map_err(clear_error)?;
+                    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) { return Err(clear_error("invalid fractional clear alpha")); }
+                }
             }
         }
     }
     control.check().map_err(|_| crate::EngineError::Cancelled)
 }
 
-/// Checked Boolean wide clear; every unselected encoded bit stays untouched.
+/// Checked native wide clear; every unselected encoded bit stays untouched.
 /// Full clear retains legacy semantics: the whole pixel becomes canonical zero.
 pub fn try_clear_surface(s: &mut Surface, area: Rect, selection: Option<&Surface>, control: &photocraft_raster::Interrupt<'_>) -> crate::Result<()> {
     control.check().map_err(|_| crate::EngineError::Cancelled)?;
@@ -414,9 +419,12 @@ pub fn try_clear_surface(s: &mut Surface, area: Rect, selection: Option<&Surface
             }
             let x = rect.x0.checked_add(i32::try_from(index % width).map_err(clear_error)?).ok_or_else(|| clear_error("coordinate overflow"))?;
             let y = rect.y0.checked_add(i32::try_from(index / width).map_err(clear_error)?).ok_or_else(|| clear_error("coordinate overflow"))?;
-            if boolean_clear_weight(selection, x, y)? {
+            let weight = native_clear_weight(selection, x, y)?;
+            if weight == 1.0 {
                 pixel.fill(0);
                 changed = true;
+            } else if weight != 0.0 {
+                changed |= photocraft_paint::wide_erase::try_clear_native_pixel(pixel, s.format(), weight).map_err(clear_error)?;
             }
         }
         if changed {
@@ -566,3 +574,7 @@ pub(crate) fn mix_through_selection(
     }
     out
 }
+
+#[cfg(test)]
+#[path = "pixels_fractional_clear_tests.rs"]
+mod fractional_clear_tests;

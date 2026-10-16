@@ -58,6 +58,7 @@ pub fn supports(id: &str) -> bool {
             | "layer.setProps"
             | "edit.clear"
             | "edit.fill"
+            | "select.inverse"
             | "select.all"
             | "select.deselect"
             | "select.colorRange"
@@ -76,7 +77,7 @@ pub fn supports(id: &str) -> bool {
 /// Observed Box admits only its sealed CURRENT filter edit lane, viewing and
 /// history navigation. Other mutations retain the original refusal.
 pub(crate) fn observed_box_mutation_refused(session: &Session, id: &str) -> bool {
-    if matches!(id,"edit.clear"|"edit.fill"|"select.all"|"select.deselect")&&session.active().and_then(|s|s.doc.accounted()).is_some_and(programme_pixels_candidate){return false}
+    if matches!(id,"edit.clear"|"edit.fill"|"select.all"|"select.deselect"|"select.inverse")&&session.active().and_then(|s|s.doc.accounted()).is_some_and(programme_pixels_candidate){return false}
     supports(id)
         && !matches!(id, "layer.select" | "edit.undo" | "edit.redo" | "history.selectState")
         && session.active().and_then(|state| state.doc.accounted()).is_some_and(point::observed_box_readonly)
@@ -96,7 +97,7 @@ pub(crate) fn supports_for_session(session:&Session,id:&str)->bool{
 }
 /// No editing or selection route is granted by readonly mixed-root storage.
 pub(crate) fn filtered_flat_mutation_refused(session:&Session,id:&str)->bool{
-    if (id=="layer.select"&&session.active().and_then(|s|s.doc.accounted()).is_some_and(programme_select_candidate))||(matches!(id,"edit.clear"|"edit.fill"|"select.all"|"select.deselect")&&session.active().and_then(|s|s.doc.accounted()).is_some_and(programme_pixels_candidate)){return false}
+    if (id=="layer.select"&&session.active().and_then(|s|s.doc.accounted()).is_some_and(programme_select_candidate))||(matches!(id,"edit.clear"|"edit.fill"|"select.all"|"select.deselect"|"select.inverse")&&session.active().and_then(|s|s.doc.accounted()).is_some_and(programme_pixels_candidate)){return false}
     if matches!(id,"paint.stroke"|"paint.pencil")&&session.active().and_then(|s|s.doc.accounted()).is_some_and(crate::accounted_native_stroke::candidate){return false}
     if matches!(id,"layer.select"|"layer.setExpanded"|"paint.stroke"|"paint.pencil") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()){return false}
     supports_for_session(session,id) && !matches!(id,"edit.undo"|"edit.redo"|"history.selectState"|"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move"|"xcf.filter.remove"|"layer.setProps"|"layer.renameLayer")
@@ -140,6 +141,7 @@ enum Request<'a> {
     HierarchySelect(LayerId,hierarchy_expanded::SelectionWitness),
     ProgrammeSelect(LayerId,programme_select::SelectionWitness),
     Edit(AccountedEdit<'a>),
+    SelectionInverse(&'a Value,crate::accounted_selection_session::AccountedSelectionTarget),
     ProgrammeClearSelection(crate::accounted_selection_session::AccountedSelectionTarget),
     ProgrammeSelectAll(&'a Value,crate::accounted_selection_session::AccountedSelectionTarget),
     ClearSelection,
@@ -227,6 +229,10 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
     }
     if id == "layer.setProps" && imported_metadata::applies(session) {
         return Ok(Request::ImportedMetadata(imported_metadata::parse(params)?));
+    }
+    if id=="select.inverse"{
+        crate::accounted_select_inverse::validate_request(session,params)?;
+        return Ok(Request::SelectionInverse(params,crate::accounted_selection_session::AccountedSelectionTarget::capture_with_control(session,control)?));
     }
     if id == "select.all" {
         crate::accounted_select_all::validate_request(session, params)?;
@@ -398,10 +404,11 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     // Null is the existing enabled-query shape, not a layer-property call.
     // Do not disable a menu because its eventual call parameters are absent.
     if !params.is_null() {
-        if matches!(id,"select.all"|"select.deselect") && state.doc.accounted().is_some_and(programme_pixels_candidate){
+        if matches!(id,"select.all"|"select.deselect"|"select.inverse") && state.doc.accounted().is_some(){
             // Availability performs bounded wire/context checks only. The real
             // captured owner proof is paid by registered preparation.
-            if id=="select.all"{crate::accounted_select_all::validate_request(session,params)?;}
+            if id=="select.inverse"{crate::accounted_select_inverse::validate_request(session,params)?;}
+            else if id=="select.all"{crate::accounted_select_all::validate_request(session,params)?;}
             else{crate::selection_inverse_controlled::storage_dispatch_preflight(session,id,params,false)?;}
         } else if matches!(id,"xcf.filter.set"|"xcf.filter.enable") && state.doc.accounted().is_some_and(point::observed_box_readonly) {
             if !point::observed_box_wire_valid(id,params) { return Err(bad(id,"observed Box requires radius Signed32 0..1000 and/or enabled")); }
@@ -412,8 +419,8 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
         }
     }
     Ok(match id {
-        "select.deselect" if state.doc.selection.is_none() => Some("no selection"),
-        "select.all" | "select.deselect" if state.doc.selection_channel_id.is_some() => {
+        "select.deselect" | "select.inverse" if state.doc.selection.is_none() => Some("no selection"),
+        "select.all" | "select.deselect" | "select.inverse" if state.doc.selection_channel_id.is_some() => {
             // Menu eligibility is only a hint. The actual source/guard/model
             // census remains mandatory under the typed publication control.
             Some("accounted anonymous selection editing requires no saved selection owner")
@@ -841,7 +848,8 @@ impl<'a> PreparedAccountedCommand<'a> {
         };
         let history = if matches!(
             &request,
-            Request::ProgrammeClearSelection(_)
+            Request::SelectionInverse(_,_)
+                | Request::ProgrammeClearSelection(_)
                 | Request::ProgrammeSelectAll(_,_)
                 | Request::HistorySelect(_)
                 | Request::PreparedNativeStroke(_)
@@ -898,7 +906,8 @@ impl<'a> PreparedAccountedCommand<'a> {
         }
         if matches!(
             &self.request,
-            Request::ProgrammeClearSelection(_)
+            Request::SelectionInverse(_,_)
+                | Request::ProgrammeClearSelection(_)
                 | Request::ProgrammeSelectAll(_,_)
                 | Request::ClearSelection
                 | Request::PreparedNativeStroke(_)
@@ -997,6 +1006,7 @@ impl<'a> PreparedAccountedCommand<'a> {
                 session.edit_accounted(label, edit, control)?;
                 Value::Null
             }
+            Request::SelectionInverse(params,target)=>crate::accounted_select_inverse::run_captured(session,params,target,control)?,
             Request::ProgrammeClearSelection(target)=>{
                 target.validate_with_control(session,control)?;
                 session.replace_accounted_selection(target,"Deselect",None,control)?;

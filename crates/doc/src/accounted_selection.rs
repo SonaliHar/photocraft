@@ -268,3 +268,7 @@ impl AccountedSelection {
 #[cfg(test)]
 #[path = "accounted_selection_tests.rs"]
 mod tests;
+
+#[path = "accounted_selection_native_bands.rs"]
+mod native_bands;
+pub use native_bands::AccountedNativeSelectionBandBuilder;

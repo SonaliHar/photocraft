@@ -3,7 +3,7 @@ use super::*;
 use photocraft_doc::accounted_selection::{AccountedSelection, CoverageDomain};
 use photocraft_raster::{
     Interrupt,
-    backing::quota::{BackingQuota, QuotaLimits, QuotaUsage},
+    backing::quota::{BackingQuota, QuotaKind, QuotaLimits, QuotaUsage},
 };
 use serde_json::json;
 use std::sync::{
@@ -104,7 +104,7 @@ fn registered_clear_is_one_undo_preserves_complete_source_state_and_noop_redo() 
     }
 }
 #[test]
-fn ordinary_fractional_selection_and_wide_boolean_rules_match_original_kernel() {
+fn ordinary_fractional_selection_and_native_wide_alpha_rules_match_clear_policy() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let mut s = fixture(depth, 3, 1, false);
         select(&mut s, photocraft_color::PixelFormat::GRAY8, &[0, 128, 255]);
@@ -122,10 +122,19 @@ fn ordinary_fractional_selection_and_wide_boolean_rules_match_original_kernel() 
         let mut s = fixture(depth, 3, 1, false);
         select(&mut s, photocraft_color::PixelFormat::GRAY8, &[0, 128, 255]);
         let before = s.active().unwrap().doc.clone();
-        let journal = s.journal.clone();
-        assert!(s.execute(ID, json!({})).is_err());
+        let raw_fractional = native(&s);
+        let format = before.pixel_format();
+        let bpp = format.bytes_per_pixel();
+        let mut expected = raw_fractional.clone();
+        let alpha = photocraft_color::try_read_sample_f64(&raw_fractional[bpp..2*bpp], depth, 3).unwrap();
+        photocraft_color::try_write_sample_f64(&mut expected[bpp..2*bpp], depth, 3, alpha * (1.0 - 128.0/255.0)).unwrap();
+        expected[2*bpp..].fill(0);
+        s.execute(ID, json!({})).unwrap();
+        assert_eq!(native(&s), expected);
+        assert_eq!(&native(&s)[bpp..bpp+3*(bpp/4)], &raw_fractional[bpp..bpp+3*(bpp/4)]);
+        assert!(s.undo_with_control(&ctl()).unwrap());
+        assert_eq!(native(&s), raw_fractional);
         assert!(before.shares_state(&s.active().unwrap().doc));
-        assert_eq!(s.journal, journal);
         select(&mut s, photocraft_color::PixelFormat::GRAY8, &[0, 0, 255]);
         let raw = native(&s);
         s.execute(ID, json!({})).unwrap();
@@ -199,3 +208,6 @@ fn native_roi_cap_refuses_large_canvas_before_clear_or_journal_publication() {
     assert!(owner.shares_state(&s.active().unwrap().doc));
     assert_eq!(s.journal, journal);
 }
+
+#[path = "accounted_fractional_clear_tests.rs"]
+mod fractional_tests;
