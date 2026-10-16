@@ -121,7 +121,7 @@ fn effect(sample: Sample, size: (u32, u32), kind: u8) -> Effect<Plane> {
         version: Some("0:0".into()),
         arguments,
         properties: Vec::new(),
-        mask: Some(mask),
+        mask: Some(Box::new(mask)),
         state: EffectState {
             enabled: Some(true),
             mode: Some(62),

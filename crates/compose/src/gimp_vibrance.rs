@@ -217,14 +217,19 @@ impl OwnedVibrance {
         if enabled { self.evaluation_work } else { self.validation_work }
     }
     fn input_lch(&self, pixel: [f64; 4], control: &Interrupt<'_>, work: &dyn Fn(u64) -> std::result::Result<(), RasterInputError>) -> Result<[f32; 4]> {
+        self.input_lch_mode(pixel, control, work, false)
+    }
+    fn input_lch_mode(&self, pixel: [f64; 4], control: &Interrupt<'_>, work: &dyn Fn(u64) -> std::result::Result<(), RasterInputError>, derived: bool) -> Result<[f32; 4]> {
         work(0)?;
         control.check().map_err(|_| RasterInputError::Cancelled)?;
-        if pixel.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
+        if pixel.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&pixel[3]) || (!derived && pixel.iter().any(|v| !(0.0..=1.0).contains(v))) {
             return Err(scope());
         }
         let linear = self.transfer.convert([pixel[0], pixel[1], pixel[2]], true)?;
         let linear = [linear[0] as f32, linear[1] as f32, linear[2] as f32, pixel[3] as f32];
-        let saturated = point_vibrance::saturation_linear_float(linear, self.parameters.saturation)?;
+        let saturated = if derived {
+            point_vibrance::saturation_linear_float_derived(linear, self.parameters.saturation)?
+        } else { point_vibrance::saturation_linear_float(linear, self.parameters.saturation)? };
         work(0)?;
         control.check().map_err(|_| RasterInputError::Cancelled)?;
         let mut lab = [0.; 3];
@@ -248,7 +253,17 @@ impl OwnedVibrance {
         control: &Interrupt<'_>,
         work: &dyn Fn(u64) -> std::result::Result<(), RasterInputError>,
     ) -> Result<[f64; 4]> {
-        let input = self.input_lch(pixel, control, work)?;
+        self.apply_mode(pixel, enabled, control, work, false)
+    }
+    /// Only the paid ordered-root compiler admits a previous stage's finite HDR.
+    pub(crate) fn validate_derived_input(&self, pixel: [f64; 4], control: &Interrupt<'_>, work: &dyn Fn(u64) -> std::result::Result<(), RasterInputError>) -> Result<()> {
+        self.input_lch_mode(pixel, control, work, true).map(|_| ())
+    }
+    pub(crate) fn apply_derived(&self, pixel: [f64; 4], enabled: bool, control: &Interrupt<'_>, work: &dyn Fn(u64) -> std::result::Result<(), RasterInputError>) -> Result<[f64; 4]> {
+        self.apply_mode(pixel, enabled, control, work, true)
+    }
+    fn apply_mode(&self, pixel: [f64; 4], enabled: bool, control: &Interrupt<'_>, work: &dyn Fn(u64) -> std::result::Result<(), RasterInputError>, derived: bool) -> Result<[f64; 4]> {
+        let input = self.input_lch_mode(pixel, control, work, derived)?;
         if !enabled {
             return Ok(pixel);
         }

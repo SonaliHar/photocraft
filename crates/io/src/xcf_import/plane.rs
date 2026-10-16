@@ -54,6 +54,10 @@ impl ExactParsedPlane for Plane {
 
 /// Private mapper dispatch. Unsupported storage families never become dummy eager planes.
 pub(super) trait MappingPlane: ExactParsedPlane + Sized {
+    /// Actual retained physical mask tiles, never a logical grid estimate.
+    /// Only the sealed staged filtered-flat mapper requires this capability.
+    fn retained_filter_mask_tiles(&self)->Option<usize>{None}
+
     fn requires_budgeted_rendering_preparation() -> bool { false }
     /// Dynamic selection is private to a sealed source-selected plane. The
     /// argument comes from the mapper's already admitted original-source

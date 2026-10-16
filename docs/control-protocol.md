@@ -2289,9 +2289,12 @@ continuation remains `.pcraft`; behavior and performance gates are deferred.
 
 
 Mixed filtered ordinary roots use a separate readonly `FilteredFlat` handoff.
-The current scope is2..4096 full-canvas origin implicit nonlinear RGB F32/F64
-layers, each plain or carrying one existing Semi-Flatten, Hue-Chroma or Vibrance
-filter, with at least one stored filter, including when all are disabled. Mixed
+The current scope is 1..4096 full-canvas origin implicit nonlinear RGB F32/F64
+layers, each plain or carrying an ordered stack of existing Semi-Flatten,
+Hue-Chroma or Vibrance filters. Globally there are at most 4096 nodes and exactly as many corresponding
+masks, and at most 8192 canonical root/mask items. A single
+root requires at least two nodes, preserving the strict older singleton route.
+There must be at least one stored filter, including when all are disabled. Mixed
 sources preserve independent visibility, finite unit effective F32 layer opacity
 and explicitly present filter activation. Float-opacity tag33 takes precedence
 over legacy byte tag6; both raw records remain exact. Filter opacity stays +1.
@@ -2307,8 +2310,9 @@ project/filter inspection are connected through this actual class and the same
 cumulative controls. Selected/active root metadata is preserved; pixel-selection
 editing is unavailable. Existing `xcf.filter.set` and `xcf.filter.enable` now
 address an exact existing Semi-Flatten, Hue-Chroma or Vibrance filter on its
-actual root. The dedicated controls capture document/revision, root, stack
-owner/revision and filter; final association, idle and lock fences still apply.
+actual root and node. The dedicated controls capture one frame's document and
+revision, root, actual node index, stack owner/revision and filter; final
+association, idle and lock fences still apply.
 No generic editable registry fallback is used for this class.
 
 Existing `layer.setProps` supports compound name/visibility/opacity metadata;
@@ -2330,3 +2334,29 @@ Generic owner adoption, Move zero shortcuts, insertion/removal/reorder, masks,
 pixel/selection edits and unrelated mutations remain unavailable. Behavioral,
 native, numerical, visual and performance acceptance, complete stock support
 and the remaining multilayer implementation remain open.
+
+
+Ordered filters retain their canonical XCF/public GIMP list order for IDs,
+inspection and UI indices. Rendering evaluates that list bottom first, while
+ordinary roots retain their existing bottom-first document order. All nodes,
+including disabled ones, retain complete source/native/profile/mask/current
+proof. Each root's actual stored mask tile aggregate is bounded before mapper
+transfer/physical scans; earlier logical source scans are separately paid.
+
+The ordered renderer uses an explicitly declared NL Float handoff compatibility
+policy between enabled kernels, with additive finite derived-input helpers,
+fixed paid working arrays and actual prepared Parts. Initial F64 input and final
+Semi output are not implicitly narrowed; disabled nodes pass wide values through
+exactly and all-disabled stacks preserve input. GIMP controls establish direction
+and matching F32 producer sequences, while F64 sequential differences and unique
+graph-format/Float/Babl/FMA/profile equivalence remain unresolved. No numerical
+waiver or source HDR import authority is introduced. Native continuation stays
+`.pcraft`; insertion, removal, reordering, masks and selection editing remain
+outside this increment.
+
+
+Accounted saving and owned reopen follow the separate owned-document format
+route. Generic model census and standard native writer/reader visitors retain
+their 1024-node per-stack guard; that guard was not found on the actual accounted
+path. Model, quota/work and staged-proof bounds remain, with large-stack native
+runtime/migration acceptance deferred.

@@ -23,11 +23,28 @@ impl SemiFlatten {
     /// This does not bypass the caller's forward/inverse transfer for zero or
     /// full alpha. All validation completes before any output word is written.
     pub fn try_eval_pixel(&self, input: &[f64], channels: u8, output: &mut [f64]) -> Result<(), RasterInputError> {
+        self.try_eval_with_input_domain(input, channels, output, false)
+    }
+
+    /// Evaluate an already derived Linear RGB Float stage. RGB may be finite
+    /// HDR; alpha and the prepared background retain their unit domains. This
+    /// does not admit HDR source storage or choose a filter graph's formats.
+    pub fn try_eval_derived_pixel(&self, input: &[f64], channels: u8, output: &mut [f64]) -> Result<(), RasterInputError> {
+        self.try_eval_with_input_domain(input, channels, output, true)
+    }
+
+    fn try_eval_with_input_domain(&self, input: &[f64], channels: u8, output: &mut [f64], derived: bool) -> Result<(), RasterInputError> {
         if channels != 3 || input.len() != 4 || output.len() != 4 {
             return Err(RasterInputError::LengthMismatch);
         }
         self.validate()?;
-        if input.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
+        let invalid = if derived {
+            input.iter().any(|v| !v.is_finite() || !(*v as f32).is_finite())
+                || input.get(3).is_none_or(|alpha| !(0.0..=1.0).contains(alpha))
+        } else {
+            input.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+        };
+        if invalid {
             return Err(RasterInputError::InvalidSample);
         }
         let alpha = *input.get(3).ok_or(RasterInputError::LengthMismatch)? as f32;

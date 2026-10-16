@@ -89,6 +89,10 @@ impl StagePolicy for SourceSelectedPolicy {
         PlainPolicy::accepts(d) || ThresholdAlphaPolicy::accepts(d) || point_plane(d)
     }
     fn family_controlled<Q:ExactParsedPlane>(file:&XcfFile<Q>,ctl:&Interrupt<'_>,shared:Option<&photocraft_xcf::Budget<'_>>)->Result<SelectedStagedFamily,IoError>{
+        if file.layers.len()==1 && file.layers.first().is_some_and(|d|d.effects.len()>=2) {
+            let budget=shared.ok_or_else(||IoError::Unsupported("selected source requires accounting".into()))?;
+            if staged_filtered_flat::hint(file,ctl,budget)?{return Ok(SelectedStagedFamily::FilteredFlat)}
+        }
         let old=Self::family(file);
         if old!=SelectedStagedFamily::Plain{return Ok(old)}
         let budget=shared.ok_or_else(||IoError::Unsupported("selected source requires accounting".into()))?;
@@ -443,6 +447,10 @@ impl<P: StagePolicy> ExactParsedPlane for StagedPlane<'_, '_, P> {
     }
 }
 impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
+    fn retained_filter_mask_tiles(&self)->Option<usize>{
+        match &self.storage {Storage::Ready(surface)=>Some(surface.tile_count()),Storage::Transferred=>None}
+    }
+
     fn requires_budgeted_rendering_preparation() -> bool {
         P::THRESHOLD_ALPHA
     }

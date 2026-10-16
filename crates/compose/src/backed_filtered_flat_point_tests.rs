@@ -449,3 +449,6 @@ mod mutation;
 
 #[path = "backed_filtered_flat_point_source_activity_tests.rs"]
 mod source_activity;
+
+#[path = "backed_filtered_flat_point_ordered_tests.rs"]
+mod ordered;

@@ -88,6 +88,7 @@ pub(crate) const LITERAL_PREPARATION_WORK: u64 = 3 * 128 + 16;
 pub(crate) struct PreparedSemiFlatten {
     working: WorkingSpace,
     operation: PreparedPointOperation,
+    derived_operation: photocraft_algo::gimp::point_semi_flatten::SemiFlatten,
 }
 impl PreparedSemiFlatten {
     pub(crate) fn new(node: &FilterNode, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, control: &Interrupt<'_>) -> Result<Self> {
@@ -110,7 +111,7 @@ impl PreparedSemiFlatten {
         let operation = PointOperation::SemiFlatten { color }.prepare()?;
         let working = WorkingSpace::new_with_interrupt(profile, stored, GimpSpace::LinearRgb, control)?;
         control.check().map_err(|_| RasterInputError::Cancelled)?;
-        Ok(Self { working, operation })
+        Ok(Self { working, operation, derived_operation: photocraft_algo::gimp::point_semi_flatten::SemiFlatten { color } })
     }
     pub(crate) fn validate_input(&self, pixel: [f64; 4]) -> Result<()> {
         if pixel.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
@@ -123,7 +124,20 @@ impl PreparedSemiFlatten {
         Ok(())
     }
     pub(crate) fn apply(&self, pixel: [f64; 4], enabled: bool) -> Result<[f64; 4]> {
-        self.validate_input(pixel)?;
+        self.apply_mode(pixel, enabled, false)
+    }
+    /// Derived stage input is finite RGB/unit alpha, never original-source authority.
+    pub(crate) fn validate_derived_input(&self, pixel: [f64; 4]) -> Result<()> {
+        if pixel.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&pixel[3]) { return Err(scope()); }
+        let color = self.working.convert([pixel[0], pixel[1], pixel[2]], true)?;
+        if color.iter().any(|v| !(*v as f32).is_finite()) { return Err(scope()); }
+        Ok(())
+    }
+    pub(crate) fn apply_derived(&self, pixel: [f64; 4], enabled: bool) -> Result<[f64; 4]> {
+        self.apply_mode(pixel, enabled, true)
+    }
+    fn apply_mode(&self, pixel: [f64; 4], enabled: bool, derived: bool) -> Result<[f64; 4]> {
+        if derived { self.validate_derived_input(pixel)?; } else { self.validate_input(pixel)?; }
         if !enabled {
             return Ok(pixel);
         }
@@ -132,7 +146,7 @@ impl PreparedSemiFlatten {
         let color = self.working.convert([pixel[0], pixel[1], pixel[2]], true)?;
         let input = [color[0], color[1], color[2], pixel[3]].map(|v| f64::from(v as f32));
         let mut output = [0.; 4];
-        self.operation.try_eval_pixel(&input, 3, &mut output)?;
+        if derived { self.derived_operation.try_eval_derived_pixel(&input, 3, &mut output)?; } else { self.operation.try_eval_pixel(&input, 3, &mut output)?; }
         let native = self.working.convert([output[0], output[1], output[2]], false)?;
         let result = [native[0], native[1], native[2], output[3]];
         if result.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&result[3]) {

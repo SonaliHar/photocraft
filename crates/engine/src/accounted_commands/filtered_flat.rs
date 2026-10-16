@@ -190,7 +190,7 @@ pub fn candidate(owner: &AccountedDocument, layer: LayerId, node: &photocraft_do
         return false;
     }
     doc.layers.iter().any(|l| l.id == layer)
-        && state.filter_stacks.iter().any(|s| s.owner == ItemRef::Layer(layer) && matches!(s.nodes.as_slice(),[n] if std::ptr::eq(n,node)))
+        && state.filter_stacks.iter().any(|s| s.owner == ItemRef::Layer(layer) && s.nodes.len()<=4096 && s.nodes.iter().any(|n|std::ptr::eq(n,node)))
 }
 fn context(session: &Session, id: &str, params: &Value) -> Result<()> {
     let state = session.active().ok_or(EngineError::NoDocument)?;
@@ -217,25 +217,24 @@ fn target<'a>(
     owner: &'a AccountedDocument,
     id: FilterId,
     c: &ReadControl<'_>,
-) -> Result<(&'a photocraft_doc::xcf_filters::FilterStack, &'a photocraft_doc::xcf_filters::FilterNode, LayerId)> {
+) -> Result<(&'a photocraft_doc::xcf_filters::FilterStack, &'a photocraft_doc::xcf_filters::FilterNode, LayerId,usize)> {
     let state = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     if state.filter_stacks.len() > 4096 {
         return Err(BackingError::Length.into());
     }
-    let mut found = None;
+    let mut found = None;let mut nodes=0usize;
     for stack in &state.filter_stacks {
         c.check(1)?;
-        let [node] = stack.nodes.as_slice() else { return Err(BackingError::Integrity.into()) };
-        if node.id == id {
-            if found.is_some() {
-                return Err(BackingError::Integrity.into());
+        nodes=nodes.checked_add(stack.nodes.len()).filter(|n|*n<=4096).ok_or(BackingError::Length)?;
+        if stack.nodes.is_empty(){return Err(BackingError::Integrity.into())}
+        for (index,node) in stack.nodes.iter().enumerate(){c.check(1)?;
+            if node.id == id {
+                if found.is_some(){return Err(BackingError::Integrity.into())}
+                let ItemRef::Layer(layer)=stack.owner else{return Err(BackingError::Integrity.into())};
+                c.check(owner.document().layers.len().checked_add(state.filter_stacks.len()).and_then(|n|n.checked_add(nodes)).ok_or(BackingError::Length)? as u64)?;
+                if !candidate(owner,layer,node){return Err(BackingError::Unsupported.into())}
+                found=Some((stack,node,layer,index));
             }
-            let ItemRef::Layer(layer) = stack.owner else { return Err(BackingError::Integrity.into()) };
-            c.check(owner.document().layers.len().checked_add(state.filter_stacks.len()).ok_or(BackingError::Length)? as u64)?;
-            if !candidate(owner, layer, node) {
-                return Err(BackingError::Unsupported.into());
-            }
-            found = Some((stack, node, layer));
         }
     }
     found.ok_or_else(|| bad("xcf.filter.set", "unknown mixed filterId"))
@@ -273,7 +272,7 @@ impl<'a> Request<'a> {
             return Err(BackingError::Integrity.into());
         }
         validate_recipe(owner, ctl)?;
-        let (stack, node, layer) = target(owner, self.fields.filter, ctl)?;
+        let (stack, node, layer,node_index) = target(owner, self.fields.filter, ctl)?;
         let visibility_changed = self.fields.enabled.is_some_and(|v| v != node.enabled);
         locks(owner, layer, visibility_changed, ctl)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
@@ -398,6 +397,7 @@ impl<'a> Request<'a> {
             layer,
             visibility_changed,
             stack_revision: stack.revision,
+            node_index,
             updated,
             reply,
             _reply_lease: reply_lease,
@@ -469,6 +469,7 @@ pub(super) struct Prepared<'a> {
     layer: LayerId,
     visibility_changed: bool,
     stack_revision: u64,
+    node_index:usize,
     updated: bool,
     reply: Value,
     _reply_lease: QuotaLease,
@@ -508,8 +509,8 @@ impl Prepared<'_> {
         if !state.history.current()?.shares_state(&state.doc) {
             return Err(BackingError::Integrity.into());
         }
-        let (stack, _, layer) = target(owner, self.request.fields.filter, ctl)?;
-        if layer != self.layer || stack.revision != self.stack_revision {
+        let (stack, _, layer,node_index) = target(owner, self.request.fields.filter, ctl)?;
+        if layer != self.layer || stack.revision != self.stack_revision || node_index!=self.node_index {
             return Err(BackingError::Integrity.into());
         }
         locks(owner, self.layer, self.visibility_changed, ctl)?;

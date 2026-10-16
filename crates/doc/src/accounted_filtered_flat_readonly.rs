@@ -202,7 +202,7 @@ fn present(doc: &Document, id: ItemRef, c: &ReadControl<'_>) -> Result<(), Backi
 }
 pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<(), BackingError> {
     c.check(1)?;
-    if !(2..=4096).contains(&doc.layers.len())
+    if !(1..=4096).contains(&doc.layers.len())
         || doc.mode != crate::ColorMode::Rgb
         || !native_sample(doc.depth)
         || doc.sample_encoding != Some(crate::SampleEncoding::NonlinearProfile)
@@ -231,7 +231,7 @@ pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Re
         || state.current_filter_output_precision != FilterOutputPrecision::Canonical
         || state.filter_stacks.is_empty()
         || state.filter_stacks.len() > doc.layers.len()
-        || state.filter_masks.len() != state.filter_stacks.len()
+        || state.filter_masks.len() > 4096
         || state.items.len() != doc.layers.len().checked_add(state.filter_masks.len()).ok_or(BackingError::Length)?
         || !state.source_items.is_empty()
         || !state.editable_indexed.is_empty()
@@ -244,6 +244,22 @@ pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Re
         || state.opaque.len() > 4096
         || state.provenance.protected_source_fingerprints.len() > 4096
     {
+        return refused();
+    }
+    // Root-local stacks are nonempty; the global node/mask/item envelopes stay
+    // fixed. A single-root owner needs >=2 nodes, preserving old singleton routes.
+    let mut node_count = 0usize;
+    for stack in &state.filter_stacks {
+        c.check(1)?;
+        if stack.nodes.is_empty() || stack.nodes.len() > 4096 {
+            return Err(BackingError::Length);
+        }
+        node_count = node_count.checked_add(stack.nodes.len()).ok_or(BackingError::Length)?;
+        if node_count > 4096 {
+            return Err(BackingError::Length);
+        }
+    }
+    if state.filter_masks.len() != node_count || doc.layers.len() == 1 && node_count < 2 {
         return refused();
     }
     // Aggregate retained physical map facts and their work are checked before
@@ -263,6 +279,34 @@ pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Re
             .ok_or(BackingError::Length)?;
     }
     c.check(total_tiles.checked_add(map_bytes).ok_or(BackingError::Length)?)?;
+    // Bound the aggregate for each actual root before any physical tile walk.
+    // This is not a new global4096 tile cap or a4096 allowance per node.
+    for stack in &state.filter_stacks {
+        c.check(1)?;
+        let mut root_tiles = 0usize;
+        for node in &stack.nodes {
+            c.check(1)?;
+            let Some(ItemRef::Mask(id)) = node.mask else { return Err(BackingError::Integrity) };
+            let mut matched = false;
+            for mask in &state.filter_masks {
+                c.check(1)?;
+                if mask.id == id {
+                    if matched {
+                        return Err(BackingError::Integrity);
+                    }
+                    matched = true;
+                    root_tiles = root_tiles.checked_add(mask.surface.tile_count()).ok_or(BackingError::Length)?;
+                    if root_tiles > 4096 {
+                        return Err(BackingError::Length);
+                    }
+                }
+            }
+            if !matched {
+                return Err(BackingError::Integrity);
+            }
+        }
+    }
+
     if doc.metadata.text.len() > 4096 || doc.metadata.psd_resources.len() > 4096 {
         return Err(BackingError::Length);
     }
@@ -356,34 +400,44 @@ pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Re
                 return Err(BackingError::Integrity);
             }
         }
-        let [node] = stack.nodes.as_slice() else { return refused() };
-        node_shape(node, c)?;
-        for old in state.filter_stacks.get(..i).ok_or(BackingError::Length)? {
-            c.check(1)?;
-            if old.nodes.first().is_some_and(|n| n.id == node.id || n.mask == node.mask) {
-                return Err(BackingError::Integrity);
-            }
-        }
-        for value in [&node.operation.name, &node.operation.stored_version, &node.operation.schema_epoch] {
-            text(value, c)?;
-        }
-        for value in [node.source_display_name.as_deref(), node.source_icon.as_deref()].into_iter().flatten() {
-            text(value, c)?;
-        }
-        let ItemRef::Mask(mask_id) = node.mask.ok_or(BackingError::Integrity)? else { return Err(BackingError::Integrity) };
-        let mut matched = None;
-        for mask in &state.filter_masks {
-            c.check(1)?;
-            if mask.id == mask_id {
-                if matched.is_some() {
+        for (node_index, node) in stack.nodes.iter().enumerate() {
+            node_shape(node, c)?;
+            for previous in stack.nodes.get(..node_index).ok_or(BackingError::Length)? {
+                c.check(1)?;
+                if previous.id == node.id || previous.mask == node.mask {
                     return Err(BackingError::Integrity);
                 }
-                matched = Some(mask);
             }
-        }
-        let mask = matched.ok_or(BackingError::Integrity)?;
-        if mask.id.0 == 0 || mask.owner != node.id || mask.bounds != canvas || mask.surface.format().sample != doc.depth {
-            return Err(BackingError::Integrity);
+            for old in state.filter_stacks.get(..i).ok_or(BackingError::Length)? {
+                c.check(1)?;
+                for previous in &old.nodes {
+                    c.check(1)?;
+                    if previous.id == node.id || previous.mask == node.mask {
+                        return Err(BackingError::Integrity);
+                    }
+                }
+            }
+            for value in [&node.operation.name, &node.operation.stored_version, &node.operation.schema_epoch] {
+                text(value, c)?;
+            }
+            for value in [node.source_display_name.as_deref(), node.source_icon.as_deref()].into_iter().flatten() {
+                text(value, c)?;
+            }
+            let ItemRef::Mask(mask_id) = node.mask.ok_or(BackingError::Integrity)? else { return Err(BackingError::Integrity) };
+            let mut matched = None;
+            for mask in &state.filter_masks {
+                c.check(1)?;
+                if mask.id == mask_id {
+                    if matched.is_some() {
+                        return Err(BackingError::Integrity);
+                    }
+                    matched = Some(mask);
+                }
+            }
+            let mask = matched.ok_or(BackingError::Integrity)?;
+            if mask.id.0 == 0 || mask.owner != node.id || mask.bounds != canvas || mask.surface.format().sample != doc.depth {
+                return Err(BackingError::Integrity);
+            }
         }
     }
     for (i, mask) in state.filter_masks.iter().enumerate() {
@@ -409,8 +463,14 @@ pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Re
         let mut stack = None;
         for candidate in &state.filter_stacks {
             c.check(1)?;
-            if candidate.nodes.first().is_some_and(|n| n.id == mask.owner) {
-                stack = Some(candidate);
+            for node in &candidate.nodes {
+                c.check(1)?;
+                if node.id == mask.owner {
+                    if stack.is_some() {
+                        return Err(BackingError::Integrity);
+                    }
+                    stack = Some(candidate);
+                }
             }
         }
         let stack = stack.ok_or(BackingError::Integrity)?;

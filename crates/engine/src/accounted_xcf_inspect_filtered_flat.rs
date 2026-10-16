@@ -9,7 +9,7 @@ pub(super) fn prepare(
     owner.validate_readonly_filtered_flat_point_storage(control)?;
     let doc = owner.document();
     let state = doc.xcf_state.as_ref().ok_or(BackingError::Integrity)?;
-    if !(2..=4096).contains(&doc.layers.len())
+    if !(1..=4096).contains(&doc.layers.len())
         || state.filter_stacks.len() > 4096
         || state.filter_masks.len() > 4096
         || state.items.len() > 8192
@@ -25,12 +25,12 @@ pub(super) fn prepare(
     let mut filters_in_owner = 0usize;
     for stack in &state.filter_stacks {
         control.check(1)?;
-        if stack.nodes.len() != 1 {
+        if stack.nodes.is_empty() {
             return Err(BackingError::Integrity.into());
         }
-        filters_in_owner = filters_in_owner.checked_add(1).ok_or(BackingError::Length)?;
+        filters_in_owner = filters_in_owner.checked_add(stack.nodes.len()).filter(|n|*n<=4096).ok_or(BackingError::Length)?;
     }
-    if filters_in_owner == 0 || filters_in_owner != state.filter_masks.len() {
+    if filters_in_owner == 0 || doc.layers.len()==1 && filters_in_owner<2 || filters_in_owner != state.filter_masks.len() {
         return Err(BackingError::Integrity.into());
     }
     // Borrow the actual unit strings; effective_resolution() would clone them.

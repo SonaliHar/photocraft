@@ -58,10 +58,20 @@ fn prepare(owner: &AccountedDocument, patch: PointFilterPatch<'_>, c: &ReadContr
     }
     let stack_index = target.ok_or(BackingError::Bounds)?;
     let stack = state.filter_stacks.get(stack_index).ok_or(BackingError::Integrity)?;
-    let [node] = stack.nodes.as_slice() else { return Err(BackingError::Integrity) };
-    if node.id != patch.filter || stack.revision != patch.expected_stack_revision {
+    if stack.revision != patch.expected_stack_revision {
         return Err(BackingError::Integrity);
     }
+    let mut node_index = None;
+    for (index, node) in stack.nodes.iter().enumerate() {
+        c.check(1)?;
+        if node.id == patch.filter {
+            if node_index.replace(index).is_some() {
+                return Err(BackingError::Integrity);
+            }
+        }
+    }
+    let node_index = node_index.ok_or(BackingError::Bounds)?;
+    let node = stack.nodes.get(node_index).ok_or(BackingError::Integrity)?;
     let mut replacements = [None; 10];
     let mut changed = patch.enabled.is_some_and(|v| v != node.enabled);
     for (slot, replacement) in patch.arguments.iter().enumerate() {
@@ -100,7 +110,7 @@ fn prepare(owner: &AccountedDocument, patch: PointFilterPatch<'_>, c: &ReadContr
             filter: patch.filter,
             layer_index,
             stack_index,
-            node_index: 0,
+            node_index,
             old_revision: stack.revision,
             revision,
             replacements,
@@ -133,7 +143,7 @@ pub(super) fn apply(doc: &mut Document, plan: Plan, c: &ReadControl<'_>) -> Resu
     }
     let state = doc.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
     let stack = state.filter_stacks.get_mut(plan.stack_index).ok_or(BackingError::Integrity)?;
-    if stack.owner != ItemRef::Layer(plan.layer) || stack.revision != plan.old_revision || stack.nodes.len() != 1 {
+    if stack.owner != ItemRef::Layer(plan.layer) || stack.revision != plan.old_revision || stack.nodes.is_empty() || stack.nodes.len() > 4096 {
         return Err(BackingError::Integrity);
     }
     let node = stack.nodes.get_mut(plan.node_index).ok_or(BackingError::Integrity)?;

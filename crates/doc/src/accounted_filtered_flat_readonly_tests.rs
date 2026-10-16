@@ -362,3 +362,6 @@ mod edit_tests;
 
 #[path = "accounted_filtered_flat_readonly_source_activity_tests.rs"]
 mod source_activity_tests;
+
+#[path = "accounted_filtered_flat_readonly_ordered_tests.rs"]
+mod ordered_tests;

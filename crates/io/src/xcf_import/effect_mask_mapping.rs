@@ -2,6 +2,21 @@
 //! Storage transfer changes no source eligibility or empty-selection semantics.
 use super::*;
 
+/// Sealed mixed source prepass: actual all-node physical tiles are admitted
+/// before the existing mapper transfers or scans even the first mask.
+pub(super) fn preflight_filtered_root<P:MappingPlane>(drawable:&Drawable<P>,ctl:&Interrupt<'_>)->Result<(),IoError>{
+    if drawable.effects.len()>4096 {return Err(unsupported(drawable,"filtered mask node count"));}
+    let mut tiles=0usize;
+    for effect in &drawable.effects {
+        ctl.check().map_err(|_|IoError::Cancelled)?;
+        let plane=effect.mask.as_ref().and_then(|m|m.plane.as_ref()).ok_or_else(||unsupported(drawable,"filtered mask physical plane"))?;
+        let actual=plane.retained_filter_mask_tiles().ok_or_else(||unsupported(drawable,"filtered mask physical tile count"))?;
+        tiles=tiles.checked_add(actual).ok_or_else(||unsupported(drawable,"filtered mask aggregate tiles"))?;
+        if tiles>4096{return Err(unsupported(drawable,"filtered mask aggregate tiles"));}
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn map<P: MappingPlane>(
     drawable: &mut Drawable<P>,

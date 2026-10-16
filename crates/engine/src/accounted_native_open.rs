@@ -40,15 +40,18 @@ pub use standard_work::is_current_pure_point_work_candidate;
 /// must precede the older singleton Point hint in explicit owned native routes.
 pub fn is_current_filtered_flat_candidate(document: &photocraft_doc::Document, control: &ReadControl<'_>) -> std::result::Result<bool, BackingError> {
     control.check(1)?;
-    if document.layers.len() < 2 { return Ok(false); }
+    if document.layers.is_empty() { return Ok(false); }
     let Some(state)=&document.xcf_state else {return Ok(false)};
-    // Oversized mixed filter shapes select this refusing endpoint in O(1),
-    // rather than falling through or walking hostile unbounded metadata.
-    if document.layers.len()>4096 || state.filter_stacks.len()>4096 {
-        return Ok(!state.filter_stacks.is_empty());
+    if document.layers.len()>4096 || state.filter_stacks.len()>4096 {return Ok(!state.filter_stacks.is_empty())}
+    let mut nodes=0usize;
+    for stack in &state.filter_stacks {control.check(1)?;
+        nodes=nodes.checked_add(stack.nodes.len()).ok_or(BackingError::Length)?;
+        if nodes>4096{return Ok(true)}
     }
+    // A single retained ordinary Point node keeps its old native priority.
+    if document.layers.len()==1 && nodes<2{return Ok(false)}
     for stack in &state.filter_stacks { control.check(1)?;
-        if stack.nodes.len()>1 {return Ok(true)}
+        if document.layers.len()>1 && stack.nodes.len()>1 {return Ok(true)}
 
         for node in &stack.nodes { control.check(1)?;
             for text in [&node.operation.name,&node.operation.schema_epoch] {control.check(text.len() as u64)?;}
@@ -694,3 +697,7 @@ mod filtered_flat_workflow_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="accounted_filtered_flat_source_activity_tests.rs"]
 mod filtered_flat_source_activity_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_filtered_flat_ordered_tests.rs"]
+mod filtered_flat_ordered_tests;

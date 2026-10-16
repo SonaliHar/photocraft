@@ -2088,6 +2088,11 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 .ok_or_else(|| unsupported(d, "filter metadata overflow"))?;
             budget.charge(metadata)?;
             let canvas_group_mask = gaussian_group_domain && d.group;
+            if filtered_flat_domain {
+                let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered mask accounting"))?;
+                staged_filtered_flat::work(ctl,source_budget,(d.effects.len() as u64).checked_mul(8).ok_or_else(||unsupported(d,"filtered mask count work"))?)?;
+                effect_mask_mapping::preflight_filtered_root(d,ctl)?;
+            }
             let masks = effect_masks(
                 d,
                 owner,
@@ -2214,7 +2219,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 crate::xcf_filters::NeighborhoodDomain::Unqualified
             };
             let stack = if filtered_flat_domain {
-                crate::xcf_filters::qualified_filtered_flat_source_stack(&d.effects,&masks,owner,next_filter_id,file.version,neighborhood_domain)?
+                crate::xcf_filters::qualified_ordered_filtered_flat_source_stack(&d.effects,&masks,owner,next_filter_id,file.version)?
             } else if let Some(domain) = owned_neighborhood_domain {
                 if domain != neighborhood_domain {
                     return Err(unsupported(d, "owned neighborhood source domain mismatch"));

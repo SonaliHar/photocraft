@@ -61,6 +61,25 @@ pub fn saturation_linear_float(input: [f32; 4], saturation: f64) -> Result<[f32;
     let [_, _, _, alpha] = input;
     converted(output.map(|value| value as f32), alpha.to_bits())
 }
+/// An additive stage boundary for already derived Linear RGB Float. Finite HDR
+/// RGB is retained, alpha stays unit and exact, and scale one is still identity.
+/// This arithmetic helper grants neither original HDR intake nor graph formats.
+pub fn saturation_linear_float_derived(input: [f32; 4], saturation: f64) -> Result<[f32; 4], E> {
+    if !saturation.is_finite() || !(0.0..=10.0).contains(&saturation) {
+        return Err(E::UnsupportedConversion);
+    }
+    let [r, g, b, alpha] = input;
+    if input.iter().any(|value| !value.is_finite()) || !(0.0..=1.0).contains(&alpha) {
+        return Err(E::InvalidSample);
+    }
+    if saturation == 1.0 {
+        return Ok(input);
+    }
+    let mut colors = [f64::from(r), f64::from(g), f64::from(b)];
+    super::point::saturation_native_float(&mut colors, saturation)?;
+    let [r, g, b] = colors.map(|value| value as f32);
+    converted([r, g, b, alpha], alpha.to_bits())
+}
 /// Fixed private scratch only. Conversion requirements must be admitted by the
 /// enclosing caller before invoking this function; cancellation spans both stages.
 /// Selected RGB input is finite unit; intermediate/output RGB may be finite HDR.
@@ -77,6 +96,10 @@ pub fn evaluate(input:[f32;4],p:Parameters,actual:Context,conversions:&impl Floa
 #[cfg(test)]
 #[path = "point_vibrance_identity_tests.rs"]
 mod identity_tests;
+
+#[cfg(test)]
+#[path = "point_derived_float_stage_tests.rs"]
+mod derived_stage_tests;
 
 #[cfg(test)]
 mod tests {

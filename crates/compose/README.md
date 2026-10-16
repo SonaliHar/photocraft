@@ -1178,10 +1178,15 @@ drafts remain ignored, unrun and uncompiled; full acceptance remains deferred.
 
 ### Mixed ordinary roots with existing point filters
 
-`ReadonlyFilteredFlatPoint` is a separate actual storage class for2..4096
+`ReadonlyFilteredFlatPoint` is a separate actual storage class for 1..4096
 ordinary full-canvas origin roots, with at least one filtered root. Each root
-is plain or has one existing Semi-Flatten, Hue-Chroma or Vibrance node and its
-own saved zero effect mask. Initial precision is implicit RGB nonlinear
+is plain or has an ordered stack of existing Semi-Flatten, Hue-Chroma or Vibrance
+nodes, each with its own saved zero effect mask. There are at most 4096 nodes
+and exactly as many filter masks globally, with at most 8192 canonical root/mask
+items. A single-root document requires at least two nodes, preserving the older
+singleton route. These are explicit bounded compatibility policies; three-node
+producer observations do not establish every stack length or combination.
+Initial precision is implicit RGB nonlinear
 F32/650 or F64/750. Assigned profiles, groups, offsets, layer masks, links,
 auxiliary inputs, pixel selection and other filter stacks remain outside this
 class. Structural L1 custody is distinct from source and CURRENT qualification.
@@ -1211,14 +1216,37 @@ Native word storage and original profile/raw identity are not derived pixels.
 The compiler binds one actual current profile and global canonical relationships,
 then prepares root-scoped leaf math. Document roots are already bottom-to-top
 (the importer reverses XCF storage order once); composition uses that order.
-It reuses the existing singleton evaluator
-body without changing arithmetic or relaxing those singleton factories. Root
-Normal28 raw(0,-1,-1), exact xcf-22-normal policy and the existing mapper's
+Single-node roots reuse the existing singleton evaluator without relaxing its
+factories. Ordered roots retain canonical node order exactly as XCF and the
+public GIMP [filter list](https://developer.gimp.org/api/3.0/libgimp/method.Drawable.get_filters.html): top first. Their operative evaluation runs in reverse,
+bottom to top; this is independent of the already bottom-first root order.
+
+The ordered path declares a separate NL Float handoff compatibility policy.
+Native data is decoded once, without an initial F64 narrowing. The first enabled
+kernel uses its existing unit-input route; later kernels use additive finite
+RGB/unit-alpha routes. Existing complete stored-NL leaf tails are joined by a
+checked stack-local Float conversion immediately before each later enabled
+kernel, with its own work charge. There is no intermediate native buffer or
+implicit final Semi-Flatten cast. Every disabled node retains full preparation
+and actual incoming-value proof while passing that value through exactly;
+disabled nodes add no bridge, and an all-disabled stack preserves the wide input.
+Nonfinite or unrepresentable conversions refuse without clamping.
+
+Own same-process GIMP controls match all three F32 merged stacks byte for byte
+when applied bottom first; opposite order differs substantially. F64 sequential
+merges retain unresolved differences up to 3.219e-5, including with an explicit
+Float bridge. The declared handoff is not uniquely recovered GEGL negotiation;
+F64/Float/Babl/FMA/profile and complete numerical acceptance remain HOLD.
+All prepared stage owners, actual Parts peaks, vector capacity, fixed arrays,
+scratch and repeated validation/evaluation/conversion work remain paid together.
+Root Normal28 raw(0,-1,-1), exact xcf-22-normal policy and the existing mapper's
 Linear/Linear/Union resolution remain distinct from nonlinear sample storage.
-Masks for the three filter families retain their existing numeric-zero/default/full
-physical padding policy and4096 stored-tile bound per root. Checked aggregate
-map/default/header/native work and all real fees precede scans; a per-root cap
-does not provide an uncharged aggregate allowance.
+Masks for the three filter families retain their numeric-zero/default/full
+physical padding policy. Actual stored physical tile counts are summed across
+each root's masks and capped at 4096 before mapper transfer and physical scans;
+the earlier source qualifier's logical native/mask scans remain independently
+paid. Checked aggregate map/default/header/native work and real fees apply to
+every node and mask; per-root bounds provide no uncharged aggregate allowance.
 
 Filtered output stays wide until combined through the existing Normal/Union
 equations with actual layer opacity. It is never encoded back to native F32
@@ -1237,8 +1265,8 @@ never retry a generic endpoint. Native save, title, preview and paid inspection
 retain their original source, quota, deadline, reply and publication fences.
 Target-aware `xcf.filter.set` and `xcf.filter.enable` now edit an actual root's
 existing Semi-Flatten, Hue-Chroma or Vibrance node. The dedicated UI captures
-the document and revision, root, stack owner/revision and filter before dispatch;
-final idle, association and lock checks precede publication. The actual class
+one frame's document and revision, root, actual node index, stack owner/revision
+and filter before dispatch; final idle, association and lock checks precede publication. The actual class
 returns before generic mask, insertion or stack controls. Old Point factories
 and command scopes retain their policies.
 
@@ -1263,3 +1291,11 @@ Generic adoption, Move (including zero), insertion/removal/reorder, masks,
 pixel/selection editing and unrelated mutations remain closed. A filter edit
 candidate is a routing hint, not semantic qualification. Regression groups are
 ignored, unrun and uncompiled; behavioral and numerical acceptance is deferred.
+
+
+Accounted native save/reopen uses the owned-document format route, with its
+actual class, model census, quota/work and staged-proof limits. Separate generic
+model-capacity and standard native writer/reader visitors retain a 1024-node
+per-stack guard; static tracing does not place that guard on accounted saving.
+The 4096-node structural bound is not a large-stack runtime, throughput, memory
+or complete native-migration acceptance claim.

@@ -282,9 +282,14 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
         let state=owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
         if state.filter_stacks.len()>4096{return Err(BackingError::Length.into())}
         let mut found=None;
-        for stack in &state.filter_stacks{control.check(1)?;let [node]=stack.nodes.as_slice() else{return Err(BackingError::Integrity.into())};if node.id==id{if found.is_some(){return Err(BackingError::Integrity.into())}found=Some((stack,node));}}
+        let mut nodes=0usize;
+        for stack in &state.filter_stacks{control.check(1)?;
+            nodes=nodes.checked_add(stack.nodes.len()).filter(|n|*n<=4096).ok_or(BackingError::Length)?;
+            if stack.nodes.is_empty(){return Err(BackingError::Integrity.into())}
+            for node in &stack.nodes {control.check(1)?;if node.id==id{if found.is_some(){return Err(BackingError::Integrity.into())}found=Some((stack,node));}}
+        }
         let (stack,node)=found.ok_or_else(||bad("unknown filterId"))?;
-        control.check(owner.document().layers.len().checked_add(state.filter_stacks.len()).ok_or(BackingError::Length)? as u64)?;
+        control.check(owner.document().layers.len().checked_add(state.filter_stacks.len()).and_then(|n|n.checked_add(nodes)).ok_or(BackingError::Length)? as u64)?;
         let text=point_metadata(node,control)?;let planned=point_envelope(text)?;
         return paid_reply(owner.quota(),ReplyKind::Filter,POINT_FILTER_BOUNDS,planned,text,control,||{
             let mut reply=crate::xcf_filter_cmds::build_point_storage_inspect_reply(id,stack,node)?;

@@ -8,6 +8,8 @@ struct Target {
     revision: u64,
     root: LayerId,
     stack_revision: u64,
+    node_index:usize,
+    stack_owner:ItemRef,
     filter: FilterId,
 }
 fn idle(app: &PhotocraftApp) -> bool {
@@ -19,12 +21,14 @@ fn idle(app: &PhotocraftApp) -> bool {
     }) && app.ui.transform.is_none()
         && !app.session.has_jobs()
 }
-fn node<'a>(snapshot: &'a DocumentSnapshot, root: LayerId) -> Option<(&'a FilterNode, u64)> {
+fn node_at<'a>(snapshot: &'a DocumentSnapshot, root: LayerId,index:usize) -> Option<(&'a FilterNode, u64)> {
     let owner = snapshot.accounted().filter(|owner| owner.is_readonly_filtered_flat_point_storage())?;
     let state = snapshot.xcf_state.as_ref()?;
-    if !(2..=4096).contains(&snapshot.layers.len()) || state.filter_stacks.len() > 4096 {
+    if !(1..=4096).contains(&snapshot.layers.len()) || state.filter_stacks.len() > 4096 {
         return None;
     }
+    let total=state.filter_stacks.iter().try_fold(0usize,|n,stack|n.checked_add(stack.nodes.len()).filter(|n|*n<=4096))?;
+    if total==0 || snapshot.layers.len()==1 && total<2{return None}
     let mut roots = snapshot.layers.iter().filter(|layer| layer.id == root);
     roots.next()?;
     if roots.next().is_some() {
@@ -35,7 +39,7 @@ fn node<'a>(snapshot: &'a DocumentSnapshot, root: LayerId) -> Option<(&'a Filter
     if stacks.next().is_some() {
         return None;
     }
-    let [node] = stack.nodes.as_slice() else { return None };
+    let node=stack.nodes.get(index)?;
     photocraft_engine::filtered_flat_filter_edit_candidate(owner, root, node).then_some((node, stack.revision))
 }
 fn unlocked(snapshot: &DocumentSnapshot, root: LayerId) -> bool {
@@ -44,11 +48,15 @@ fn unlocked(snapshot: &DocumentSnapshot, root: LayerId) -> bool {
         && !ordinary.pixels
         && snapshot.xcf_state.as_ref().is_some_and(|state| state.effective_locks(ItemRef::Layer(root)).is_ok_and(|locks| !locks.content))
 }
-fn capture(app: &PhotocraftApp, root: LayerId) -> Option<Target> {
-    let state = app.session.active()?;
-    let (node, stack_revision) = node(&state.doc, root)?;
-    Some(Target { snapshot: state.doc.clone(), revision: state.revision, root, stack_revision, filter: node.id })
+fn capture_snapshot(snapshot:&DocumentSnapshot,revision:u64,root:LayerId,index:usize)->Option<Target>{
+    let (node,stack_revision)=node_at(snapshot,root,index)?;
+    Some(Target{snapshot:snapshot.clone(),revision,root,stack_revision,node_index:index,stack_owner:ItemRef::Layer(root),filter:node.id})
 }
+#[cfg(test)]
+fn capture_at(app:&PhotocraftApp,root:LayerId,index:usize)->Option<Target>{
+    let state=app.session.active()?;capture_snapshot(&state.doc,state.revision,root,index)
+}
+
 fn validate(app: &PhotocraftApp, target: &Target) -> bool {
     idle(app)
         && app.session.active().is_some_and(|state| {
@@ -56,7 +64,8 @@ fn validate(app: &PhotocraftApp, target: &Target) -> bool {
                 && state.revision == target.revision
                 && state.doc.shares_state(&target.snapshot)
                 && unlocked(&state.doc, target.root)
-                && node(&state.doc, target.root).is_some_and(|(node, revision)| node.id == target.filter && revision == target.stack_revision)
+                && target.stack_owner==ItemRef::Layer(target.root)
+                && node_at(&state.doc, target.root,target.node_index).is_some_and(|(node, revision)| node.id == target.filter && revision == target.stack_revision)
         })
 }
 fn submit(app: &mut PhotocraftApp, target: &Target, command: &str, params: serde_json::Value) {
@@ -123,17 +132,32 @@ fn controls(ui: &mut egui::Ui, node: &FilterNode, enabled_ui: bool) -> Option<(&
     }
 }
 pub(super) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, root: LayerId) {
-    let Some(target) = capture(app, root) else {
-        ui.label(tl!("Filter editing is unavailable"));
-        return;
-    };
-    let Some((node, _)) = node(&target.snapshot, root) else { return };
-    ui.separator();
-    ui.label(tl!("GIMP Filters"));
-    if let Some((command, params)) = controls(ui, node, validate(app, &target)) {
-        submit(app, &target, command, params);
+    let Some((snapshot,revision))=app.session.active().map(|state|(state.doc.clone(),state.revision)) else{return};
+    let count=snapshot.xcf_state.as_ref()
+        .and_then(|state|state.filter_stacks.iter().find(|stack|stack.owner==ItemRef::Layer(root)))
+        .map_or(0,|stack|stack.nodes.len());
+    if count==0 || count>4096 {
+        ui.label(tl!("Filter editing is unavailable"));return;
+    }
+    ui.separator();ui.label(tl!("GIMP Filters"));
+    // Canonical/public XCF node order is UI order. Operative processing order
+    // remains the independently qualified L3 pipeline's responsibility.
+    for index in 0..count {
+        let Some(target)=capture_snapshot(&snapshot,revision,root,index) else {ui.label(tl!("Filter editing is unavailable"));continue};
+        let Some((node,_))=node_at(&target.snapshot,root,index) else {continue};
+        ui.push_id((index,target.filter.0),|ui|{
+            if let Some((command,params))=controls(ui,node,validate(app,&target)) {
+                submit(app,&target,command,params);
+            }
+        });
     }
 }
+// Historical singleton-per-root test fixtures explicitly target their index0;
+// production capture/display always supplies the actual loop index above.
+#[cfg(test)]
+fn node(snapshot:&DocumentSnapshot,root:LayerId)->Option<(&FilterNode,u64)>{node_at(snapshot,root,0)}
+#[cfg(test)]
+fn capture(app:&PhotocraftApp,root:LayerId)->Option<Target>{capture_at(app,root,0)}
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "filtered_flat_point_mutation_tests.rs"]
@@ -142,3 +166,7 @@ mod tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "filtered_flat_point_source_activity_tests.rs"]
 mod source_activity;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="filtered_flat_point_ordered_tests.rs"]
+mod ordered_tests;

@@ -88,7 +88,7 @@ pub(super) struct Entry<L> {
     visible: bool,
     opacity: f64,
     descriptor: NativePlaneDescriptor,
-    point: Option<RootPointPlan>,
+    point: Option<RootPointPlan<L>>,
     _lease: Option<L>,
 }
 pub(super) struct Plan<L> {
@@ -152,11 +152,11 @@ fn compile<B: PlanBudget>(doc: &Document, header: u64, interrupt: &Interrupt<'_>
     let filtered = state.filter_stacks.len();
     let bounds = doc.bounds();
     crate::gimp_semi_flatten::positive_origin(bounds).map_err(E::Color)?;
-    if !(2..=4096).contains(&count)
+    if !(1..=4096).contains(&count)
         || filtered == 0
         || filtered > count
-        || state.filter_masks.len() != filtered
-        || state.items.len() != count.checked_add(filtered).ok_or_else(length)?
+        || state.filter_masks.len() > 4096
+        || state.items.len() > 8192
         || doc.mode != ColorMode::Rgb
         || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
         || !matches!((doc.depth, source.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750))
@@ -179,6 +179,14 @@ fn compile<B: PlanBudget>(doc: &Document, header: u64, interrupt: &Interrupt<'_>
     {
         return Err(scope());
     }
+    let mut nodes = 0usize;
+    for stack in &state.filter_stacks {
+        charge(budget, interrupt, 1)?;
+        if stack.nodes.is_empty() || stack.nodes.len() > 4096 { return Err(scope()); }
+        nodes = nodes.checked_add(stack.nodes.len()).ok_or_else(length)?;
+        if nodes > 4096 { return Err(scope()); }
+    }
+    if nodes == 0 || (count == 1 && nodes < 2) || state.filter_masks.len() != nodes || state.items.len() != count.checked_add(nodes).ok_or_else(length)? { return Err(scope()); }
     // All dynamic retained state is admitted before Vec reserve/fill or profile
     // construction; source adapters retain the full conservative bound.
     let metadata = count
@@ -188,16 +196,26 @@ fn compile<B: PlanBudget>(doc: &Document, header: u64, interrupt: &Interrupt<'_>
         .ok_or_else(length)?;
     let envelope = u64::try_from(metadata).map_err(|_| length())?.checked_add(header).and_then(|n| n.checked_add(2 * 65536)).ok_or_else(length)?;
     let lease = budget.reserve(envelope)?;
-    for stack in &state.filter_stacks {
-        charge(budget, interrupt, 1)?;
-        if stack.nodes.len() != 1 {
-            return Err(scope());
-        }
-    }
     let mut entries = Vec::new();
     entries.try_reserve_exact(count).map_err(|_| E::Allocation)?;
     if entries.capacity() > count.checked_mul(2).ok_or_else(length)? {
         return Err(E::Allocation);
+    }
+    // Preserve the original root's physical-mask allowance across all its
+    // ordered nodes; no per-node multiplier. Admit counts before census/scans.
+    for stack in &state.filter_stacks {
+        let mut root_tiles = 0usize;
+        for node in &stack.nodes {
+            charge(budget, interrupt, 1)?;
+            let Some(ItemRef::Mask(id)) = node.mask else { return Err(scope()) };
+            let mut found = None;
+            for mask in &state.filter_masks {
+                charge(budget, interrupt, 1)?;
+                if mask.id == id { if found.is_some() { return Err(scope()); } found = Some(mask); }
+            }
+            root_tiles = root_tiles.checked_add(found.ok_or_else(scope)?.surface.tile_count()).ok_or_else(length)?;
+            if root_tiles > 4096 { return Err(scope()); }
+        }
     }
     // O(1) per-mask cap and checked global actual work before physical scans.
     let mut physical_work = 0u64;
@@ -311,80 +329,81 @@ fn compile<B: PlanBudget>(doc: &Document, header: u64, interrupt: &Interrupt<'_>
             }
         }
         let (point, root_lease) = if let Some(stack) = root_stack {
-            let [node] = stack.nodes.as_slice() else { return Err(scope()) };
-            if node.id.0 == 0 {
-                return Err(scope());
-            }
-            // Exact family canonical policies are unchanged, separately selected.
-            if crate::gimp_semi_flatten::claims(node) {
-                crate::gimp_semi_flatten::canonical(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
-            } else if crate::gimp_hue_chroma::claims(node) {
-                crate::gimp_hue_chroma::canonical(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
-            } else if crate::gimp_vibrance::claims(node) {
-                crate::gimp_vibrance::canonical(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
-            } else {
-                return Err(scope());
-            }
-            for other in &state.filter_stacks {
-                charge(budget, interrupt, 1)?;
-                if other.owner != stack.owner && other.nodes.iter().any(|n| n.id == node.id || n.mask == node.mask) {
+            for node in &stack.nodes {
+                if node.id.0 == 0 {
                     return Err(scope());
                 }
-            }
-            let Some(ItemRef::Mask(mask_id)) = node.mask else { return Err(scope()) };
-            let mut mask = None;
-            for m in &state.filter_masks {
-                charge(budget, interrupt, 1)?;
-                if m.id == mask_id {
-                    if mask.is_some() {
-                        return Err(scope());
+                // Exact family canonical policies are unchanged, separately selected.
+                if crate::gimp_semi_flatten::claims(node) {
+                    crate::gimp_semi_flatten::canonical(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
+                } else if crate::gimp_hue_chroma::claims(node) {
+                    crate::gimp_hue_chroma::canonical(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
+                } else if crate::gimp_vibrance::claims(node) {
+                    crate::gimp_vibrance::canonical(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
+                } else {
+                    return Err(scope());
+                }
+                for other in &state.filter_stacks {
+                    for retained in &other.nodes {
+                        charge(budget, interrupt, 1)?;
+                        if !std::ptr::eq(retained, node) && (retained.id == node.id || retained.mask == node.mask) { return Err(scope()); }
                     }
-                    mask = Some(m)
                 }
-            }
-            let mask = mask.ok_or_else(scope)?;
-            let mut metadata = None;
-            for row in &state.items {
-                charge(budget, interrupt, 1)?;
-                if row.item == ItemRef::Mask(mask_id) {
-                    if metadata.is_some() {
-                        return Err(scope());
+                let Some(ItemRef::Mask(mask_id)) = node.mask else { return Err(scope()) };
+                let mut mask = None;
+                for m in &state.filter_masks {
+                    charge(budget, interrupt, 1)?;
+                    if m.id == mask_id {
+                        if mask.is_some() {
+                            return Err(scope());
+                        }
+                        mask = Some(m)
                     }
-                    metadata = Some(row)
                 }
-            }
-            let metadata = metadata.ok_or_else(scope)?;
-            let m = metadata.mask.as_ref().ok_or_else(scope)?;
-            if mask_id.0 == 0
-                || mask.owner != node.id
-                || mask.bounds != bounds
-                || mask.surface.format() != PixelFormat::new(ColorMode::Grayscale, doc.depth, false)
-                || metadata.parent.is_some()
-                || metadata.composition.is_some()
-                || metadata.raster_bounds != Some(bounds)
-                || !metadata.visible
-                || metadata.source_flags != 0
-                || m.owner != ItemRef::Layer(layer.id)
-                || m.bounds != bounds
-                || m.offset != [0, 0]
-                || m.outside_f64_bits != 0f64.to_bits()
-                || !m.enabled
-                || m.shown
-                || m.editing
-                || m.linked
-            {
-                return Err(scope());
-            }
-            numeric_zero(mask.surface.default_bytes(), doc.depth, interrupt)?;
-            for (coordinate, tile) in mask.surface.tiles() {
-                if tile.bytes().len() != 65536usize.checked_mul(doc.depth.bytes()).ok_or_else(length)? {
-                    return Err(length());
+                let mask = mask.ok_or_else(scope)?;
+                let mut metadata = None;
+                for row in &state.items {
+                    charge(budget, interrupt, 1)?;
+                    if row.item == ItemRef::Mask(mask_id) {
+                        if metadata.is_some() {
+                            return Err(scope());
+                        }
+                        metadata = Some(row)
+                    }
                 }
-                crate::gimp_semi_flatten::mask_tile(bounds, *coordinate).map_err(E::Color)?;
-                numeric_zero(tile.bytes(), doc.depth, interrupt)?;
+                let metadata = metadata.ok_or_else(scope)?;
+                let m = metadata.mask.as_ref().ok_or_else(scope)?;
+                if mask_id.0 == 0
+                    || mask.owner != node.id
+                    || mask.bounds != bounds
+                    || mask.surface.format() != PixelFormat::new(ColorMode::Grayscale, doc.depth, false)
+                    || metadata.parent.is_some()
+                    || metadata.composition.is_some()
+                    || metadata.raster_bounds != Some(bounds)
+                    || !metadata.visible
+                    || metadata.source_flags != 0
+                    || m.owner != ItemRef::Layer(layer.id)
+                    || m.bounds != bounds
+                    || m.offset != [0, 0]
+                    || m.outside_f64_bits != 0f64.to_bits()
+                    || !m.enabled
+                    || m.shown
+                    || m.editing
+                    || m.linked
+                {
+                    return Err(scope());
+                }
+                numeric_zero(mask.surface.default_bytes(), doc.depth, interrupt)?;
+                for (coordinate, tile) in mask.surface.tiles() {
+                    if tile.bytes().len() != 65536usize.checked_mul(doc.depth.bytes()).ok_or_else(length)? {
+                        return Err(length());
+                    }
+                    crate::gimp_semi_flatten::mask_tile(bounds, *coordinate).map_err(E::Color)?;
+                    numeric_zero(tile.bytes(), doc.depth, interrupt)?;
+                }
             }
             let (plan, fee) = RootPointPlan::prepare(stack, format, bounds, interrupt, budget)?;
-            found_filters = found_filters.checked_add(1).ok_or_else(length)?;
+            found_filters = found_filters.checked_add(stack.nodes.len()).ok_or_else(length)?;
             (Some(plan), Some(fee))
         } else {
             (None, None)
@@ -411,7 +430,7 @@ fn compile<B: PlanBudget>(doc: &Document, header: u64, interrupt: &Interrupt<'_>
         }
         entries.push(entry);
     }
-    if found_filters != filtered {
+    if found_filters != nodes {
         return Err(scope());
     }
     for (index, id) in state.selection.selected.iter().enumerate() {

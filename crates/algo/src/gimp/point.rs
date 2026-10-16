@@ -14,6 +14,23 @@
 use photocraft_color::{try_read_sample_f64, try_write_sample_f64};
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, RasterInputError, Surface, checked_region_byte_len};
+
+// Arithmetic only: callers own their input-domain and output-finiteness proof.
+// Kept shared with the derived Linear Float Vibrance stage so its declared
+// Float products and addition have exactly the same rounding schedule.
+pub(super) fn saturation_native_float(colors: &mut [f64], scale: f64) -> Result<(), RasterInputError> {
+    if colors.len() != 3 {
+        return Err(RasterInputError::LengthMismatch);
+    }
+    let r = *colors.first().ok_or(RasterInputError::LengthMismatch)? as f32;
+    let g = *colors.get(1).ok_or(RasterInputError::LengthMismatch)? as f32;
+    let b = *colors.get(2).ok_or(RasterInputError::LengthMismatch)? as f32;
+    let gray = r * f32::from_bits(0x3e63d3e1) + g * f32::from_bits(0x3f378703) + b * f32::from_bits(0x3d78405d);
+    for value in colors {
+        *value = f64::from(gray + (*value as f32 - gray) * scale as f32);
+    }
+    Ok(())
+}
 #[path = "point_alien_hsl.rs"]
 mod alien_hsl;
 #[path = "point_color_exchange.rs"]
@@ -491,13 +508,7 @@ impl PointOperation {
                 return Err(RasterInputError::UnsupportedConversion);
             }
             if colorspace == 0 {
-                let r = *colors.first().ok_or(RasterInputError::LengthMismatch)? as f32;
-                let g = *colors.get(1).ok_or(RasterInputError::LengthMismatch)? as f32;
-                let b = *colors.get(2).ok_or(RasterInputError::LengthMismatch)? as f32;
-                let gray = r * f32::from_bits(0x3e63d3e1) + g * f32::from_bits(0x3f378703) + b * f32::from_bits(0x3d78405d);
-                for value in colors {
-                    *value = f64::from(gray + (*value as f32 - gray) * scale as f32);
-                }
+                saturation_native_float(colors, scale)?;
             } else {
                 let rgb = [
                     *colors.first().ok_or(RasterInputError::LengthMismatch)?,

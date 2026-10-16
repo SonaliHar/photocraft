@@ -175,7 +175,12 @@ fn promote_with_storage<'b,'a,S:PromotionSource<'b,'a>>(source:S,budget:&'b phot
     incoming.bridge = Some(budget.reserve(BudgetKind::Index, bridge_bytes, "point owned bridge headers").map_err(accounting_error)?);
     let mut phase = phase_work(incoming.source.document(), measured.model, measured.payload, incoming.source.original_bytes().len() as u64, &budget)?;
     if filtered {
-      let n=incoming.source.document().layers.len() as u64;
+      let doc=incoming.source.document();
+      let state=doc.xcf_state.as_ref().ok_or_else(||invalid("filtered phase state"))?;
+      let mut n=add(doc.layers.len() as u64,state.items.len() as u64)?;
+      n=add(n,state.filter_masks.len() as u64)?;
+      n=add(n,state.filter_stacks.len() as u64)?;
+      for stack in &state.filter_stacks {n=add(n,stack.nodes.len() as u64)?;}
       phase=add(phase,n.checked_mul(n).and_then(|v|v.checked_mul(64)).ok_or_else(||invalid("filtered phase joins"))?)?;
     }
     prepay(&budget, phase)?;

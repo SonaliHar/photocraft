@@ -1,44 +1,41 @@
 //! Sealed source policy for mixed ordinary roots. Never a singleton facade.
 use super::*;
-use crate::xcf_filters::{NeighborhoodDomain, PointReplaceFamily};
+use crate::xcf_filters::NeighborhoodDomain;
 pub(super) fn work(i: &Interrupt<'_>, b: &photocraft_xcf::Budget<'_>, n: u64) -> Result<(), IoError> {
     i.check().map_err(|_| IoError::Cancelled)?;
     b.consume_work(n, "filtered flat source").map_err(accounting_error)?;
     i.check().map_err(|_| IoError::Cancelled)
 }
 pub(super) fn hint<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
-    if !(2..=4096).contains(&f.layers.len()) {
+    if !(1..=4096).contains(&f.layers.len()) || f.layers.len()==1 && f.layers.first().is_none_or(|d|d.effects.len()<2) {
         return Ok(false);
     }
+    let mut count=0usize;
+    let mut known=false;
     for d in &f.layers {
-        work(i, b, 8)?;
-        if let Some(e) = d.effects.first() {
-            work(i, b, e.operation.len() as u64)?;
-            if matches!(e.operation.as_str(), "gimp:semi-flatten" | "gegl:hue-chroma" | "gegl:vibrance") {
-                return Ok(true);
-            }
+        work(i,b,8)?;
+        count=count.checked_add(d.effects.len()).ok_or_else(||IoError::Unsupported("filtered flat node count".into()))?;
+        if count>4096 {return Err(IoError::Unsupported("filtered flat node count".into()));}
+        for e in &d.effects {
+            work(i,b,e.operation.len() as u64+1)?;
+            known |= matches!(e.operation.as_str(),"gimp:semi-flatten"|"gegl:hue-chroma"|"gegl:vibrance");
         }
     }
-    Ok(false)
+    Ok(known)
 }
 pub(super) fn root_domain<P>(d: &Drawable<P>, i: &Interrupt<'_>, b: &photocraft_xcf::Budget<'_>) -> Result<Option<NeighborhoodDomain>, IoError> {
     work(i, b, 16)?;
     if d.effects.is_empty() {
         return Ok(None);
     }
-    if d.effects.len() != 1 {
-        return Err(IoError::Unsupported("filtered flat singleton effect".into()));
+    if d.effects.len()>4096 {return Err(IoError::Unsupported("filtered flat node count".into()));}
+    let mut first=None;
+    for e in &d.effects {
+        work(i,b,e.operation.len() as u64+128)?;
+        let family=crate::xcf_filters::filtered_flat_source_family(e).ok_or_else(||IoError::Unsupported("filtered flat leaf envelope".into()))?;
+        if first.is_none(){first=Some(NeighborhoodDomain::PointReplace(family));}
     }
-    let e = d.effects.first().ok_or_else(|| IoError::Unsupported("filtered flat effect".into()))?;
-    work(i, b, e.operation.len() as u64 + 128)?;
-    if !crate::xcf_filters::filtered_flat_source_envelope(e) {return Err(IoError::Unsupported("filtered flat leaf envelope".into()));}
-    let family = match e.operation.as_str() {
-        "gimp:semi-flatten" => PointReplaceFamily::SemiFlatten,
-        "gegl:hue-chroma" => PointReplaceFamily::HueChroma,
-        "gegl:vibrance" => PointReplaceFamily::Vibrance,
-        _ => return Err(IoError::Unsupported("filtered flat leaf envelope".into())),
-    };
-    Ok(Some(NeighborhoodDomain::PointReplace(family)))
+    Ok(first)
 }
 pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &photocraft_xcf::Budget<'_>) -> Result<(), IoError> {
     work(i, b, 128)?;
@@ -52,7 +49,7 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
         || f.width > 262144
         || f.height > 262144
         || u64::from(f.width).checked_mul(u64::from(f.height)).is_none_or(|n| n > 1 << 30)
-        || !(2..=4096).contains(&f.layers.len())
+        || !(1..=4096).contains(&f.layers.len())
         || !f.channels.is_empty()
         || !f.paths.is_empty()
         || !f.palette.is_empty()
@@ -60,6 +57,13 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
     {
         return Err(IoError::Unsupported("filtered flat source header".into()));
     }
+    let mut nodes=0usize;
+    for d in &f.layers {
+        work(i,b,1)?;
+        nodes=nodes.checked_add(d.effects.len()).ok_or_else(||IoError::Unsupported("filtered flat node count".into()))?;
+        if nodes>4096 {return Err(IoError::Unsupported("filtered flat node count".into()));}
+    }
+    if nodes==0 || f.layers.len()==1 && nodes<2 {return Err(IoError::Unsupported("filtered flat closed topology".into()));}
     let mut filtered = 0usize;
     for d in &f.layers {
         work(i, b, 64)?;
@@ -99,10 +103,10 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
         }
         if domain.is_some() {
             filtered += 1;
-            let e = d.effects.first().ok_or_else(|| IoError::Unsupported("filtered flat node".into()))?;
-            let m = e.mask.as_ref().ok_or_else(|| IoError::Unsupported("filtered flat physical mask".into()))?;
-            if !mask(m, f, i, b)? {
-                return Err(IoError::Unsupported("filtered flat mask".into()));
+            for e in &d.effects {
+                work(i,b,8)?;
+                let m=e.mask.as_ref().ok_or_else(||IoError::Unsupported("filtered flat physical mask".into()))?;
+                if !mask(m,f,i,b)? {return Err(IoError::Unsupported("filtered flat mask".into()));}
             }
         }
     }
@@ -203,3 +207,10 @@ mod tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_filtered_flat_activity_tests.rs"]
 mod activity_tests;
+
+#[cfg(test)]
+use crate::xcf_filters::PointReplaceFamily;
+
+#[cfg(all(test, not(target_arch="wasm32")))]
+#[path="staged_filtered_flat_ordered_tests.rs"]
+mod ordered_tests;
