@@ -180,16 +180,21 @@ pub fn entries(dir: &Path) -> Vec<(String, PathBuf, PathBuf)> {
         .collect();
     stems.sort();
     stems.dedup();
-    // Names are dates and times, so the newest sort last.
-    stems.reverse();
-    stems
+    // Newest capture first, by when the file was made: names differ between PhotoCraft
+    // ("2026-10-15 18-42-07") and the system's ⌘⇧4 ("Screenshot 2026-10-15 at 18.42.07"),
+    // so they don't sort by time on their own.
+    let made = |p: &Path| std::fs::metadata(p).and_then(|m| m.created().or_else(|_| m.modified())).ok();
+    let mut list: Vec<(Option<std::time::SystemTime>, String, PathBuf, PathBuf)> = stems
         .into_iter()
         .map(|s| {
             let (pcraft, png) = (dir.join(format!("{s}.pcraft")), dir.join(format!("{s}.png")));
+            let when = made(&png).or_else(|| made(&pcraft));
             let open = if pcraft.exists() { pcraft } else { png.clone() };
-            (s, open, png)
+            (when, s, open, png)
         })
-        .collect()
+        .collect();
+    list.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    list.into_iter().map(|(_, s, open, png)| (s, open, png)).collect()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -317,7 +322,10 @@ fn handle_request(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let result = match r {
         Request::Open(path) => {
             close(app);
-            app.open_path(&path.to_string_lossy()).map(|_| ())
+            // A PNG put in the library from outside (the system's ⌘⇧4, Finder) gets its
+            // editable copy the first time it is opened, as a capture made here does.
+            let editable = if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("png")) { store(app, &path) } else { Ok(path) };
+            editable.and_then(|p| app.open_path(&p.to_string_lossy()).map(|_| ()))
         }
         Request::New => {
             close(app);
@@ -414,6 +422,21 @@ mod tests {
         let list = entries(&d);
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].1, pcraft);
+        // A screenshot the system saved here (⌘⇧4) lists first, being newer, and opening it from
+        // the library makes its editable copy.
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let system = d.join("Screenshot 2026-10-15 at 19.01.02.png");
+        std::fs::copy(&png, &system).unwrap();
+        let list = entries(&d);
+        assert_eq!(list[0].1, system, "newest first");
+        app.ui.dialogs.clear();
+        app.ui.open_dialog(crate::state::DialogKind::Command, serde_json::Map::from_iter([(MARK.to_string(), json!(true))]));
+        let ctx = egui::Context::default();
+        ctx.data_mut(|data| data.insert_temp(request_id(), Request::Open(system.clone())));
+        handle_request(&mut app, &ctx);
+        assert!(system.with_extension("pcraft").exists(), "editable copy made");
+        assert!(app.ui.dialogs.is_empty(), "the library closes");
+        assert_eq!(app.session.active().and_then(|st| st.path.clone()), Some(system.with_extension("pcraft").to_string_lossy().into_owned()));
         let _ = std::fs::remove_dir_all(d);
     }
 }
