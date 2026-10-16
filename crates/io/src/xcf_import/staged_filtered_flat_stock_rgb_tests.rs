@@ -208,7 +208,7 @@ fn declared_mixed_and_opacity_contract_preserve_each_typed_field() {
     }
 }
 #[test]
-#[ignore = "UNRUN: cheap exact2/2/10 typed parser domains, AlienHSL1/wrongtypes/duplicates/unknowns refuse, own-kind mapping and oldPointStack priority remain strict; externaldecoded contract"]
+#[ignore = "UNRUN: cheap exact2/2/10 typed parser domains, unknownAlienModel2/wrongtypes/duplicates/unknowns refuse, own-kind mapping and oldPointStack priority remain strict; externaldecoded contract"]
 fn cheap_shapes_domains_and_wrong_family_refuse() {
     let f = mixed(0, (8, 6));
     for (index, family, kind) in [(0, F::MixedTemperature, Kind::Temperature), (1, F::MixedSepia, Kind::Sepia), (2, F::MixedAlienRgb, Kind::AlienRgb)] {
@@ -238,7 +238,7 @@ fn cheap_shapes_domains_and_wrong_family_refuse() {
     sepia.arguments.iter_mut().find(|a| a.name == "srgb").unwrap().value = ArgumentValue::Float32Bits(1f32.to_bits());
     assert!(stock::kind(&sepia).is_none());
     let mut alien = f.layers[1].effects[2].clone();
-    alien.arguments.iter_mut().find(|a| a.name == "color-model").unwrap().value = ArgumentValue::Enum(1);
+    alien.arguments.iter_mut().find(|a| a.name == "color-model").unwrap().value = ArgumentValue::Enum(2);
     assert!(stock::kind(&alien).is_none());
     assert!(map::filtered_flat_source_family(&alien).is_none());
     let mut alien = f.layers[1].effects[2].clone();
@@ -288,6 +288,6 @@ fn work_and_allocation_admission_are_separate_and_inactive_proof_stays() {
     mask.layers[1].effects[2].mask.as_mut().unwrap().plane.as_mut().unwrap().bytes[0] = 1;
     assert!(qualify(&mask, &Interrupt::NONE, &budget()).is_err());
     let mut later = f.clone();
-    later.layers[1].effects[2].arguments[0].value = ArgumentValue::Enum(1);
+    later.layers[1].effects[2].arguments[0].value = ArgumentValue::Enum(2);
     assert!(qualify(&later, &Interrupt::NONE, &budget()).is_err());
 }

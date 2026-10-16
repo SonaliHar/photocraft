@@ -8,6 +8,8 @@ use photocraft_doc::{
 use photocraft_xcf::{ArgumentValue, Effect};
 #[path = "xcf_affine_mixed_source.rs"]
 pub(crate) mod mixed_affine_source;
+#[path="xcf_alien_hsl_mixed_source.rs"]
+pub(crate) mod mixed_alien_hsl_source;
 #[path="xcf_stock_rgb_mixed_source.rs"]
 pub(crate) mod mixed_stock_source;
 #[path = "xcf_filtered_flat_opacity_source.rs"]
@@ -28,6 +30,7 @@ pub(crate) enum PointReplaceFamily {
     MixedTemperature,
     MixedSepia,
     MixedAlienRgb,
+    MixedAlienHsl,
     LoadedExposure,
     MaskedExposure,
     MixedLoadedExposure,
@@ -70,6 +73,7 @@ impl PointReplaceFamily {
             Self::MixedTemperature => NeighborhoodDomain::MixedTemperature,
             Self::MixedSepia => NeighborhoodDomain::MixedSepia,
             Self::MixedAlienRgb => NeighborhoodDomain::MixedAlienRgb,
+            Self::MixedAlienHsl => NeighborhoodDomain::MixedAlienHsl,
             Self::LoadedExposure => NeighborhoodDomain::ExposureLoadedPoint,
             Self::MaskedExposure => NeighborhoodDomain::ExposureMaskedPoint,
             Self::MixedLoadedExposure => NeighborhoodDomain::ExposureLoadedMixed,
@@ -120,6 +124,7 @@ pub(crate) enum NeighborhoodDomain {
     MixedTemperature,
     MixedSepia,
     MixedAlienRgb,
+    MixedAlienHsl,
     ExposureLoadedPoint,
     ExposureMaskedPoint,
     ExposureLoadedMixed,
@@ -636,7 +641,7 @@ pub(crate) fn filtered_flat_source_family<P>(effect:&Effect<P>)->Option<PointRep
         "gimp:semi-flatten"=>Some(PointReplaceFamily::SemiFlatten),
         "gegl:color-temperature"=>Some(PointReplaceFamily::MixedTemperature),
         "gegl:sepia"=>Some(PointReplaceFamily::MixedSepia),
-        "gegl:alien-map"=>Some(PointReplaceFamily::MixedAlienRgb),
+        "gegl:alien-map"=>match mixed_stock_source::kind(effect)? {mixed_stock_source::Kind::AlienRgb=>Some(PointReplaceFamily::MixedAlienRgb),mixed_stock_source::Kind::AlienHsl=>Some(PointReplaceFamily::MixedAlienHsl),_=>None},
         "gegl:brightness-contrast"=>Some(PointReplaceFamily::MixedBrightnessContrast),
         "gegl:levels"=>Some(PointReplaceFamily::MixedGeglLevels),
         "gegl:hue-chroma"=>Some(PointReplaceFamily::HueChroma),
@@ -675,7 +680,7 @@ pub(crate) fn qualified_filtered_flat_source_stack<P>(
         NeighborhoodDomain::PointReplace(PointReplaceFamily::MixedGeglLevels)=>"gegl:levels",
         NeighborhoodDomain::PointReplace(PointReplaceFamily::MixedTemperature)=>"gegl:color-temperature",
         NeighborhoodDomain::PointReplace(PointReplaceFamily::MixedSepia)=>"gegl:sepia",
-        NeighborhoodDomain::PointReplace(PointReplaceFamily::MixedAlienRgb)=>"gegl:alien-map",
+        NeighborhoodDomain::PointReplace(PointReplaceFamily::MixedAlienRgb)|NeighborhoodDomain::PointReplace(PointReplaceFamily::MixedAlienHsl)=>"gegl:alien-map",
         _=>return Err(IoError::Unsupported("mixed source filter domain".into())),
     };
     if effects.len()!=1 || effects.first().is_none_or(|e|e.operation!=operation||!filtered_flat_source_envelope(e)){
@@ -751,9 +756,10 @@ fn qualified_stack_with_activation<P>(
         let mixed_temperature=domain==NeighborhoodDomain::MixedTemperature;
         let mixed_sepia=domain==NeighborhoodDomain::MixedSepia;
         let mixed_alien_rgb=domain==NeighborhoodDomain::MixedAlienRgb;
-        let mixed_stock=mixed_temperature||mixed_sepia||mixed_alien_rgb;
+        let mixed_alien_hsl=domain==NeighborhoodDomain::MixedAlienHsl;
+        let mixed_stock=mixed_temperature||mixed_sepia||mixed_alien_rgb||mixed_alien_hsl;
         if mixed_stock && (!generic_replace||!mixed_source||!mixed_envelope(effect)
-            || mixed_stock_source::kind(effect)!=Some(if mixed_temperature{mixed_stock_source::Kind::Temperature}else if mixed_sepia{mixed_stock_source::Kind::Sepia}else{mixed_stock_source::Kind::AlienRgb})) {
+            || mixed_stock_source::kind(effect)!=Some(if mixed_temperature{mixed_stock_source::Kind::Temperature}else if mixed_sepia{mixed_stock_source::Kind::Sepia}else if mixed_alien_hsl{mixed_stock_source::Kind::AlienHsl}else{mixed_stock_source::Kind::AlienRgb})) {
             return Err(unsupported(effect,"mixed stock RGB source identity"));
         }
         let masked_exposure=domain==NeighborhoodDomain::ExposureMaskedPoint;
@@ -927,7 +933,7 @@ fn qualified_stack_with_activation<P>(
         let alien_hsl = domain == NeighborhoodDomain::AlienMapHslPrecision;
         let alien_map = alien_hsl || domain == NeighborhoodDomain::AlienMapPrecision;
         let alien_epoch = if alien_hsl { "xcf-22-stock-alien-map-hsl-precision-v1" } else { "xcf-22-stock-alien-map-precision-v1" };
-        if effect.operation == "gegl:alien-map" && !mixed_alien_rgb
+        if effect.operation == "gegl:alien-map" && !mixed_alien_rgb && !mixed_alien_hsl
             && (!alien_map || effects.len() != 1 || effect.version.as_deref() != Some("0:0") || effect.arguments.len() != 10)
         {
             return Err(unsupported(effect, "unqualified Alien Map owner/version/argument count"));
@@ -1161,6 +1167,7 @@ fn qualified_stack_with_activation<P>(
                     ArgumentValue::Float32Bits(bits)=>FilterValue::Number(ExactNumber::Float32Bits(*bits)),
                     ArgumentValue::Boolean(value)=>FilterValue::Bool(*value),
                     ArgumentValue::Enum(0)if mixed_alien_rgb&&argument.name=="color-model"=>FilterValue::Enum{domain:"gegl:alien-map/color-model".into(),value:0},
+                    ArgumentValue::Enum(1)if mixed_alien_hsl&&argument.name=="color-model"=>FilterValue::Enum{domain:"gegl:alien-map/color-model".into(),value:1},
                     _=>return Err(unsupported(effect,"mixed stock RGB exact storage")),
                 };
                 arguments.push(FilterArgument{name:argument.name.clone(),value});
@@ -1659,6 +1666,8 @@ fn qualified_stack_with_activation<P>(
                     photocraft_compose::COLOR_TEMPERATURE_MIXED_EPOCH
                 } else if mixed_sepia {
                     photocraft_compose::SEPIA_MIXED_EPOCH
+                } else if mixed_alien_hsl {
+                    photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH
                 } else if mixed_alien_rgb {
                     photocraft_compose::ALIEN_MAP_RGB_MIXED_EPOCH
                 } else if masked_exposure {
@@ -1780,6 +1789,8 @@ fn qualified_stack_with_activation<P>(
                     photocraft_compose::COLOR_TEMPERATURE_MIXED_EPOCH
                 } else if mixed_sepia {
                     photocraft_compose::SEPIA_MIXED_EPOCH
+                } else if mixed_alien_hsl {
+                    photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH
                 } else if mixed_alien_rgb {
                     photocraft_compose::ALIEN_MAP_RGB_MIXED_EPOCH
                 } else if masked_exposure {

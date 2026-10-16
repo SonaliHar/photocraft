@@ -1,4 +1,4 @@
-//! Paid mixed adapters for three exact stock RGB kernels; no ordinary Point alias.
+//! Paid mixed adapters for exact stock RGB and checked-finite HSL kernels; no ordinary Point alias.
 use crate::{
     backed_normal::BackedNormalError as E,
     backed_stock_point_context::PlanBudget,
@@ -21,6 +21,7 @@ use photocraft_raster::{
 pub const COLOR_TEMPERATURE_EPOCH: &str = "xcf22-gegl-color-temperature-mixed-float-v1";
 pub const SEPIA_EPOCH: &str = "xcf22-gegl-sepia-mixed-float-v1";
 pub const ALIEN_MAP_RGB_EPOCH: &str = "xcf22-gegl-alien-map-rgb-mixed-float-v1";
+pub const ALIEN_MAP_HSL_EPOCH: &str = "xcf22-gegl-alien-map-hsl-mixed-checked-finite-v1";
 pub(crate) const CANONICAL_WORK: u64 = 4096;
 pub(crate) const PIXEL_SCRATCH_BYTES: u64 = 512;
 const INPUT_WORK: u64 = 128;
@@ -45,13 +46,14 @@ pub enum Kind {
     ColorTemperature,
     Sepia,
     AlienRgb,
+    AlienHsl,
 }
 impl Kind {
     pub fn operation_name(self) -> &'static str {
         match self {
             Self::ColorTemperature => "gegl:color-temperature",
             Self::Sepia => "gegl:sepia",
-            Self::AlienRgb => "gegl:alien-map",
+            Self::AlienRgb | Self::AlienHsl => "gegl:alien-map",
         }
     }
     pub fn epoch(self) -> &'static str {
@@ -59,6 +61,7 @@ impl Kind {
             Self::ColorTemperature => COLOR_TEMPERATURE_EPOCH,
             Self::Sepia => SEPIA_EPOCH,
             Self::AlienRgb => ALIEN_MAP_RGB_EPOCH,
+            Self::AlienHsl => ALIEN_MAP_HSL_EPOCH,
         }
     }
     pub fn version(self) -> &'static str {
@@ -138,11 +141,39 @@ impl AlienRgbParameters {
         (self.frequency.map(|w| f64::from(f32::from_bits(w))), self.phase.map(|w| f64::from(f32::from_bits(w))))
     }
 }
+/// HSL model only. Cheap shape/domain validation is not an operative HSL proof.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AlienHslParameters {
+    frequency: [u32; 3],
+    phase: [u32; 3],
+    keep: [bool; 3],
+}
+impl AlienHslParameters {
+    pub fn from_words(frequency: [u32; 3], phase: [u32; 3], keep: [bool; 3]) -> Result<Self, CompositionError> {
+        for word in frequency {
+            domain(word, 0., 20.)?;
+        }
+        for word in phase {
+            domain(word, 0., 360.)?;
+        }
+        Ok(Self { frequency, phase, keep })
+    }
+    pub fn raw_words(self) -> ([u32; 3], [u32; 3]) {
+        (self.frequency, self.phase)
+    }
+    pub fn keep(self) -> [bool; 3] {
+        self.keep
+    }
+    pub fn values(self) -> ([f64; 3], [f64; 3]) {
+        (self.frequency.map(|w| f64::from(f32::from_bits(w))), self.phase.map(|w| f64::from(f32::from_bits(w))))
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Parameters {
     ColorTemperature(TemperatureParameters),
     Sepia(SepiaParameters),
     AlienRgb(AlienRgbParameters),
+    AlienHsl(AlienHslParameters),
 }
 impl Parameters {
     pub fn kind(self) -> Kind {
@@ -150,6 +181,7 @@ impl Parameters {
             Self::ColorTemperature(_) => Kind::ColorTemperature,
             Self::Sepia(_) => Kind::Sepia,
             Self::AlienRgb(_) => Kind::AlienRgb,
+            Self::AlienHsl(_) => Kind::AlienHsl,
         }
     }
     fn operation(self) -> PointOperation {
@@ -163,7 +195,14 @@ impl Parameters {
                 let (frequency, phase) = p.values();
                 PointOperation::AlienMap { frequency, phase, keep: p.keep() }
             }
+            Self::AlienHsl(p) => {
+                let (frequency, phase) = p.values();
+                PointOperation::AlienMapHsl { frequency, phase, keep: p.keep() }
+            }
         }
+    }
+    fn scratch_bytes(self) -> u64 {
+        if matches!(self, Self::AlienHsl(_)) { 1024 } else { PIXEL_SCRATCH_BYTES }
     }
     fn working(self) -> GimpSpace {
         match self {
@@ -242,9 +281,30 @@ pub fn alien_map_rgb_parameters(args: &[FilterArgument]) -> Result<AlienRgbParam
     }
     AlienRgbParameters::from_words([word(f1)?, word(f2)?, word(f3)?], [word(p1)?, word(p2)?, word(p3)?], [boolean(k1)?, boolean(k2)?, boolean(k3)?])
 }
+pub fn alien_map_hsl_parameters(args: &[FilterArgument]) -> Result<AlienHslParameters, CompositionError> {
+    let [model, f1, f2, f3, p1, p2, p3, k1, k2, k3] = fields(
+        args,
+        [
+            "color-model",
+            "cpn-1-frequency",
+            "cpn-2-frequency",
+            "cpn-3-frequency",
+            "cpn-1-phaseshift",
+            "cpn-2-phaseshift",
+            "cpn-3-phaseshift",
+            "cpn-1-keep",
+            "cpn-2-keep",
+            "cpn-3-keep",
+        ],
+    )?;
+    if !matches!(model,FilterValue::Enum{domain,value:1}if domain.len()<=32&&domain=="gegl:alien-map/color-model") {
+        return Err(shape());
+    }
+    AlienHslParameters::from_words([word(f1)?, word(f2)?, word(f3)?], [word(p1)?, word(p2)?, word(p3)?], [boolean(k1)?, boolean(k2)?, boolean(k3)?])
+}
 pub(crate) fn claims(n: &FilterNode) -> bool {
     matches!(n.operation.name.as_str(), "gegl:color-temperature" | "gegl:sepia" | "gegl:alien-map")
-        || matches!(n.operation.schema_epoch.as_str(), COLOR_TEMPERATURE_EPOCH | SEPIA_EPOCH | ALIEN_MAP_RGB_EPOCH)
+        || matches!(n.operation.schema_epoch.as_str(), COLOR_TEMPERATURE_EPOCH | SEPIA_EPOCH | ALIEN_MAP_RGB_EPOCH | ALIEN_MAP_HSL_EPOCH)
 }
 pub(crate) fn canonical(n: &FilterNode, stored: SampleEncoding, version: u32, extent: photocraft_geom::Rect) -> Result<Parameters, CompositionError> {
     canonical_mode(n, stored, version, extent, false)
@@ -271,6 +331,7 @@ fn canonical_mode(
     let kind = match n.operation.name.as_str() {
         "gegl:color-temperature" => Kind::ColorTemperature,
         "gegl:sepia" => Kind::Sepia,
+        "gegl:alien-map" if n.operation.schema_epoch == ALIEN_MAP_HSL_EPOCH => Kind::AlienHsl,
         "gegl:alien-map" => Kind::AlienRgb,
         _ => return Err(shape()),
     };
@@ -298,6 +359,7 @@ fn canonical_mode(
         Kind::ColorTemperature => Ok(Parameters::ColorTemperature(color_temperature_parameters(&n.arguments)?)),
         Kind::Sepia => Ok(Parameters::Sepia(sepia_parameters(&n.arguments)?)),
         Kind::AlienRgb => Ok(Parameters::AlienRgb(alien_map_rgb_parameters(&n.arguments)?)),
+        Kind::AlienHsl => Ok(Parameters::AlienHsl(alien_map_hsl_parameters(&n.arguments)?)),
     }
 }
 pub struct PreparedStockRgb {
@@ -310,7 +372,7 @@ impl PreparedStockRgb {
         charge(b, i, 512)?;
         let basis = photocraft_cms::Builtin::Srgb.profile();
         let semantic = photocraft_cms::xcf_color::semantic_analytic_profile_work_ceiling(basis).map_err(|_| scope())?;
-        let header = (std::mem::size_of::<Self>() as u64).checked_add(outer).and_then(|n| n.checked_add(PIXEL_SCRATCH_BYTES + 128)).ok_or_else(length)?;
+        let header = (std::mem::size_of::<Self>() as u64).checked_add(outer).and_then(|n| n.checked_add(p.scratch_bytes() + 128)).ok_or_else(length)?;
         // prepare() calls validate()->gains(), then gains() for its cached result.
         let kernel_work = if matches!(p, Parameters::ColorTemperature(_)) { 32768 } else { 512 };
         charge(
@@ -342,6 +404,7 @@ impl PreparedStockRgb {
             Parameters::ColorTemperature(_) => 384,
             Parameters::Sepia(_) => 768,
             Parameters::AlienRgb(_) => 1536,
+            Parameters::AlienHsl(_) => 4096,
         };
         INPUT_WORK + kernel + OUTPUT_WORK + if self.parameters.working() == GimpSpace::LinearRgb { 2 * TRANSFER_WORK } else { 0 }
     }
@@ -355,8 +418,16 @@ impl PreparedStockRgb {
         let input = [rgb[0], rgb[1], rgb[2], p[3]];
         let mut output = [0.; 4];
         c.check(0).map_err(E::Backing)?;
-        if derived { self.operation.try_eval_derived_rgb_pixel(&input, &mut output) } else { self.operation.try_eval_pixel(&input, 3, &mut output) }
-            .map_err(|e| E::Color(e.into()))?;
+        if derived {
+            if matches!(self.parameters, Parameters::AlienHsl(_)) {
+                self.operation.try_eval_derived_hsl_pixel(&input, &mut output)
+            } else {
+                self.operation.try_eval_derived_rgb_pixel(&input, &mut output)
+            }
+        } else {
+            self.operation.try_eval_pixel(&input, 3, &mut output)
+        }
+        .map_err(|e| E::Color(e.into()))?;
         c.check(0).map_err(E::Backing)?;
         let rgb = self.working.convert([output[0], output[1], output[2]], false).map_err(E::Color)?;
         let out = [rgb[0], rgb[1], rgb[2], p[3]];
@@ -368,7 +439,7 @@ impl PreparedStockRgb {
         c.check(self.validation_work()).map_err(E::Backing)?;
         Self::validate_mode(p, derived)?;
         c.check(self.evaluation_work(enabled)).map_err(E::Backing)?;
-        let _scratch = q.reserve(QuotaKind::Resident, PIXEL_SCRATCH_BYTES).map_err(E::Quota)?;
+        let _scratch = q.reserve(QuotaKind::Resident, self.parameters.scratch_bytes()).map_err(E::Quota)?;
         let result = self.apply(p, enabled, derived, c)?;
         c.check(0).map_err(E::Backing)?;
         Ok(result)

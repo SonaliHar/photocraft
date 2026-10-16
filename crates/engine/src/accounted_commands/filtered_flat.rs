@@ -160,6 +160,7 @@ fn family(node: &photocraft_doc::xcf_filters::FilterNode) -> Option<u8> {
         "gegl:levels" => (7, "0:0", photocraft_compose::GEGL_LEVELS_MIXED_EPOCH),
         "gegl:color-temperature" => (8, "0:0", photocraft_compose::COLOR_TEMPERATURE_MIXED_EPOCH),
         "gegl:sepia" => (9, "0:0", photocraft_compose::SEPIA_MIXED_EPOCH),
+        "gegl:alien-map" if node.operation.schema_epoch==photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH => (11, "0:0", photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH),
         "gegl:alien-map" => (10, "0:0", photocraft_compose::ALIEN_MAP_RGB_MIXED_EPOCH),
         _ => return None,
     };
@@ -172,8 +173,8 @@ fn range(kind: u8, name: &str) -> Option<(f32, f32)> {
         (2, "saturation") => Some((0., 10.)),
         (8, "original-temperature" | "intended-temperature") => Some((1000., 12000.)),
         (9, "scale") => Some((0., 1.)),
-        (10, "cpn-1-frequency" | "cpn-2-frequency" | "cpn-3-frequency") => Some((0., 20.)),
-        (10, "cpn-1-phaseshift" | "cpn-2-phaseshift" | "cpn-3-phaseshift") => Some((0., 360.)),
+        (10|11, "cpn-1-frequency" | "cpn-2-frequency" | "cpn-3-frequency") => Some((0., 20.)),
+        (10|11, "cpn-1-phaseshift" | "cpn-2-phaseshift" | "cpn-3-phaseshift") => Some((0., 360.)),
         (6, "brightness") => Some((-3., 3.)),
         (6, "contrast") => Some((-5., 5.)),
         _ => None,
@@ -200,6 +201,7 @@ fn valid_node(node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
     if kind == 8 { return photocraft_compose::color_temperature_mixed_parameters(&node.arguments).is_ok(); }
     if kind == 9 { return photocraft_compose::sepia_mixed_parameters(&node.arguments).is_ok(); }
     if kind == 10 { return photocraft_compose::alien_map_rgb_mixed_parameters(&node.arguments).is_ok(); }
+    if kind == 11 { return photocraft_compose::alien_map_hsl_mixed_parameters(&node.arguments).is_ok(); }
     if kind == 6 { return photocraft_compose::brightness_contrast_mixed_parameters(&node.arguments).is_ok(); }
     if kind == 7 { return photocraft_compose::gegl_levels_mixed_parameters(&node.arguments).is_ok(); }
     if matches!(kind,4|5) { return node.arguments.is_empty(); }
@@ -278,13 +280,13 @@ fn target<'a>(
     }
     found.ok_or_else(|| bad("xcf.filter.set", "unknown mixed filterId"))
 }
-fn patch_limit(kind:u8)->usize {match kind {7=>4,10=>10,8|9=>2,_=>3}}
+fn patch_limit(kind:u8)->usize {match kind {7=>4,10|11=>10,8|9=>2,_=>3}}
 fn incoming(kind:u8,argument:&Argument<'_>)->bool {
-    if kind==10 && argument.name=="color-model" {
-        return argument.domain==Some("gegl:alien-map/color-model") && matches!(argument.value,PointArgumentValue::Enum(0));
+    if matches!(kind,10|11) && argument.name=="color-model" {
+        return argument.domain==Some("gegl:alien-map/color-model") && matches!(argument.value,PointArgumentValue::Enum(v) if v==if kind==10{0}else{1});
     }
     if argument.domain.is_some(){return false}
-    if (kind==9 && argument.name=="srgb") || (kind==10 && matches!(argument.name,"cpn-1-keep"|"cpn-2-keep"|"cpn-3-keep")) {
+    if (kind==9 && argument.name=="srgb") || (matches!(kind,10|11) && matches!(argument.name,"cpn-1-keep"|"cpn-2-keep"|"cpn-3-keep")) {
         return matches!(argument.value,PointArgumentValue::Bool(_));
     }
     if kind==0 {return argument.name=="color" && matches!(argument.value,PointArgumentValue::LiteralColor4F32{components,encoding:photocraft_doc::SampleEncoding::Linear|photocraft_doc::SampleEncoding::NonlinearProfile} if components.iter().all(|b|f32::from_bits(*b).is_finite()&&(0.0..=1.0).contains(&f32::from_bits(*b))))}
@@ -445,7 +447,7 @@ impl<'a> Request<'a> {
             .ok_or(BackingError::Length)?;
         lease.reconcile_capacity(actual as u64).map_err(|_| BackingError::Allocation)?;
 
-        let staged = if kind==10 {
+        let staged = if matches!(kind,10|11) {
             stage_patches::<10>(owner,&self.fields,kind,layer,stack.revision,stack.nodes.len(),self.id,self.move_to,ctl)?
         } else {
             stage_patches::<4>(owner,&self.fields,kind,layer,stack.revision,stack.nodes.len(),self.id,self.move_to,ctl)?
@@ -661,3 +663,7 @@ mod affine_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_stock_rgb_tests.rs"]
 mod stock_rgb_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="filtered_flat_hsl_tests.rs"]
+mod hsl_tests;

@@ -305,3 +305,6 @@ fn exact_role_refusal_and_unconditional_control() {
         fails[1].store(false, Ordering::Relaxed);
     }
 }
+
+#[path = "backed_filtered_flat_point_hsl_tests.rs"]
+mod hsl;

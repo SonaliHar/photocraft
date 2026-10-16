@@ -250,3 +250,7 @@ mod affine_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_filtered_flat_stock_rgb_tests.rs"]
 mod stock_rgb_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "staged_filtered_flat_hsl_tests.rs"]
+mod hsl_tests;

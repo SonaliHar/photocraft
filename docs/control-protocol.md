@@ -2845,3 +2845,61 @@ execution notes separately. All PhotoCraft tests, runtime, visual/native GUI,
 corpus, performance and final acceptance remain deferred. Matched SC002
 display<=2/255 and exact source/native/ICC/structure criteria still apply.
 Remaining HSL, masked families/topologies and other stock coverage continue.
+
+
+Mixed Alien Map HSL has a separate exact version0:0 paired identity,
+`xcf22-gegl-alien-map-hsl-mixed-checked-finite-v1`. Its ten typed fields retain
+the exact color-model Enum domain gegl:alien-map/color-model/value1, six bounded
+frequency/phase F32 words and three keep Bools. Separate cheap HSL parameter
+helpers do no rendering or preparation. RGB model0 stays fixed to its existing
+identity; cross-model patches in either direction refuse. Original singleton,
+PointStack, Gray and masked routes keep their priorities and arithmetic.
+
+The real prepared stage works in the known nonlinear Profile space. Actual
+unit-native first input passes the old strict evaluator; later finite RGB/unit
+alpha passes the additive checked HSL evaluator. It preserves the old Float
+ingress/extrema/chroma/lightness/component arithmetic and f64 reconstruction
+order. Selected saturation denominator exactly0, Float/intermediate overflow,
+nonfinite component maps or nonfinite reconstructed Float output refuse
+atomically. There is no epsilon, clamp or invented NaN recovery. Achromatic
+and mapped-zero-saturation branches remain literal; all-kept still performs
+the HSL roundtrip. This is an explicitly partial finite-derived domain.
+
+Incoming wide alpha is retained by declared compatibility. A single public
+default-space GIMP diagnostic made192 successful calls and produced NaN/Inf
+for singular/overflow controls; its F64 near-one alpha narrowed to1 in384
+outputs. That alpha behavior is not claimed equivalent here. The unavailable
+actual format getter remains a recorded HOLD. Requested public views do not
+establish internal formats, assigned profiles, XCF transport, unique rounding
+or mixed numerical acceptance. No additional GIMP run is needed to implement
+the declared checked domain.
+
+HSL receives its own4096 kernel work envelope,4480 total active/256 disabled,
+and independent1024 runtime scratch before caller/callee arrays. Preparation
+accounts for its actual inline holder/Stage/Vec/header/profile and separate
+constructor; optional1024 opacity scratch remains concurrently paid. Other
+StockRgb families retain their prior512 leaf allowance. Actual roots/paid sole-stage
+paths, enabled-only32 nonlinear Float bridges and old opacity equations remain.
+Disabled HSL retains recipe/native/default/profile/mask/input proof and wide
+pass-through; enabling must validate the complete staged program.
+
+Source and SourceOpacity admission are explicit bounded compatibility extensions
+under the existing RGBNL650/750/unit-native/originalNone/knownCurrentImplicitSrgb,
+positive-origin/topology/activity/census/default/full-physical-zero-mask caps.
+SourceOpacity still proves original raw33/group association independently.
+No assigned-profile, source HDR/Gray, offsets, nonzero-mask or general HDR-HSL
+grant follows. Actual model1 mapping preserves all typed words and source order.
+Existing commands select the real paid ten-slot array for the retained HSL
+target and keep complete OLD/history/STAGED/lock/source/publication fences.
+Captured fixed-HSL controls preserve passive words/order and reuse opacity and
+stale-target handling. Native mixed storage adds no field/version; exact new
+epoch hints select the strict mixed route for unmarked sole HSL owners; its
+existing Source storage factory refuses that topology. Marked CURRENT storage
+continues sole owners, and selected failures never retry through generic Point.
+
+Ignored numeric/backend/source/command/request/native workflow contracts remain
+UNRUN and uncompiled. Static reviews and desktop/WebAssembly production checks
+are separate from deferred numerical/native GUI/visual/corpus/performance and
+parent/final acceptance. SC002 matched display<=2/255 and exact source/native/
+ICC/structure criteria remain. Other masked families/topologies and stock work
+continue; this checkpoint does not complete full XCF support.

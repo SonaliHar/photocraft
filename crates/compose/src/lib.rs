@@ -115,7 +115,7 @@ pub use gimp_exposure::{LOADED_POINT_EPOCH as EXPOSURE_LOADED_POINT_EPOCH, LOADE
 mod gimp_masked_exposure;
 pub use gimp_masked_exposure::{EPOCH as EXPOSURE_MASKED_EPOCH, parameters as masked_exposure_parameters};
 mod gimp_stock_rgb;
-pub use gimp_stock_rgb::{COLOR_TEMPERATURE_EPOCH as COLOR_TEMPERATURE_MIXED_EPOCH, SEPIA_EPOCH as SEPIA_MIXED_EPOCH, ALIEN_MAP_RGB_EPOCH as ALIEN_MAP_RGB_MIXED_EPOCH, Kind as StockRgbKind, Parameters as MixedStockRgbParameters, TemperatureParameters, SepiaParameters, AlienRgbParameters, PreparedStockRgb, color_temperature_parameters as color_temperature_mixed_parameters, sepia_parameters as sepia_mixed_parameters, alien_map_rgb_parameters as alien_map_rgb_mixed_parameters};
+pub use gimp_stock_rgb::{COLOR_TEMPERATURE_EPOCH as COLOR_TEMPERATURE_MIXED_EPOCH, SEPIA_EPOCH as SEPIA_MIXED_EPOCH, ALIEN_MAP_RGB_EPOCH as ALIEN_MAP_RGB_MIXED_EPOCH, ALIEN_MAP_HSL_EPOCH as ALIEN_MAP_HSL_MIXED_EPOCH, Kind as StockRgbKind, Parameters as MixedStockRgbParameters, TemperatureParameters, SepiaParameters, AlienRgbParameters, AlienHslParameters, PreparedStockRgb, color_temperature_parameters as color_temperature_mixed_parameters, sepia_parameters as sepia_mixed_parameters, alien_map_rgb_parameters as alien_map_rgb_mixed_parameters, alien_map_hsl_parameters as alien_map_hsl_mixed_parameters};
 mod gimp_affine;
 pub use gimp_affine::{BRIGHTNESS_CONTRAST_EPOCH as BRIGHTNESS_CONTRAST_MIXED_EPOCH, GEGL_LEVELS_EPOCH as GEGL_LEVELS_MIXED_EPOCH, Kind as AffineKind, Parameters as MixedAffineParameters, BrightnessContrastParameters, GeglLevelsParameters, PreparedAffine, brightness_contrast_parameters as brightness_contrast_mixed_parameters, gegl_levels_parameters as gegl_levels_mixed_parameters};
 mod gimp_invert;

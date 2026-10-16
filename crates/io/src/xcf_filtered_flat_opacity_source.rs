@@ -61,7 +61,11 @@ pub(crate) fn family<P>(effect: &Effect<P>) -> Option<PointReplaceFamily> {
         "gimp:semi-flatten" => Some(PointReplaceFamily::SemiFlatten),
         "gegl:color-temperature" => Some(PointReplaceFamily::MixedTemperature),
         "gegl:sepia" => Some(PointReplaceFamily::MixedSepia),
-        "gegl:alien-map" => Some(PointReplaceFamily::MixedAlienRgb),
+        "gegl:alien-map" => match mixed_stock_source::kind(effect)? {
+            mixed_stock_source::Kind::AlienRgb => Some(PointReplaceFamily::MixedAlienRgb),
+            mixed_stock_source::Kind::AlienHsl => Some(PointReplaceFamily::MixedAlienHsl),
+            _ => None,
+        },
         "gegl:brightness-contrast" => Some(PointReplaceFamily::MixedBrightnessContrast),
         "gegl:levels" => Some(PointReplaceFamily::MixedGeglLevels),
         "gegl:hue-chroma" => Some(PointReplaceFamily::HueChroma),

@@ -97,6 +97,7 @@ pub(super) fn reference(p: Parameters, input: [f64; 4]) -> [f64; 4] {
                 }
             }
         }
+        Parameters::AlienHsl(_) => panic!("separate HSL reference contract"),
     }
     if p.working() == GimpSpace::LinearRgb {
         for x in &mut out[..3] {
@@ -228,3 +229,6 @@ fn actual_fees_work_and_cleanup() {
     assert!(matches!(PreparedStockRgb::prepare(temp(6500., 4000.), 128, &Interrupt::NONE, &mut b), Err(E::Backing(BackingError::Work))));
     assert_eq!(q.usage().unwrap(), base);
 }
+
+#[path = "gimp_stock_rgb_hsl_tests.rs"]
+mod hsl;

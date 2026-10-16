@@ -22,7 +22,13 @@ fn stock_rgb_native_epochs_keep_the_actual_mixed_class() {
         assert!(wrong.add_owned_native_point_archive(fixture::unmarked_archive(&owner), "stock.pcraft", None, &fixture::ctl()).is_err());
         assert!(wrong.documents().is_empty());
         let mut right = Session::new();
-        right.add_owned_native_filtered_flat_archive(fixture::unmarked_archive(&owner), "stock.pcraft", None, &fixture::ctl()).unwrap();
+        if kind.is_some() {
+            assert!(right.add_owned_native_filtered_flat_archive(fixture::unmarked_archive(&owner), "stock.pcraft", None, &fixture::ctl()).is_err());
+            assert!(right.documents().is_empty());
+            right.add_owned_native_filtered_flat_archive(fixture::archive(&owner), "stock.pcraft", None, &fixture::ctl()).unwrap();
+        } else {
+            right.add_owned_native_filtered_flat_archive(fixture::unmarked_archive(&owner), "stock.pcraft", None, &fixture::ctl()).unwrap();
+        }
         let current = &right.active().unwrap().doc;
         assert!(current.accounted().unwrap().is_readonly_filtered_flat_point_storage());
         fixture::storage(owner.document(), current);

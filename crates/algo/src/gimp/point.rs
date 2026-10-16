@@ -45,6 +45,8 @@ mod temperature;
 mod native_pixel;
 #[path = "point/derived_rgb.rs"]
 mod derived_rgb;
+#[path = "point/derived_hsl.rs"]
+mod derived_hsl;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PointOperation {

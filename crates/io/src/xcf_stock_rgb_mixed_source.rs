@@ -5,6 +5,7 @@ pub(crate) enum Kind {
     Temperature,
     Sepia,
     AlienRgb,
+    AlienHsl,
 }
 pub(crate) fn parsing_work(operation: &str) -> u64 {
     match operation {
@@ -85,6 +86,12 @@ pub(crate) fn kind<P>(e: &Effect<P>) -> Option<Kind> {
         }
         photocraft_compose::SepiaParameters::from_words(scale?, srgb?).ok()?;
         return Some(Kind::Sepia);
+    }
+    // Fixed10-field dispatch only. The HSL helper rechecks unique model1 and
+    // the complete shape; never run an RGB constructor as a failed HSL probe.
+    if e.arguments.iter().any(|a| a.name == "color-model" && matches!(a.value, ArgumentValue::Enum(1))) {
+        super::mixed_alien_hsl_source::parameters(e)?;
+        return Some(Kind::AlienHsl);
     }
     let (mut model, mut frequency, mut phase, mut keep) = (false, [None; 3], [None; 3], [None; 3]);
     for a in &e.arguments {
