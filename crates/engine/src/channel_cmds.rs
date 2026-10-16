@@ -990,8 +990,17 @@ fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let p = &targeted;
     // Composite and colour channels load their luminosity / values, as ⌘-clicking them does.
-    let plane = source(s, p, cmd, true)?.into_iter().next().ok_or_else(|| bad(cmd, "the channel has no pixels"))?;
+    let mut plane = source(s, p, cmd, true)?.into_iter().next().ok_or_else(|| bad(cmd, "the channel has no pixels"))?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    // A spot channel loads its ink, the black pixels, as ⌘-clicking it does in Photoshop (#6123).
+    if p.get("document").is_none()
+        && let Some(ChanRef::Alpha(i)) = p.get("channel").and_then(|v| parse_ref(v, doc))
+        && doc.channels.get(i).is_some_and(|c| c.spot.is_some())
+    {
+        for v in plane.iter_mut() {
+            *v = AlphaChannel::ink(*v);
+        }
+    }
     let label = match p.get("channel").and_then(|v| parse_ref(v, doc)) {
         Some(ChanRef::Transparency) => "Load Transparency",
         Some(ChanRef::LayerMask) => "Load Layer Mask",
@@ -1132,14 +1141,14 @@ fn new_spot(s: &mut Session, p: &Value) -> Result<Value> {
     let i = s.edit("New Spot Channel", |doc, _| {
         let area = doc.bounds();
         let fmt = channel_format(doc);
-        // Stored as the Channels panel shows it (#6123): the selection is ink, black; the rest
-        // paper, white.
-        let surface = if from_sel && doc.selection.is_some() {
-            let ink: Vec<f32> = sel::mask_from_surface(doc.selection.as_ref(), area).iter().map(|m| 1.0 - m).collect();
-            AlphaChannel::on_paper(&plane_surface(&ink, area, fmt), area)
-        } else {
-            AlphaChannel::paper(fmt)
+        // Stored as the Channels panel shows it (#6123): the selection is ink, black, and the rest
+        // paper; with no selection the whole canvas is ink, as in Photoshop. Space added to the
+        // canvas later is paper.
+        let ink: Vec<f32> = match doc.selection.as_ref().filter(|_| from_sel) {
+            Some(sel) => sel::mask_from_surface(Some(sel), area).iter().map(|m| 1.0 - m).collect(),
+            None => vec![0.0; area.width() as usize * area.height() as usize],
         };
+        let surface = AlphaChannel::on_paper(&plane_surface(&ink, area, fmt), area);
         let name = name.clone().unwrap_or_else(|| next_alpha_name(doc, "Spot Color"));
         doc.channels.push(AlphaChannel { spot: Some((color, solidity)), ..AlphaChannel::new(name, surface) });
         Ok(doc.channels.len() - 1)

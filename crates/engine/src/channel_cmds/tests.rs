@@ -918,31 +918,55 @@ fn layers_panel_mask_target_isolates_the_curve_channel() {
     assert_eq!((row.name.as_str(), row.gray), ("Quick Mask", Some(GraySurface::QuickMask)));
 }
 
-/// #6123: spot channels are stored as Photoshop shows them, black = solid ink. A black fill adds
-/// ink, which Merge Spot Channel prints; space added to the canvas is paper, at every depth.
+/// #6123: spot channels are stored as Photoshop shows them, black = solid ink (checked in
+/// Photoshop): a new spot channel without a selection is all ink, painting white takes the ink
+/// away, Merge Spot Channel prints what is left, and space added to the canvas is paper, at every
+/// depth.
 #[test]
-fn spot_channels_take_black_as_ink_and_grow_as_paper() {
+fn spot_channels_take_white_as_paper_and_grow_as_paper() {
     for depth in [8, 16, 32] {
         let mut s = session_depth(depth);
-        let r = s.execute("channel.newSpot", json!({"color": "#ff00ff", "solidity": 100, "fromSelection": false})).unwrap();
+        let r = s.execute("channel.newSpot", json!({"color": "#ff00ff", "solidity": 100})).unwrap();
         let i = r["channel"].as_u64().unwrap() as usize;
-        assert_eq!(chan(&s, i, 7, 7), 1.0, "{depth}: a new spot channel is paper");
-        // Black inside a selection is ink.
+        assert_eq!((chan(&s, i, 7, 7), chan(&s, i, 30, 15)), (0.0, 0.0), "{depth}: a new spot channel is all ink");
+        // White inside a selection takes the ink away.
         rect(&mut s, 5, 5, 10, 5, "replace");
-        s.execute("paint.bucket", json!({"x": 7, "y": 7, "color": "#000000", "target": {"channel": i}, "tolerance": 0})).unwrap();
+        s.execute("paint.bucket", json!({"x": 7, "y": 7, "color": "#ffffff", "target": {"channel": i}, "tolerance": 0})).unwrap();
         s.execute("select.deselect", json!({})).unwrap();
-        assert_eq!((chan(&s, i, 7, 7), chan(&s, i, 30, 15)), (0.0, 1.0), "{depth}: ink inside, paper outside");
-        // The canvas grows by 10 px on every side: the new space is paper, the ink moves with it.
+        assert_eq!((chan(&s, i, 7, 7), chan(&s, i, 30, 15)), (1.0, 0.0), "{depth}: paper inside, ink outside");
+        // The canvas grows by 10 px on every side: the new space is paper, the rest moves with it.
         s.execute("image.canvasSize", json!({"width": 60, "height": 40, "anchor": "center"})).unwrap();
         assert_eq!(chan(&s, i, 1, 1), 1.0, "{depth}: added space holds no ink");
-        assert_eq!(chan(&s, i, 17, 17), 0.0, "{depth}: the ink moved with the canvas");
+        assert_eq!((chan(&s, i, 17, 17), chan(&s, i, 40, 25)), (1.0, 0.0), "{depth}: the channel moved with the canvas");
         // Merge Spot Channel prints solid magenta where the channel is black, nothing elsewhere.
         s.execute("channel.mergeSpot", json!({"channel": i})).unwrap();
-        let ink = px(&s, 17, 17);
+        let ink = px(&s, 40, 25);
         assert!((ink[0] - 1.0).abs() < 0.01 && ink[1] < 0.01 && (ink[2] - 1.0).abs() < 0.01, "{depth}: {ink:?}");
-        let paper = px(&s, 40, 30);
-        assert!(paper[..3].iter().all(|v| (v - 1.0).abs() < 0.01), "{depth}: {paper:?}");
+        for (x, y) in [(17, 17), (1, 1)] {
+            let paper = px(&s, x, y);
+            assert!(paper[..3].iter().all(|v| (v - 1.0).abs() < 0.01), "{depth}: ({x},{y}) {paper:?}");
+        }
     }
+}
+
+/// ⌘-clicking a spot channel (Load Selection) selects its ink, the black pixels, as Photoshop
+/// does; an alpha channel still selects its white.
+#[test]
+fn loading_a_spot_channel_selects_its_ink() {
+    let mut s = session();
+    rect(&mut s, 0, 0, 10, 10, "replace");
+    let r = s.execute("channel.newSpot", json!({"color": "#00ff00"})).unwrap();
+    let spot = r["channel"].as_u64().unwrap() as usize;
+    s.execute("channel.new", json!({"fill": "selection"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    assert_eq!((chan(&s, spot, 5, 5), chan(&s, spot, 20, 15)), (0.0, 1.0));
+    for target in [json!(spot), json!("Spot Color 1")] {
+        s.execute("select.loadSelection", json!({"channel": target})).unwrap();
+        assert_eq!((sel_at(&s, 5, 5), sel_at(&s, 20, 15)), (1.0, 0.0), "the ink is selected ({target})");
+        s.execute("select.deselect", json!({})).unwrap();
+    }
+    s.execute("select.loadSelection", json!({"channel": spot + 1})).unwrap();
+    assert_eq!((sel_at(&s, 5, 5), sel_at(&s, 20, 15)), (1.0, 0.0), "an alpha channel's white is selected");
 }
 
 /// Channel Options keeps a channel's values when it becomes a spot channel or an alpha channel
