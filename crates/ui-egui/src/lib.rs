@@ -143,6 +143,7 @@ pub mod new_doc_ui;
 pub mod new_guide_ui;
 pub mod new_layer_ui;
 pub mod notices;
+pub mod nudge_bundle;
 mod numeric_expression;
 pub mod object_finder;
 mod opacity_keys;
@@ -704,6 +705,8 @@ pub struct PhotocraftApp {
     pub(crate) move_mods: move_mods::MoveDrag,
     /// Cached document for a modal text Style Options color preview.
     pub(crate) text_style_preview: Option<type_panels_ui::color_picker::Preview>,
+    /// The run of arrow-key nudges that share one History state (nudge_bundle).
+    pub(crate) nudge_bundle: nudge_bundle::NudgeBundle,
     /// Live Layer Style dialog preview: (key over revision + style fields, preview or validation error).
     pub(crate) style_preview: Option<(u64, Result<std::sync::Arc<Document>, String>)>,
     pub(crate) solid_fill_preview: Option<solid_fill_ui::Preview>,
@@ -800,6 +803,12 @@ pub struct PhotocraftApp {
     /// `jobs_ui`). The desktop app turns it on; off (the default), everything runs inline as
     /// before, which tests and scripts rely on.
     pub background_jobs: bool,
+    /// Shortest time between frames (ms), or `None` for no cap. A present mode that doesn't wait
+    /// for the display (Low-Latency Drawing) would otherwise redraw as fast as it can while
+    /// anything keeps requesting repaints (a drag hovering, autoscroll, Liquify held still).
+    /// After #4472 (astigmata).
+    pub min_frame_ms: Option<f64>,
+    last_frame_start_ms: f64,
     /// Background job bookkeeping: opening tabs, control replies waiting on a job.
     pub jobs: jobs_ui::JobsUi,
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
@@ -905,6 +914,7 @@ impl PhotocraftApp {
             clip_read_for_paste: false,
             transform_preview: None,
             move_mods: Default::default(),
+            nudge_bundle: Default::default(),
             style_preview: None,
             text_style_preview: None,
             solid_fill_preview: None,
@@ -935,6 +945,8 @@ impl PhotocraftApp {
             allow_close: false,
             stylus: Default::default(),
             background_jobs: false,
+            min_frame_ms: None,
+            last_frame_start_ms: 0.0,
             jobs: Default::default(),
             #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
             live_tokens: theme::live::LiveTokens::from_env(),
@@ -1044,6 +1056,21 @@ impl PhotocraftApp {
         {
             authorize(id, &params)?;
         }
+        // A new layer while Free Transform is open applies the transform first, as Photoshop does
+        // (#5667): History reads the transform (or Place Embedded), then New Layer. Only for a
+        // command that can run; a transform refused or still being applied keeps the box open and
+        // the command doesn't run.
+        if photocraft_engine::PRECHECKED.contains(&id) && self.ui.transform.is_some() {
+            // Bad params or a command that can't run leave the box as it is.
+            self.session.precheck(id, &params).map_err(|e| e.to_string())?;
+            transform_tool::commit(self);
+            if transform_tool::committing(self).is_some() {
+                return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
+            }
+            if self.ui.transform.is_some() {
+                return Err(if self.ui.status.is_empty() { tl!("The transform couldn't be applied.").into() } else { self.ui.status.clone() });
+            }
+        }
         if let Some(result) = panel_docking::command(self, id, &params) {
             return result;
         }
@@ -1086,6 +1113,10 @@ impl PhotocraftApp {
             id,
             "layer.vectorMask.add" | "layer.vectorMask.fromPath" | "layer.vectorMask.revealAll" | "layer.vectorMask.hideAll" | "layer.vectorMask.currentPath"
         ) && on_active_layer;
+        // A draft Pen path belongs to the current document, not the one about to be created.
+        if id == "file.new" && self.ui.pen.is_some() {
+            vector_ui::pen_commit(self, false);
+        }
         let r = if id == "actions.play" {
             actions::play(self, &params)
         } else if photocraft_engine::actions_cmds::shell_view_command(id) {
@@ -1755,6 +1786,20 @@ impl PhotocraftApp {
     }
 }
 
+impl PhotocraftApp {
+    /// Wait out the rest of [`Self::min_frame_ms`] since the last frame started.
+    fn cap_frame_rate(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(min) = self.min_frame_ms.filter(|m| m.is_finite() && *m > 0.0) {
+            let wait = min.min(100.0) - (gpu_canvas::now_ms() - self.last_frame_start_ms);
+            if wait > 0.0 {
+                std::thread::sleep(std::time::Duration::from_secs_f64(wait / 1000.0));
+            }
+        }
+        self.last_frame_start_ms = gpu_canvas::now_ms();
+    }
+}
+
 impl eframe::App for PhotocraftApp {
     fn on_exit(&mut self) {
         if let Err(err) = tool_memory::save_on_exit(self) {
@@ -1763,10 +1808,12 @@ impl eframe::App for PhotocraftApp {
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.cap_frame_rate();
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Caps Lock state read from the OS once per frame (see `Services::caps_lock`): the canvas
         // cursor block needs it before the frame renders. `None` (Wayland/web) keeps `false`.
         self.caps_lock = self.services.caps_lock.as_mut().is_some_and(|f| f());
+        tool_cursor::set_wayland(ctx, self.services.is_wayland);
         if !self.styled {
             Self::setup_context(ctx, self.ui.theme);
             self.styled = true;
@@ -1835,6 +1882,9 @@ impl eframe::App for PhotocraftApp {
         if !dropped.is_empty() {
             let at = self.services.cursor_pos.as_mut().and_then(|f| f(ctx));
             self.open_dropped(ctx, dropped, at);
+            // Files dragged in from another app's window: PhotoCraft comes to the front and takes
+            // the keyboard, as Photoshop does, instead of staying behind the source (#5687).
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
         }
         self.place_next_dropped(ctx);
         // The control transport wakes the UI on arrival (ctx.request_repaint); only poll while a
@@ -1963,7 +2013,7 @@ impl eframe::App for PhotocraftApp {
         notices::show(self, &ctx);
         gpu_status::show_fallback(self, &ctx);
         kys_import::show_offer(self, &ctx);
-        if chrome && self.ui.panels.menu_bar && self.custom_titlebar && !self.ui.dialogs.is_empty() {
+        if self.titlebar_modal_drag(chrome) {
             titlebar::modal_drag_overlay(&ctx);
         }
         if self.custom_titlebar {
@@ -1996,7 +2046,10 @@ impl eframe::App for PhotocraftApp {
         if self.stroke_trace.enabled() {
             self.stroke_trace.canvas(self.perf.frame_refresh_ms);
             let info = &self.perf.gpu_info;
-            self.stroke_trace.end_frame(ui_ms, self.live_stroke.is_some(), || format!("{} {}", info.backend, info.adapter).trim().to_string());
+            self.stroke_trace.end_frame(ui_ms, self.live_stroke.is_some(), || {
+                let gpu = format!("{} {}", info.backend, info.adapter).trim().to_string();
+                if info.present.is_empty() { gpu } else { format!("{gpu}, {}", info.present) }
+            });
         }
         // Synthetic input is injected one press/release step per frame: keep frames coming until
         // the queue is empty, then release control replies waiting on it.
@@ -2034,6 +2087,14 @@ fn read_dropped(_f: &dyn egui::DroppedFile) -> Result<Vec<u8>, String> {
 }
 
 impl PhotocraftApp {
+    /// Whether the title bar's free gap gets the drag overlay this frame: the app draws its title
+    /// strip (`chrome`: not hidden by the screen mode) and a dialog's modal layer covers it. Not
+    /// only with the custom title bar: on macOS the strip under the traffic lights is the window's
+    /// title bar too, and an open dialog (Embedded Profile Mismatch…) left it undraggable (#5826).
+    pub(crate) fn titlebar_modal_drag(&self, chrome: bool) -> bool {
+        chrome && self.ui.panels.menu_bar && !self.ui.dialogs.is_empty()
+    }
+
     /// `params` aimed at the active layer's mask (`"target":"mask"`) when the Layers panel targets
     /// it and command `id` edits the target (adjustments, filters, fills) without naming one:
     /// ⌘I then inverts the mask, as in Photoshop (#780). A targeted alpha channel or Quick Mask
@@ -2602,6 +2663,9 @@ mod profile_prompt_tests;
 mod input_tests;
 
 #[cfg(test)]
+mod empty_workspace_tests;
+
+#[cfg(test)]
 mod pen_variants_tests;
 
 #[cfg(test)]
@@ -2619,6 +2683,10 @@ mod pixel_aspect_tests;
 #[cfg(test)]
 mod transform_fx_tests;
 
+#[cfg(test)]
+mod layer_props_ui_tests;
+#[cfg(test)]
+mod transform_switch_tests;
 #[cfg(test)]
 mod transform_undo_tests;
 
@@ -2680,6 +2748,9 @@ mod marquee_tests;
 
 #[cfg(test)]
 mod canvas_menu_tests;
+
+#[cfg(test)]
+mod nudge_bundle_tests;
 
 #[cfg(test)]
 mod caps_lock_tests;
@@ -2982,3 +3053,6 @@ mod channel_tint_tests {
         assert_eq!(channel_tint(Rgb, 0, 77, false), Color32::from_gray(77));
     }
 }
+
+#[cfg(test)]
+mod options_hit_area_tests;
