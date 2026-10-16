@@ -3387,4 +3387,4 @@ curves	Smooth	매끄럽게
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	이 문서의 레이어에 {needed}가 필요하지만 {budget}만 사용할 수 있습니다: 문서 전체 다시 그리기는 CPU를 사용합니다
 	GPU Memory (MB, 0 = Automatic)	GPU 메모리(MB, 0 = 자동)
 # Save for Web: AVIF (#2415, #6391)
-	The preview shows the image before compression. AVIF files carry no color profile or metadata.	미리 보기는 압축 전 이미지를 보여 줍니다. AVIF 파일에는 색상 프로파일과 메타데이터가 포함되지 않습니다.
+	AVIF files carry no color profile or metadata.	AVIF 파일에는 색상 프로파일과 메타데이터가 포함되지 않습니다.

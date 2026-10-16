@@ -3807,4 +3807,4 @@ curves	Smooth	Wygładź
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Warstwy tego dokumentu potrzebują {needed}, ale mogą zająć {budget}: odświeżanie całego dokumentu używa CPU
 	GPU Memory (MB, 0 = Automatic)	Pamięć GPU (MB, 0 = Automatycznie)
 # Save for Web: AVIF (#2415, #6391)
-	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Podgląd pokazuje obraz przed kompresją. Pliki AVIF nie zawierają profilu kolorów ani metadanych.
+	AVIF files carry no color profile or metadata.	Pliki AVIF nie zawierają profilu kolorów ani metadanych.

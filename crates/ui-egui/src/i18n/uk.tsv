@@ -3908,4 +3908,4 @@ curves	Smooth	Згладити
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Шарам цього документа потрібно {needed}, але займати вони можуть {budget}: увесь документ перемальовується на CPU
 	GPU Memory (MB, 0 = Automatic)	Пам'ять GPU (МБ, 0 = автоматично)
 # Save for Web: AVIF (#2415, #6391)
-	The preview shows the image before compression. AVIF files carry no color profile or metadata.	Попередній перегляд показує зображення до стиснення. Файли AVIF не містять колірного профілю й метаданих.
+	AVIF files carry no color profile or metadata.	Файли AVIF не містять колірного профілю й метаданих.
