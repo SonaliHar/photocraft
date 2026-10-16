@@ -23,6 +23,7 @@ enum NativeHandoff {
     CurrentSeparableBlend,
     CurrentFilteredFlat,
     CurrentMaskedFilteredFlat,
+    CurrentNormalHierarchy,
 }
 
 /// Bounded work-policy routing hint only. Selecting the standard profile work
@@ -43,7 +44,7 @@ pub fn is_owned_current_filtered_flat_candidate(archive:&OwnedDocumentArchive, c
     control.check(1)?;
     match archive.current_storage_hint() {
         Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) => return Ok(true),
-        Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage | photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint) => return Ok(false),
+        Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage | photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint | photocraft_format::NativeCurrentStorageHint::NormalHierarchy) => return Ok(false),
         None => {}
     }
     is_current_filtered_flat_candidate(archive.document(),control)
@@ -53,6 +54,9 @@ pub fn is_owned_current_filtered_flat_candidate(archive:&OwnedDocumentArchive, c
 pub fn is_owned_current_masked_filtered_flat_candidate(archive:&OwnedDocumentArchive,c:&ReadControl<'_>)->std::result::Result<bool,BackingError>{
  c.check(1)?;Ok(archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint))
 }
+
+/// Marker13 selects only the distinct hierarchy handoff, never an unmarked shape.
+pub fn is_owned_current_normal_hierarchy_candidate(archive:&OwnedDocumentArchive,c:&ReadControl<'_>)->std::result::Result<bool,BackingError>{c.check(1)?;Ok(archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::NormalHierarchy))}
 
 /// Multi-root filtered identity hint only. A selected refusal is final and
 /// must precede the older singleton Point hint in explicit owned native routes.
@@ -522,6 +526,9 @@ impl Session {
         self.add_owned_native_with(archive,label,path,control,NativeHandoff::CurrentMaskedFilteredFlat)
     }
 
+    /// Explicit native13 actual-tree CURRENT continuation; selected failures never retry.
+    pub fn add_owned_native_normal_hierarchy_archive(&mut self,archive:OwnedDocumentArchive,label:&str,path:Option<&str>,control:&ReadControl<'_>)->Result<usize>{self.add_owned_native_with(archive,label,path,control,NativeHandoff::CurrentNormalHierarchy)}
+
     fn add_owned_native_with(
         &mut self,
         archive: OwnedDocumentArchive,
@@ -547,6 +554,7 @@ impl Session {
             }
         }
         match archive.current_storage_hint() {
+            Some(photocraft_format::NativeCurrentStorageHint::NormalHierarchy) if !matches!(handoff,NativeHandoff::CurrentNormalHierarchy)=>return Err(BackingError::Unsupported.into()),
             Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint) if !matches!(handoff,NativeHandoff::CurrentMaskedFilteredFlat)=>return Err(BackingError::Unsupported.into()),
             Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) if !matches!(handoff,NativeHandoff::CurrentFilteredFlat) => return Err(BackingError::Unsupported.into()),
             Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) if !matches!(handoff,NativeHandoff::CurrentPoint) => return Err(BackingError::Unsupported.into()),
@@ -573,9 +581,10 @@ impl Session {
             NativeHandoff::CurrentSeparableBlend => archive.into_accounted_readonly_flat_composite_storage(control),
             NativeHandoff::CurrentFilteredFlat => archive.into_accounted_readonly_filtered_flat_storage(control),
             NativeHandoff::CurrentMaskedFilteredFlat=>archive.into_accounted_readonly_masked_filtered_flat_storage(control),
+            NativeHandoff::CurrentNormalHierarchy=>archive.into_accounted_readonly_normal_hierarchy_storage(control),
         }
         .map_err(|error| {
-            if matches!(handoff, NativeHandoff::CurrentAssignedPoint | NativeHandoff::CurrentPoint | NativeHandoff::CurrentAnalyticGeometry | NativeHandoff::CurrentIsolatedNormalGroup | NativeHandoff::CurrentIsolatedGaussianGroup | NativeHandoff::CurrentSeparableBlend | NativeHandoff::CurrentFilteredFlat | NativeHandoff::CurrentMaskedFilteredFlat) {
+            if matches!(handoff, NativeHandoff::CurrentAssignedPoint | NativeHandoff::CurrentPoint | NativeHandoff::CurrentAnalyticGeometry | NativeHandoff::CurrentIsolatedNormalGroup | NativeHandoff::CurrentIsolatedGaussianGroup | NativeHandoff::CurrentSeparableBlend | NativeHandoff::CurrentFilteredFlat | NativeHandoff::CurrentMaskedFilteredFlat | NativeHandoff::CurrentNormalHierarchy) {
                 if let photocraft_format::FormatError::Io(io) = &error {
                     if let Some(backing) = io.get_ref().and_then(|source| source.downcast_ref::<BackingError>()) {
                         return EngineError::from(*backing);
@@ -588,6 +597,7 @@ impl Session {
                 EngineError::Other(format!("owned native reopen: {error}"))
             }
         })?;
+        if let NativeHandoff::CurrentNormalHierarchy=handoff{crate::accounted_xcf_open::normal_hierarchy::validate_current_normal_hierarchy_storage(&document,control)?;}
         if let NativeHandoff::CurrentMaskedFilteredFlat=handoff{
             crate::accounted_xcf_open::masked_filtered_flat::validate_current_masked_filtered_flat_storage(&document,control)?;
         }

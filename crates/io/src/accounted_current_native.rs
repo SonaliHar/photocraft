@@ -66,11 +66,12 @@ pub fn save_accounted_current_archive<W: Write + Seek>(
     }
     // Structural intent comes from the actual retained runtime owner, including
     // a derived empty stack. Epoch inference cannot grant this separate class.
+    let hierarchy = owner.is_readonly_normal_hierarchy_storage();
     let masked_flat = owner.is_readonly_masked_filtered_flat_point_storage();
-    if masked_flat {
+    if hierarchy || masked_flat {
         control.check(1).map_err(backing)?;
     }
-    if !masked_flat && !claims(owner, control)? {
+    if !hierarchy && !masked_flat && !claims(owner, control)? {
         return photocraft_format::owned_document::save_accounted_current_document_archive(owner, output, limits, quota, control);
     }
     // Covers the fixed relay/first-error witness and error/header stack. The
@@ -108,6 +109,14 @@ pub fn save_accounted_current_archive<W: Write + Seek>(
         }
     };
     c.check(1).map_err(backing)?;
+    if hierarchy {
+        let prepared = photocraft_compose::backed_normal_hierarchy_document::PreparedBackedNormalHierarchyDocument::new(owner, Default::default(), &c)
+            .map_err(&map)?;
+        prepared.validate_operative(&c).map_err(&map)?;
+        drop(prepared);
+        c.check(1).map_err(backing)?;
+        return photocraft_format::owned_document::save_accounted_normal_hierarchy_document_archive(owner, output, limits, quota, &c);
+    }
     if masked_flat {
         let prepared = photocraft_compose::backed_masked_filtered_flat_point_document::PreparedBackedMaskedFilteredFlatPointDocument::new(
             owner,

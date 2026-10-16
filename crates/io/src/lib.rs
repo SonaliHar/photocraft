@@ -130,6 +130,7 @@ pub use xcf_import::{OwnedHistogramThresholdXcfImport, OwnedPointXcfImport, Owne
 pub use xcf_import::OwnedSeparableBlendXcfImport;
 pub use xcf_import::OwnedFilteredFlatXcfImport;
 pub use xcf_import::OwnedMaskedFilteredFlatXcfImport;
+pub use xcf_import::OwnedNormalHierarchyXcfImport;
 pub use xcf_import::{OwnedXcfImport, import_owned_xcf_bytes_in_quota, import_owned_xcf_from_reader_in_quota};
 pub use xcf_import::{
     AssembledStoredChannel, CorrespondenceRequirements, NamespaceBacking, StoredChannelCorrespondence, assemble_owned_stored_channel,

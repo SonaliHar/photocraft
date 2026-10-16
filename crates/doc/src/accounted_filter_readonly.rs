@@ -105,13 +105,13 @@ impl MaskCopyPlan {
         Ok(output)
     }
 }
-pub(super) fn mask_census(masks: &Vec<FilterMask>, census: &mut CanonicalCensus<'_, '_>) -> Result<(), BackingError> {
+pub(super) fn mask_census(masks: &Vec<FilterMask>, census: &mut CanonicalCensus<'_>) -> Result<(), BackingError> {
     if masks.len() > 1 {
         return unsupported();
     }
     census.vec(masks, 1)?;
     for mask in masks {
-        let plan = MaskCopyPlan::new(&mask.surface, mask.bounds, census.control)?;
+        let plan = MaskCopyPlan::new(&mask.surface, mask.bounds, census.control.sync_control())?;
         census.counted.index = census.counted.index.checked_add(plan.bytes).ok_or(BackingError::Length)?;
         // Existing native Tile payload/Arc owners remain with the original
         // accounted codec guard. This is only a new map/default metadata charge.

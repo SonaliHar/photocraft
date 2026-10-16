@@ -85,7 +85,9 @@ impl Headless {
                     .map_err(photocraft_engine::EngineError::from)?
             };
             control.check(1).map_err(photocraft_engine::EngineError::from)?;
-            if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint) {
+            if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::NormalHierarchy) {
+                self.session.add_owned_native_normal_hierarchy_archive(archive,label,Some(path),control)?;
+            } else if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint) {
                 self.session.add_owned_native_masked_filtered_flat_archive(archive,label,Some(path),control)?;
             } else if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) {
                 self.session.add_owned_native_point_archive(archive, label, Some(path), control)?;

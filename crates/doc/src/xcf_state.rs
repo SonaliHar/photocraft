@@ -97,8 +97,8 @@ fn text(s: &str) -> Result<()> {
 fn hash(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
-fn payload(bytes: &[u8], expected: &str, control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
-    if bytes.len() > 64 << 20 || !hash(expected) || crate::xcf_items::checked_payload_hash(bytes, control)?.to_hex().as_str() != expected {
+fn payload(bytes: &[u8], expected: &str, control: &dyn crate::xcf_local_validation::ValidationControl) -> Result<()> {
+    if bytes.len() > 64 << 20 || !hash(expected) || control.hash(bytes)?.to_hex().as_str() != expected {
         Err(invalid("payload_hash"))
     } else {
         Ok(())
@@ -135,7 +135,7 @@ fn number(n: &ExactNumber) -> Result<()> {
     }
     Ok(())
 }
-fn cancellation(control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
+fn cancellation(control: &dyn crate::xcf_local_validation::ValidationControl) -> Result<()> {
     if control.cancelled() { Err(invalid("cancelled")) } else { Ok(()) }
 }
 fn arguments(
@@ -143,7 +143,7 @@ fn arguments(
     resources: &BTreeSet<ResourceId>,
     depth: usize,
     visits: &mut usize,
-    control: &photocraft_raster::Interrupt<'_>,
+    control: &dyn crate::xcf_local_validation::ValidationControl,
 ) -> Result<()> {
     cancellation(control)?;
     if depth > 32 || args.len() > 100000 {
@@ -215,9 +215,9 @@ fn arguments(
     }
     Ok(())
 }
-fn graph(g: &FilterGraph, resources: &BTreeSet<ResourceId>, depth: usize, visits: &mut usize, control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
+fn graph(g: &FilterGraph, resources: &BTreeSet<ResourceId>, depth: usize, visits: &mut usize, control: &dyn crate::xcf_local_validation::ValidationControl) -> Result<()> {
     cancellation(control)?;
-    g.charge_validation_work(depth, visits, control)?;
+    g.charge_validation_work(depth, visits, control.interrupt())?;
     let mut indegree = BTreeMap::new();
     if let Some(input) = g.input {
         if input.0 == 0 {
@@ -289,7 +289,7 @@ impl XcfState {
     pub(crate) fn check_clone_bounds(&self) -> Result<()> {
         self.check_clone_bounds_with(&photocraft_raster::Interrupt::NONE)
     }
-    pub(crate) fn check_clone_bounds_with(&self, control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
+    pub(crate) fn check_clone_bounds_with(&self, control: &dyn crate::xcf_local_validation::ValidationControl) -> Result<()> {
         if control.cancelled() {
             return Err(invalid("cancelled"));
         }
@@ -344,7 +344,7 @@ impl XcfState {
             if control.cancelled() {
                 return Err(invalid("cancelled"));
             }
-            item.raster.validate_with(control)?;
+            item.raster.validate_with(control.interrupt())?;
             add(item.raster.indices().len())?;
             add(item.raster.alpha().map_or(0, |a| a.len()))?;
         }
@@ -425,7 +425,7 @@ impl XcfState {
         self.validate_with_filter_mask_selection(doc, control, selected, None)
     }
     pub(crate) fn validate_with_filter_mask_selection(
-        &self, doc: &Document, control: &photocraft_raster::Interrupt<'_>,
+        &self, doc: &Document, control: &dyn crate::xcf_local_validation::ValidationControl,
         selected: Option<&crate::xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,
         set: Option<&dyn crate::xcf_filter_masks::CoverageSetProof>,
     ) -> Result<()> {
@@ -519,7 +519,7 @@ impl XcfState {
             }
             if set.is_some_and(|proof| !proof.covers(doc, ordinal, mask)) { return Err(invalid("filter_mask_identity")); }
             if !selected.is_some_and(|proof| proof.covers(mask)) && set.is_none() {
-                mask.validate_with(control)?;
+                control.mask(mask)?;
             }
         }
         let mut indexed_owners = BTreeSet::new();
@@ -531,7 +531,7 @@ impl XcfState {
             if layers.get(&indexed.owner) != Some(&false) || !indexed_owners.insert(indexed.owner) {
                 return Err(invalid("indexed_owner"));
             }
-            indexed.raster.validate_with(control)?;
+            indexed.raster.validate_with(control.interrupt())?;
             let bytes = indexed.raster.indices().len().checked_add(indexed.raster.alpha().map_or(0, |a| a.len())).ok_or_else(|| invalid("indexed_limit"))?;
             indexed_bytes = indexed_bytes.checked_add(bytes).ok_or_else(|| invalid("indexed_limit"))?;
             if indexed_bytes > 128 << 20 {
@@ -629,7 +629,7 @@ impl XcfState {
                 if resource_bytes > 128 << 20 {
                     return Err(invalid("resource_limit"));
                 }
-                let observed = crate::source_cache_hash::checked_digest(b, control)?;
+                let observed = crate::source_cache_hash::checked_digest(b, control.interrupt())?;
                 let expected = r.resolution.as_ref().map(|resolution| resolution.payload_hash.as_str()).or(r.content_hash.as_deref());
                 if expected.is_none_or(|h| !observed.to_hex().as_str().eq_ignore_ascii_case(h)) {
                     return Err(invalid("resource_hash"));
@@ -787,7 +787,7 @@ impl XcfState {
                 return Err(invalid("transform_nonfinite"));
             }
             if let Some(c) = &s.cache {
-                c.validate_with(control)?;
+                c.validate_with(control.interrupt())?;
             }
         }
         if let Some(f) = &self.floating {

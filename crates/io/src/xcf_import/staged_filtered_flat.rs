@@ -128,7 +128,7 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
     }
     Ok(())
 }
-fn mask<P: ExactParsedPlane>(m: &Drawable<P>, f: &XcfFile<P>, i: &Interrupt<'_>, budget: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
+pub(super) fn mask<P: ExactParsedPlane>(m: &Drawable<P>, f: &XcfFile<P>, i: &Interrupt<'_>, budget: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
     let b = Some(budget);
     if m.group
         || m.alpha

@@ -72,6 +72,9 @@ pub use owned_filtered_flat_source::OwnedFilteredFlatXcfImport;
 #[path="xcf_import/owned_masked_filtered_flat_source.rs"]
 mod owned_masked_filtered_flat_source;
 pub use owned_masked_filtered_flat_source::OwnedMaskedFilteredFlatXcfImport;
+#[path="xcf_import/owned_normal_hierarchy_source.rs"]
+mod owned_normal_hierarchy_source;
+pub use owned_normal_hierarchy_source::OwnedNormalHierarchyXcfImport;
 #[path = "xcf_import/owned_point_source.rs"]
 mod owned_point_source;
 pub use owned_point_source::OwnedPointXcfImport;
@@ -1685,6 +1688,11 @@ impl<'b,'a> photocraft_compose::backed_masked_filtered_flat_point_context::Maske
   self.shared.reserve(photocraft_xcf::BudgetKind::Index,bytes,"masked mixed source proof index").map_err(|error|{let raster=if error.kind==ErrorKind::Cancelled{photocraft_raster::RasterInputError::Cancelled}else{photocraft_raster::RasterInputError::LimitExceeded};self.failure=Some(error);raster.into()})
  }
 }
+impl<'b,'a> photocraft_compose::backed_normal_hierarchy_context::HierarchyPreparationBudget for SharedPreparation<'b,'a>{
+ fn reserve_hierarchy_index(&mut self,bytes:u64)->photocraft_compose::gimp_composite::Result<Self::Lease>{
+  self.shared.reserve(photocraft_xcf::BudgetKind::Index,bytes,"normal hierarchy source index").map_err(|error|{let raster=if error.kind==ErrorKind::Cancelled{photocraft_raster::RasterInputError::Cancelled}else{photocraft_raster::RasterInputError::LimitExceeded};self.failure=Some(error);raster.into()})
+ }
+}
 // Preserve the genuine default mapping seam used by staged/held-source imports.
 fn map_accounted<P: MappingPlane,S>(name:&str,file:XcfFile<P>,ctl:&Interrupt<'_>,resident:usize,shared:Option<&dyn Fn(usize)->Result<(),IoError>>,preparation:Option<(&photocraft_xcf::Budget<'_>,S)>)->Result<(ImportResult,usize),IoError>{
     map_accounted_with_authorized_font(name,file,ctl,resident,shared,preparation,None)
@@ -1700,6 +1708,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
     authorized_font: Option<&PreparedRuntimeFont<'_>>,
 ) -> Result<(ImportResult, usize), IoError> {
     let admission::AdmissionDomains {
+        normal_hierarchy_domain,
         filtered_flat_domain,
         masked_filtered_flat_domain,
         filtered_flat_opacity_domain,
@@ -1741,7 +1750,17 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
     } = P::admissions(&file, ctl, preparation.as_ref().map(|(budget, _)| *budget))?;
     if filtered_flat_domain && filtered_flat_opacity_domain {return Err(IoError::Unsupported("conflicting mixed source purpose".into()));}
     let filtered_flat_source_domain=filtered_flat_domain || filtered_flat_opacity_domain;
-    let any_filtered_flat_source=filtered_flat_source_domain||masked_filtered_flat_domain;
+    let any_filtered_flat_source=filtered_flat_source_domain||masked_filtered_flat_domain||normal_hierarchy_domain;
+    if normal_hierarchy_domain {
+        let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||IoError::Unsupported("hierarchy mapper accounting".into()))?;
+        // Source paths are <=33 words. Admit the actual identities-prefix
+        // searches, bounded insert/reverse traversal and canonical ID joins;
+        // the earlier parser/path proof is a distinct paid pass.
+        let n=file.layers.len()as u64;
+        let units=n.checked_mul(n).and_then(|v|v.checked_mul(256)).and_then(|v|v.checked_add(n.checked_mul(1024)?)).ok_or_else(||IoError::Unsupported("hierarchy mapping work".into()))?;
+        staged_filtered_flat::work(ctl,source_budget,units)?;
+    }
+
     let masked_exposure_source=point_replace_domain==Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(crate::xcf_filters::PointReplaceFamily::MaskedExposure));
     let masked_scalar_source=matches!(point_replace_domain,Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(family)) if crate::xcf_point_replace_source::masked_stock_source::selected(family));
     let selected_masked_point_source=masked_exposure_source||masked_scalar_source;
@@ -1900,7 +1919,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         };
         let masked_domains=if masked_filtered_flat_domain{Some(staged_source::staged_masked_filtered_flat::domains(d,file.sample,file.width,file.height,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"masked mixed domain accounting"))?)?)}else{None};
         let masked_root_domain=masked_domains.as_ref().and_then(|v|v.values.first().copied());
-        let filtered_root_domain=if filtered_flat_opacity_domain {Some(staged_filtered_flat::opacity::root_domain(d,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered flat opacity accounting"))?)?)} else if filtered_flat_domain {Some(staged_filtered_flat::root_domain(d,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered flat accounting"))?)?)} else {None};
+        let filtered_root_domain=if filtered_flat_opacity_domain {Some(staged_filtered_flat::opacity::root_domain(d,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered flat opacity accounting"))?)?)} else if filtered_flat_domain || normal_hierarchy_domain && !d.group {Some(staged_filtered_flat::root_domain(d,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered flat accounting"))?)?)} else {None};
         let point_replace_domain=masked_root_domain.or(filtered_root_domain.flatten()).or(point_replace_domain);
         let effects_candidate = !d.effects.is_empty()
             && (point_replace_domain.is_some()
@@ -2249,7 +2268,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 crate::xcf_filters::qualified_ordered_masked_filtered_flat_source_stack(&d.effects,&masks,&masked_domains.as_ref().ok_or_else(||unsupported(d,"masked mixed domain plan"))?.values,owner,next_filter_id,file.version)?
             }else if filtered_flat_opacity_domain {
                 crate::xcf_filters::qualified_ordered_filtered_flat_opacity_source_stack(&d.effects,&masks,owner,next_filter_id,file.version)?
-            } else if filtered_flat_domain {
+            } else if filtered_flat_domain || normal_hierarchy_domain {
                 crate::xcf_filters::qualified_ordered_filtered_flat_source_stack(&d.effects,&masks,owner,next_filter_id,file.version)?
             } else if let Some(domain) = owned_neighborhood_domain {
                 if domain != neighborhood_domain {
@@ -2601,7 +2620,9 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         state.selection.active = state.selection.selected.first().copied();
     }
     doc.xcf_state = Some(state);
-    let structural=if masked_filtered_flat_domain {
+    // The mandatory hierarchy Source index owns its genuine Index scratch and
+    // prepaid whole-Doc validation; do not run an extra unpriced tree pass here.
+    let structural=if normal_hierarchy_domain {Ok(())}else if masked_filtered_flat_domain {
         let b=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||IoError::Unsupported("masked mixed final accounting".into()))?;
         let work=|units:u64|b.consume_work(units.max(1),"masked mixed final coverage").map_err(|e|if e.kind==ErrorKind::Cancelled{photocraft_raster::backing::BackingError::Cancelled}else{photocraft_raster::backing::BackingError::Work});
         let reserve=|n:u64|b.reserve(photocraft_xcf::BudgetKind::Index,n,"masked mixed source proof index").map(staged_source::staged_masked_filtered_flat::CoverageLease).map_err(|e|if e.kind==ErrorKind::Cancelled{photocraft_raster::backing::BackingError::Cancelled}else{photocraft_raster::backing::BackingError::Quota});
@@ -2652,6 +2673,10 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 .map(accounting_error)
                 .unwrap_or_else(|| if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF rendering consumer: {error}")) }));
         }
+    } else if P::requires_budgeted_normal_hierarchy_preparation(normal_hierarchy_domain) {
+        let (shared,source_lease)=preparation.ok_or_else(||IoError::Unsupported("hierarchy Source preparation accounting".into()))?;
+        let mut adapter=SharedPreparation{shared,failure:None};
+        if let Err(error)=photocraft_compose::backed_normal_hierarchy_context::LeasedNormalHierarchyPipeline::new_budgeted(&doc,ctl,&mut adapter,source_lease){return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("normal hierarchy Source preparation: {error}"))}));}
     } else if masked_filtered_flat_domain {
         let(shared,source_lease)=preparation.ok_or_else(||IoError::Unsupported("masked mixed Source preparation accounting".into()))?;
         let mut adapter=SharedPreparation{shared,failure:None};

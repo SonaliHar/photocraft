@@ -32,6 +32,8 @@ pub(crate) mod backed_analytic_geometry;
 pub mod backed_assigned_current_profile;
 pub mod backed_normal;
 pub mod backed_normal_stack;
+pub mod backed_normal_hierarchy_context;
+pub mod backed_normal_hierarchy_document;
 pub mod backed_filtered_flat_point_context;
 pub mod backed_filtered_flat_point_document;
 pub mod backed_neighborhood_context;

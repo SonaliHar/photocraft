@@ -205,13 +205,13 @@ impl MaskPlan {
 }
 // Parent's Point-only census policy calls this; old strict mask policies must
 // continue calling their unchanged Threshold helper.
-pub(super) fn mask_census(masks: &Vec<FilterMask>, census: &mut CanonicalCensus<'_, '_>) -> Result<(), BackingError> {
+pub(super) fn mask_census(masks: &Vec<FilterMask>, census: &mut CanonicalCensus<'_>) -> Result<(), BackingError> {
     if masks.len() > MAX_NODES {
         return refused();
     }
     census.vec(masks, MAX_NODES)?;
     for mask in masks {
-        let plan = MaskPlan::new(&mask.surface, mask.bounds, census.control)?;
+        let plan = MaskPlan::new(&mask.surface, mask.bounds, census.control.sync_control())?;
         census.counted.index = census.counted.index.checked_add(plan.bytes).ok_or(BackingError::Length)?;
     }
     Ok(())

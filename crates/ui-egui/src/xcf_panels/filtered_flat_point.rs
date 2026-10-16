@@ -9,8 +9,8 @@ mod derived_rgb;
 #[path="masked_mixed.rs"]
 mod masked;
 #[derive(Clone,Copy,PartialEq,Eq)]
-enum Route{Original,Masked}
-fn route(snapshot:&DocumentSnapshot)->Option<Route>{let o=snapshot.accounted()?;if o.is_readonly_masked_filtered_flat_point_storage(){Some(Route::Masked)}else if o.is_readonly_filtered_flat_point_storage(){Some(Route::Original)}else{None}}
+enum Route{Original,Masked,Hierarchy}
+fn route(snapshot:&DocumentSnapshot)->Option<Route>{let o=snapshot.accounted()?;if o.is_readonly_normal_hierarchy_storage(){Some(Route::Hierarchy)}else if o.is_readonly_masked_filtered_flat_point_storage(){Some(Route::Masked)}else if o.is_readonly_filtered_flat_point_storage(){Some(Route::Original)}else{None}}
 
 struct Target {
     route:Route,
@@ -42,10 +42,13 @@ fn node_at<'a>(snapshot: &'a DocumentSnapshot, root: LayerId,index:usize) -> Opt
         if stack.nodes.len()>1024{return None}
         n.checked_add(stack.nodes.len()).filter(|n|*n<=4096)
     })?;
-    let mut roots = snapshot.layers.iter().filter(|layer| layer.id == root);
-    roots.next()?;
-    if roots.next().is_some() {
-        return None;
+    // The actual hierarchy owner seals nested layer membership. Do not build a
+    // full physical-mask/profile index in a per-frame widget lookup. The engine
+    // resolves the exact nested ordinal again under the transaction control.
+    if actual_route != Route::Hierarchy {
+        let mut roots = snapshot.layers.iter().filter(|layer| layer.id == root);
+        roots.next()?;
+        if roots.next().is_some() { return None; }
     }
     let mut stacks = state.filter_stacks.iter().filter(|stack| stack.owner == ItemRef::Layer(root));
     let stack = stacks.next()?;
@@ -53,7 +56,7 @@ fn node_at<'a>(snapshot: &'a DocumentSnapshot, root: LayerId,index:usize) -> Opt
         return None;
     }
     let node=stack.nodes.get(index)?;
-    (match actual_route{Route::Original=>photocraft_engine::filtered_flat_filter_edit_candidate(owner,root,node),Route::Masked=>photocraft_engine::masked_filtered_flat_filter_edit_candidate(owner,root,node)}).then_some((node,stack.revision))
+    (match actual_route{Route::Original=>photocraft_engine::filtered_flat_filter_edit_candidate(owner,root,node),Route::Masked=>photocraft_engine::masked_filtered_flat_filter_edit_candidate(owner,root,node),Route::Hierarchy=>photocraft_engine::normal_hierarchy_filter_edit_candidate(owner,root,node)}).then_some((node,stack.revision))
 }
 fn unlocked(snapshot: &DocumentSnapshot, root: LayerId) -> bool {
     let ordinary = snapshot.effective_locks(root);
@@ -296,3 +299,7 @@ mod affine_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="masked_filtered_flat_tests.rs"]
 mod masked_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="normal_hierarchy_tests.rs"]
+mod normal_hierarchy_tests;

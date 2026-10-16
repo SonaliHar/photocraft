@@ -23,8 +23,10 @@ mod imported_metadata;
 mod imported_translate;
 mod point;
 mod filtered_flat;
+mod hierarchy_expanded;
 pub use filtered_flat::candidate as filtered_flat_filter_edit_candidate;
 pub use filtered_flat::masked_candidate as masked_filtered_flat_filter_edit_candidate;
+pub use filtered_flat::hierarchy_candidate as normal_hierarchy_filter_edit_candidate;
 mod gaussian_group;
 mod flat_composition;
 mod readonly_layer_name;
@@ -88,15 +90,18 @@ fn bad(id: &str, message: &str) -> EngineError {
 
 /// Preserve the old global command set; rename is admitted only on this actual class.
 pub(crate) fn supports_for_session(session:&Session,id:&str)->bool{
- supports(id) || id=="layer.renameLayer" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || o.is_readonly_masked_filtered_flat_point_storage())
+ supports(id) || id=="layer.setExpanded" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()) || id=="layer.renameLayer" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()))
 }
 /// No editing or selection route is granted by readonly mixed-root storage.
 pub(crate) fn filtered_flat_mutation_refused(session:&Session,id:&str)->bool{
+    if matches!(id,"layer.select"|"layer.setExpanded") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()){return false}
     supports_for_session(session,id) && !matches!(id,"edit.undo"|"edit.redo"|"history.selectState"|"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move"|"xcf.filter.remove"|"layer.setProps"|"layer.renameLayer")
-        && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || o.is_readonly_masked_filtered_flat_point_storage())
+        && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()))
 }
 
 enum Request<'a> {
+    HierarchyExpanded(hierarchy_expanded::Request<'a>),
+    PreparedHierarchyExpanded(hierarchy_expanded::Prepared<'a>),
     FlatComposition(flat_composition::Request<'a>),
     PreparedFlatComposition(flat_composition::Prepared<'a>),
     ImportedTranslate(imported_translate::Request<'a>),
@@ -122,6 +127,7 @@ enum Request<'a> {
     Fill(&'a Value),
     PreparedFill(crate::accounted_fill::Prepared<'a>),
     Select(LayerId),
+    HierarchySelect(LayerId,hierarchy_expanded::SelectionWitness),
     Edit(AccountedEdit<'a>),
     ClearSelection,
     SelectAll(&'a Value),
@@ -163,7 +169,10 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
         crate::accounted_clear::validate_request(session, params)?;
         return Ok(Request::Clear(params));
     }
-    if matches!(id,"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move"|"xcf.filter.remove") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || o.is_readonly_masked_filtered_flat_point_storage()) {
+    if id=="layer.setExpanded" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()) {
+        return Ok(Request::HierarchyExpanded(hierarchy_expanded::Request::parse(session,params,control)?));
+    }
+    if matches!(id,"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move"|"xcf.filter.remove") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage())) {
         return Ok(Request::FilteredFlat(filtered_flat::Request::parse(session,id,params,control)?));
     }
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove") {
@@ -194,7 +203,7 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
         params.as_object().ok_or_else(|| bad(id, "parameters must be an object"))?;
         return Ok(Request::HistorySelect(crate::history_select_cmds::validate_request(session, params, control)?));
     }
-    if id=="layer.renameLayer" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || o.is_readonly_masked_filtered_flat_point_storage()) {
+    if id=="layer.renameLayer" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage())) {
         return Ok(Request::ImportedMetadata(imported_metadata::parse_rename(session,params,control)?));
     }
     if id == "layer.setProps" && readonly_layer_name::applies(session) {
@@ -247,7 +256,10 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
                 }
             }
             let layer = object.get("layer").and_then(Value::as_u64).filter(|id| *id != 0).ok_or_else(|| bad(id, "layer must be a nonzero integer identity"))?;
-            Ok(Request::Select(LayerId(layer)))
+            let layer=LayerId(layer);
+            if session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()) {
+                Ok(Request::HierarchySelect(layer,hierarchy_expanded::SelectionWitness::prepare(session,layer,control)?))
+            }else{Ok(Request::Select(layer))}
         }
         "layer.setProps" => {
             if object.keys().any(|key| !matches!(key.as_str(), "layer" | "coalesce" | "name" | "visible" | "opacity")) {
@@ -333,14 +345,14 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     if observed_box_mutation_refused(session, id) {
         return Ok(Some("this observed Box geometry recipe is read-only"));
     }
-    if matches!(id, "xcf.filter.move" | "xcf.filter.remove") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_point_storage() || (owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage())) {
+    if matches!(id, "xcf.filter.move" | "xcf.filter.remove") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_point_storage() || (owner.is_readonly_filtered_flat_point_storage() || (owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage()))) {
         return Ok(Some("this accounted filter storage has no qualified stack edit recipe"));
     }
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable")
         && !state
             .doc
             .accounted()
-            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_gaussian_group_storage() || (owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage()) || point::assigned_enabled_candidate(owner))
+            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_gaussian_group_storage() || (owner.is_readonly_filtered_flat_point_storage() || (owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage())) || point::assigned_enabled_candidate(owner))
     {
         return Ok(Some("this accounted filter storage has no qualified editing recipe"));
     }
@@ -651,6 +663,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             return Err(EngineError::Other(reason.into()));
         }
         let request = match request {
+            Request::HierarchyExpanded(request)=>Request::PreparedHierarchyExpanded(request.prepare(session,control)?),
             Request::FlatComposition(request)=>Request::PreparedFlatComposition(request.prepare(session,control)?),
             Request::ImportedTranslate(request) => Request::PreparedImportedTranslate(request.prepare(session, control)?),
             Request::AssignedMask(request) => Request::PreparedAssignedMask(request.prepare(session, control)?),
@@ -688,7 +701,7 @@ impl<'a> PreparedAccountedCommand<'a> {
         };
         // Mask enablement preserves its upstream journal:false contract. Its
         // retained response still owns a real fee beside the unchanged journal.
-        let journal_policy = if matches!(&request, Request::PreparedAssignedMask(_)) { JournalPolicy::Retain } else { JournalPolicy::Append };
+        let journal_policy = if matches!(&request, Request::PreparedAssignedMask(_)|Request::PreparedHierarchyExpanded(_)) { JournalPolicy::Retain } else { JournalPolicy::Append };
         let count = session.journal.len().checked_add(usize::from(matches!(journal_policy, JournalPolicy::Append))).ok_or(BackingError::Length)?;
         if count > MAX_RECORDS {
             return Err(BackingError::Length.into());
@@ -733,6 +746,9 @@ impl<'a> PreparedAccountedCommand<'a> {
         }
         if matches!(&request, Request::PreparedFlatComposition(_)) {
             census.add(0,usize::try_from(flat_composition::REPLY_ENVELOPE).map_err(|_|BackingError::Length)?)?;
+        }
+        if matches!(&request, Request::PreparedHierarchyExpanded(_)) {
+            census.add(0,usize::try_from(hierarchy_expanded::REPLY_ENVELOPE).map_err(|_|BackingError::Length)?)?;
         }
         if matches!(&request, Request::PreparedGaussianGroup(_)) {
             census.add(0,usize::try_from(gaussian_group::REPLY_ENVELOPE).map_err(|_|BackingError::Length)?)?;
@@ -792,6 +808,7 @@ impl<'a> PreparedAccountedCommand<'a> {
         let history = if matches!(
             &request,
             Request::HistorySelect(_)
+                | Request::HierarchySelect(_,_)
                 | Request::PreparedImportedTranslate(_)
                 | Request::PreparedFilteredFlat(_)
                 | Request::PreparedPoint(_)
@@ -844,6 +861,8 @@ impl<'a> PreparedAccountedCommand<'a> {
         if matches!(
             &self.request,
             Request::ClearSelection
+                | Request::HierarchySelect(_,_)
+                | Request::PreparedHierarchyExpanded(_)
                 | Request::PreparedImportedTranslate(_)
                 | Request::SelectAll(_)
                 | Request::ColorRange(_)
@@ -889,6 +908,8 @@ impl<'a> PreparedAccountedCommand<'a> {
             return Err(BackingError::Integrity.into());
         }
         let result = match self.request {
+            Request::PreparedHierarchyExpanded(prepared)=>prepared.execute(session,control)?,
+            Request::HierarchyExpanded(_)=>return Err(BackingError::Integrity.into()),
             Request::PreparedFlatComposition(prepared)=>prepared.execute(session,control)?,
             Request::FlatComposition(_)=>return Err(BackingError::Integrity.into()),
             Request::PreparedImportedTranslate(prepared) => prepared.execute(session, control)?,
@@ -913,6 +934,11 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::ReadonlyLayerName(_) => return Err(BackingError::Integrity.into()),
             Request::AssignedMask(_) => return Err(BackingError::Integrity.into()),
             Request::ImportedMetadata(_) => return Err(BackingError::Integrity.into()),
+            Request::HierarchySelect(layer,witness)=>{
+                witness.validate(session,control)?;
+                session.select_accounted_with_control(layer,control)?;
+                Value::Null
+            }
             Request::Select(layer) => {
                 session.select_accounted_with_control(layer, control)?;
                 Value::Null
@@ -954,6 +980,10 @@ impl Session {
         }
         let state = self.active_mut().ok_or(EngineError::NoDocument)?;
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
+        if owner.is_readonly_normal_hierarchy_storage(){
+            if !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
+            crate::accounted_xcf_open::normal_hierarchy::validate_current_normal_hierarchy_storage(owner,control)?;
+        }
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
         if state.active_layer != view.target().active || state.layer_anchor != view.anchor() || !state.selected_layers.is_empty() {
             return Err(BackingError::Integrity.into());

@@ -28,7 +28,7 @@ impl Headless {
     /// Cheap runtime routing only; the paid query validates the real class.
     pub fn has_owned_filter_inspection(&self) -> bool {
         self.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
-            owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_threshold_alpha_storage()
+            owner.is_readonly_normal_hierarchy_storage() || owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_threshold_alpha_storage()
                 || owner.is_readonly_threshold_storage()
                 || owner.is_readonly_point_storage()
                 || owner.is_readonly_assigned_point_storage()

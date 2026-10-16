@@ -755,20 +755,25 @@ pub(crate) fn doc_m_with_checked_filter_mask<'doc>(
     sink: &mut dyn Sink<'doc>,
     proof: Option<&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,
 ) -> Result<DocM> {
-    doc_m_selected(d,sink,proof,None)
+    doc_m_selected(d,sink,proof,None,false)
 }
-pub(crate) fn doc_m_with_checked_filter_masks<'doc>(d:&'doc Document,sink:&mut dyn Sink<'doc>,proof:&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverageSet<'_>)->Result<DocM>{doc_m_selected(d,sink,None,Some(proof))}
-fn doc_m_selected<'doc>(d:&'doc Document,sink:&mut dyn Sink<'doc>,proof:Option<&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,set:Option<&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverageSet<'_>>)->Result<DocM>{
+pub(crate) fn doc_m_with_checked_filter_masks<'doc>(d:&'doc Document,sink:&mut dyn Sink<'doc>,proof:&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverageSet<'_>)->Result<DocM>{doc_m_selected(d,sink,None,Some(proof),false)}
+pub(crate) fn doc_m_with_normal_hierarchy_index<'doc>(d:&'doc Document,sink:&mut dyn Sink<'doc>,index:&photocraft_doc::normal_hierarchy_index::CheckedNormalHierarchyIndex<'_>)->Result<DocM>{
+    if !index.matches_document(d){return Err(FormatError::Unsupported("foreign hierarchy index".into()))}doc_m_selected(d,sink,None,None,true)
+}
+fn doc_m_selected<'doc>(d:&'doc Document,sink:&mut dyn Sink<'doc>,proof:Option<&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,set:Option<&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverageSet<'_>>,hierarchy_validated:bool)->Result<DocM>{
     sink.poll()?;
     if !d.resolution_dpi.is_finite() {
         return Err(FormatError::NonFinite { path: "document.resolution_dpi".into() });
     }
+    if !hierarchy_validated {
     match (set,proof) {
         (Some(set),_)=>d.validate_xcf_state_with_checked_filter_masks(set,&sink.control()),
         (None,Some(proof)) => d.validate_xcf_state_with_checked_filter_mask(proof, &sink.control()),
         (None,None) => d.validate_xcf_state_with(&sink.control()),
     }
     .map_err(|e| if sink.control().cancelled() { FormatError::Cancelled } else { FormatError::Unsupported(e.to_string()) })?;
+    }
     let xcf_state = d
         .xcf_state
         .as_ref()
@@ -906,7 +911,8 @@ fn comp_m(c: &LayerComp, sink: &mut dyn Sink<'_>) -> Result<LayerCompM> {
 // Load
 // ---------------------------------------------------------------------------
 
-enum CoverageLoad<'a,'c>{Strict,Single(&'a photocraft_raster::backing::ReadControl<'c>),Set(&'a photocraft_raster::backing::quota::BackingQuota,&'a photocraft_raster::backing::ReadControl<'c>)}
+#[derive(Clone,Copy)]
+enum CoverageLoad<'a,'c>{Hierarchy(&'a photocraft_raster::backing::quota::BackingQuota,&'a photocraft_raster::backing::ReadControl<'c>),Strict,Single(&'a photocraft_raster::backing::ReadControl<'c>),Set(&'a photocraft_raster::backing::quota::BackingQuota,&'a photocraft_raster::backing::ReadControl<'c>)}
 pub(crate) struct Loader<'a> {
     pub fetch: &'a mut dyn Fetch,
     pub preserve_ids: bool,
@@ -1218,8 +1224,10 @@ impl Loader<'_> {
     pub(crate) fn document_with_mask_set_control(&mut self,m:&DocM,c:&photocraft_raster::backing::ReadControl<'_>,q:&photocraft_raster::backing::quota::BackingQuota)->Result<Document>{
         self.document_with_selected_coverage(m,c.interrupt,CoverageLoad::Set(q,c))
     }
+    pub(crate) fn document_with_normal_hierarchy_control(&mut self,m:&DocM,c:&photocraft_raster::backing::ReadControl<'_>,q:&photocraft_raster::backing::quota::BackingQuota)->Result<Document>{self.document_with_selected_coverage(m,c.interrupt,CoverageLoad::Hierarchy(q,c))}
     fn document_with_selected_coverage(&mut self,m:&DocM,control:&photocraft_raster::Interrupt<'_>,purpose:CoverageLoad<'_,'_>)->Result<Document>{
-        let (coverage_control,set_quota)=match purpose{CoverageLoad::Strict=>(None,None),CoverageLoad::Single(c)=>(Some(c),None),CoverageLoad::Set(q,c)=>{crate::masked_filtered_flat::preflight(m,c)?;(Some(c),Some(q))}};
+        let hierarchy=match purpose{CoverageLoad::Hierarchy(q,c)=>Some((q,c)),_=>None};
+        let (coverage_control,set_quota)=match purpose{CoverageLoad::Hierarchy(_,c)=>{crate::normal_hierarchy::preflight(m,c)?;(Some(c),None)},CoverageLoad::Strict=>(None,None),CoverageLoad::Single(c)=>(Some(c),None),CoverageLoad::Set(q,c)=>{crate::masked_filtered_flat::preflight(m,c)?;(Some(c),Some(q))}};
         // Reserve every stored id before allocating identities missing from older bundles. If an
         // id is implausibly large, remap the whole document while retaining shared contents groups.
         if self.preserve_ids {
@@ -1399,7 +1407,7 @@ impl Loader<'_> {
                     inline_caches.push((index, cache));
                 }
             }
-            if coverage_control.is_some() && set_quota.is_none() && m.xcf_filter_masks.len() > 1 {
+            if hierarchy.is_none() && coverage_control.is_some() && set_quota.is_none() && m.xcf_filter_masks.len() > 1 {
                 return Err(FormatError::corrupt("coverage purpose requires at most one actual mask"));
             }
             for mask in &m.xcf_filter_masks {
@@ -1509,7 +1517,7 @@ impl Loader<'_> {
             text_styles: self.model_clone(&m.text_styles)?,
             slices,
         };
-        if let (Some(q),Some(c))=(set_quota,coverage_control){
+        if let Some((q,c))=hierarchy{document.checked_normal_hierarchy_index_with(photocraft_doc::normal_hierarchy_index::NormalHierarchyLimits::STANDARD,q,c).map_err(crate::owned_document::error)?;}else if let (Some(q),Some(c))=(set_quota,coverage_control){
             let set=document.checked_f32_filter_mask_coverages_with(photocraft_doc::xcf_filter_masks::MaskCoverageSetLimits::STANDARD,q,c).map_err(crate::owned_document::error)?;
             document.validate_xcf_state_with_checked_filter_masks(&set,control).map_err(|e|if e.code=="cancelled"{FormatError::Cancelled}else{FormatError::corrupt(e.to_string())})?;
         }else{

@@ -1137,8 +1137,14 @@ impl Document {
     ) -> Result<(), XcfValidationError> {
         self.validate_xcf_state_selection(control, selected, None)
     }
+    pub(crate) fn validate_xcf_state_with_local_hierarchy_work(&self,interrupt:&photocraft_raster::Interrupt<'_>,work:&dyn Fn(u64)->Result<(),photocraft_raster::backing::BackingError>)->Result<(),photocraft_raster::backing::BackingError>{
+        let local=xcf_local_validation::LocalValidation{interrupt,work,failure:std::cell::Cell::new(None)};
+        let result=self.validate_xcf_state_selection(&local,None,None);
+        if let Some(error)=local.failure.get(){return Err(error)}
+        result.map_err(|_|photocraft_raster::backing::BackingError::Integrity)
+    }
     fn validate_xcf_state_selection(
-        &self, control: &photocraft_raster::Interrupt<'_>,
+        &self, control: &dyn xcf_local_validation::ValidationControl,
         selected: Option<&xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,
         set: Option<&dyn xcf_filter_masks::CoverageSetProof>,
     ) -> Result<(), XcfValidationError> {
@@ -1146,7 +1152,7 @@ impl Document {
         if control.cancelled() {
             return Err(XcfValidationError::new("cancelled", "document validation cancelled"));
         }
-        self.working_profile_interpretation.validate_with_interrupt(self.icc_profile.as_deref().map(Vec::as_slice), self.mode, control)?;
+        control.profile(self)?;
         self.effective_resolution().validate()?;
         if self.channels.len() > 10000 {
             return Err(XcfValidationError::new("channel_limit", "too many channels"));
@@ -1744,3 +1750,8 @@ mod id_tests {
         assert!(super::DocId::fresh().0 > far);
     }
 }
+
+/// Paid actual-tree structural index for explicit isolated Normal hierarchy custody.
+pub mod normal_hierarchy_index;
+
+mod xcf_local_validation;

@@ -151,7 +151,7 @@ fn context(session: &Session) -> Result<()> {
         return Err(invalid("Move context is unsupported"));
     }
     let state = session.active().ok_or(EngineError::NoDocument)?;
-    if state.doc.accounted().is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || o.is_readonly_masked_filtered_flat_point_storage()) { return Err(BackingError::Unsupported.into()); }
+    if state.doc.accounted().is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage())) { return Err(BackingError::Unsupported.into()); }
     if state.floating.is_some() || state.coalesce.is_some() {
         return Err(invalid("Move requires no floating or resident coalescing state"));
     }

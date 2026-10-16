@@ -199,3 +199,6 @@ fn selected_writer_and_loader_preserve_external_controls() {
 
 #[path = "masked_filtered_flat_tests.rs"]
 mod masked_filtered_flat_tests;
+
+#[path="normal_hierarchy_tests.rs"]
+mod normal_hierarchy_tests;

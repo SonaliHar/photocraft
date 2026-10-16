@@ -1137,3 +1137,7 @@ mod owned_filtered_flat_affine_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="headless/owned_masked_filtered_flat_tests.rs"]
 mod owned_masked_filtered_flat_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="headless/owned_normal_hierarchy_tests.rs"]
+mod owned_normal_hierarchy_tests;

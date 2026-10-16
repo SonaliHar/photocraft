@@ -277,8 +277,8 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     let id = crate::xcf_filter_cmds::id(COMMAND, params)?;
     let active = session.active().ok_or(EngineError::NoDocument)?;
     let owner = active.doc.accounted().ok_or(BackingError::Unsupported)?;
-    if owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage(){
-        if owner.is_readonly_masked_filtered_flat_point_storage(){owner.validate_readonly_masked_filtered_flat_point_storage(control)?;}else{owner.validate_readonly_filtered_flat_point_storage(control)?;}
+    if owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage(){
+        if owner.is_readonly_normal_hierarchy_storage(){owner.validate_readonly_normal_hierarchy_storage(control)?;}else if owner.is_readonly_masked_filtered_flat_point_storage(){owner.validate_readonly_masked_filtered_flat_point_storage(control)?;}else{owner.validate_readonly_filtered_flat_point_storage(control)?;}
         let state=owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
         if state.filter_stacks.len()>4096{return Err(BackingError::Length.into())}
         let mut found=None;
@@ -293,7 +293,7 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
         let text=point_metadata(node,control)?;let planned=point_envelope(text)?;
         return paid_reply(owner.quota(),ReplyKind::Filter,POINT_FILTER_BOUNDS,planned,text,control,||{
             let mut reply=crate::xcf_filter_cmds::build_point_storage_inspect_reply(id,stack,node)?;
-            *reply.get_mut("scalarEditCandidate").ok_or(BackingError::Integrity)?=Value::Bool(match stack.owner {photocraft_doc::item_identity::ItemRef::Layer(layer)=>if owner.is_readonly_masked_filtered_flat_point_storage(){crate::masked_filtered_flat_filter_edit_candidate(owner,layer,node)}else{crate::filtered_flat_filter_edit_candidate(owner,layer,node)},_=>false});
+            *reply.get_mut("scalarEditCandidate").ok_or(BackingError::Integrity)?=Value::Bool(match stack.owner {photocraft_doc::item_identity::ItemRef::Layer(layer)=>if owner.is_readonly_normal_hierarchy_storage(){crate::normal_hierarchy_filter_edit_candidate(owner,layer,node)}else if owner.is_readonly_masked_filtered_flat_point_storage(){crate::masked_filtered_flat_filter_edit_candidate(owner,layer,node)}else{crate::filtered_flat_filter_edit_candidate(owner,layer,node)},_=>false});
             Ok(reply)
         });
     }

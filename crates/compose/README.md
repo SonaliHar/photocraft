@@ -1985,3 +1985,53 @@ compatibility extensions. Ignored contracts remain UNRUN and uncompiled;
 production compilation is recorded separately in execution notes. PhotoCraft
 tests, runtime/UI/offscreen, corpus, performance and parent/final acceptance
 remain deferred. Full stock XCF support is unfinished.
+
+
+Isolated Normal XCF hierarchy now has its own actual-tree accounted storage
+class and native13 `normal_hierarchy` intent. The paid immutable index binds
+real layers, parents, ordered children, subtree ranges, canonical owners and
+leaf stacks. Limits are4096 layers including groups,32 simultaneous group
+frames,4096 nodes/masks and1024 nodes per stack. Empty groups keep canonical
+raster bounds absent and contribute no pixels; derived GIMP group caches are
+not native sample authority. A depth-bounded iterative fold composites each
+isolated group separately, preserving visibility/opacity and old leaf recipes.
+Both-axis chunks account for output and ancestor accumulators; their quantum
+is max(1,floor(max_pixels/(depth+2))), with independent runtime work/scratch.
+All hidden and zero-opacity subtrees still receive complete operative proof.
+
+This increment admits full-origin RGB nonlinear650/F32 or750/F64 native-unit
+leaves with original ICC absent and the retained implicit sRGB interpretation.
+Every group/leaf uses modern isolated Normal28 raw tuple(0,-1,-1), resolved
+Linear/Linear/Union. Actual source versions12/13 permit plain or empty stacks;
+nonempty existing ordered point stacks require22. Epochs retain the actual
+version. Version13 is an explicit compatibility extension beyond the observed
+12/22 packet;23 is not granted. Initial hierarchy effect masks must be wholly
+BYTEzero. Physical16MiB/mask and64MiB aggregate admission precedes allocation.
+Successful old fixed-group/separable/Gaussian routes retain priority.
+
+The Source factory retains original cancellation/deadline callbacks through
+paid shape, index, census and full generic validation, including non-Sync
+callbacks. It does not replace original controls with a fresh meter. Selected
+native loading defers generic validation to the paid complete index; selected
+writing uses an immutable actual-Document-bound index. Native13 original
+format/minimum-reader floors precede migration;12-to13 invents no marker.
+Wrong or generic handoffs cannot grant hierarchy storage. Empty current
+filter programs retain that purpose through repeated .pcraft saves/reopen.
+
+Actual nested filter edits, move/remove, layer metadata, history and captured
+controls use full OLD/STAGED/source/lock/view/reply/journal/publication guards.
+Layer selection reuses upstream revision/view semantics. Group disclosure
+copies the actual tree under quota, preserves undo/redo and raw source flags,
+and follows upstream setExpanded reply/revision/history semantics. UI, native,
+web and Headless consumers use the same actual storage owner. General pixel
+painting, nonempty hierarchy masks, group filters, pass-through, layer masks,
+offsets, additional profiles/models and remaining stock operations remain open.
+
+Twelve independently saved GIMP research sources establish raw/public order,
+48 exact seed planes,28 zero masks, activity and empty-group storage facts.
+The observation covers small two-depth trees, not general numerical acceptance.
+Larger/deeper bounded combinations are explicit compatibility policy. Ignored
+integration contracts remain UNRUN and uncompiled. Production compilation is
+recorded separately in execution notes; PhotoCraft tests/runtime/UI/corpus,
+performance and final acceptance remain deferred. Save/reopen is .pcraft;
+this increment does not implement XCF export or complete full stock support.

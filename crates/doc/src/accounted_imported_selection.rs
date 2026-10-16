@@ -144,7 +144,7 @@ pub(super) fn validate(doc: &Document, quota: &BackingQuota, c: &ReadControl<'_>
 // Conservatively retain the complete shared immutable owner envelope in each
 // imported selection snapshot as well as the codec's original physical lease.
 // No bytes are copied, interpreted, hashed or read from a locator here.
-pub(super) fn shared_payloads(doc: &Document, census: &mut CanonicalCensus<'_, '_>, c: &ReadControl<'_>) -> Result<(), BackingError> {
+pub(super) fn shared_payloads(doc: &Document, census: &mut CanonicalCensus<'_>, c: &dyn ModelControl) -> Result<(), BackingError> {
     let mut blob = |bytes: &Arc<Vec<u8>>, already_counted: bool| -> Result<(), BackingError> {
         c.check(1)?;
         if !already_counted {
@@ -468,9 +468,13 @@ pub(super) fn copy_filtered_flat(doc: &Document, quota: &BackingQuota, c: &ReadC
     copy_document_inner(doc, c, false)
 }
 fn copy_document_inner(doc: &Document, c: &ReadControl<'_>, isolated: bool) -> Result<Document, BackingError> {
+    copy_document_inner_layers(doc,c,isolated,None)
+}
+fn copy_document_inner_layers(doc:&Document,c:&ReadControl<'_>,isolated:bool,prepared:Option<Vec<crate::Layer>>)->Result<Document,BackingError>{
     // Called only after the complete selection-specific census and reservations.
     // Every owned string/vector copied below is fallible and polls per record or
     // <=32KiB text chunk. Immutable blobs/backings keep their original guard.
+    let new_layers=if let Some(layers)=prepared{layers}else{
     let mut new_layers = vector(doc.layers.len())?;
     for value in &doc.layers {
         c.check(1)?;
@@ -478,6 +482,8 @@ fn copy_document_inner(doc: &Document, c: &ReadControl<'_>, isolated: bool) -> R
         if isolated { c.check(std::mem::size_of::<crate::LayerMask>() as u64)?; copied.mask = value.mask.clone(); }
         new_layers.push(copied);
     }
+        new_layers
+    };
     let mut text = vector(doc.metadata.text.len())?;
     for (key, value) in &doc.metadata.text {
         c.check(1)?;
@@ -607,3 +613,72 @@ fn copy_document_inner(doc: &Document, c: &ReadControl<'_>, isolated: bool) -> R
 #[cfg(test)]
 #[path = "accounted_imported_selection_tests.rs"]
 mod tests;
+
+pub(super) fn copy_normal_hierarchy(doc:&Document,c:&ReadControl<'_>)->Result<Document,BackingError>{
+    fn layers(values:&[crate::Layer],depth:usize,c:&ReadControl<'_>)->Result<Vec<crate::Layer>,BackingError>{
+        if depth>32{return Err(BackingError::Length)}
+        let mut output=vector(values.len())?;
+        for value in values{c.check(1)?;
+            let content=match &value.content{
+                LayerContent::BackedRaster(backed)=>LayerContent::BackedRaster(backed.clone()),
+                LayerContent::Group(group) if depth<32&&group.artboard.is_none()=>LayerContent::Group(crate::Group{children:layers(&group.children,depth+1,c)?,expanded:group.expanded,artboard:None}),
+                _=>return Err(BackingError::Unsupported),
+            };
+            output.push(layer_with_known_content(value,content,c)?);
+        }Ok(output)
+    }
+    let copied=layers(&doc.layers,0,c)?;
+    copy_document_inner_layers(doc,c,false,Some(copied))
+}
+fn layer_with_known_content(v:&crate::Layer,content:LayerContent,c:&ReadControl<'_>)->Result<crate::Layer,BackingError>{
+    let crate::Layer {
+        indexed_source: _,
+        import_compositing,
+        id,
+        name,
+        visible,
+        locks,
+        blend,
+        opacity,
+        fill_opacity,
+        clipped,
+        mask: _,
+        vector_mask: _,
+        effects,
+        label,
+        content: _,
+        psd_blocks,
+        psd_id,
+        fill_cache: _,
+        link_group,
+        excluded_channels,
+        blend_if,
+        advanced,
+        video: _,
+    } = v;
+    Ok(crate::Layer {
+        indexed_source: None,
+        import_compositing: *import_compositing,
+        id: *id,
+        name: string(name, c)?,
+        visible: *visible,
+        locks: *locks,
+        blend: *blend,
+        opacity: *opacity,
+        fill_opacity: *fill_opacity,
+        clipped: *clipped,
+        mask: None,
+        vector_mask: None,
+        effects: crate::Effects { enabled: effects.enabled, items: Vec::new(), psd_raw: effects.psd_raw.clone(), reference: effects.reference },
+        label: *label,
+        content,
+        psd_blocks: copied(psd_blocks, c)?,
+        psd_id: *psd_id,
+        fill_cache: None,
+        link_group: *link_group,
+        excluded_channels: *excluded_channels,
+        blend_if: crate::blend_if::BlendIf { ranges: copied(&blend_if.ranges, c)? },
+        advanced: *advanced,
+        video: None,
+    })
+}

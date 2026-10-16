@@ -29,21 +29,25 @@ fn backed_display_image_with_owner(
 ) -> Result<(egui::ColorImage, QuotaLease), String> {
     let render = || -> Result<_, String> {
         let builtin_basis = owner
-            .is_some_and(|owner| owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage() || owner.is_readonly_gaussian_group_storage() || owner.is_readonly_flat_composite_storage());
+            .is_some_and(|owner| owner.is_readonly_normal_hierarchy_storage() || owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage() || owner.is_readonly_gaussian_group_storage() || owner.is_readonly_flat_composite_storage());
         // Ordinary profiles require explicit current ICC interpretation. Typed
         // runtime classes validate their own current/source relation below.
         if !builtin_basis && !matches!(doc.working_profile_interpretation, WorkingProfileInterpretation::Icc) {
             return Err("backed canvas requires explicit current ICC".into());
         }
         let bytes = doc.icc_profile.as_deref().ok_or("backed canvas current ICC is missing")?;
-        let quota = doc
+        let quota = if let Some(owner) = owner.filter(|owner| owner.is_readonly_normal_hierarchy_storage()) {
+            // Nested leaves need not have a root-level raster. The actual owner
+            // retains the same quota for its complete tree and native providers.
+            owner.quota()
+        } else { doc
             .layers
             .iter()
             .find_map(|layer| match &layer.content {
                 LayerContent::BackedRaster(backed) => Some(backed.quota()),
                 _ => None,
             })
-            .ok_or("backed canvas has no owned source")?;
+            .ok_or("backed canvas has no owned source")? };
         let work = photocraft_io::accounted_operation_work::OperationWork::legacy(36_000_000u64 * 512);
         let charge = |units| work.check(units);
         let cancelled = || interrupt.cancelled() || work.deadline_expired();

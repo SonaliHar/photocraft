@@ -117,6 +117,7 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
     let prepared = PreparedReply::new(&imported, path, name, authority, &control)?;
     control.check(1).map_err(|e| e.to_string())?;
     match &imported {
+        photocraft_io::OwnedXcfImport::NormalHierarchy(imported) => app.session.add_owned_normal_hierarchy_xcf_import(imported, name, Some(path), &control),
         photocraft_io::OwnedXcfImport::MaskedFilteredFlat(imported) => app.session.add_owned_masked_filtered_flat_xcf_import(imported, name, Some(path), &control),
         photocraft_io::OwnedXcfImport::FilteredFlat(imported) => app.session.add_owned_filtered_flat_xcf_import(imported, name, Some(path), &control),
         photocraft_io::OwnedXcfImport::SeparableBlend(imported) => app.session.add_owned_separable_blend_xcf_import(imported, name, Some(path), &control),
@@ -348,6 +349,7 @@ pub(crate) fn adopt_bytes(app: &mut PhotocraftApp, name: &str, imported: &photoc
     let prepared = PreparedReply::new(imported, "", name, Authority::Interactive, control)?;
     control.check(1).map_err(|e| e.to_string())?;
     match imported {
+        photocraft_io::OwnedXcfImport::NormalHierarchy(value) => app.session.add_owned_normal_hierarchy_xcf_import(value, name, None, control),
         photocraft_io::OwnedXcfImport::MaskedFilteredFlat(value) => app.session.add_owned_masked_filtered_flat_xcf_import(value, name, None, control),
         photocraft_io::OwnedXcfImport::FilteredFlat(value) => app.session.add_owned_filtered_flat_xcf_import(value, name, None, control),
         photocraft_io::OwnedXcfImport::SeparableBlend(value) => app.session.add_owned_separable_blend_xcf_import(value, name, None, control),

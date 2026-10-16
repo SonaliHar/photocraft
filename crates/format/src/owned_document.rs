@@ -15,7 +15,7 @@ mod finite_catalog;
 mod save;
 mod source;
 use accounting::RetainedReservations;
-pub use save::{save_accounted_current_document_archive, save_accounted_masked_filtered_flat_document_archive, save_accounted_point_f32_coverage_document_archive, save_current_document_archive};
+pub use save::{save_accounted_normal_hierarchy_document_archive,save_accounted_current_document_archive, save_accounted_masked_filtered_flat_document_archive, save_accounted_point_f32_coverage_document_archive, save_current_document_archive};
 
 /// Standard owned-codec per-raster logical ceiling. This is a descriptor allowance,
 /// not a resident allocation or encoded archive allowance. Native-large remains
@@ -76,6 +76,7 @@ pub struct OwnedDocumentArchive {
 // This is a stack-only choice. Neither native manifest data nor an archive
 // loader selects the immutable storage class on the caller's behalf.
 enum AccountedHandoff {
+    ReadonlyNormalHierarchyStorage,
     Document,
     ReadonlyThresholdAlphaStorage,
     ReadonlyHistogramThresholdStorage,
@@ -157,6 +158,7 @@ impl OwnedDocumentArchive {
 
     /// Marker-only selected current handoff, never unmarked source authority.
     pub fn into_accounted_readonly_masked_filtered_flat_storage(self,control:&ReadControl<'_>)->Result<photocraft_doc::accounted_document::AccountedDocument>{self.into_accounted_with(control,AccountedHandoff::ReadonlyMaskedFilteredFlatStorage)}
+    pub fn into_accounted_readonly_normal_hierarchy_storage(self,control:&ReadControl<'_>)->Result<photocraft_doc::accounted_document::AccountedDocument>{self.into_accounted_with(control,AccountedHandoff::ReadonlyNormalHierarchyStorage)}
     fn into_accounted_with(self, control: &ReadControl<'_>, handoff: AccountedHandoff) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
         struct NativeRetention {
             _archive: Arc<dyn ImmutableCanonicalArchive>,
@@ -164,7 +166,8 @@ impl OwnedDocumentArchive {
             _owner: photocraft_raster::backing::quota::QuotaLease,
         }
         let valid_handoff = match self.current_storage_hint {
-            None => !matches!(handoff,AccountedHandoff::ReadonlyMaskedFilteredFlatStorage),
+            Some(crate::NativeCurrentStorageHint::NormalHierarchy)=>matches!(handoff,AccountedHandoff::ReadonlyNormalHierarchyStorage),
+            None => !matches!(handoff,AccountedHandoff::ReadonlyMaskedFilteredFlatStorage|AccountedHandoff::ReadonlyNormalHierarchyStorage),
             Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint)=>matches!(handoff,AccountedHandoff::ReadonlyMaskedFilteredFlatStorage),
             Some(crate::NativeCurrentStorageHint::FilteredFlatPoint) => matches!(handoff, AccountedHandoff::ReadonlyFilteredFlatStorage),
             Some(crate::NativeCurrentStorageHint::PointF32Coverage) => matches!(handoff, AccountedHandoff::ReadonlyPointStorage),
@@ -182,6 +185,7 @@ impl OwnedDocumentArchive {
         let Self { document, current_storage_hint, _archive, _model } = self;
         let retention = Arc::new(NativeRetention { _archive, _model, _owner: lease });
         match handoff {
+            AccountedHandoff::ReadonlyNormalHierarchyStorage=>photocraft_doc::accounted_document::AccountedDocument::new_readonly_normal_hierarchy_current_storage(document,retention,quota,control),
             AccountedHandoff::Document => {
                 photocraft_doc::accounted_document::AccountedDocument::from_owned_rehydrating_selection(document, retention, quota, control)
             }
@@ -202,6 +206,7 @@ impl OwnedDocumentArchive {
             }
             AccountedHandoff::ReadonlyMaskedFilteredFlatStorage=>photocraft_doc::accounted_document::AccountedDocument::new_readonly_masked_filtered_flat_point_current_storage(document,retention,quota,control),
             AccountedHandoff::ReadonlyFilteredFlatStorage => match current_storage_hint {
+                Some(crate::NativeCurrentStorageHint::NormalHierarchy)=>return Err(FormatError::Unsupported("hierarchy requires exact handoff".into())),
                 Some(crate::NativeCurrentStorageHint::FilteredFlatPoint) => {
                     photocraft_doc::accounted_document::AccountedDocument::new_readonly_filtered_flat_point_current_storage(document, retention, quota, control)
                 }
@@ -297,6 +302,7 @@ pub fn load_document_from_owned_archive(
         ..*options
     };
     let manifest = crate::store::read_manifest(&source, &options)?;
+    if manifest.current_storage_hint==Some(crate::NativeCurrentStorageHint::NormalHierarchy){crate::normal_hierarchy::preflight(&manifest.document,control)?;}
     fn layers(values: &[crate::manifest::LayerM], depth: usize, control: &ReadControl<'_>) -> Result<usize> {
         if depth > crate::MAX_GROUP_DEPTH {
             return Err(FormatError::LimitExceeded("owned document layer depth".into()));
@@ -332,7 +338,7 @@ pub fn load_document_from_owned_archive(
         legacy_linked_contents: HashMap::new(),
         tiles: HashMap::new(),
     };
-    let document = if manifest.current_storage_hint == Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint){
+    let document = if manifest.current_storage_hint==Some(crate::NativeCurrentStorageHint::NormalHierarchy){loader.document_with_normal_hierarchy_control(&manifest.document,control,&quota)?}else if manifest.current_storage_hint == Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint){
         loader.document_with_mask_set_control(&manifest.document,control,&quota)?
     }else if manifest.current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
         loader.document_with_coverage_control(&manifest.document, control.interrupt, Some(control))?

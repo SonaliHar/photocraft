@@ -2,6 +2,8 @@
 //! Rc/map publication uses bounded prepaid standard allocations, not a complete
 //! fallible allocator or process RSS guarantee. No consumed storage DTO escapes.
 use super::*;
+#[path="staged_normal_hierarchy.rs"]
+pub(in crate::xcf_import) mod staged_normal_hierarchy;
 use photocraft_raster::staged::{StagedSurfaceBuilder, StagingBudget};
 use photocraft_xcf::{BudgetKind, PlaneDescriptor, PlaneRole, PlaneSink, PlaneSinkControl, Reservation};
 use std::{cell::RefCell, marker::PhantomData, rc::Rc};
@@ -42,6 +44,7 @@ trait StagePolicy {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SelectedStagedFamily {
     Plain,
+    NormalHierarchy,
     FilteredFlat,
     MaskedFilteredFlat,
     FilteredFlatOpacity,
@@ -65,6 +68,7 @@ impl std::fmt::Debug for SelectedStagedFamily {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Plain => "Plain",
+            Self::NormalHierarchy => "NormalHierarchy",
             Self::FilteredFlat => "FilteredFlat",
             Self::MaskedFilteredFlat => "MaskedFilteredFlat",
             Self::FilteredFlatOpacity => "FilteredFlatOpacity",
@@ -98,6 +102,11 @@ impl StagePolicy for SourceSelectedPolicy {
             if staged_filtered_flat::hint(file,ctl,budget)?{if staged_masked_filtered_flat::hint(file,ctl,budget)?{return Ok(SelectedStagedFamily::MaskedFilteredFlat);}return Ok(if staged_filtered_flat::opacity::has_nonunit(file,ctl,budget)? {SelectedStagedFamily::FilteredFlatOpacity}else{SelectedStagedFamily::FilteredFlat})}
         }
         let old=Self::family(file);
+        if old==SelectedStagedFamily::IsolatedNormalGroup {
+            let budget=shared.ok_or_else(||IoError::Unsupported("hierarchy priority accounting".into()))?;
+            if staged_normal_hierarchy::intrinsic_old_partition(file,ctl,budget)?{return Ok(SelectedStagedFamily::NormalHierarchy)}
+        }
+
         if old==SelectedStagedFamily::Point(crate::xcf_filters::PointReplaceFamily::Exposure) {
             let budget=shared.ok_or_else(||IoError::Unsupported("masked source selection accounting".into()))?;
             if crate::xcf_point_replace_source::masked_exposure_source::hint(file,ctl,budget)? {return Ok(SelectedStagedFamily::Point(crate::xcf_filters::PointReplaceFamily::MaskedExposure));}
@@ -111,6 +120,8 @@ impl StagePolicy for SourceSelectedPolicy {
             }
         }
         if old!=SelectedStagedFamily::Plain{return Ok(old)}
+        let hierarchy_budget=shared.ok_or_else(||IoError::Unsupported("hierarchy selection accounting".into()))?;
+        if staged_normal_hierarchy::hint(file,ctl,hierarchy_budget)?{return Ok(SelectedStagedFamily::NormalHierarchy)}
         let budget=shared.ok_or_else(||IoError::Unsupported("selected source requires accounting".into()))?;
         if staged_filtered_flat::hint(file,ctl,budget)?{if staged_masked_filtered_flat::hint(file,ctl,budget)?{return Ok(SelectedStagedFamily::MaskedFilteredFlat);}return Ok(if staged_filtered_flat::opacity::has_nonunit(file,ctl,budget)? {SelectedStagedFamily::FilteredFlatOpacity}else{SelectedStagedFamily::FilteredFlat})}
         if separable_blend::general_hint(file,ctl,budget)?{Ok(SelectedStagedFamily::SeparableBlend)}else{Ok(old)}
@@ -203,6 +214,7 @@ enum Storage {
 struct StagedPlane<'b, 'a, P: StagePolicy = PlainPolicy> {
     descriptor: PlaneDescriptor,
     masked_mixed_plan: bool,
+    hierarchy_plan:bool,
     // Actual raster must die before its last reservation token.
     storage: Storage,
     _token: Token<'b, 'a>,
@@ -277,7 +289,7 @@ impl<'b, 'a, P: StagePolicy> PlaneSink for Sink<'b, 'a, '_, '_, P> {
         Ok(())
     }
     fn mask_coverage_policy(&self,d:&PlaneDescriptor)->photocraft_xcf::MaskCoveragePolicy{
-        if self.descriptor_plan.is_some()&&d.role==photocraft_xcf::PlaneRole::Mask&&self.active.as_ref().is_some_and(|(actual,_)|actual==d){photocraft_xcf::MaskCoveragePolicy::CheckedF32Preimage}else{photocraft_xcf::MaskCoveragePolicy::StrictUnit}
+        if self.descriptor_plan.as_ref().is_some_and(|p|!p.hierarchy_upgrade())&&d.role==photocraft_xcf::PlaneRole::Mask&&self.active.as_ref().is_some_and(|(actual,_)|actual==d){photocraft_xcf::MaskCoveragePolicy::CheckedF32Preimage}else{photocraft_xcf::MaskCoveragePolicy::StrictUnit}
     }
     fn begin(&mut self, d: &PlaneDescriptor, control: &mut PlaneSinkControl<'_, '_, '_>) -> Result<(), XcfError> {
         control.poll()?;
@@ -376,7 +388,7 @@ impl<'b, 'a, P: StagePolicy> PlaneSink for Sink<'b, 'a, '_, '_, P> {
         let (surface, lease) = staged.into_parts();
         let token = Rc::new(LeaseToken { _surface: lease, _metadata: metadata, budget: self.budget });
         self.tokens.push(Rc::clone(&token));
-        Ok(StagedPlane { descriptor, masked_mixed_plan:self.descriptor_plan.as_ref().is_some_and(|p|p.mixed_upgrade()), storage: Storage::Ready(surface), _token: token, _policy: PhantomData })
+        Ok(StagedPlane { descriptor, masked_mixed_plan:self.descriptor_plan.as_ref().is_some_and(|p|p.mixed_upgrade()),hierarchy_plan:self.descriptor_plan.as_ref().is_some_and(|p|p.hierarchy_upgrade()), storage: Storage::Ready(surface), _token: token, _policy: PhantomData })
     }
     fn abort(&mut self) {
         self.active.take();
@@ -461,6 +473,7 @@ impl<P: StagePolicy> StagedPlane<'_, '_, P> {
     }
 }
 impl<P: StagePolicy> ExactParsedPlane for StagedPlane<'_, '_, P> {
+    fn allows_normal_hierarchy_source(&self)->bool{self.hierarchy_plan}
     fn allows_masked_mixed_source_upgrade(&self)->bool{self.masked_mixed_plan}
     fn descriptor(&self) -> plane::ParsedPlaneDescriptor {
         StagedPlane::descriptor(self)
@@ -487,6 +500,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         if P::SOURCE_SELECTED { threshold_alpha_domain } else { Self::requires_budgeted_rendering_preparation() }
     }
     fn requires_budgeted_filtered_flat_preparation(domain:bool)->bool{P::SOURCE_SELECTED && domain}
+    fn requires_budgeted_normal_hierarchy_preparation(domain:bool)->bool{P::SOURCE_SELECTED && domain}
     fn requires_budgeted_point_preparation(point_domain: bool) -> bool {
         P::SOURCE_SELECTED && point_domain
     }
@@ -503,6 +517,9 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn requires_budgeted_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn requires_budgeted_general_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn effective_profile(file: &XcfFile<Self>, space: photocraft_cms::ColorSpace, ce: photocraft_cms::xcf_color::Encoding, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<photocraft_cms::Profile, IoError> {
+        if P::SOURCE_SELECTED && P::family_controlled(file,ctl,shared)?==SelectedStagedFamily::NormalHierarchy {
+            return photocraft_cms::xcf_color::effective_profile(None,space,ce).map_err(|e|IoError::Unsupported(format!("hierarchy implicit effective profile: {e}")));
+        }
         if matches!(P::family(file), SelectedStagedFamily::Neighborhood(NeighborhoodSourceFamily::BoxGeometryGrayF32 | NeighborhoodSourceFamily::BoxGeometryGrayF64 | NeighborhoodSourceFamily::BoxGeometryGrayLinearF32 | NeighborhoodSourceFamily::BoxGeometryGrayLinearF64 | NeighborhoodSourceFamily::BoxGeometryGrayPerceptualF32 | NeighborhoodSourceFamily::BoxGeometryGrayPerceptualF64 | NeighborhoodSourceFamily::BoxGeometryLinearF32 | NeighborhoodSourceFamily::BoxGeometryLinearF64 | NeighborhoodSourceFamily::BoxGeometryPerceptualF32 | NeighborhoodSourceFamily::BoxGeometryPerceptualF64)) {
             return implicit_box_effective(file,space,ce,ctl,shared.ok_or_else(||IoError::Unsupported("implicit transfer Box profile needs accounting".into()))?);
         }
@@ -514,6 +531,8 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
         let family = P::family_controlled(file,ctl,shared)?;
+        let hierarchy=family==SelectedStagedFamily::NormalHierarchy;
+        if hierarchy{staged_normal_hierarchy::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("hierarchy Source accounting".into()))?)?;}
         let masked_filtered_flat=family==SelectedStagedFamily::MaskedFilteredFlat;
         if masked_filtered_flat{staged_masked_filtered_flat::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("masked mixed source accounting".into()))?)?;}
         let filtered_flat_opacity=family==SelectedStagedFamily::FilteredFlatOpacity;
@@ -589,7 +608,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             }
             Some(expected)
         } else { None };
-        if filtered_flat || separable || gaussian_group || group || geometry || point.is_some() || owned_point.is_some() || neighborhood.is_some() {
+        if hierarchy || filtered_flat || separable || gaussian_group || group || geometry || point.is_some() || owned_point.is_some() || neighborhood.is_some() {
             // Full original source, precision, geometry, mask flags and unit
             // domains were just checked by the unchanged classifier policy.
         } else if histogram {
@@ -618,7 +637,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         }
         for d in &file.layers {
             ctl.check().map_err(|_| IoError::Cancelled)?;
-            if !filtered_flat
+            if !hierarchy && !filtered_flat
                 && !threshold
                 && !geometry
                 && !group
@@ -645,7 +664,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             // The parser deliberately skips the non-authoritative group projection.
             // The exact shared predicate above requires it absent; only leaves
             // and the optional physical mask retain real staged storage.
-            if (group || gaussian_group) && d.group { continue; }
+            if (hierarchy || group || gaussian_group) && d.group { continue; }
             let p = d.plane.as_ref().ok_or_else(|| unsupported(d, "staged owner missing pixels"))?;
             if p.descriptor.width != d.width
                 || p.descriptor.height != d.height
@@ -666,6 +685,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             validate_drawable_alpha(d, point.is_some(), false, ctl, 0)?;
         }
         let mut domains = admission::AdmissionDomains {
+            normal_hierarchy_domain:hierarchy,
             filtered_flat_domain:filtered_flat && !filtered_flat_opacity,
             masked_filtered_flat_domain:masked_filtered_flat,
             filtered_flat_opacity_domain:filtered_flat_opacity,
@@ -1042,6 +1062,7 @@ mod threshold_alpha_tests;
 mod tests {
     use super::super::plane::fixture;
     use super::*;
+
     struct Bytes(Vec<u8>);
     impl photocraft_xcf::Source for Bytes {
         fn len(&self) -> u64 {

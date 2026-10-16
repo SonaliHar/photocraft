@@ -35,6 +35,8 @@ mod flat_composite_readonly;
 mod filtered_flat_readonly;
 #[path = "accounted_masked_filtered_flat_readonly.rs"]
 mod masked_filtered_flat_readonly;
+#[path="accounted_normal_hierarchy_readonly.rs"]
+mod normal_hierarchy_readonly;
 pub use flat_composite_readonly::FlatCompositeCompositionPatch;
 pub use gaussian_group_readonly::{GaussianGroupEnabledPatch, GaussianGroupPatch};
 pub use point_readonly::{AssignedPointEnabledPatch, PointArgumentPatch, PointArgumentValue, PointFilterMovePatch, PointFilterPatch, PointFilterRemovePatch};
@@ -62,6 +64,12 @@ mod imported_isolated_group;
 #[path = "accounted_document/plain_xcf_inspection.rs"]
 mod plain_xcf_inspection;
 
+// Private accounting callback polymorphism; public ReadControl remains Sync.
+trait ModelControl {
+    fn check(&self,units:u64)->Result<(),BackingError>;
+    fn sync_control(&self)->&ReadControl<'_>;
+}
+impl ModelControl for ReadControl<'_>{fn check(&self,units:u64)->Result<(),BackingError>{ReadControl::check(self,units)}fn sync_control(&self)->&ReadControl<'_>{self}}
 struct ModelCharges {
     _index: QuotaLease,
     _payload: QuotaLease,
@@ -92,6 +100,7 @@ enum StorageClass {
     ReadonlyFlatComposite,
     ReadonlyFilteredFlatPoint,
     ReadonlyMaskedFilteredFlatPoint,
+    ReadonlyNormalHierarchy,
 }
 struct ModelOwner {
     _storage_class: StorageClass,
@@ -216,6 +225,8 @@ impl AccountedHistory {
         let domain = imported_edits::validate_owner(self.current()?, edit, control)?;
         let unchanged = if domain == imported_edits::EditDomain::GaussianGroup {
             gaussian_group_readonly::metadata::noop(self.current()?, edit, control)?
+        } else if domain == imported_edits::EditDomain::NormalHierarchyMetadata {
+            normal_hierarchy_readonly::metadata::noop(self.current()?,edit,control)?
         } else if domain == imported_edits::EditDomain::FilteredFlatMetadata {
             filtered_flat_readonly::metadata::noop(self.current()?, edit, control)?
         } else { is_noop(self.current()?.document(), edit, control)? };
@@ -408,6 +419,8 @@ impl AccountedDocument {
     /// Borrowed preflight for the closed imported current-metadata transaction.
     /// No allocation or mutation authority; final try_edit repeats these gates.
     pub fn validate_imported_metadata_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<(), BackingError> {
+        if self.is_readonly_normal_hierarchy_storage(){return normal_hierarchy_readonly::metadata::validate(self,edit,control);}
+
         if self.is_readonly_filtered_flat_point_storage() || self.is_readonly_masked_filtered_flat_point_storage() {
             return filtered_flat_readonly::metadata::validate(self, edit, control);
         }
@@ -461,6 +474,8 @@ impl AccountedDocument {
     /// Unknown collections refuse before clone. Native COW allocation uses the
     /// same source ledger and never replaces immutable source/default samples.
     pub fn try_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<Self, BackingError> {
+        if self.is_readonly_normal_hierarchy_storage(){return normal_hierarchy_readonly::metadata::edited(self,edit,control);}
+
         if self.is_readonly_filtered_flat_point_storage() || self.is_readonly_masked_filtered_flat_point_storage() {
             return filtered_flat_readonly::metadata::edited(self, edit, control);
         }
@@ -687,7 +702,7 @@ impl AccountedDocument {
     /// larger canonical-row bound belongs only to the new runtime class and
     /// does not grant selection or command mutation authority.
     pub fn accounted_layer_access(&self, id: LayerId, control: &ReadControl<'_>) -> Result<Option<AccountedLayerAccess<'_>>, BackingError> {
-        let limit = if self.is_readonly_filtered_flat_point_storage() || self.is_readonly_masked_filtered_flat_point_storage() { 8192 } else { 4096 };
+        let limit = if self.is_readonly_normal_hierarchy_storage() || self.is_readonly_filtered_flat_point_storage() || self.is_readonly_masked_filtered_flat_point_storage() { 8192 } else { 4096 };
         accounted_layer_access_with_limit(self.document(), id, control, limit)
     }
 }
@@ -864,7 +879,7 @@ fn census_with_mask_policy(
     imported_selection: bool,
     selection_guard: Option<&AccountedSelection>,
     expected_quota: &BackingQuota,
-    control: &ReadControl<'_>,
+    control: &dyn ModelControl,
     readonly_masks: ReadonlyMaskPolicy,
 ) -> Result<ModelCensus, BackingError> {
     let crate::Metadata { xmp: _, exif: _, psd_resources: _, psd_global_blocks: _, text: _ } = &doc.metadata;
@@ -950,7 +965,7 @@ fn census_with_mask_policy(
                 || (!imported_selection && (doc.xcf_state.is_some() || doc.source_color_context.is_some()))
                 || !selection_format_allowed(guard.format(), doc.depth)
                 || !doc.bounds().contains_rect(&guard.bounds())
-                || !guard.matches(surface, expected_quota, control)?
+                || !guard.matches(surface, expected_quota, control.sync_control())?
             {
                 return Err(BackingError::Unsupported);
             }
@@ -1024,7 +1039,7 @@ fn census_layers(
     depth: usize,
     count: &mut usize,
     mask_tiles: &mut usize,
-    control: &ReadControl<'_>,
+    control: &dyn ModelControl,
 ) -> Result<(), BackingError> {
     if depth > crate::MAX_GROUP_DEPTH {
         return Err(BackingError::Length);
@@ -1108,7 +1123,7 @@ fn add_vec<T>(size: &mut u64, value: &Vec<T>, actual: bool) -> Result<(), Backin
 /// codec-owned retention guard covers the original physical Surface; only the
 /// inline Arc handle is copied with Layer. This admits ownership, not rendering
 /// semantics or unaccounted generic mask mutation.
-fn validate_shared_mask(mask: &crate::LayerMask, total_tiles: &mut usize, control: &ReadControl<'_>) -> Result<(), BackingError> {
+fn validate_shared_mask(mask: &crate::LayerMask, total_tiles: &mut usize, control: &dyn ModelControl) -> Result<(), BackingError> {
     let crate::LayerMask { surface, enabled: _, linked: _, density: _, feather: _ } = mask;
     let format = surface.format();
     if format.mode != crate::ColorMode::Grayscale || format.alpha {
@@ -1191,17 +1206,17 @@ fn sync_current_item(document: &mut Document, edit: AccountedEdit<'_>) -> Result
 /// evidence; clones copy owned buffers and share immutable Arc payloads.
 #[derive(Clone, Copy)]
 enum ReadonlyMaskPolicy { None, Threshold, Point, FilteredFlat }
-struct CanonicalCensus<'a, 'i> {
+struct CanonicalCensus<'a> {
     readonly_masks: ReadonlyMaskPolicy,
     counted: ModelCensus,
     text: u64,
     resources: u64,
     visits: usize,
     actual: bool,
-    control: &'a ReadControl<'i>,
+    control: &'a dyn ModelControl,
 }
-impl<'a, 'i> CanonicalCensus<'a, 'i> {
-    fn new(index: u64, actual: bool, control: &'a ReadControl<'i>) -> Self {
+impl<'a> CanonicalCensus<'a> {
+    fn new(index: u64, actual: bool, control: &'a dyn ModelControl) -> Self {
         Self { readonly_masks: ReadonlyMaskPolicy::None, counted: ModelCensus { index, payload: 0 }, text: 0, resources: 0, visits: 0, actual, control }
     }
     fn visit(&mut self) -> Result<(), BackingError> {

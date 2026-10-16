@@ -90,7 +90,7 @@ pub(crate) fn validate_resolution(resolution: &photocraft_doc::PhysicalResolutio
 pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> Result<OwnedFilterInspectReply> {
     let (offset, limit) = pagination(params, control)?;
     let owner = session.active().ok_or(EngineError::NoDocument)?.doc.accounted().ok_or(BackingError::Unsupported)?;
-    if owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage() {
+    if owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage() {
         return filtered_flat::prepare(owner,offset,limit,control);
     } else if owner.is_readonly_flat_composite_storage() {
         return crate::accounted_plain_xcf_inspect::prepare_flat_composite(owner,offset,limit,control);

@@ -9,11 +9,11 @@ use photocraft_doc::{
 };
 
 #[derive(Clone,Copy,PartialEq,Eq)]
-enum Route { Original, Masked }
+enum Route { Original, Masked, Hierarchy }
 impl Route {
- fn owner(o:&AccountedDocument)->Option<Self>{if o.is_readonly_masked_filtered_flat_point_storage(){Some(Self::Masked)}else if o.is_readonly_filtered_flat_point_storage(){Some(Self::Original)}else{None}}
- fn validate(self,o:&AccountedDocument,c:&ReadControl<'_>)->Result<()>{if Self::owner(o)!=Some(self){return Err(BackingError::Unsupported.into())}match self{Self::Original=>Ok(o.validate_readonly_filtered_flat_point_storage(c)?),Self::Masked=>Ok(o.validate_readonly_masked_filtered_flat_point_storage(c)?)}}
- fn recipe(self,o:&AccountedDocument,c:&ReadControl<'_>)->Result<()>{if Self::owner(o)!=Some(self){return Err(BackingError::Unsupported.into())}match self{Self::Original=>crate::accounted_xcf_open::filtered_flat::validate_current_filtered_flat_storage(o,c),Self::Masked=>crate::accounted_xcf_open::masked_filtered_flat::validate_current_masked_filtered_flat_storage(o,c)}}
+ fn owner(o:&AccountedDocument)->Option<Self>{if o.is_readonly_normal_hierarchy_storage(){Some(Self::Hierarchy)}else if o.is_readonly_masked_filtered_flat_point_storage(){Some(Self::Masked)}else if o.is_readonly_filtered_flat_point_storage(){Some(Self::Original)}else{None}}
+ fn validate(self,o:&AccountedDocument,c:&ReadControl<'_>)->Result<()>{if Self::owner(o)!=Some(self){return Err(BackingError::Unsupported.into())}match self{Self::Original=>Ok(o.validate_readonly_filtered_flat_point_storage(c)?),Self::Masked=>Ok(o.validate_readonly_masked_filtered_flat_point_storage(c)?),Self::Hierarchy=>Ok(o.validate_readonly_normal_hierarchy_storage(c)?)}}
+ fn recipe(self,o:&AccountedDocument,c:&ReadControl<'_>)->Result<()>{if Self::owner(o)!=Some(self){return Err(BackingError::Unsupported.into())}match self{Self::Original=>crate::accounted_xcf_open::filtered_flat::validate_current_filtered_flat_storage(o,c),Self::Masked=>crate::accounted_xcf_open::masked_filtered_flat::validate_current_masked_filtered_flat_storage(o,c),Self::Hierarchy=>crate::accounted_xcf_open::normal_hierarchy::validate_current_normal_hierarchy_storage(o,c)}}
 }
 fn masked_kind(n:&photocraft_doc::xcf_filters::FilterNode)->Option<photocraft_compose::MaskedMixedKind>{
  use photocraft_compose::MaskedMixedKind as K;
@@ -246,6 +246,9 @@ pub fn candidate(owner: &AccountedDocument, layer: LayerId, node: &photocraft_do
 pub fn masked_candidate(owner:&AccountedDocument,layer:LayerId,node:&photocraft_doc::xcf_filters::FilterNode)->bool{
  if !owner.is_readonly_masked_filtered_flat_point_storage(){return false} candidate_route(Route::Masked,owner,layer,node)
 }
+pub fn hierarchy_candidate(owner:&AccountedDocument,layer:LayerId,node:&photocraft_doc::xcf_filters::FilterNode)->bool{
+ if !owner.is_readonly_normal_hierarchy_storage(){return false} candidate_route(Route::Hierarchy,owner,layer,node)
+}
 fn candidate_route(route:Route,owner:&AccountedDocument,layer:LayerId,node:&photocraft_doc::xcf_filters::FilterNode)->bool{
     if Route::owner(owner)!=Some(route) || node.id.0==0 || !(valid_node(node)||route==Route::Masked&&masked_kind(node).is_some()&&node.opacity_f64_bits==1.0f64.to_bits()) {
         return false;
@@ -255,7 +258,7 @@ fn candidate_route(route:Route,owner:&AccountedDocument,layer:LayerId,node:&phot
     if doc.layers.len() > 4096 || state.filter_stacks.len() > 4096 {
         return false;
     }
-    doc.layers.iter().any(|l| l.id == layer)
+    (route==Route::Hierarchy || doc.layers.iter().any(|l| l.id == layer))
         && state.filter_stacks.iter().any(|s| s.owner == ItemRef::Layer(layer) && s.nodes.len()<=1024 && s.nodes.iter().any(|n|std::ptr::eq(n,node)))
 }
 fn context(session: &Session, id: &str, params: &Value) -> Result<()> {
@@ -279,11 +282,23 @@ fn context(session: &Session, id: &str, params: &Value) -> Result<()> {
     }
     Ok(())
 }
+#[derive(Clone,Copy,PartialEq,Eq)]
+struct TreeWitness{ordinal:usize,parent:Option<usize>,canonical:usize}
+fn tree_witness(owner:&AccountedDocument,layer:LayerId,c:&ReadControl<'_>)->Result<Option<TreeWitness>>{
+ if !owner.is_readonly_normal_hierarchy_storage(){return Ok(None)}
+ let index=owner.checked_readonly_normal_hierarchy_index(c)?;
+ let mut found=None;
+ for row in index.rows(){c.check(1)?;if row.layer.id==layer{
+   if found.is_some()||!matches!(row.layer.content,photocraft_doc::LayerContent::BackedRaster(_)){return Err(BackingError::Integrity.into())}
+   found=Some(TreeWitness{ordinal:row.ordinal,parent:row.parent,canonical:row.canonical_item_index});
+ }}
+ found.map(Some).ok_or_else(||BackingError::Bounds.into())
+}
 fn target<'a>(
     owner: &'a AccountedDocument,
     id: FilterId,
     c: &ReadControl<'_>,
-) -> Result<(&'a photocraft_doc::xcf_filters::FilterStack, &'a photocraft_doc::xcf_filters::FilterNode, LayerId,usize)> {
+) -> Result<(&'a photocraft_doc::xcf_filters::FilterStack, &'a photocraft_doc::xcf_filters::FilterNode, LayerId,usize,Option<TreeWitness>)> {
     let state = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     if state.filter_stacks.len() > 4096 {
         return Err(BackingError::Length.into());
@@ -299,7 +314,7 @@ fn target<'a>(
                 let ItemRef::Layer(layer)=stack.owner else{return Err(BackingError::Integrity.into())};
                 c.check(owner.document().layers.len().checked_add(state.filter_stacks.len()).and_then(|n|n.checked_add(nodes)).ok_or(BackingError::Length)? as u64)?;
                 if !candidate_route(Route::owner(owner).ok_or(BackingError::Unsupported)?,owner,layer,node){return Err(BackingError::Unsupported.into())}
-                found=Some((stack,node,layer,index));
+                found=Some((stack,node,layer,index,tree_witness(owner,layer,c)?));
             }
         }
     }
@@ -333,13 +348,13 @@ fn stage_patches<const N:usize>(route:Route,owner:&AccountedDocument,fields:&Fie
             *slot = PointArgumentPatch { name: argument.name, value: argument.value };
         }
         let staged = if id=="xcf.filter.remove" {
-            match route{Route::Original=>owner.try_remove_readonly_filtered_flat_point_filter(PointFilterRemovePatch{layer,filter:fields.filter,expected_stack_revision:revision},ctl)?,Route::Masked=>owner.try_remove_readonly_masked_filtered_flat_point_filter(PointFilterRemovePatch{layer,filter:fields.filter,expected_stack_revision:revision},ctl)?}
+            match route{Route::Original=>owner.try_remove_readonly_filtered_flat_point_filter(PointFilterRemovePatch{layer,filter:fields.filter,expected_stack_revision:revision},ctl)?,Route::Masked=>owner.try_remove_readonly_masked_filtered_flat_point_filter(PointFilterRemovePatch{layer,filter:fields.filter,expected_stack_revision:revision},ctl)?,Route::Hierarchy=>owner.try_remove_readonly_normal_hierarchy_filter(PointFilterRemovePatch{layer,filter:fields.filter,expected_stack_revision:revision},ctl)?}
         } else if let Some(index)=move_to {
             if index>=stack_len{return Err(bad(id,"index is outside the current owner stack"))}
-            match route{Route::Original=>owner.try_move_readonly_filtered_flat_point_filter(PointFilterMovePatch{layer,filter:fields.filter,expected_stack_revision:revision,index},ctl)?,Route::Masked=>owner.try_move_readonly_masked_filtered_flat_point_filter(PointFilterMovePatch{layer,filter:fields.filter,expected_stack_revision:revision,index},ctl)?}
+            match route{Route::Original=>owner.try_move_readonly_filtered_flat_point_filter(PointFilterMovePatch{layer,filter:fields.filter,expected_stack_revision:revision,index},ctl)?,Route::Masked=>owner.try_move_readonly_masked_filtered_flat_point_filter(PointFilterMovePatch{layer,filter:fields.filter,expected_stack_revision:revision,index},ctl)?,Route::Hierarchy=>owner.try_move_readonly_normal_hierarchy_filter(PointFilterMovePatch{layer,filter:fields.filter,expected_stack_revision:revision,index},ctl)?}
         } else {
  let patch=PointFilterPatch{layer,filter:fields.filter,expected_stack_revision:revision,arguments:patches.get(..fields.count).ok_or(BackingError::Integrity)?,enabled:fields.enabled};
- match route{Route::Original=>owner.try_with_readonly_filtered_flat_point_filter_with_opacity(patch,fields.opacity,ctl)?,Route::Masked=>owner.try_with_readonly_masked_filtered_flat_point_filter_with_opacity(patch,fields.opacity,ctl)?}
+ match route{Route::Original=>owner.try_with_readonly_filtered_flat_point_filter_with_opacity(patch,fields.opacity,ctl)?,Route::Masked=>owner.try_with_readonly_masked_filtered_flat_point_filter_with_opacity(patch,fields.opacity,ctl)?,Route::Hierarchy=>owner.try_with_readonly_normal_hierarchy_filter_with_opacity(patch,fields.opacity,ctl)?}
  };
         route.recipe(&staged, ctl)?;
         Ok(staged)
@@ -394,7 +409,7 @@ impl<'a> Request<'a> {
         // this is not a generic ten-field command permission.
         if fields.count > 3 {
             let owner = session.active().and_then(|s| s.doc.accounted()).ok_or(BackingError::Unsupported)?;
-            let (_, node, _, _) = target(owner, fields.filter, c)?;
+            let (_, node, _, _, _) = target(owner, fields.filter, c)?;
             let kind=route_family(route,node).ok_or(BackingError::Unsupported)?;
             if fields.count>patch_limit(kind) {return Err(bad(id,"patch count exceeds the actual target family"));}
         }
@@ -409,7 +424,7 @@ impl<'a> Request<'a> {
             return Err(BackingError::Integrity.into());
         }
         self.route.recipe(owner, ctl)?;
-        let (stack, node, layer,node_index) = target(owner, self.fields.filter, ctl)?;
+        let (stack, node, layer,node_index,tree) = target(owner, self.fields.filter, ctl)?;
         let kind = route_family(self.route,node).ok_or(BackingError::Unsupported)?;
         if self.route==Route::Masked && masked_kind(node).is_some() && self.fields.opacity.is_some_and(|b|b!=1.0f64.to_bits()){return Err(BackingError::Unsupported.into())}
         if self.fields.count > patch_limit(kind) {
@@ -513,6 +528,7 @@ impl<'a> Request<'a> {
             visibility_changed,
             stack_revision: stack.revision,
             node_index,
+            tree,
             updated,
             reply,
             _reply_lease: reply_lease,
@@ -582,6 +598,7 @@ pub(super) struct Prepared<'a> {
     visibility_changed: bool,
     stack_revision: u64,
     node_index:usize,
+    tree:Option<TreeWitness>,
     updated: bool,
     reply: Value,
     _reply_lease: QuotaLease,
@@ -622,8 +639,8 @@ impl Prepared<'_> {
         if !state.history.current()?.shares_state(&state.doc) {
             return Err(BackingError::Integrity.into());
         }
-        let (stack, _, layer,node_index) = target(owner, self.request.fields.filter, ctl)?;
-        if layer != self.layer || stack.revision != self.stack_revision || node_index!=self.node_index {
+        let (stack, _, layer,node_index,tree) = target(owner, self.request.fields.filter, ctl)?;
+        if layer != self.layer || stack.revision != self.stack_revision || node_index!=self.node_index || tree!=self.tree {
             return Err(BackingError::Integrity.into());
         }
         locks(owner, self.layer, self.visibility_changed, ctl)?;

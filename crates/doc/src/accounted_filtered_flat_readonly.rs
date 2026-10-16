@@ -33,7 +33,7 @@ fn rectangle(r: Rect) -> Result<(), BackingError> {
     }
     Ok(())
 }
-fn text(value: &str, c: &ReadControl<'_>) -> Result<(), BackingError> {
+pub(super) fn text(value: &str, c: &dyn ModelControl) -> Result<(), BackingError> {
     if value.len() > 1 << 20 {
         return Err(BackingError::Length);
     }
@@ -45,7 +45,7 @@ fn text(value: &str, c: &ReadControl<'_>) -> Result<(), BackingError> {
     }
     c.check(1)
 }
-fn hash(value: &str, c: &ReadControl<'_>) -> Result<(), BackingError> {
+pub(super) fn hash(value: &str, c: &dyn ModelControl) -> Result<(), BackingError> {
     if value.len() != 64 {
         return Err(BackingError::Integrity);
     }
@@ -55,7 +55,7 @@ fn hash(value: &str, c: &ReadControl<'_>) -> Result<(), BackingError> {
     }
     Ok(())
 }
-fn digest(bytes: &[u8], expected: &str, c: &ReadControl<'_>) -> Result<(), BackingError> {
+pub(super) fn digest(bytes: &[u8], expected: &str, c: &dyn ModelControl) -> Result<(), BackingError> {
     if bytes.len() > 64 << 20 {
         return Err(BackingError::Length);
     }
@@ -79,7 +79,7 @@ pub(super) struct MaskPlan {
     format: crate::PixelFormat,
 }
 impl MaskPlan {
-    fn new(surface: &Surface, bounds: Rect, control: &ReadControl<'_>) -> Result<Self, BackingError> {
+    pub(super) fn new(surface: &Surface, bounds: Rect, control: &dyn ModelControl) -> Result<Self, BackingError> {
         control.check(1)?;
         rectangle(bounds)?;
         if surface.tile_count() > 4096 {
@@ -130,7 +130,7 @@ impl MaskPlan {
             .ok_or(BackingError::Length)?;
         Ok(Self { bytes, bounds, entries: surface.tile_count(), format })
     }
-    fn copy(&self, source: &Surface, control: &ReadControl<'_>) -> Result<Surface, BackingError> {
+    pub(super) fn copy(&self, source: &Surface, control: &ReadControl<'_>) -> Result<Surface, BackingError> {
         let actual = Self::new(source, self.bounds, control)?;
         if actual.bytes != self.bytes || actual.entries != self.entries || actual.format != self.format {
             return Err(BackingError::Integrity);
@@ -145,7 +145,7 @@ impl MaskPlan {
         Ok(copied)
     }
 }
-fn node_shape(node: &FilterNode, control: &ReadControl<'_>) -> Result<PointArgumentShape, BackingError> {
+pub(super) fn node_shape(node: &FilterNode, control: &dyn ModelControl) -> Result<PointArgumentShape, BackingError> {
     control.check(1)?;
     let opacity = f64::from_bits(node.opacity_f64_bits);
     if node.id.0 == 0
@@ -191,10 +191,10 @@ fn node_shape(node: &FilterNode, control: &ReadControl<'_>) -> Result<PointArgum
         }
     }
     text(&composition.compatibility_epoch, control)?;
-    point_argument_shape(&node.arguments, control)
+    point_argument_shape(&node.arguments, control.sync_control())
 }
 
-fn present(doc: &Document, id: ItemRef, c: &ReadControl<'_>) -> Result<(), BackingError> {
+pub(super) fn present(doc: &Document, id: ItemRef, c: &dyn ModelControl) -> Result<(), BackingError> {
     let state = doc.xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     for item in &state.items {
         c.check(1)?;
@@ -616,7 +616,7 @@ fn measured_with_purpose(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>, 
     shape_with_purpose(doc, q, c, purpose)?;
     census_with_mask_policy(doc, true, true, None, q, c, ReadonlyMaskPolicy::FilteredFlat)
 }
-pub(super) fn mask_census(masks: &Vec<FilterMask>, census: &mut CanonicalCensus<'_, '_>) -> Result<(), BackingError> {
+pub(super) fn mask_census(masks: &Vec<FilterMask>, census: &mut CanonicalCensus<'_>) -> Result<(), BackingError> {
     census.vec(masks, 4096)?;
     for mask in masks {
         let plan = MaskPlan::new(&mask.surface, mask.bounds, census.control)?;
@@ -702,7 +702,7 @@ impl AccountedDocument {
         Ok(())
     }
 }
-fn vector<T>(len: usize) -> Result<Vec<T>, BackingError> {
+pub(super) fn vector<T>(len: usize) -> Result<Vec<T>, BackingError> {
     let mut v = Vec::new();
     v.try_reserve_exact(len).map_err(|_| BackingError::Allocation)?;
     if v.capacity() > len.checked_mul(2).ok_or(BackingError::Length)? {
@@ -727,7 +727,7 @@ fn copy_value(v: &FilterValue, c: &ReadControl<'_>) -> Result<FilterValue, Backi
         _ => return refused(),
     })
 }
-fn copy_node(node: &FilterNode, control: &ReadControl<'_>) -> Result<FilterNode, BackingError> {
+pub(super) fn copy_node(node: &FilterNode, control: &ReadControl<'_>) -> Result<FilterNode, BackingError> {
     node_shape(node, control)?;
     let mut arguments = Vec::new();
     arguments.try_reserve_exact(node.arguments.len()).map_err(|_| BackingError::Allocation)?;

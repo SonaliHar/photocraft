@@ -288,3 +288,5 @@ pub fn read_thumbnail(bytes: &[u8]) -> Result<Option<Vec<u8>>> {
 }
 
 mod masked_filtered_flat;
+
+mod normal_hierarchy;

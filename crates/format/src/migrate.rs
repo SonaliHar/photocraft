@@ -21,7 +21,12 @@ pub(crate) const STEPS: &[Step] = &[
     current_storage_hint,
     point_f32_coverage,
     masked_filtered_flat,
+    normal_hierarchy,
 ];
+// 12 -> 13: a new explicit handoff only; absence/old intent remains exact.
+fn normal_hierarchy(value:&mut Value)->Result<()>{
+    if value.get("document").and_then(Value::as_object).is_none(){return Err(FormatError::corrupt("manifest has no document object"))}Ok(())
+}
 // 11 -> 12: new explicit structural handoff only; invent no intent.
 fn masked_filtered_flat(value:&mut Value)->Result<()> {
     if value.get("document").and_then(Value::as_object).is_none(){return Err(FormatError::corrupt("manifest has no document object"))}Ok(())

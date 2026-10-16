@@ -88,13 +88,13 @@ impl Walk<'_, '_> {
     }
 }
 pub(super) fn measure(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>) -> Result<Census, IoError> {
-    measure_inner(doc, budget, control, false, false, false)
+    measure_inner(doc, budget, control, false, false, false, false,std::iter::empty())
 }
 /// Only the sealed staged Threshold Alpha producer may call this sibling seam.
 /// Its original source/Surface receipts remain mandatory; this measures storage.
 pub(in crate::xcf_import) fn measure_threshold(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>) -> Result<Census, IoError> {
     threshold_shape(doc)?;
-    measure_inner(doc, budget, control, true, false, false)
+    measure_inner(doc, budget, control, true, false, false, false,std::iter::empty())
 }
 /// Closed Histogram Threshold source promotion only; not a caller source proof.
 pub(in crate::xcf_import) fn measure_histogram_threshold(
@@ -105,19 +105,24 @@ pub(in crate::xcf_import) fn measure_histogram_threshold(
     control.check().map_err(|_| IoError::Cancelled)?;
     budget.consume_work(32, "histogram threshold census shape").map_err(accounting_error)?;
     histogram_threshold_shape(doc)?;
-    measure_inner(doc, budget, control, true, false, false)
+    measure_inner(doc, budget, control, true, false, false, false,std::iter::empty())
 }
 /// Storage-only shared walker, reached after the sealed Point shape gate.
 pub(in crate::xcf_import) fn measure_point_storage(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>) -> Result<Census, IoError> {
-    measure_inner(doc, budget, control, true, false, false)
+    measure_inner(doc, budget, control, true, false, false, false,std::iter::empty())
 }
-fn measure_inner(
-    doc: &Document,
+pub(in crate::xcf_import) fn measure_normal_hierarchy(doc:&Document,budget:&photocraft_xcf::Budget<'_>,control:&Interrupt<'_>)->Result<Census,IoError>{
+ measure_inner(doc,budget,control,true,false,false,true,super::super::staged_source::staged_normal_hierarchy::layers(doc))
+}
+fn measure_inner<'d,I:Iterator<Item=Result<&'d Layer,IoError>>>(
+    doc: &'d Document,
     budget: &photocraft_xcf::Budget<'_>,
     control: &Interrupt<'_>,
     threshold: bool,
     geometry: bool,
     isolated_group: bool,
+    hierarchy: bool,
+    mut tree:I,
 ) -> Result<Census, IoError> {
     use photocraft_doc::{WorkingProfileInterpretation, physical_resolution::PhysicalUnit, xcf_editing::ItemSetRule};
     control.check().map_err(|_| IoError::Cancelled)?;
@@ -256,7 +261,13 @@ fn measure_inner(
     } else {
         &[]
     };
-    for layer in doc.layers.iter().chain(children.iter()) {
+    let mut flat=doc.layers.iter().chain(children.iter());
+    let mut actual_layers=0usize;
+    loop {
+        let layer=if hierarchy{tree.next().transpose()?}else{flat.next()};
+        let Some(layer)=layer else{break};
+        if hierarchy{control.check().map_err(|_|IoError::Cancelled)?;actual_layers=actual_layers.checked_add(1).ok_or_else(||invalid("hierarchy census count"))?;if actual_layers>4096{return Err(invalid("hierarchy census count"))}}
+
         if isolated_group {
             control.check().map_err(|_| IoError::Cancelled)?;
         }
@@ -272,6 +283,7 @@ fn measure_inner(
         }
         let surface = match &layer.content {
             LayerContent::Raster(surface) => Some(surface),
+            LayerContent::Group(group) if hierarchy && group.artboard.is_none()=>{w.vector(&group.children)?;None},
             LayerContent::Group(_) if isolated_group && layer.id == doc.layers.get(1).ok_or_else(|| invalid("group census root"))?.id => None,
             _ => return Err(invalid("owned plain layer requires genuine staged Surface")),
         };
@@ -596,7 +608,7 @@ pub(in crate::xcf_import) fn measure_analytic_geometry(
     {
         return Err(invalid("analytic geometry census shape"));
     }
-    measure_inner(doc, budget, control, false, true, false)
+    measure_inner(doc, budget, control, false, true, false, false,std::iter::empty())
 }
 
 /// Exact one-level isolated Normal group storage census. The sealed source
@@ -633,7 +645,7 @@ pub(in crate::xcf_import) fn measure_isolated_normal_group(
             return Err(invalid("isolated group census child"));
         }
     }
-    measure_inner(doc, budget, control, false, false, true)
+    measure_inner(doc, budget, control, false, false, true, false,std::iter::empty())
 }
 
 #[cfg(test)]
@@ -680,5 +692,5 @@ pub(in crate::xcf_import) fn measure_isolated_gaussian_group(
     // Existing threshold storage is the bounded flat-node/filter-mask census;
     // existing isolated storage is the four-header/three-store tree census.
     // Their original entry points keep their original flags and shape gates.
-    measure_inner(doc, budget, control, true, false, true)
+    measure_inner(doc, budget, control, true, false, true, false,std::iter::empty())
 }

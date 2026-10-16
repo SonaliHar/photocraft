@@ -12,9 +12,12 @@ pub(super) enum EditDomain {
     FlatComposite,
     PointMetadata,
     FilteredFlatMetadata,
+    NormalHierarchyMetadata,
 }
 
 pub(super) fn validate_owner(owner: &AccountedDocument, edit: AccountedEdit<'_>, c: &ReadControl<'_>) -> Result<EditDomain, BackingError> {
+    if owner.is_readonly_normal_hierarchy_storage(){normal_hierarchy_readonly::metadata::validate(owner,edit,c)?;return Ok(EditDomain::NormalHierarchyMetadata)}
+
     // Actual Point classes admit only the structural compound metadata plan.
     // This runs before generic no-op/history admission and grants no recipe.
     if owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage() {

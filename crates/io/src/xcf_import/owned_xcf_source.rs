@@ -22,6 +22,7 @@ fn backing(error: BackingError) -> IoError {
 /// Actual typed owner returned by the selected original-source family. The enum
 /// itself is not a persisted admission flag or a source/render authority.
 pub enum OwnedXcfImport {
+    NormalHierarchy(owned_normal_hierarchy_source::OwnedNormalHierarchyXcfImport),
     FilteredFlat(owned_filtered_flat_source::OwnedFilteredFlatXcfImport),
     MaskedFilteredFlat(owned_masked_filtered_flat_source::OwnedMaskedFilteredFlatXcfImport),
     SeparableBlend(owned_separable_blend_source::OwnedSeparableBlendXcfImport),
@@ -41,6 +42,7 @@ impl std::fmt::Debug for OwnedXcfImport {
 impl OwnedXcfImport {
     pub fn document(&self) -> &photocraft_doc::accounted_document::AccountedDocument {
         match self {
+            Self::NormalHierarchy(v) => v.document(),
             Self::FilteredFlat(v) => v.document(),
             Self::MaskedFilteredFlat(v) => v.document(),
             Self::SeparableBlend(v) => v.document(),
@@ -55,6 +57,7 @@ impl OwnedXcfImport {
     }
     pub fn warnings(&self) -> &[String] {
         match self {
+            Self::NormalHierarchy(v) => v.warnings(),
             Self::FilteredFlat(v) => v.warnings(),
             Self::MaskedFilteredFlat(v) => v.warnings(),
             Self::SeparableBlend(v) => v.warnings(),
@@ -69,6 +72,7 @@ impl OwnedXcfImport {
     }
     pub fn origin(&self) -> ImportOrigin {
         match self {
+            Self::NormalHierarchy(v) => v.origin(),
             Self::FilteredFlat(v) => v.origin(),
             Self::MaskedFilteredFlat(v) => v.origin(),
             Self::SeparableBlend(v) => v.origin(),
@@ -83,6 +87,7 @@ impl OwnedXcfImport {
     }
     pub fn assessment(&self) -> Option<&crate::xcf_assessment::ImportAssessment> {
         match self {
+            Self::NormalHierarchy(v) => v.assessment(),
             Self::FilteredFlat(v) => v.assessment(),
             Self::MaskedFilteredFlat(v) => v.assessment(),
             Self::SeparableBlend(v) => v.assessment(),
@@ -97,6 +102,7 @@ impl OwnedXcfImport {
     }
     pub fn source_read_only(&self) -> bool {
         match self {
+            Self::NormalHierarchy(v) => v.source_read_only(),
             Self::FilteredFlat(v) => v.source_read_only(),
             Self::MaskedFilteredFlat(v) => v.source_read_only(),
             Self::SeparableBlend(v) => v.source_read_only(),
@@ -111,6 +117,7 @@ impl OwnedXcfImport {
     }
     pub fn preview_only(&self) -> bool {
         match self {
+            Self::NormalHierarchy(v) => v.preview_only(),
             Self::FilteredFlat(v) => v.preview_only(),
             Self::MaskedFilteredFlat(v) => v.preview_only(),
             Self::SeparableBlend(v) => v.preview_only(),
@@ -125,6 +132,7 @@ impl OwnedXcfImport {
     }
     pub fn into_accounted_document(self) -> photocraft_doc::accounted_document::AccountedDocument {
         match self {
+            Self::NormalHierarchy(v) => v.into_accounted_document(),
             Self::FilteredFlat(v) => v.into_accounted_document(),
             Self::MaskedFilteredFlat(v) => v.into_accounted_document(),
             Self::SeparableBlend(v) => v.into_accounted_document(),
@@ -184,6 +192,7 @@ pub fn import_owned_xcf_bytes_in_quota(
     let family = source.family();
     let context = Context { quota: quota.clone(), control };
     match family {
+        staged_selected_source::SelectedStagedFamily::NormalHierarchy=>owned_normal_hierarchy_source::promote_source(source,&budget,quota,control,&mut preparation.hold).map(OwnedXcfImport::NormalHierarchy),
         staged_selected_source::SelectedStagedFamily::MaskedFilteredFlat => owned_masked_filtered_flat_source::promote_source(source,&budget,quota,control,&mut preparation.hold).map(OwnedXcfImport::MaskedFilteredFlat),
         staged_selected_source::SelectedStagedFamily::FilteredFlat | staged_selected_source::SelectedStagedFamily::FilteredFlatOpacity => owned_filtered_flat_source::promote_source(source,&budget,quota,control,&mut preparation.hold).map(OwnedXcfImport::FilteredFlat),
         staged_selected_source::SelectedStagedFamily::SeparableBlend => owned_separable_blend_source::promote_source(source, &budget, &effective, aggregate, &context, &mut preparation.hold, control.interrupt).map(OwnedXcfImport::SeparableBlend),

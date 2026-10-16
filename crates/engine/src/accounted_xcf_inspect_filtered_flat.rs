@@ -6,7 +6,7 @@ pub(super) fn prepare(
     limit: usize,
     control: &ReadControl<'_>,
 ) -> Result<OwnedFilterInspectReply> {
-    if owner.is_readonly_masked_filtered_flat_point_storage(){owner.validate_readonly_masked_filtered_flat_point_storage(control)?;}else{owner.validate_readonly_filtered_flat_point_storage(control)?;}
+    if owner.is_readonly_normal_hierarchy_storage(){owner.validate_readonly_normal_hierarchy_storage(control)?;}else if owner.is_readonly_masked_filtered_flat_point_storage(){owner.validate_readonly_masked_filtered_flat_point_storage(control)?;}else{owner.validate_readonly_filtered_flat_point_storage(control)?;}
     let doc = owner.document();
     let state = doc.xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     if !(1..=4096).contains(&doc.layers.len())

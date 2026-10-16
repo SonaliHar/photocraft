@@ -8,9 +8,12 @@ pub(super) struct DescriptorPlan<'b, 'a> {
     descriptors: Vec<PlaneDescriptor>,
     next: usize,
     mixed_upgrade: bool,
+    hierarchy_upgrade:bool,
     _fee: Reservation<'b, 'a>,
 }
-impl DescriptorPlan<'_, '_> {
+impl<'b,'a> DescriptorPlan<'b, 'a> {
+    pub(super) fn hierarchy(descriptors:Vec<PlaneDescriptor>,fee:Reservation<'b,'a>)->Self{Self{descriptors,next:0,mixed_upgrade:false,hierarchy_upgrade:true,_fee:fee}}
+    pub(super) fn hierarchy_upgrade(&self)->bool{self.hierarchy_upgrade}
     pub(super) fn mixed_upgrade(&self) -> bool {
         self.mixed_upgrade
     }
@@ -35,6 +38,7 @@ pub(super) fn preplan<'b, 'a>(
 ) -> Result<Option<DescriptorPlan<'b, 'a>>, IoError> {
     let metadata = photocraft_xcf::read_plain_source_metadata_with_budget(source, o, b, a).map_err(accounting_error)?;
     let f = metadata.file();
+    if let Some(plan)=super::staged_normal_hierarchy::descriptors(f,i,b)?{return Ok(Some(plan))}
     // Only eligible NEW topology is planned. A cap miss is permanent old-only;
     // no old Source cap, identity or validator is changed by this optimization.
     if f.version != 22
@@ -133,7 +137,7 @@ pub(super) fn preplan<'b, 'a>(
         staged_filtered_flat::work(i, b, 32)?;
         descriptors.push(d.plane.as_ref().ok_or_else(|| IoError::Unsupported("masked mixed planned root".into()))?.clone());
     }
-    Ok(Some(DescriptorPlan { descriptors, next: 0, mixed_upgrade: !ordinary, _fee: fee }))
+    Ok(Some(DescriptorPlan { descriptors, next: 0, mixed_upgrade: !ordinary,hierarchy_upgrade:false, _fee: fee }))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
