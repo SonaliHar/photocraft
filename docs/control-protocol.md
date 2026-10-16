@@ -2330,7 +2330,7 @@ revision increments; metadata leaves filter values intact. Final stale-target,
 history/channel/view/source/preferences and publication fences remain binding.
 Native continuation saves `.pcraft`; this does not add XCF export.
 
-Generic owner adoption, Move zero shortcuts, insertion/removal/reorder, masks,
+Generic owner adoption, layer movement, filter insertion/removal, masks,
 pixel/selection edits and unrelated mutations remain unavailable. Behavioral,
 native, numerical, visual and performance acceptance, complete stock support
 and the remaining multilayer implementation remain open.
@@ -2351,12 +2351,25 @@ exactly and all-disabled stacks preserve input. GIMP controls establish directio
 and matching F32 producer sequences, while F64 sequential differences and unique
 graph-format/Float/Babl/FMA/profile equivalence remain unresolved. No numerical
 waiver or source HDR import authority is introduced. Native continuation stays
-`.pcraft`; insertion, removal, reordering, masks and selection editing remain
-outside this increment.
+`.pcraft`; filter insertion/removal, layer movement, masks and selection editing
+remain outside this increment.
 
 
-Accounted saving and owned reopen follow the separate owned-document format
-route. Generic model census and standard native writer/reader visitors retain
-their 1024-node per-stack guard; that guard was not found on the actual accounted
-path. Model, quota/work and staged-proof bounds remain, with large-stack native
-runtime/migration acceptance deferred.
+Accounted saving and owned reopen follow the owned-document format route.
+They bypass the separate generic IO census and standard native version visitors,
+but serialization and loading still call generic Document/XCF validation with
+its 1024-node per-stack limit. This corrects the earlier incomplete path trace.
+The broader composition bound does not grant native migration beyond this limit.
+Model, quota/work and staged-proof bounds remain; runtime acceptance is deferred.
+
+Mixed filtered-flat `xcf.filter.move` accepts the existing two-key wire:
+`{"filterId":"123","index":0}`. The ID is canonical decimal text and the
+destination is a zero-based integer below both 1024 and the actual stack length.
+It moves that actual filter within its own root, retaining its ID, arguments,
+mask, raw source custody and undo history. A changed move increments only its
+target stack revision; a same-position request still receives full proof and
+the upstream revision-headroom check. Both use the existing cumulative controls,
+locks, full OLD/history/STAGED validation and final publication fences. Up, Down
+and Top controls use the frame's captured target and only valid wire indices.
+No new command ID or layer-movement authority is introduced. Ten new regression
+groups remain ignored, uncompiled and unrun; PhotoCraft tests remain deferred.

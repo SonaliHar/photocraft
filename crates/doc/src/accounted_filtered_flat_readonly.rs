@@ -9,6 +9,8 @@ use crate::{
 use photocraft_raster::Surface;
 #[path = "accounted_filtered_flat_readonly_filter.rs"]
 mod filter;
+#[path = "accounted_filtered_flat_readonly_move.rs"]
+mod filter_move;
 #[path = "accounted_filtered_flat_readonly_metadata.rs"]
 pub(super) mod metadata;
 fn refused<T>() -> Result<T, BackingError> {
@@ -730,12 +732,13 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, c: &ReadControl<'_>
 enum CopyKind<'a> {
     Title(&'a str),
     Filter(filter::Plan),
+    Move(filter_move::Plan),
     Metadata(metadata::Plan<'a>),
 }
 fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     let name_bytes = match kind {
         CopyKind::Title(name) => (name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
-        CopyKind::Filter(_) => 0,
+        CopyKind::Filter(_) | CopyKind::Move(_) => 0,
         CopyKind::Metadata(plan) => plan.replacement_name_bytes()?,
     };
     let header = AccountedDocument::owned_model_reservation_bytes();
@@ -771,6 +774,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     match kind {
         CopyKind::Title(name) => staged.document.name = imported_edits::copy_name(name, c)?,
         CopyKind::Filter(plan) => filter::apply(&mut staged.document, plan, c)?,
+        CopyKind::Move(plan) => filter_move::apply(&mut staged.document, plan, c)?,
         CopyKind::Metadata(plan) => metadata::apply(&mut staged.document, plan, c)?,
     }
     let actual = measured(&staged.document, owner.quota(), c)?;

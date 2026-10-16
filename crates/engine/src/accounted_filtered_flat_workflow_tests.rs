@@ -60,7 +60,6 @@ fn filtered_flat_publication_is_typed_and_mutations_are_closed() {
             ("layer.select", serde_json::json!({"index":0})),
             ("layer.setProps", serde_json::json!({"blend":"denied"})),
             ("layer.translate", serde_json::json!({"dx":0,"dy":0})),
-            ("xcf.filter.move", serde_json::json!({"filterId":filter,"index":0})),
             ("xcf.filter.remove", serde_json::json!({"filterId":filter})),
         ] {
             assert!(s.execute(id, p).is_err());

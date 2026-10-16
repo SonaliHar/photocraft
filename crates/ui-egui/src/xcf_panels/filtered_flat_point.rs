@@ -74,7 +74,7 @@ fn submit(app: &mut PhotocraftApp, target: &Target, command: &str, params: serde
         app.ui.status_error = true;
         return;
     }
-    // Canonical wire stays filterId/arguments/enabled. The engine captures and
+    // Canonical edit/move wires retain their original keys. The engine captures and
     // rechecks its transaction target; no unsupported revision fields are added.
     run_checked(app, &target.snapshot, target.revision, command, params);
 }
@@ -149,6 +149,19 @@ pub(super) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, root: Layer
             if let Some((command,params))=controls(ui,node,validate(app,&target)) {
                 submit(app,&target,command,params);
             }
+            let enabled=validate(app,&target);
+            let destination=ui.horizontal(|ui| {
+                let mut to=None;
+                if ui.add_enabled(enabled && index>0 && index-1<1024,egui::Button::new(tl!("Up"))).clicked(){to=index.checked_sub(1)}
+                if ui.add_enabled(enabled && index.checked_add(1).is_some_and(|next|next<count&&next<1024),egui::Button::new(tl!("Down"))).clicked(){to=index.checked_add(1)}
+                if ui.add_enabled(enabled && index>0,egui::Button::new(tl!("Move to Top"))).clicked(){to=Some(0)}
+                to
+            }).inner;
+            if let Some(destination)=destination {
+                submit(app,&target,"xcf.filter.move",serde_json::json!({"filterId":target.filter.0.to_string(),"index":destination}));
+            }
+            // Existing wire destinations remain 0..1024; all stored targets
+            // can move to the front without widening the protocol.
         });
     }
 }
@@ -170,3 +183,7 @@ mod source_activity;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_point_ordered_tests.rs"]
 mod ordered_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="filtered_flat_point_move_tests.rs"]
+mod move_tests;

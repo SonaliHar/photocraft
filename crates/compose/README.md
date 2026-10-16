@@ -1287,15 +1287,29 @@ Actual copies, reply and original journal overlap are paid, and failure drops
 payloads before their fee receipts. Preview and native continuation remain
 `.pcraft`; the source XCF remains protected.
 
-Generic adoption, Move (including zero), insertion/removal/reorder, masks,
+Generic adoption, layer movement, filter insertion/removal, masks,
 pixel/selection editing and unrelated mutations remain closed. A filter edit
 candidate is a routing hint, not semantic qualification. Regression groups are
 ignored, unrun and uncompiled; behavioral and numerical acceptance is deferred.
 
 
-Accounted native save/reopen uses the owned-document format route, with its
-actual class, model census, quota/work and staged-proof limits. Separate generic
-model-capacity and standard native writer/reader visitors retain a 1024-node
-per-stack guard; static tracing does not place that guard on accounted saving.
-The 4096-node structural bound is not a large-stack runtime, throughput, memory
-or complete native-migration acceptance claim.
+Accounted native save/reopen uses the owned-document format route. Although it
+bypasses the separate generic IO census and standard native version visitors,
+owned serialization and loading call generic Document/XCF validation, which
+still rejects stacks above 1024 nodes. This transitive guard corrects the earlier
+incomplete trace. The 4096-node composition/custody bound does not establish
+native migration beyond that save/load limit, or large-stack runtime, throughput
+or memory acceptance.
+
+The existing `xcf.filter.move` now reorders an actual mixed root's existing
+filter. Its canonical decimal `filterId` and zero-based `index` wire remain
+unchanged, including `index < 1024`. The destination must also exist in that
+stack. The paid whole-document copy moves the actual node while preserving its
+ID, parameters, mask association, source raw records and original source order.
+Changed movement increments the target stack revision once; a fully validated
+same-position move shares its owner. Engine movement retains the upstream
+revision-headroom refusal even for a no-op. Complete OLD/history/STAGED proof,
+locks, cumulative work and publication fences apply in both cases. Dedicated
+Up, Down and Top controls capture the same frame's target and offer only
+expressible destinations. This grants filter movement, not layer movement.
+Ten new ignored regression groups are authored but uncompiled and unrun.

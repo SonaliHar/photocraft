@@ -4,7 +4,7 @@
 use super::*;
 use crate::{DocumentSnapshot, accounted_view::AccountedView, channel_cmds::ChannelView, document_history::DocumentHistory, source_policy::SourceIdentity};
 use photocraft_doc::{
-    accounted_document::{AccountedDocument, PointArgumentPatch, PointArgumentValue, PointFilterPatch},
+    accounted_document::{AccountedDocument, PointArgumentPatch, PointArgumentValue, PointFilterPatch, PointFilterMovePatch},
     item_identity::{FilterId, ItemRef},
 };
 
@@ -197,7 +197,7 @@ fn context(session: &Session, id: &str, params: &Value) -> Result<()> {
     if !state.doc.accounted().is_some_and(|o| o.is_readonly_filtered_flat_point_storage()) {
         return Err(BackingError::Unsupported.into());
     }
-    if !matches!(id, "xcf.filter.set" | "xcf.filter.enable")
+    if !matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move")
         || params.get("coalesce").is_some()
         || session.coalesce_request.is_some()
         || state.coalesce.is_some()
@@ -243,6 +243,7 @@ pub(super) struct Request<'a> {
     id: &'static str,
     params: &'a Value,
     fields: Fields<'a>,
+    move_to: Option<usize>,
 }
 impl<'a> Request<'a> {
     pub(super) fn parse(session: &Session, id: &str, params: &'a Value, c: &ReadControl<'_>) -> Result<Self> {
@@ -251,8 +252,19 @@ impl<'a> Request<'a> {
         let id = match id {
             "xcf.filter.set" => "xcf.filter.set",
             "xcf.filter.enable" => "xcf.filter.enable",
+            "xcf.filter.move" => "xcf.filter.move",
             _ => return Err(BackingError::Unsupported.into()),
         };
+        if id == "xcf.filter.move" {
+            let object=params.as_object().filter(|o|o.len()==2 && o.keys().all(|k|matches!(k.as_str(),"filterId"|"index")))
+                .ok_or_else(||bad(id,"only filterId,index supported"))?;
+            let text=object.get("filterId").and_then(Value::as_str).filter(|s|!s.is_empty()&&s.len()<=20&&!s.starts_with('0')&&s.bytes().all(|b|b.is_ascii_digit()))
+                .ok_or_else(||bad(id,"canonical filterId required"))?;
+            let filter=FilterId(text.parse().map_err(|_|bad(id,"filterId overflow"))?);
+            let index=object.get("index").and_then(Value::as_u64).filter(|i|*i<1024).ok_or_else(||bad(id,"index must be a bounded owner-local integer"))?;
+            let index=usize::try_from(index).map_err(|_|BackingError::Length)?;
+            return Ok(Self{id,params,fields:Fields{filter,arguments:[None;10],count:0,enabled:None},move_to:Some(index)});
+        }
         let object = params
             .as_object()
             .filter(|o| o.len() <= 3 && o.keys().all(|k| matches!(k.as_str(), "filterId" | "arguments" | "enabled")))
@@ -261,7 +273,7 @@ impl<'a> Request<'a> {
             return Err(bad(id, "one to three patches required"));
         }
         let fields = wire_with_literal(id, params, true).ok_or_else(|| bad(id, "typed mixed filter patch required"))?;
-        Ok(Self { id, params, fields })
+        Ok(Self { id, params, fields, move_to:None })
     }
     pub(super) fn prepare(self, session: &Session, ctl: &ReadControl<'_>) -> Result<Prepared<'a>> {
         context(session, self.id, self.params)?;
@@ -273,6 +285,7 @@ impl<'a> Request<'a> {
         }
         validate_recipe(owner, ctl)?;
         let (stack, node, layer,node_index) = target(owner, self.fields.filter, ctl)?;
+        if self.move_to.is_some() && stack.revision==u64::MAX {return Err(BackingError::Length.into())}
         let visibility_changed = self.fields.enabled.is_some_and(|v| v != node.enabled);
         locks(owner, layer, visibility_changed, ctl)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
@@ -347,7 +360,10 @@ impl<'a> Request<'a> {
             }
             *slot = PointArgumentPatch { name: argument.name, value: argument.value };
         }
-        let staged = owner.try_with_readonly_filtered_flat_point_filter(
+        let staged = if let Some(index)=self.move_to {
+            if index>=stack.nodes.len(){return Err(bad(self.id,"index is outside the current owner stack"))}
+            owner.try_move_readonly_filtered_flat_point_filter(PointFilterMovePatch{layer,filter:self.fields.filter,expected_stack_revision:stack.revision,index},ctl)?
+        } else { owner.try_with_readonly_filtered_flat_point_filter(
             PointFilterPatch {
                 layer,
                 filter: self.fields.filter,
@@ -356,7 +372,7 @@ impl<'a> Request<'a> {
                 enabled: self.fields.enabled,
             },
             ctl,
-        )?;
+        )? };
         validate_recipe(&staged, ctl)?;
         let updated = !staged.shares_model(owner);
         let mut history = state.history.clone();
@@ -364,7 +380,7 @@ impl<'a> Request<'a> {
             history.max_states = session.prefs().performance.history_states.max(1) as usize;
             history.max_bytes = session.prefs().performance.history_budget_bytes();
             history.set_current_layers_borrowed(view.target(), ctl)?;
-            history.try_commit_prepared_accounted(owner, staged, "Edit GIMP Stock Filter", view.target(), ctl)?
+            history.try_commit_prepared_accounted(owner, staged, if self.move_to.is_some(){"Move GIMP Stock Filter"}else{"Edit GIMP Stock Filter"}, view.target(), ctl)?
         } else {
             state.doc.clone()
         };
@@ -533,3 +549,7 @@ impl Prepared<'_> {
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_tests.rs"]
 mod tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="filtered_flat_move_tests.rs"]
+mod move_tests;

@@ -325,3 +325,6 @@ fn stage_owners_and_failures_keep_real_custody() {
     assert!(matches!(prepared.render_band(rect, &denied), Err(E::Backing(BackingError::Work))));
     assert_eq!(q.usage().unwrap(), baseline);
 }
+
+#[path = "backed_filtered_flat_point_move_tests.rs"]
+mod filter_move;

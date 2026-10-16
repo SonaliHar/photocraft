@@ -223,3 +223,6 @@ fn ordered_target_failures_and_copy_rollback_keep_original() {
     assert!(owner.try_with_readonly_filtered_flat_point_filter(p, &ReadControl { interrupt: &Interrupt::NONE, work: &work }).is_err());
     assert_eq!(owner.quota().usage().unwrap(), before);
 }
+
+#[path = "accounted_filtered_flat_readonly_move_tests.rs"]
+mod move_tests;

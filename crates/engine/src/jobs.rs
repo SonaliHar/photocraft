@@ -1027,7 +1027,11 @@ impl Session {
         }
         // These family-specific validators deliberately refuse unrelated ids.
         if matches!(id, "xcf.filter.move" | "xcf.filter.remove") {
-            if self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_point_storage()) {
+            if id=="xcf.filter.move" && self.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_filtered_flat_point_storage()) {
+                if background||self.jobs.spawn {return Err(EngineError::BadParams{cmd:id.into(),msg:"mixed filter move requires synchronous dispatch".into()})}
+                // The dedicated mixed parser/transaction runs under the same
+                // controlled paid dispatch below; do not use resident preflight.
+            } else if self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_point_storage()) {
                 if id == "xcf.filter.move" {
                     crate::xcf_filter_cmds::pre_dispatch_point_move(self, id, &params, background || self.jobs.spawn)?;
                 } else {
@@ -1184,7 +1188,8 @@ impl Session {
                     && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
                         owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage()
                             || matches!(id, "xcf.filter.set" | "xcf.filter.enable")
-                                && (owner.is_readonly_gaussian_group_storage() || owner.is_readonly_assigned_point_storage() || owner.is_readonly_filtered_flat_point_storage())
+                                && (owner.is_readonly_gaussian_group_storage() || owner.is_readonly_assigned_point_storage())
+                            || matches!(id,"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move") && owner.is_readonly_filtered_flat_point_storage()
                     });
             let registered_work = photocraft_io::accounted_operation_work::OperationWork::legacy(crate::accounted_clear::REGISTERED_WORK_LIMIT);
             // This synchronous boundary has no external Interrupt. The same
