@@ -468,24 +468,29 @@ fn preview_blend(selection: Option<&(Surface, LayerMask)>, bounds: Rect, max_sid
     let mut row_height = 0;
     // Read one downsampling strip, not an additional whole RGBA mask proxy. The same box
     // footprint as the colour proxy preserves fractional selection coverage at fit zoom.
-    original.px.into_iter().enumerate().map(|(i, original)| {
-        let (x, y) = (i % width, i / width);
-        if x == 0 {
-            let y0 = bounds.y0 + y as i32 * scale;
-            let y1 = (y0 + scale).min(bounds.y1);
-            row_height = (y1 - y0) as usize;
-            mask.values_into(Rect::new(bounds.x0, y0, bounds.x0 + width as i32 * scale, y1), &mut coverage);
-        }
-        let row_width = width * scale as usize;
-        let mut sum = 0.0;
-        for dy in 0..row_height {
-            for dx in 0..scale as usize {
-                sum += coverage.get(dy * row_width + x * scale as usize + dx).copied().unwrap_or(0.0);
+    original
+        .px
+        .into_iter()
+        .enumerate()
+        .map(|(i, original)| {
+            let (x, y) = (i % width, i / width);
+            if x == 0 {
+                let y0 = bounds.y0 + y as i32 * scale;
+                let y1 = (y0 + scale).min(bounds.y1);
+                row_height = (y1 - y0) as usize;
+                mask.values_into(Rect::new(bounds.x0, y0, bounds.x0 + width as i32 * scale, y1), &mut coverage);
             }
-        }
-        let count = row_height * scale as usize;
-        PreviewBlend { original, coverage: if count > 0 { sum / count as f32 } else { 0.0 } }
-    }).collect()
+            let row_width = width * scale as usize;
+            let mut sum = 0.0;
+            for dy in 0..row_height {
+                for dx in 0..scale as usize {
+                    sum += coverage.get(dy * row_width + x * scale as usize + dx).copied().unwrap_or(0.0);
+                }
+            }
+            let count = row_height * scale as usize;
+            PreviewBlend { original, coverage: if count > 0 { sum / count as f32 } else { 0.0 } }
+        })
+        .collect()
 }
 
 /// Opens the dialog on the active layer.
@@ -1201,27 +1206,28 @@ mod tests {
             let ctx = egui::Context::default();
             let mut app = app_with_layer();
             app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
-            app.session.edit("mask setup", |doc, active| {
-                let mut left = Surface::new(photocraft_doc::PixelFormat::GRAY8);
-                left.fill_rect(Rect::new(0, 0, 30, 80), &[1.0]);
-                let mut right = Surface::new(photocraft_doc::PixelFormat::GRAY8);
-                right.fill_rect(Rect::new(60, 0, 120, 80), &[1.0]);
-                doc.selection = Some(if mode == 1 || mode == 2 { right } else { left.clone() });
-                if let LayerContent::Smart(sm) = &mut doc.layer_mut(active.unwrap()).unwrap().content {
-                    if mode == 1 || mode == 3 {
-                        sm.filter_mask = Some(LayerMask {
-                            surface: left, enabled: mode != 3, linked: true, density: 1.0, feather: 0.0,
-                        });
+            app.session
+                .edit("mask setup", |doc, active| {
+                    let mut left = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+                    left.fill_rect(Rect::new(0, 0, 30, 80), &[1.0]);
+                    let mut right = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+                    right.fill_rect(Rect::new(60, 0, 120, 80), &[1.0]);
+                    doc.selection = Some(if mode == 1 || mode == 2 { right } else { left.clone() });
+                    if let LayerContent::Smart(sm) = &mut doc.layer_mut(active.unwrap()).unwrap().content {
+                        if mode == 1 || mode == 3 {
+                            sm.filter_mask = Some(LayerMask { surface: left, enabled: mode != 3, linked: true, density: 1.0, feather: 0.0 });
+                        }
+                        sm.filters_enabled = mode != 2;
                     }
-                    sm.filters_enabled = mode != 2;
-                }
-                Ok(())
-            }).unwrap();
+                    Ok(())
+                })
+                .unwrap();
             let (_, before, _) = crate::distort_ui::active_pixels(&app).unwrap();
             open(&mut app, &ctx).unwrap();
             let preview_before = app.distort.liquify.as_ref().unwrap().out.clone();
             control(&mut app, &json!({"tool": "forwardWarp", "size": 24})).unwrap();
-            for ev in [ToolEvent::Down { x: 80.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 90.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 90.0, y: 40.0 }]
+            for ev in
+                [ToolEvent::Down { x: 80.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 90.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 90.0, y: 40.0 }]
             {
                 pointer(&mut app, ev, egui::Modifiers::NONE);
             }
@@ -1242,18 +1248,20 @@ mod tests {
     fn feathered_translucent_selection_preview_matches_commit_5989() {
         let ctx = egui::Context::default();
         let mut app = app_with_layer();
-        app.session.edit("smooth translucent pixels", |doc, active| {
-            let s = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
-            for y in 0..80 {
-                for x in 0..120 {
-                    s.write_pixel(x, y, &[x as f32 / 120.0, y as f32 / 80.0, 0.3, 0.5]);
+        app.session
+            .edit("smooth translucent pixels", |doc, active| {
+                let s = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                for y in 0..80 {
+                    for x in 0..120 {
+                        s.write_pixel(x, y, &[x as f32 / 120.0, y as f32 / 80.0, 0.3, 0.5]);
+                    }
                 }
-            }
-            let mut selection = Surface::new(photocraft_doc::PixelFormat::GRAY8);
-            selection.fill_rect(Rect::new(0, 0, 120, 80), &[0.5]);
-            doc.selection = Some(selection);
-            Ok(())
-        }).unwrap();
+                let mut selection = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+                selection.fill_rect(Rect::new(0, 0, 120, 80), &[0.5]);
+                doc.selection = Some(selection);
+                Ok(())
+            })
+            .unwrap();
         open(&mut app, &ctx).unwrap();
         let before = app.distort.liquify.as_ref().unwrap().out.clone();
         control(&mut app, &json!({"tool": "forwardWarp", "size": 24})).unwrap();
