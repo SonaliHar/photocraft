@@ -646,6 +646,12 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
                 Some(p) if result.is_ok() && running => p.committing = true,
                 _ => app.filter_preview = None,
             }
+            if result.is_ok() && matches!(cmd.as_str(), "figure.fromCollage" | "figure.make") {
+                // The figure workflow's next steps: arrows and markers, then export.
+                app.ui.tool = crate::state::Tool::Arrow;
+                app.ui.status = tl!("Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…").to_string();
+                app.ui.status_error = false;
+            }
             if result.is_ok() && cmd == "view.newGuideLayout" {
                 app.ui.view.guide_layout = params;
             }

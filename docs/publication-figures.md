@@ -21,6 +21,35 @@ Lays several images out as one new document at a journal width and resolution:
 The dialog takes a folder and places its images in name order; `figure.make` also takes an
 explicit list of files.
 
+## Prepare Collage for Publication (File › Automate, `figure.fromCollage`)
+
+For a collage saved as one image, such as an OsiriX or PACS grid capture. It works on the open
+document and leaves it unchanged:
+
+1. It finds the grid from the edges running all the way across the image (or use Rows/Columns;
+   0 means detect).
+2. It splits the collage into its panels, in reading order.
+3. It lays them out again as Make Figure does: journal width and dpi, separators in mm and
+   colour, labels A, B, C (or another style) with an optional outline, in a new document.
+
+The dialogs for this, Make Figure and Export for Publication open with the choices of their last
+run.
+
+### OsiriX workflow
+
+1. Open the OsiriX collage in PhotoCraft.
+2. Optional: remove unwanted columns or rows with the Cut Out tool (scissors, C) to go from, say,
+   5 × 2 to 4 × 2 or 4 × 1. Drag across the column or row: Auto direction follows the drag, and
+   with Snap to panels on (the default) the band's edges snap to the panel edges, so exactly that
+   column or row goes. Repeat for each one.
+3. File › Automate › Prepare Collage for Publication…: the dialog asks every time for the labels
+   (A, B, C capital or a, b, c small, with or without brackets), Bold or regular, the corner (top
+   or bottom, left or right), size and colour, plus the width (double column = 175 mm), 300 dpi and
+   the separator width and colour. A new figure document opens with the Arrow tool selected.
+4. Add arrows (Arrow tool) and stars or other markers (Marker tool). Labels are type layers: drag
+   one with the Move tool if it covers something.
+5. File › Export › Export for Publication…: TIFF and PNG at 300 dpi.
+
 ## Arrow tool (U)
 
 See [Shape stroke options](shape-strokes.md) for the arrowhead model. For print work the width is

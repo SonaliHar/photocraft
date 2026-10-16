@@ -132,6 +132,14 @@ fn export_publication(s: &mut Session, p: &Value) -> Result<Value> {
         files.push(json!({"path": path, "format": f, "bytes": r.bytes.len()}));
     }
     crate::automate_cmds::fire_event(s, "export");
+    // The dialog opens with these choices next time (not the folder or name).
+    let saved: serde_json::Map<String, Value> =
+        ["tiff", "png", "dpi", "width", "widthMm"].iter().filter_map(|k| p.get(*k).filter(|v| !v.is_null()).map(|v| ((*k).to_string(), v.clone()))).collect();
+    if !saved.is_empty() {
+        s.edit_prefs(|pr| {
+            pr.dialogs.insert(CMD.to_string(), Value::Object(saved));
+        });
+    }
     let size_mm = |px: u32| (f64::from(px) / dpi * MM_PER_INCH * 10.0).round() / 10.0;
     Ok(json!({"files": files, "width": w, "height": h, "dpi": dpi, "widthMm": size_mm(w), "heightMm": size_mm(h), "warnings": warnings}))
 }

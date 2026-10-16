@@ -1,5 +1,7 @@
 use serde_json::json;
 
+use photocraft_geom::Rect;
+
 use super::*;
 
 /// Writes test images of the given sizes (each a flat colour) and returns their paths.
@@ -96,4 +98,84 @@ fn bad_params_are_errors_and_open_nothing() {
         assert!(s.active().is_none(), "no document opened for {p}");
     }
     let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A collage like an OsiriX capture: `rows` x `cols` panels with no gaps, each a different grey with
+/// a brighter blob, on a black canvas.
+fn collage(s: &mut Session, rows: u32, cols: u32, cell: (u32, u32)) {
+    s.execute("file.new", json!({"width": cols * cell.0, "height": rows * cell.1, "background": "black", "resolution": 300, "name": "2.tif"})).unwrap();
+    s.edit("cells", |doc, _| {
+        let bg = doc.background_mut().ok_or(EngineError::Other("no background".into()))?;
+        if let LayerContent::Raster(surf) = &mut bg.content {
+            let fmt = surf.format();
+            for r in 0..rows {
+                for c in 0..cols {
+                    let g = 0.15 + 0.6 * ((r * cols + c) as f32 / (rows * cols) as f32);
+                    let (x0, y0) = ((c * cell.0) as i32, (r * cell.1) as i32);
+                    surf.fill_rect(Rect::new(x0, y0, x0 + cell.0 as i32, y0 + cell.1 as i32), &photocraft_raster::from_rgba(&fmt, [g, g, g, 1.0]));
+                    let (bx, by) = (x0 + cell.0 as i32 / 3, y0 + cell.1 as i32 / 3);
+                    surf.fill_rect(Rect::new(bx, by, bx + 20, by + 20), &photocraft_raster::from_rgba(&fmt, [1.0, 1.0, 1.0, 1.0]));
+                }
+            }
+        }
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn a_collage_grid_is_found_split_and_labelled_a_to_j() {
+    let mut s = Session::new();
+    collage(&mut s, 2, 5, (101, 120));
+    let original = photocraft_doc::Document::clone(&s.active().unwrap().doc);
+    let r = s.execute(COLLAGE, json!({"width": "double", "gutterMm": 0.5, "gutterColor": "#ffffff"})).unwrap();
+    assert_eq!((r["rows"].as_u64(), r["columns"].as_u64()), (Some(2), Some(5)), "{r}");
+    // detectGrid on the collage reports the panel edges too.
+    let first = s.documents().iter().position(|d| d.doc.name == "2.tif").unwrap();
+    let mut probe = Session::new();
+    probe.add_document(photocraft_doc::Document::clone(&s.documents()[first].doc), None);
+    let g = probe.execute("figure.detectGrid", json!({})).unwrap();
+    assert_eq!(g["x"], json!([0, 101, 202, 303, 404, 505]), "{g}");
+    assert_eq!(g["y"], json!([0, 120, 240]));
+    assert_eq!(r["panels"].as_array().map(Vec::len), Some(10));
+    assert_eq!(r["width"].as_u64(), Some(2067), "175 mm at 300 dpi");
+    let doc = &s.active().unwrap().doc;
+    assert_eq!(doc.name, "2 figure");
+    for want in ["Label A", "Label E", "Label J"] {
+        assert!(doc.layers.iter().any(|l| l.name == want), "{want}");
+    }
+    // The collage document itself is untouched.
+    let first = s.documents().iter().map(|d| &d.doc).find(|d| d.name == "2.tif").unwrap();
+    assert_eq!(**first, original);
+}
+
+#[test]
+fn rows_and_columns_can_be_given_and_are_remembered() {
+    let mut s = Session::new();
+    collage(&mut s, 1, 3, (100, 100));
+    let r = s.execute(COLLAGE, json!({"rows": 1, "columns": 3, "labels": "(a)", "dpi": 600, "width": "single", "labelBold": false})).unwrap();
+    let label = s.active().unwrap().doc.layers.iter().find(|l| l.name == "Label (a)").cloned().unwrap();
+    assert!(matches!(&label.content, LayerContent::Text(t) if !format!("{t:?}").contains("faux_bold: true")), "regular weight");
+    assert_eq!(r["columns"].as_u64(), Some(3));
+    assert_eq!(r["width"].as_u64(), Some(2008), "85 mm at 600 dpi");
+    let saved = s.prefs().dialogs.get(COLLAGE).cloned().unwrap();
+    assert_eq!(saved["labels"], "(a)");
+    assert_eq!(saved["dpi"], 600);
+    assert!(s.execute(COLLAGE, json!({"rows": 40})).is_err());
+    assert!(s.execute(COLLAGE, json!({"labels": "xyz"})).is_err());
+}
+
+#[test]
+fn edge_detection_needs_an_edge_at_every_boundary() {
+    // Strong edges at the quarters: four parts, not two.
+    let mut scores = vec![0.01; 400];
+    for at in [100, 200, 300] {
+        scores[at] = 1.0;
+    }
+    assert_eq!(detect_parts(&scores), (4, vec![0, 100, 200, 300, 400]));
+    // An edge 2 px off the equal split is found where it is.
+    scores[200] = 0.01;
+    scores[202] = 1.0;
+    assert_eq!(detect_parts(&scores).1, vec![0, 100, 202, 300, 400]);
+    assert_eq!(detect_parts(&vec![0.01; 400]), (1, vec![0, 400]), "no edges: one part");
 }

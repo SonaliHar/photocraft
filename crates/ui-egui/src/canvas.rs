@@ -5179,6 +5179,8 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     if crate::corner_radius::pointer(app, ev, mods) {
         return;
     }
+    // Cut Out finds a collage's panel edges at the press, to snap the band to (never consumes).
+    crate::cutout_ui::pointer(app, ev);
     // The active arrow's tail, bend and tip handles (Arrow tool).
     if crate::arrow_ui::pointer(app, ev, mods) {
         return;

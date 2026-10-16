@@ -1185,6 +1185,9 @@ pub struct UiState {
     /// An Arrow tool handle being dragged (tail, bend or tip).
     #[serde(skip)]
     pub arrow_drag: Option<crate::arrow_ui::Drag>,
+    /// Panel edges the Cut Out tool snaps to (found when a drag starts).
+    #[serde(skip)]
+    pub cut_out_edges: Option<crate::cutout_ui::PanelEdges>,
     /// Selected row in the Paths panel ("work" or a saved path name).
     #[serde(default)]
     pub selected_path: Option<String>,
@@ -1377,6 +1380,7 @@ impl Default for UiState {
             direct_selection: Default::default(),
             corner_radius: None,
             arrow_drag: None,
+            cut_out_edges: None,
             selected_path: None,
             panels: Panels::default(),
             views: Vec::new(),
