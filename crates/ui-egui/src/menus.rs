@@ -20,7 +20,6 @@ pub(crate) fn modal_allows(app: &PhotocraftApp, id: &str) -> bool {
 pub const TOP_MENUS: [&str; 10] = ["File", "Edit", "Image", "Layer", "Type", "Select", "Filter", "View", "Window", "Help"];
 
 /// UI-level commands (handled by the shell rather than the engine): id, label, menu, shortcut.
-/// UI-level commands (handled by the shell rather than the engine): id, label, menu, shortcut.
 /// The table is the engine's ([`photocraft_engine::shell_commands::SHELL_COMMANDS`]), so the
 /// commands and their keys exist without this UI (headless shortcut sets, lists, conflicts).
 pub const UI_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = photocraft_engine::shell_commands::SHELL_COMMANDS;
