@@ -3178,3 +3178,15 @@ curves	Smooth	Сгладить
 	This document's layers: {needed} of {budget} for layers	Слои этого документа: {needed} из {budget} для слоёв
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Слоям этого документа нужно {needed}, но занимать они могут {budget}: весь документ перерисовывается на CPU
 	GPU Memory (MB, 0 = Automatic)	Память GPU (МБ, 0 = автоматически)
+	Create Frame Animation	Создать покадровую анимацию
+	Make Frames From Layers	Создать кадры из слоёв
+	Forever	Постоянно
+	Once	Один раз
+	No delay	Без задержки
+	First frame	Первый кадр
+	Duplicate Selected Frame	Дублировать выбранный кадр
+	Delete Selected Frame	Удалить выбранный кадр
+	{seconds} sec.	{seconds} с
+	{count} times	{count} раз
+	Frames before	Кадры до
+	Frames after	Кадры после
