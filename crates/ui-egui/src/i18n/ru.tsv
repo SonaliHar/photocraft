@@ -3170,3 +3170,8 @@ curves	Smooth	Сгладить
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Свободное трансформирование ещё применяется; повторите попытку, когда оно завершится.
 	The transform couldn't be applied.	Не удалось применить трансформирование.
+
+# File Info metadata labels
+	Document Title	Название документа
+	Copyright Notice	Уведомление об авторских правах
+	Select Layer Under Cursor	Выбрать слой под курсором

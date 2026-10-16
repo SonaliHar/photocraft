@@ -3798,3 +3798,8 @@ curves	Smooth	Wygładź
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Przekształcanie swobodne jest nadal stosowane; spróbuj ponownie, gdy się zakończy.
 	The transform couldn't be applied.	Nie można zastosować przekształcenia.
+
+# File Info metadata labels
+	Document Title	Tytuł dokumentu
+	Copyright Notice	Informacja o prawach autorskich
+	Select Layer Under Cursor	Zaznacz warstwę pod kursorem

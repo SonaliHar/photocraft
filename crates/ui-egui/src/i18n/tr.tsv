@@ -3930,3 +3930,8 @@ cameraData	Lens	Lens
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Serbest Dönüştürme hâlâ uygulanıyor; bittiğinde yeniden deneyin.
 	The transform couldn't be applied.	Dönüştürme uygulanamadı.
+
+# File Info metadata labels
+	Document Title	Belge Başlığı
+	Copyright Notice	Telif Hakkı Bildirimi
+	Select Layer Under Cursor	İmlecin Altındaki Katmanı Seç

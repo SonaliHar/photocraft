@@ -3990,3 +3990,8 @@ layerLabel	No Color	Sem cor
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	A Transformação livre ainda está sendo aplicada; tente novamente quando terminar.
 	The transform couldn't be applied.	Não foi possível aplicar a transformação.
+
+# File Info metadata labels
+	Document Title	Título do documento
+	Copyright Notice	Aviso de direitos autorais
+	Select Layer Under Cursor	Selecionar camada sob o cursor

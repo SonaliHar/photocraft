@@ -2801,3 +2801,9 @@ curves	Smooth	平滑
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	任意變形仍在套用中；請在完成後再試一次。
 	The transform couldn't be applied.	無法套用變形。
+
+# File Info metadata labels
+	Document Title	文件標題
+	Copyright Notice	著作權聲明
+	Copyright Info URL	著作權資訊網址
+	Select Layer Under Cursor	選取游標下的圖層

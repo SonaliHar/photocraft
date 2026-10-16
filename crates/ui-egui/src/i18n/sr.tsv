@@ -4273,3 +4273,8 @@ shape	Appearance	Izgled
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Slobodna transformacija se još primenjuje; pokušajte ponovo kad se završi.
 	The transform couldn't be applied.	Transformacija nije mogla da se primeni.
+
+# File Info metadata labels
+	Document Title	Naslov dokumenta
+	Copyright Notice	Obaveštenje o autorskim pravima
+	Select Layer Under Cursor	Izaberi sloj ispod kursora

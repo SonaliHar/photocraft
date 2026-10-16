@@ -3808,3 +3808,9 @@ navigator	Zoom	Zvětšení
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Volná transformace se stále použije; zkuste to znovu, až skončí.
 	The transform couldn't be applied.	Transformaci nelze použít.
+
+# File Info metadata labels
+	Document Title	Název dokumentu
+	Copyright Notice	Oznámení o autorských právech
+	Copyright Info URL	URL informací o autorských právech
+	Select Layer Under Cursor	Vybrat vrstvu pod kurzorem

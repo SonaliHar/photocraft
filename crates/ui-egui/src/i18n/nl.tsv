@@ -3960,3 +3960,8 @@ curves	Smooth	Vloeiend maken
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Vrije transformatie wordt nog toegepast; probeer het opnieuw als die klaar is.
 	The transform couldn't be applied.	De transformatie kon niet worden toegepast.
+
+# File Info metadata labels
+	Document Title	Documenttitel
+	Copyright Notice	Copyrightvermelding
+	Select Layer Under Cursor	Laag onder cursor selecteren

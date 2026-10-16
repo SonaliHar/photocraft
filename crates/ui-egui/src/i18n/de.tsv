@@ -3202,3 +3202,9 @@ curves	Smooth	Glätten
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Frei transformieren wird noch angewendet; versuchen Sie es erneut, wenn es fertig ist.
 	The transform couldn't be applied.	Die Transformation konnte nicht angewendet werden.
+
+# File Info metadata labels
+	Document Title	Dokumenttitel
+	Copyright Notice	Urheberrechtsvermerk
+	Copyright Info URL	URL der Urheberrechtsinformationen
+	Select Layer Under Cursor	Ebene unter dem Cursor auswählen

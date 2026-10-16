@@ -3378,3 +3378,9 @@ curves	Smooth	매끄럽게
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	자유 변형을 아직 적용하는 중입니다. 완료된 후 다시 시도하세요.
 	The transform couldn't be applied.	변형을 적용할 수 없습니다.
+
+# File Info metadata labels
+	Document Title	문서 제목
+	Copyright Notice	저작권 고지
+	Copyright Info URL	저작권 정보 URL
+	Select Layer Under Cursor	커서 아래 레이어 선택

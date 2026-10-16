@@ -3205,3 +3205,8 @@ curves	Smooth	Lisser
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	La transformation manuelle est encore en cours d'application ; réessayez quand elle sera terminée.
 	The transform couldn't be applied.	Impossible d'appliquer la transformation.
+
+# File Info metadata labels
+	Document Title	Titre du document
+	Copyright Notice	Mention de copyright
+	Select Layer Under Cursor	Sélectionner le calque sous le curseur

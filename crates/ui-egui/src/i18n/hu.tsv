@@ -4119,3 +4119,8 @@ cameraRaw	Yellow	Sárga
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	A szabad alakítás alkalmazása még folyamatban van; próbáld újra, ha befejeződött.
 	The transform couldn't be applied.	Az átalakítás nem alkalmazható.
+
+# File Info metadata labels
+	Document Title	Dokumentum címe
+	Copyright Notice	Szerzői jogi közlemény
+	Select Layer Under Cursor	Kurzor alatti réteg kijelölése

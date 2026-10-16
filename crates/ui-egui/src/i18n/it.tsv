@@ -4321,3 +4321,8 @@ shape	Appearance	Aspetto
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Trasformazione libera è ancora in corso di applicazione; riprova quando è terminata.
 	The transform couldn't be applied.	Impossibile applicare la trasformazione.
+
+# File Info metadata labels
+	Document Title	Titolo del documento
+	Copyright Notice	Avviso di copyright
+	Select Layer Under Cursor	Seleziona livello sotto il cursore

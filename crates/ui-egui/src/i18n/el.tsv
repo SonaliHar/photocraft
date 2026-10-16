@@ -3900,3 +3900,8 @@ curves	Smooth	Εξομάλυνση
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Ο Ελεύθερος μετασχηματισμός εφαρμόζεται ακόμη· δοκιμάστε ξανά όταν ολοκληρωθεί.
 	The transform couldn't be applied.	Δεν ήταν δυνατή η εφαρμογή του μετασχηματισμού.
+
+# File Info metadata labels
+	Document Title	Τίτλος εγγράφου
+	Copyright Notice	Σημείωση πνευματικών δικαιωμάτων
+	Select Layer Under Cursor	Επιλογή επιπέδου κάτω από τον δρομέα

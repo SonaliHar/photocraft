@@ -3192,3 +3192,8 @@ curves	Smooth	Haluskan
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Transformasi Bebas masih diterapkan; coba lagi setelah selesai.
 	The transform couldn't be applied.	Transformasi tidak dapat diterapkan.
+
+# File Info metadata labels
+	Document Title	Judul Dokumen
+	Copyright Notice	Pemberitahuan Hak Cipta
+	Select Layer Under Cursor	Pilih Lapisan di Bawah Kursor
