@@ -4291,3 +4291,5 @@ shape	Appearance	Izgled
 	Delete Selected Frame	Obriši izabrani kadar
 	{seconds} sec.	{seconds} s
 	{count} times	{count} puta
+	Frames before	Kadrovi pre
+	Frames after	Kadrovi posle

@@ -3396,3 +3396,5 @@ curves	Smooth	매끄럽게
 	Delete Selected Frame	선택한 프레임 삭제
 	{seconds} sec.	{seconds}초
 	{count} times	{count}회
+	Frames before	이전 프레임
+	Frames after	이후 프레임

@@ -3220,3 +3220,5 @@ curves	Smooth	Glätten
 	Delete Selected Frame	Ausgewählten Frame löschen
 	{seconds} sec.	{seconds} Sek.
 	{count} times	{count}-mal
+	Frames before	Frames davor
+	Frames after	Frames danach

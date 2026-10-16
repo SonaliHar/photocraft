@@ -3894,3 +3894,5 @@ curves	Smooth	スムーズ
 	Delete Selected Frame	選択したフレームを削除
 	{seconds} sec.	{seconds} 秒
 	{count} times	{count} 回
+	Frames before	前のフレーム
+	Frames after	後のフレーム

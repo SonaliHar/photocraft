@@ -4137,3 +4137,5 @@ cameraRaw	Yellow	Sárga
 	Delete Selected Frame	Kijelölt képkocka törlése
 	{seconds} sec.	{seconds} mp
 	{count} times	{count}×
+	Frames before	Előző képkockák
+	Frames after	Következő képkockák

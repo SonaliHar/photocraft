@@ -4180,3 +4180,5 @@ navigator	Zoom	Zoom
 	Delete Selected Frame	Eliminar fotograma seleccionado
 	{seconds} sec.	{seconds} s
 	{count} times	{count} veces
+	Frames before	Fotogramas anteriores
+	Frames after	Fotogramas posteriores

@@ -2819,3 +2819,5 @@ curves	Smooth	平滑
 	Delete Selected Frame	刪除選取的影格
 	{seconds} sec.	{seconds} 秒
 	{count} times	{count} 次
+	Frames before	之前的影格
+	Frames after	之後的影格

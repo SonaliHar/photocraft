@@ -3188,3 +3188,5 @@ curves	Smooth	Сгладить
 	Delete Selected Frame	Удалить выбранный кадр
 	{seconds} sec.	{seconds} с
 	{count} times	{count} раз
+	Frames before	Кадры до
+	Frames after	Кадры после

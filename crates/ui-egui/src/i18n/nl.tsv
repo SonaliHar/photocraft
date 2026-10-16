@@ -3978,3 +3978,5 @@ curves	Smooth	Vloeiend maken
 	Delete Selected Frame	Geselecteerd frame verwijderen
 	{seconds} sec.	{seconds} sec.
 	{count} times	{count} keer
+	Frames before	Frames ervoor
+	Frames after	Frames erna

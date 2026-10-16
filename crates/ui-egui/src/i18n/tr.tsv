@@ -3948,3 +3948,5 @@ cameraData	Lens	Lens
 	Delete Selected Frame	Seçili kareyi sil
 	{seconds} sec.	{seconds} sn.
 	{count} times	{count} kez
+	Frames before	Önceki kareler
+	Frames after	Sonraki kareler

@@ -146,6 +146,7 @@ pub mod notices;
 pub mod nudge_bundle;
 mod numeric_expression;
 pub mod object_finder;
+mod onion_skin;
 mod opacity_keys;
 pub mod open_prompt;
 pub mod outline;

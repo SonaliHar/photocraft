@@ -59,6 +59,11 @@ fn with_cache<R>(ctx: &egui::Context, f: impl FnOnce(&mut StripCache) -> R) -> R
     f(&mut g)
 }
 
+/// The revision a frame-selecting command left behind (see `ran`), if the last change was only that.
+pub fn nav_rev(ctx: &egui::Context) -> Option<u64> {
+    with_cache(ctx, |c| c.nav_rev)
+}
+
 /// Records that `cmd` just ran: a command that only moves the selected frame keeps the thumbnails.
 pub fn ran(app: &crate::PhotocraftApp, ctx: &egui::Context, cmd: &str) {
     if matches!(cmd, "animation.selectFrame" | "animation.nextFrame" | "animation.previousFrame")
@@ -234,6 +239,11 @@ pub struct Strip<'a> {
     pub playing: bool,
     /// Commands the user asked for.
     pub acts: &'a mut Vec<Act>,
+    /// The onion-skin settings, and where changes to them go.
+    pub onion: crate::onion_skin::OnionSkin,
+    /// Whether the Onion Skin menu is shown (Options menu in the panel header).
+    pub show_onion: bool,
+    pub onion_out: &'a mut Option<crate::onion_skin::OnionSkin>,
     /// A click on a frame, to turn into a selection.
     pub clicked: &'a mut Option<(usize, Click)>,
     /// Set when Play or Pause was pressed.
@@ -242,7 +252,7 @@ pub struct Strip<'a> {
 
 /// Draws the strip and its bar.
 pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
-    let Strip { doc, revision, animation: a, selection, playing, acts, clicked, toggle_play } = strip;
+    let Strip { doc, revision, animation: a, selection, playing, acts, onion, show_onion, onion_out, clicked, toggle_play } = strip;
     let t = Tokens::get(ctx);
     refresh_thumbs(ctx, doc, revision, a);
 
@@ -302,6 +312,9 @@ pub fn body(ui: &mut egui::Ui, ctx: &egui::Context, strip: Strip<'_>) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         loop_menu(ui, a.loops, acts);
+        if show_onion {
+            onion_menu(ui, onion, onion_out);
+        }
         ui.separator();
         if crate::icons::button(ui, "chevrons-left", 22.0, false, tl!("First frame")).clicked() {
             acts.push(("animation.selectFrame", json!({ "frame": 0 })));
@@ -451,6 +464,30 @@ fn loop_menu(ui: &mut egui::Ui, loops: LoopCount, acts: &mut Vec<Act>) {
                 ui.close();
             }
         });
+    });
+}
+
+/// The onion-skin menu: on or off, how many neighbouring frames to show and how strongly.
+fn onion_menu(ui: &mut egui::Ui, onion: crate::onion_skin::OnionSkin, out: &mut Option<crate::onion_skin::OnionSkin>) {
+    drop_menu(ui, tl!("Onion Skin"), |ui| {
+        let mut now = onion;
+        ui.checkbox(&mut now.enabled, tl!("Onion Skin"));
+        ui.separator();
+        let max = crate::onion_skin::MAX_NEIGHBOURS;
+        egui::Grid::new("onion-settings").num_columns(2).show(ui, |ui| {
+            ui.label(tl!("Frames before"));
+            ui.add(egui::DragValue::new(&mut now.before).range(0..=max));
+            ui.end_row();
+            ui.label(tl!("Frames after"));
+            ui.add(egui::DragValue::new(&mut now.after).range(0..=max));
+            ui.end_row();
+            ui.label(tl!("Opacity"));
+            ui.add(egui::DragValue::new(&mut now.opacity).range(1..=100).suffix("%"));
+            ui.end_row();
+        });
+        if now != onion {
+            *out = Some(now.clamped());
+        }
     });
 }
 
