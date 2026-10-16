@@ -30,8 +30,22 @@ fn settings_menu(h: &mut Harness<'_, PhotocraftApp>, tab: usize) {
     h.state_mut().ui.panels.brush_settings = true;
     h.state_mut().ui.brush_tab = tab;
     h.run_steps(3);
+    // A larger tab can clamp the floating panel to the screen after a pointer frame.
+    // Wait for its actual target to settle; clicking a stale rectangle can hit the tab body.
+    let mut settled = false;
+    for _ in 0..8 {
+        let menu = h.get_by_role_and_label(egui::accesskit::Role::Window, "Brush Settings").get_by_label("Panel menu").rect();
+        h.hover_at(menu.center());
+        h.run_steps(2);
+        let next = h.get_by_role_and_label(egui::accesskit::Role::Window, "Brush Settings").get_by_label("Panel menu").rect();
+        if menu == next {
+            settled = true;
+            break;
+        }
+    }
+    assert!(settled, "the menu target must settle before clicking");
     h.get_by_role_and_label(egui::accesskit::Role::Window, "Brush Settings").get_by_label("Panel menu").click();
-    h.run_steps(2);
+    h.run_steps(3);
     h.get_by_label("New Brush Preset…").click();
     h.run_steps(3);
 }
