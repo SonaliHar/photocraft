@@ -11,12 +11,7 @@ use photocraft_ui_egui::gpu_canvas::{self, GpuCanvas};
 use photocraft_ui_egui::{PhotocraftApp, gpu_status};
 use serde_json::json;
 
-/// Concurrent wgpu devices in one process crash on some drivers (see `canvas_16f.rs`).
-static GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
-    GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use photocraft_testkit::gpu_lock;
 
 fn render_state() -> Option<RenderState> {
     let rs =
@@ -29,6 +24,32 @@ fn render_state() -> Option<RenderState> {
 
 fn doc() -> Document {
     Document::with_background("t", Size::new(300, 200), ColorMode::Rgb, SampleType::U8, Color::rgba(0.2, 0.5, 0.8, 1.0))
+}
+
+#[test]
+fn composite_reuse_reports_held_bytes_and_honors_the_canvas_override() {
+    let _gpu = gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let g = GpuCanvas::new(&rs);
+    let mut d = doc();
+    d.layers.push(photocraft_doc::Layer::new("top", photocraft_doc::LayerContent::Fill(photocraft_doc::Fill::Solid(Color::rgba(0.8, 0.1, 0.2, 0.5)))));
+    g.set_memory_budget(1 << 30);
+    g.set_composite_cache_budget(0);
+    assert_eq!(g.composite(&d, d.bounds(), false).unwrap().prefix_hits, 0);
+    assert_eq!(g.compositor_bytes().unwrap().1, 0, "no effect maps or composite chunks");
+    g.set_composite_cache_budget(512 << 20);
+    assert_eq!(g.composite(&d, d.bounds(), false).unwrap().prefix_hits, 0);
+    let bpp = if photocraft_gpu::Compositor::preferred_acc_format(&rs.adapter) == eframe::wgpu::TextureFormat::Rgba32Float { 16 } else { 8 };
+    // The cache holds whole chunk-aligned cells, not the document's exact rectangle.
+    let cell = u64::from(photocraft_gpu::CHUNK);
+    let cells = u64::from(d.size.width).div_ceil(cell) * cell * u64::from(d.size.height).div_ceil(cell) * cell;
+    assert_eq!(g.compositor_bytes().unwrap().1 as u64, cells * bpp);
+    d.layers[1].opacity = 0.4;
+    assert!(g.composite(&d, d.bounds(), false).unwrap().prefix_hits > 0);
+    g.set_composite_cache_budget(0);
+    g.set_memory_budget(512 << 20);
+    assert_eq!(g.composite(&d, d.bounds(), false).unwrap().prefix_hits, 0);
+    assert_eq!(g.compositor_bytes().unwrap().1, 0, "override survives the overall budget update");
 }
 
 #[test]
@@ -49,7 +70,7 @@ fn injected_loss_stops_gpu_work_without_panicking() {
     assert!(g.composite(&d, d.bounds(), false).is_err());
     assert!(!g.upload_rect(key, [0, 0], [1, 1], &[0; 4]));
     g.upload_full(key, [1, 1], &[0; 4]);
-    g.set_display_lut(key, 2, Some(&[0; 32]));
+    g.set_display_lut(key, 0, 2, Some(&[0; 32]));
     assert!(g.read_texels(key).is_none());
     g.release();
     assert!(!g.has(key, [300, 200]));
@@ -112,9 +133,10 @@ fn app_switches_to_the_cpu_canvas_and_keeps_the_documents() {
     let app = h.state();
     assert!(!app.gpu_active(), "still on the GPU canvas");
     assert_eq!(app.session.documents().len(), 1, "document kept");
-    let n = app.ui.notices.last().expect("notice");
-    assert_eq!(n.title, gpu_status::LOST_MESSAGE);
-    assert!(n.error);
+    assert_eq!(app.ui.status, gpu_status::LOST_MESSAGE);
+    assert!(app.ui.status_error);
+    assert!(app.ui.gpu_fallback_notice.as_deref().unwrap_or("").contains("killed by the OS"));
+    assert!(app.ui.notices.is_empty(), "one recovery warning, no duplicate notice");
     assert!(app.perf.gpu_info.lost.as_deref().unwrap_or("").contains("killed by the OS"));
     assert_eq!(app.perf.gpu_info.canvas, "cpu");
     // The CPU path draws the document: a refresh after the loss is a CPU one.
@@ -158,9 +180,42 @@ fn system_info_lists_the_graphics_state() {
     app.perf.gpu_info.fallback = Some("the previous start didn't finish on vulkan; using dx12".into());
     let lines = gpu_status::system_info(&app);
     let text = lines.join("\n");
-    for want in ["Graphics adapter: Test GPU", "Backend: dx12", "Selected at launch: dx12", "Fallback: the previous start", "Canvas renderer: CPU"] {
+    for want in ["Graphics adapter: Test GPU", "Backend: dx12", "Selected at launch: dx12", "Fallback: the previous start", "Image compositor: CPU"] {
         assert!(text.contains(want), "{want} missing from\n{text}");
     }
     let v = gpu_status::system_info_json(&app);
     assert_eq!(v["gpu"]["adapter"], "Test GPU");
+}
+
+/// A canvas whose display textures exceed the canvas budget gets none: no texture set is built,
+/// the refresh says so and the app draws it on the CPU canvas instead (#2934).
+#[test]
+fn canvas_over_the_texture_budget_builds_no_textures() {
+    let _gpu = gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let g = GpuCanvas::new(&rs);
+    let d = doc();
+    let (key, size) = (d.id.0, [d.size.width, d.size.height]);
+    // Less than the full-resolution level alone.
+    g.set_canvas_budget(u64::from(size[0] * size[1]) * 4 - 1);
+    assert!(!g.fits_canvas(&d));
+    let r = g.refresh(key, &d, None, None);
+    assert_eq!(r.kind, gpu_canvas::REFRESH_OVER_BUDGET);
+    assert!(!g.has(key, size) && g.texture_info(key).is_none());
+    assert!(g.composite(&d, d.bounds(), false).is_err());
+    g.upload_full(key, size, &vec![0; size[0] as usize * size[1] as usize * 4]);
+    assert!(g.texture_info(key).is_none(), "no entry point builds the set");
+    // Within the budget the same document is drawn on the GPU, at the bytes it was priced at.
+    g.set_canvas_budget(1 << 30);
+    assert!(g.fits_canvas(&d));
+    assert_ne!(g.refresh(key, &d, None, None).kind, gpu_canvas::REFRESH_OVER_BUDGET);
+    assert!(g.has(key, size));
+    let (format, bytes) = g.texture_info(key).unwrap();
+    let bpp = if format == eframe::wgpu::TextureFormat::Rgba16Float { 8 } else { 4 };
+    assert_eq!(bytes, gpu_canvas::canvas_texture_bytes(size, gpu_canvas::DEFAULT_TILE, bpp));
+    // Shrinking the budget below an existing set drops it on the next refresh.
+    g.set_canvas_budget(1);
+    assert_eq!(g.refresh(key, &d, None, None).kind, gpu_canvas::REFRESH_OVER_BUDGET);
+    assert!(g.texture_info(key).is_none());
+    g.release();
 }

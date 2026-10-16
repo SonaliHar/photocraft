@@ -16,7 +16,6 @@ fn render(profile: &str, rgb: [f32; 3], reopen: bool) -> Option<([u8; 3], [u8; 3
     let ft = float_targets.clone();
     let observer = Arc::new(std::sync::Mutex::new(None));
     let observer_out = observer.clone();
-    let profile = profile.to_string();
     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).with_pixels_per_point(1.0).with_max_steps(64).wgpu().build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
@@ -25,14 +24,6 @@ fn render(profile: &str, rgb: [f32; 3], reopen: bool) -> Option<([u8; 3], [u8; 3
                 ft.store(photocraft_gpu::Compositor::preferred_acc_format(&rs.adapter) == eframe::wgpu::TextureFormat::Rgba32Float, Ordering::SeqCst);
                 *observer_out.lock().expect("GPU observer lock") = Some(photocraft_ui_egui::gpu_canvas::GpuCanvas::new(rs));
                 app.set_wgpu(rs.clone());
-            }
-            let hex = format!("#{:02x}{:02x}{:02x}", (rgb[0] * 255.0).round() as u8, (rgb[1] * 255.0).round() as u8, (rgb[2] * 255.0).round() as u8);
-            app.run("file.new", json!({"width": 512, "height": 512, "mode": "rgb", "depth": 8})).expect("new");
-            app.run("edit.assignProfile", json!({"profile": profile})).expect("assign");
-            app.run("edit.fill", json!({"color": hex})).expect("fill");
-            // Native loading starts at revision one; preserve that collision in the reopen case.
-            if reopen {
-                app.session.active_mut().unwrap().revision = 1;
             }
             app
         })
@@ -44,6 +35,17 @@ fn render(profile: &str, rgb: [f32; 3], reopen: bool) -> Option<([u8; 3], [u8; 3
     if !float_targets.load(Ordering::SeqCst) {
         eprintln!("skipping: adapter can't render Rgba32Float");
         return None;
+    }
+    // Outside the catch_unwind: a failing setup command fails the test instead of reading as
+    // "no GPU adapter" (#760).
+    let hex = format!("#{:02x}{:02x}{:02x}", (rgb[0] * 255.0).round() as u8, (rgb[1] * 255.0).round() as u8, (rgb[2] * 255.0).round() as u8);
+    let app = harness.state_mut();
+    app.run("file.new", json!({"width": 512, "height": 512, "mode": "rgb", "depth": 8})).expect("new");
+    app.run("edit.assignProfile", json!({"profile": profile})).expect("assign");
+    app.run("edit.fill", json!({"color": hex})).expect("fill");
+    // Native loading starts at revision one; preserve that collision in the reopen case.
+    if reopen {
+        app.session.active_mut().expect("active document").revision = 1;
     }
     let sample = |harness: &mut egui_kittest::Harness<'_, PhotocraftApp>| {
         harness.run_steps(6);
@@ -108,6 +110,7 @@ fn close(a: [u8; 3], b: [f32; 3], tol: f32) -> bool {
 
 #[test]
 fn display_p3_is_converted_on_gpu_and_cpu_canvases() {
+    let _gpu = photocraft_testkit::gpu_lock();
     // P3 (0.8, 0.5, 0.3) → sRGB (216.7, 122.9, 64.3) (see engine display_color_tests); raw would be (204, 128, 77).
     let Some((gpu, cpu)) = render("display-p3", [0.8, 0.5, 0.3], true) else { return };
     assert!(close(cpu, [216.7, 122.9, 64.3], 2.0), "CPU canvas {cpu:?}");
@@ -116,6 +119,7 @@ fn display_p3_is_converted_on_gpu_and_cpu_canvases() {
 
 #[test]
 fn srgb_documents_are_unchanged() {
+    let _gpu = photocraft_testkit::gpu_lock();
     let Some((gpu, cpu)) = render("srgb", [0.8, 0.5, 0.3], false) else { return };
     assert!(close(cpu, [204.0, 128.0, 77.0], 1.0), "CPU canvas {cpu:?}");
     assert!(close(gpu, [204.0, 128.0, 77.0], 1.0), "GPU canvas {gpu:?}");

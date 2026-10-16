@@ -254,6 +254,66 @@ fn builder_psd_imports() {
 }
 
 #[test]
+fn group_nesting_past_the_cap_is_rejected() {
+    use photocraft_psd::{GroupSpec, LayerSpec, PixelData, PsdBuilder};
+    let mut b = PsdBuilder::new(4, 4);
+    for _ in 0..101 {
+        b.begin_group(GroupSpec::new("g"));
+    }
+    b.push_layer(LayerSpec::new("deep", 0, 0, 1, 1, PixelData::Rgba8(vec![1, 2, 3, 4])));
+    for _ in 0..101 {
+        b.end_group().unwrap();
+    }
+    let bytes = b.to_bytes().unwrap();
+    let err = import("deep.psd", &bytes).unwrap_err();
+    assert!(err.to_string().contains("nested deeper than 100"), "{err}");
+    // The never-fail converter still returns a document — capped, with a warning
+    // about the part that was not imported (it used to recurse to the file's depth).
+    let (d, warnings) = psd_to_document(&photocraft_psd::PsdFile::from_bytes(&bytes).unwrap());
+    assert_eq!(d.max_group_depth(), 100);
+    assert!(warnings.iter().any(|w| w.contains("deeper than 100")), "{warnings:?}");
+}
+
+#[test]
+fn group_nesting_at_the_cap_imports() {
+    use photocraft_psd::{GroupSpec, LayerSpec, PixelData, PsdBuilder};
+    let mut b = PsdBuilder::new(4, 4);
+    for _ in 0..100 {
+        b.begin_group(GroupSpec::new("g"));
+    }
+    b.push_layer(LayerSpec::new("deep", 0, 0, 1, 1, PixelData::Rgba8(vec![1, 2, 3, 4])));
+    for _ in 0..100 {
+        b.end_group().unwrap();
+    }
+    let r = import("hundred.psd", &b.to_bytes().unwrap()).unwrap();
+    assert_eq!(r.document.max_group_depth(), 100);
+    assert!(!r.warnings.iter().any(|w| w.contains("deeper")), "{:?}", r.warnings);
+}
+
+#[test]
+fn layered_import_skips_the_unused_merged_composite() {
+    use photocraft_psd::{LayerSpec, PixelData, PsdBuilder};
+    // A layered file whose merged composite carries nothing behind the colour channels never
+    // decodes it - that composite is roughly half a Photoshop save's bytes. Here its data is
+    // garbage: the layered import does not touch it, while a file with an extra channel does
+    // decode (and warn), which is what makes the skip observable.
+    let mut b = PsdBuilder::new(4, 4);
+    b.push_layer(LayerSpec::new("a", 0, 0, 2, 2, PixelData::Rgba8(vec![7u8; 16])));
+    b.composite(PixelData::Rgba8(vec![128; 64]));
+    let mut f = photocraft_psd::PsdFile::from_bytes(&b.to_bytes().unwrap()).unwrap();
+    f.image_data.data.clear();
+    f.layer_info.as_mut().unwrap().merged_alpha = true;
+    let (d, warnings) = psd_to_document(&f);
+    assert_eq!(d.layers.len(), 1);
+    assert!(!warnings.iter().any(|w| w.contains("merged image")), "an unused composite is not decoded: {warnings:?}");
+    // A real extra channel behind the colour ones is part of the composite: it is decoded,
+    // and the garbage above surfaces as a warning.
+    f.layer_info.as_mut().unwrap().merged_alpha = false;
+    let (_, warnings) = psd_to_document(&f);
+    assert!(warnings.iter().any(|w| w.contains("merged image")), "{warnings:?}");
+}
+
+#[test]
 fn locks_and_labels_from_psd() {
     use photocraft_psd::TaggedBlock;
     let mut f = testgen::small(Version::Psd, Compression::Raw);
@@ -263,6 +323,19 @@ fn locks_and_labels_from_psd() {
     let l = &d.layers[0];
     assert!(l.locks.transparency && l.locks.position && !l.locks.pixels);
     assert_eq!(l.label, photocraft_doc::LabelColor::Yellow);
+}
+
+#[test]
+fn artboard_lock_round_trips_byte_for_byte() {
+    // Reference files write a Background layer's locks as lspf = 0x0D (transparency + position +
+    // the bit-3 lock). PhotoCraft read the artboard lock at bit 4, so 0x0D came back as 0x05
+    // and the lock bytes drifted on every re-save.
+    use photocraft_psd::TaggedBlock;
+    let mut f = testgen::small(Version::Psd, Compression::Raw);
+    f.layers_mut()[0].blocks.push(TaggedBlock::protection(0x0D));
+    let g = via_doc(&f);
+    let lspf = g.layers().iter().find_map(|l| l.block(b"lspf")).expect("exported layer should carry an lspf block");
+    assert_eq!(lspf.data, 0x0Du32.to_be_bytes());
 }
 
 #[test]
@@ -387,13 +460,18 @@ fn guides_and_alpha_names_roundtrip() {
 }
 
 #[test]
-fn resolution_in_cm_converted() {
+fn resolution_info_cm_display_unit_stays_pixels_per_inch() {
     let mut f = testgen::small(Version::Psd, Compression::Raw);
-    let mut ri = photocraft_psd::ResolutionInfo::from_dpi(100.0);
+    let mut ri = photocraft_psd::ResolutionInfo::from_dpi(300.0);
     ri.h_res_unit = 2;
+    ri.v_res_unit = 2;
     f.resources[0] = photocraft_psd::ImageResource::new(1005, ri.to_bytes());
     let (d, _) = psd_to_document(&f);
-    assert!((d.resolution_dpi - 254.0).abs() < 1e-3);
+    assert!((d.resolution_dpi - 300.0).abs() < 1e-3, "{}", d.resolution_dpi);
+    let out = document_to_psd(&d);
+    let written = out.resolution().unwrap();
+    assert!((written.h_res() - 300.0).abs() < 1e-3, "{}", written.h_res());
+    assert!((written.v_res() - 300.0).abs() < 1e-3, "{}", written.v_res());
 }
 
 #[test]
@@ -424,6 +502,11 @@ fn merged_composite_unmattes_photoshop_white() {
     hdr.header.channels = 4;
     hdr.image_data =
         photocraft_psd::ImageData { compression: Compression::Raw, data: [1.5_f32, 0.25, 0.5, 0.5].into_iter().flat_map(f32::to_be_bytes).collect() };
+    assert_eq!(merged_composite(&hdr).unwrap(), vec![[2.0, -0.5, 0.0, 0.5]]);
+    let mut deep = testgen::merged_only(Version::Psd, ColorMode::Rgb, 16, Compression::Raw, 1, 1);
+    deep.header.channels = 4;
+    deep.image_data.data = [65535_u16, 65535, 65535, 65500].into_iter().flat_map(u16::to_be_bytes).collect();
+    assert_eq!(merged_composite(&deep).unwrap()[0][3], 65500.0 / 65535.0);
     let imported = import("hdr.psd", &hdr.to_bytes().unwrap()).unwrap().document;
     assert_eq!(imported.depth, photocraft_color::SampleType::F32);
     assert_eq!(imported.layers[0].surface().unwrap().pixel(0, 0), vec![2.0, -0.5, 0.0, 0.5]);
@@ -467,4 +550,17 @@ fn every_blend_mode_maps_both_ways() {
         assert!(!matches!(k, photocraft_psd::BlendMode::Unknown(_)), "{m:?}");
         assert_eq!(photocraft_color::BlendMode::from_psd_key(k.key()), Some(m));
     }
+}
+
+#[test]
+fn layer_bounds_without_channel_data_allocate_nothing() {
+    // A record can declare a 300000x300000 rectangle in a few bytes. With no channel data to
+    // back it, import used to interleave a ~360 GB buffer and abort on the allocation (#755).
+    use photocraft_psd::LayerRecord;
+    let mut f = testgen::small(Version::Psd, Compression::Raw);
+    f.layers_mut().push(LayerRecord { rect: photocraft_psd::Rect::from_xywh(0, 0, 300_000, 300_000), name: b"huge".to_vec(), ..Default::default() });
+    let (d, warnings) = psd_to_document(&f);
+    let l = d.layers.last().unwrap();
+    assert!(matches!(&l.content, LayerContent::Raster(s) if s.tile_count() == 0));
+    assert!(warnings.iter().any(|w| w.contains("\"huge\"")), "{warnings:?}");
 }

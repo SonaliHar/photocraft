@@ -58,6 +58,8 @@ fn default_build_formats_all_symmetric() {
         Format::Qoi,
         Format::OpenExr,
         Format::Hdr,
+        Format::Fits,
+        Format::Dpx,
     ];
     for f in expected {
         assert!(caps(f).read && caps(f).write, "{f:?}");
@@ -69,6 +71,29 @@ fn avif_never_readable() {
     assert!(!caps(Format::Avif).read);
     assert_eq!(caps(Format::Avif).write, cfg!(feature = "avif"));
     assert!(matches!(decode_as(Format::Avif, b"\0\0\0\x1cftypavif"), Err(CodecError::Unsupported { .. })));
+}
+
+#[test]
+fn heif_is_detected_always_and_readable_only_with_the_feature() {
+    let header = b"\0\0\0\x18ftypheic\0\0\0\0mif1heic";
+    assert_eq!(detect(header), Some(Format::Heif));
+    assert_eq!(from_extension("IMG_0001.HEIC"), Some(Format::Heif));
+    assert_eq!(caps(Format::Heif).read, cfg!(feature = "heif"));
+    assert!(!caps(Format::Heif).write);
+    assert!(ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::Heif));
+    // Either way a bare header is an error, never a panic.
+    assert!(decode_as(Format::Heif, header).is_err());
+}
+
+#[test]
+fn detect_heif_brands() {
+    assert_eq!(detect(b"\0\0\0\x18ftypheic\0\0\0\0mif1heic"), Some(Format::Heif));
+    assert_eq!(detect(b"\0\0\0\x18ftypmif1\0\0\0\0mif1heic"), Some(Format::Heif), "generic major brand");
+    assert_eq!(detect(b"\0\0\0\x18ftypheix\0\0\0\0mif1heix"), Some(Format::Heif), "10-bit");
+    assert_eq!(detect(b"\0\0\0\x18ftypmsf1\0\0\0\0msf1hevc"), Some(Format::Heif), "image sequence");
+    assert_eq!(detect(b"\0\0\0\x18ftypmif1\0\0\0\0mif1avif"), Some(Format::Avif), "AVIF wins over the generic brand");
+    assert_eq!(detect(b"\0\0\0\x18ftypisom\0\0\0\0isommp41"), None, "mp4 is not HEIF");
+    assert_eq!(detect(b"\0\0\0\x14ftypqt  \0\0\0\0qt  "), None, "QuickTime is not HEIF");
 }
 
 #[test]
@@ -162,6 +187,17 @@ fn detect_magic_hdr() {
     assert_eq!(detect(b"#?RGBE\n"), Some(Format::Hdr));
 }
 #[test]
+fn detect_magic_cineon() {
+    let mut b = vec![0u8; 208];
+    b[0..4].copy_from_slice(&[0x80, 0x2A, 0x5F, 0xD7]);
+    assert_eq!(detect(&b), Some(Format::Cineon));
+    assert_eq!(from_extension("scan.CIN"), Some(Format::Cineon));
+    assert!(caps(Format::Cineon).read && !caps(Format::Cineon).write, "Cineon is read-only");
+    assert!(ASYMMETRIC_EXCEPTIONS.iter().any(|(f, _)| *f == Format::Cineon));
+    // A bare magic is an error, never a panic.
+    assert!(decode_as(Format::Cineon, &b).is_err());
+}
+#[test]
 fn detect_magic_avif() {
     assert_eq!(detect(b"\0\0\0\x1cftypavif\0\0\0\0avifmif1miaf"), Some(Format::Avif));
     assert_eq!(detect(b"\0\0\0\x1cftypavis\0\0\0\0avismsf1miaf"), Some(Format::Avif));
@@ -222,6 +258,8 @@ fn extension_specific_cases() {
     assert_eq!(from_extension("tif"), Some(Format::Tiff));
     assert_eq!(from_extension("pfm"), Some(Format::Pnm));
     assert_eq!(from_extension("pam"), Some(Format::Pnm));
+    assert_eq!(from_extension("FIT"), Some(Format::Fits));
+    assert_eq!(from_extension("m31.fits"), Some(Format::Fits));
     assert_eq!(from_extension("exr"), Some(Format::OpenExr));
     assert_eq!(from_extension("psd"), None);
     assert_eq!(from_extension(""), None);

@@ -1,6 +1,7 @@
 //! #314: renaming a layer in place works like Photoshop. A click anywhere else, Enter or Tab
 //! commits; Esc cancels; only one rename is open at a time, and starting another (double-click,
-//! the context menu or Layer › Rename Layer) commits the first.
+//! the context menu or Layer › Rename Layer) commits the first. Tab then renames the layer below,
+//! ⇧Tab the layer above.
 
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, pos2, vec2};
 use egui_kittest::Harness;
@@ -127,7 +128,8 @@ fn enter_and_tab_commit_and_escape_cancels() {
     start(&mut h, b);
     type_text(&mut h, "By Tab");
     key(&mut h, Key::Tab);
-    assert_eq!((name(&h, b), renaming(&h.ctx)), ("By Tab".into(), None));
+    assert_eq!((name(&h, b), renaming(&h.ctx)), ("By Tab".into(), Some(a)), "Tab commits and renames the layer below");
+    key(&mut h, Key::Escape);
 
     start(&mut h, c);
     type_text(&mut h, "Never");
@@ -141,6 +143,28 @@ fn enter_and_tab_commit_and_escape_cancels() {
     type_text(&mut h, "   ");
     key(&mut h, Key::Enter);
     assert_eq!(name(&h, c), "Gamma");
+}
+
+#[test]
+fn shift_tab_renames_the_layer_above_and_tab_at_the_bottom_ends() {
+    let (mut h, [a, b, c]) = harness(1.0);
+    start(&mut h, b);
+    type_text(&mut h, "Middle");
+    h.event(Event::ModifiersChanged(Modifiers::SHIFT));
+    h.event(Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT });
+    h.event(Event::Key { key: Key::Tab, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::SHIFT });
+    h.run_steps(1);
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert_eq!((name(&h, b), renaming(&h.ctx)), ("Middle".into(), Some(c)), "⇧Tab renames the layer above");
+    // Typing replaces the next layer's name too, as the whole name starts selected.
+    type_text(&mut h, "Top");
+    key(&mut h, Key::Enter);
+    assert_eq!((name(&h, c), renaming(&h.ctx)), ("Top".into(), None));
+    // Tab from the lowest layer ends the rename: the Background below isn't renamed in place.
+    start(&mut h, a);
+    key(&mut h, Key::Tab);
+    assert_eq!(renaming(&h.ctx), None);
 }
 
 #[test]
@@ -189,4 +213,59 @@ fn a_rename_ends_when_its_layer_goes_away() {
     // The keyboard is back to the tools: V selects the Move tool.
     key(&mut h, Key::V);
     assert_eq!(h.state().ui.tool, crate::state::Tool::Move);
+}
+
+/// #651: a double-click just above or below the name, still over it, renames rather than opening
+/// Layer Style.
+#[test]
+fn double_click_above_or_below_the_name_renames() {
+    for ppp in [1.0, 2.0] {
+        let (mut h, [a, ..]) = harness(ppp);
+        let row = recorded(&h.ctx).into_iter().find(|r| r.layer == a).unwrap();
+        let name = row.name.expect("name drawn");
+        for y in [row.row.top() + 1.0, row.row.bottom() - 2.0] {
+            assert!(!name.expand(2.0).contains(pos2(name.center().x, y)), "@{ppp}x: off the glyphs");
+            double_click(&mut h, pos2(name.center().x, y));
+            assert_eq!(renaming(&h.ctx), Some(a), "@{ppp}x: y {y} renames");
+            assert!(h.state().ui.dialogs.is_empty(), "@{ppp}x: no Layer Style");
+            key(&mut h, Key::Escape);
+        }
+    }
+}
+
+/// #350: a double-click on the row outside the name opens Layer Style for that layer; on the
+/// name it still renames; on a Smart Object's thumbnail it opens the contents.
+#[test]
+fn double_click_beside_the_name_opens_layer_style() {
+    let (mut h, [a, b, c]) = harness(1.0);
+    let styles = |h: &Harness<'_, PhotocraftApp>| h.state().ui.dialogs.iter().filter(|d| d.kind == crate::state::DialogKind::LayerStyle).count();
+    // Select Alpha with one click, then double-click the empty part of its row.
+    let at = name_at(&h, a);
+    click(&mut h, at);
+    let row = recorded(&h.ctx).into_iter().find(|r| r.layer == a).unwrap();
+    let name = row.name.expect("name drawn");
+    let beside = pos2(name.right() + 40.0, row.row.center().y);
+    assert!(row.indicators.iter().all(|(_, r)| !r.expand(2.0).contains(beside)) && row.row.contains(beside));
+    double_click(&mut h, beside);
+    assert_eq!(styles(&h), 1, "Layer Style opened");
+    assert_eq!(renaming(&h.ctx), None, "not a rename");
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(photocraft_doc::LayerId(a)));
+    h.state_mut().ui.dialogs.clear();
+    h.run_steps(2);
+    // The name still renames.
+    start(&mut h, b);
+    assert_eq!(styles(&h), 0);
+    key(&mut h, Key::Escape);
+    // A Smart Object's thumbnail opens its contents instead of Layer Style.
+    h.state_mut().run("layer.select", json!({"layer": c})).unwrap();
+    h.state_mut().run("edit.fill", json!({"color": "#808080"})).unwrap();
+    h.state_mut().run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    h.run_steps(4);
+    let docs = h.state().session.documents().len();
+    let smart = h.state().session.active().unwrap().active_layer.unwrap().0;
+    let name = recorded(&h.ctx).into_iter().find(|r| r.layer == smart).and_then(|r| r.name).expect("smart row drawn");
+    // The thumbnail sits just left of the name (a Smart Object has no mask thumbnail).
+    double_click(&mut h, pos2(name.left() - 18.0, name.center().y));
+    assert_eq!(h.state().session.documents().len(), docs + 1, "Edit Contents opened the source");
+    assert_eq!(styles(&h), 0);
 }

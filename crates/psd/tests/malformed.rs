@@ -92,6 +92,21 @@ fn oversized_dimensions_rejected() {
 }
 
 #[test]
+fn zero_dimensions_rejected() {
+    // Height is bytes 14..18 and width 18..22; the spec range starts at 1.
+    let good = testgen::small(Version::Psd, Compression::Raw).to_bytes().unwrap();
+    for range in [14..18, 18..22, 14..22] {
+        let mut b = good.clone();
+        b[range.clone()].fill(0);
+        let err = PsdFile::from_bytes(&b).unwrap_err();
+        assert!(err.to_string().contains("at least 1x1"), "{range:?}: {err}");
+    }
+    let mut f = testgen::small(Version::Psd, Compression::Raw);
+    f.header.width = 0;
+    assert!(f.validate().is_err(), "a zero-sized header must not pass the writer's validation");
+}
+
+#[test]
 fn huge_declared_dimensions_small_data() {
     // 300000² RLE image with 16 bytes of data must fail fast, not allocate.
     let mut f = testgen::merged_only(Version::Psb, ColorMode::Grayscale, 8, Compression::Rle, 1, 1);
@@ -99,10 +114,11 @@ fn huge_declared_dimensions_small_data() {
     f.header.height = 300_000;
     let b = f.to_bytes().unwrap();
     assert!(PsdFile::from_bytes(&b).is_err());
+    // ZIP over `MAX_DECODED_BYTES` is not inflated at parse time (#2926); decoding refuses it.
     f.image_data.compression = Compression::Zip;
     f.image_data.data = compression::zip_compress(&[0; 100]);
     let b = f.to_bytes().unwrap();
-    assert!(PsdFile::from_bytes(&b).is_err());
+    assert!(matches!(PsdFile::from_bytes(&b).and_then(|f| f.decode_merged()), Err(PsdError::LimitExceeded(_))));
 }
 
 #[test]

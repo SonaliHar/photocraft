@@ -74,6 +74,13 @@ impl Image {
         if self.rect.contains(x, y) { self.data[self.index(x, y) + c] } else { 0.0 }
     }
 
+    /// Samples of the pixels of a one-pixel-high rectangle (must be inside).
+    #[inline]
+    pub fn row(&self, r: Rect) -> &[f32] {
+        let i = self.index(r.x0, r.y0);
+        &self.data[i..i + r.width() as usize * self.ch]
+    }
+
     /// Pixel slice at `(x, y)` (must be inside).
     #[inline]
     pub fn px(&self, x: i32, y: i32) -> &[f32] {
@@ -84,6 +91,9 @@ impl Image {
     /// Sample with an edge policy relative to `area`.
     #[inline]
     pub fn get_edge(&self, x: i32, y: i32, c: usize, edge: Edge, area: Rect) -> f32 {
+        if area.is_empty() {
+            return 0.0;
+        }
         if area.contains(x, y) {
             return self.get(x, y, c);
         }

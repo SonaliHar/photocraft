@@ -17,13 +17,7 @@ use photocraft_ui_egui::PhotocraftApp;
 use photocraft_ui_egui::gpu_canvas::{self, GpuCanvas};
 use serde_json::json;
 
-/// Concurrent wgpu devices in one process crash on some drivers (Mesa llvmpipe over GL, RADV;
-/// see #194), so every test here holds this lock for its whole run, devices included.
-static GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-fn gpu_lock() -> std::sync::MutexGuard<'static, ()> {
-    GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use photocraft_testkit::gpu_lock;
 
 /// A headless GPU canvas on a device created like the app's, if the adapter has a float canvas.
 fn canvas() -> Option<(GpuCanvas, RenderState)> {
@@ -195,9 +189,6 @@ fn screen(doc: Document, setup: &[(&str, serde_json::Value)], name: &str) -> Opt
                 app.set_wgpu(rs.clone());
             }
             app.session.open_document(doc, None);
-            for (id, p) in setup {
-                app.run(&id, p).expect("setup command");
-            }
             app
         })
     }));
@@ -208,6 +199,11 @@ fn screen(doc: Document, setup: &[(&str, serde_json::Value)], name: &str) -> Opt
     if !ok.load(Ordering::SeqCst) {
         eprintln!("skipping: adapter can't render/filter Rgba16Float");
         return None;
+    }
+    // Outside the catch_unwind: a failing setup command fails the test instead of reading as
+    // "no GPU adapter" (#760).
+    for (id, p) in setup {
+        harness.state_mut().run(&id, p).unwrap_or_else(|e| panic!("setup command {id}: {e}"));
     }
     harness.run_steps(6);
     let img = harness.render().expect("render");

@@ -21,7 +21,13 @@ fn png_u16_rgba_is_clean() {
 fn tiff_is_clean_for_all_integer_and_f32_layouts() {
     for l in ChannelLayout::ALL {
         for s in [SampleType::U8, SampleType::U16, SampleType::F32, SampleType::F16] {
-            assert!(warns(&test_image(l, s), Format::Tiff).is_empty(), "{l:?} {s:?}");
+            let w = warns(&test_image(l, s), Format::Tiff);
+            if l.is_lab() && s.is_float() {
+                // CIELab has no float form: it is written with 16 bits, and says so.
+                assert_eq!(w, vec![FidelityWarning::DepthReduced { from: s, to: SampleType::U16 }], "{l:?} {s:?}");
+            } else {
+                assert!(w.is_empty(), "{l:?} {s:?}");
+            }
         }
     }
 }
@@ -86,7 +92,8 @@ fn icc_warning_suppressed_when_not_embedding() {
 #[test]
 fn exif_xmp_dpi_text_dropped_for_qoi() {
     let mut img = test_image(ChannelLayout::Rgb, SampleType::U8);
-    img.meta = Metadata { exif: Some(sample_exif()), xmp: Some("x".into()), dpi: Some((72.0, 72.0)), text: vec![("a".into(), "b".into())] };
+    img.meta =
+        Metadata { exif: Some(sample_exif()), xmp: Some("x".into()), dpi: Some((72.0, 72.0)), text: vec![("a".into(), "b".into())], ..Default::default() };
     let w = warns(&img, Format::Qoi);
     for x in [W::ExifDropped, W::XmpDropped, W::DpiDropped, W::TextDropped] {
         assert!(w.contains(&x), "{x:?}");
@@ -95,7 +102,8 @@ fn exif_xmp_dpi_text_dropped_for_qoi() {
 #[test]
 fn webp_drops_dpi_and_text_only() {
     let mut img = test_image(ChannelLayout::Rgb, SampleType::U8);
-    img.meta = Metadata { exif: Some(sample_exif()), xmp: Some("x".into()), dpi: Some((72.0, 72.0)), text: vec![("a".into(), "b".into())] };
+    img.meta =
+        Metadata { exif: Some(sample_exif()), xmp: Some("x".into()), dpi: Some((72.0, 72.0)), text: vec![("a".into(), "b".into())], ..Default::default() };
     let w = warns(&img, Format::WebP);
     assert_eq!(w, vec![W::DpiDropped, W::TextDropped]);
 }
@@ -111,6 +119,12 @@ fn float_to_png_reduces_and_clips() {
 fn in_range_float_not_clipped() {
     let w = warns(&test_image(ChannelLayout::Rgb, SampleType::F32), Format::Png);
     assert!(!w.contains(&W::RangeClipped));
+}
+#[test]
+fn hdr_float_to_fits_clips() {
+    let img = Image::from_f32(2, 1, ChannelLayout::Gray, &[0.5, 3.0]).unwrap();
+    assert!(warns(&img, Format::Fits).contains(&W::RangeClipped));
+    assert!(!warns(&test_image(ChannelLayout::Gray, SampleType::F32), Format::Fits).contains(&W::RangeClipped));
 }
 #[test]
 fn float_to_exr_and_tiff_is_clean() {
@@ -170,6 +184,7 @@ fn every_warning_has_a_message() {
         W::AlphaDiscarded,
         W::AlphaBinarized,
         W::CmykConverted { to: ChannelLayout::Rgb },
+        W::LabConverted { to: ChannelLayout::Rgb },
         W::ColorToGray,
         W::PaletteQuantized,
         W::LossyCompression,
@@ -201,6 +216,8 @@ fn warnings_match_actual_roundtrip_behaviour() {
                 assert_eq!(w.contains(&W::AlphaDiscarded), alpha_lost, "{f:?} {l:?} {s:?}");
                 let cmyk_lost = l.is_cmyk() && !back.layout().is_cmyk();
                 assert_eq!(w.iter().any(|w| matches!(w, W::CmykConverted { .. })), cmyk_lost, "{f:?} {l:?} {s:?}");
+                let lab_lost = l.is_lab() && !back.layout().is_lab();
+                assert_eq!(w.iter().any(|w| matches!(w, W::LabConverted { .. })), lab_lost, "{f:?} {l:?} {s:?}");
             }
         }
     }

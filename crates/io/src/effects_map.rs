@@ -106,27 +106,34 @@ fn contour(d: &Descriptor, key: &str) -> Contour {
         _ => String::new(),
     };
     let mut points = Vec::new();
+    let mut corners = Vec::new();
     if let Some(Value::List(items)) = c.get("Crv ") {
         for it in items {
             if let Value::Descriptor(p) = it {
                 points.push(CurvePoint { input: f(p, "Hrzn", 0.0) / 255.0, output: f(p, "Vrtc", 0.0) / 255.0 });
+                // `Cnty` (continuity): false marks a corner point; absent means smooth.
+                corners.push(matches!(p.get("Cnty"), Some(Value::Boolean(false))));
             }
         }
     }
+    if !corners.contains(&true) {
+        corners.clear();
+    }
     let linear = points.len() == 2 && points[0].input == 0.0 && points[0].output == 0.0 && points[1].input == 1.0 && points[1].output == 1.0;
-    if points.is_empty() || (linear && (name.is_empty() || name == "Linear")) { Contour::Linear } else { Contour::Custom { name, points } }
+    if points.is_empty() || (linear && (name.is_empty() || name == "Linear")) { Contour::Linear } else { Contour::Custom { name, points, corners } }
 }
 fn contour_value(c: &Contour) -> Value {
     let (name, points) = match c {
         Contour::Linear => ("Linear".to_string(), vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 1.0, output: 1.0 }]),
-        Contour::Custom { name, points } => (name.clone(), points.clone()),
+        Contour::Custom { name, points, .. } => (name.clone(), points.clone()),
     };
     let pts = points
         .iter()
-        .map(|p| {
-            Value::Descriptor(
-                Descriptor::new("CrPt").with("Hrzn", Value::Double(f64::from(p.input * 255.0))).with("Vrtc", Value::Double(f64::from(p.output * 255.0))),
-            )
+        .enumerate()
+        .map(|(i, p)| {
+            let d = Descriptor::new("CrPt").with("Hrzn", Value::Double(f64::from(p.input * 255.0))).with("Vrtc", Value::Double(f64::from(p.output * 255.0)));
+            // Photoshop writes no `Cnty` (continuity) on smooth points; a corner carries `Cnty` false.
+            Value::Descriptor(if c.is_corner(i) { d.with("Cnty", Value::Boolean(false)) } else { d })
         })
         .collect();
     Value::Descriptor(Descriptor::new("ShpC").with("Nm  ", Value::Text(UnicodeString::new_nul(&name))).with("Crv ", Value::List(pts)))
@@ -137,7 +144,7 @@ fn common(d: &Descriptor, blend: BlendMode, opacity: f32) -> FxCommon {
 }
 
 fn gradient_from(d: &Descriptor) -> Gradient {
-    let (stops, opacity_stops) = get_desc(d, "Grad").map(|g| crate::blocks::gradient_stops_with(g, enum_of(d, "gs99"))).unwrap_or_default();
+    let (stops, opacity_stops) = get_desc(d, "Grad").map(|g| crate::blocks::gradient_stops_with(g, crate::blocks::gradient_method(d))).unwrap_or_default();
     let off = get_desc(d, "Ofst");
     Gradient {
         stops: if stops.is_empty() { Gradient::default().stops } else { stops },
@@ -246,6 +253,9 @@ fn parse_bevel(d: &Descriptor) -> Bevel {
 }
 
 fn parse_one(key: &str, d: &Descriptor) -> Option<Effect> {
+    if matches!(d.get("present"), Some(Value::Boolean(false))) {
+        return None;
+    }
     Some(match key {
         "DrSh" => Effect::DropShadow(parse_shadow(d, false)),
         "IrSh" => Effect::InnerShadow(parse_shadow(d, true)),
@@ -625,6 +635,7 @@ mod tests {
                 contour: Contour::Custom {
                     name: "Cone".into(),
                     points: vec![CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 0.5, output: 1.0 }, CurvePoint { input: 1.0, output: 0.0 }],
+                    corners: vec![false, true, false],
                 },
                 ..match Effect::default_drop_shadow() {
                     Effect::DropShadow(s) => s,
@@ -735,6 +746,23 @@ mod tests {
         // Kind order is canonical: shadows first ... strokes last.
         assert!(matches!(back[0], Effect::DropShadow(_)));
         assert!(matches!(back.last().unwrap(), Effect::Stroke(_)));
+    }
+
+    #[test]
+    fn lfx2_ignores_absent_effects_but_keeps_disabled_configured_effects() {
+        let d = Descriptor::new("null")
+            .with("DrSh", Value::Descriptor(Descriptor::new("DrSh").with("present", Value::Boolean(false)).with("enab", Value::Boolean(false))))
+            .with("FrFX", Value::Descriptor(Descriptor::new("FrFX").with("present", Value::Boolean(true)).with("enab", Value::Boolean(false))))
+            .with("SoFi", Value::Descriptor(Descriptor::new("SoFi").with("enab", Value::Boolean(false))));
+        let mut data = 0u32.to_be_bytes().to_vec();
+        data.extend(VersionedDescriptor::new(d).to_bytes());
+
+        let (_, effects) = parse_lfx2(&data).unwrap();
+
+        assert_eq!(effects.len(), 2);
+        assert!(effects.iter().all(|effect| !effect.enabled()));
+        assert!(effects.iter().any(|effect| effect.label() == "Stroke"));
+        assert!(effects.iter().any(|effect| effect.label() == "Color Overlay"));
     }
 
     #[test]

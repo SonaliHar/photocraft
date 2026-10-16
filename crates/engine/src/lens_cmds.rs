@@ -12,7 +12,7 @@ use photocraft_algo::lens::{self, EdgeMode, LensCorrection};
 use photocraft_algo::transform::Interp;
 use photocraft_algo::wideangle::{self, WideAngle};
 use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::{Document, LayerContent, LayerId, SmartFilter};
+use photocraft_doc::{Document, Layer, LayerContent, LayerId, SmartFilter};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into};
 use serde_json::{Value, json};
@@ -139,26 +139,49 @@ pub fn raw_params(cmd: &str, p: &Value) -> Result<CameraRaw> {
     if let Value::Object(m) = &mut q {
         m.remove("layer");
     }
-    serde_json::from_value(q).map_err(|e| bad(cmd, format!("bad params: {e}")))
+    let mut cr: CameraRaw = serde_json::from_value(q).map_err(|e| bad(cmd, format!("bad params: {e}")))?;
+    // The noise stages turn these straight into a guided-filter radius and a
+    // blur sigma, so an out-of-range value means unbounded work. Clamp to the
+    // documented 0..100 (part of #707).
+    cr.noise_luminance = cr.noise_luminance.clamp(0.0, 100.0);
+    cr.noise_luminance_detail = cr.noise_luminance_detail.clamp(0.0, 100.0);
+    cr.noise_color = cr.noise_color.clamp(0.0, 100.0);
+    cr.noise_color_detail = cr.noise_color_detail.clamp(0.0, 100.0);
+    Ok(cr)
 }
 
 // ---------- pixels ----------
 
-fn rgba_region(surf: &Surface, area: Rect) -> Vec<[f32; 4]> {
-    let mut v = vec![[0.0f32; 4]; (area.width() * area.height()) as usize];
+/// Largest area Camera Raw develops in one pass. The pipeline holds the whole region as RGBA
+/// f32 plus the source and result planes (≥ 48 bytes per pixel), so beyond this a document
+/// is refused with an error rather than attempted (#962).
+pub const MAX_RAW_PIXELS: u64 = 400_000_000;
+
+/// The number of pixels in `area` if Camera Raw can develop it in one pass.
+fn raw_pixels(area: Rect) -> Option<usize> {
+    let n = u64::from(area.width()) * u64::from(area.height());
+    (n <= MAX_RAW_PIXELS).then(|| usize::try_from(n).ok()).flatten()
+}
+
+fn rgba_region(surf: &Surface, area: Rect, len: usize) -> Vec<[f32; 4]> {
+    let mut v = vec![[0.0f32; 4]; len];
     surf.read_rgba_into(area, &mut v);
     v
 }
 
 /// Camera Raw on a surface over `area` (RGB / Gray via RGBA, at the surface's depth).
+///
+/// An area above [`MAX_RAW_PIXELS`] is returned unchanged: the command rejects it with an
+/// error first, and this keeps the preview and Smart Filter paths from overflowing.
 pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> Surface {
     let area = area.intersect(&surf.content_bounds().union(&area));
     if area.is_empty() || p.is_identity() {
         return surf.clone();
     }
+    let Some(len) = raw_pixels(area) else { return surf.clone() };
     let fmt = surf.format();
     let (w, h) = (area.width() as usize, area.height() as usize);
-    let mut px = rgba_region(surf, area);
+    let mut px = rgba_region(surf, area, len);
     camera_raw::develop(&mut px, w, h, p, fmt.sample == SampleType::F32);
     let n = fmt.channels();
     let orig = surf.read_region(area);
@@ -239,7 +262,7 @@ fn filterable(s: &Session) -> std::result::Result<(), String> {
     match &d.doc.layer(id).ok_or("no active layer")?.content {
         LayerContent::Raster(_) => Ok(()),
         LayerContent::Smart(sm) if sm.cache.is_some() => Ok(()),
-        other => Err(format!("filters need a pixel layer (active layer is a {} layer)", other.kind_name())),
+        other => Err(format!("filters need a pixel layer (active layer is {} {} layer)", other.article(), other.kind_name())),
     }
 }
 
@@ -263,16 +286,18 @@ fn run_filter(s: &mut Session, cmd: &str, label: &str, stored: Value, float_bg: 
     s.edit(label, |doc: &mut Document, _| {
         let canvas = doc.bounds();
         let selection = doc.selection.clone();
+        let locks = doc.effective_locks(id);
+        let background = doc.is_background(id);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         if let LayerContent::Smart(_) = l.content {
             let sf = SmartFilter { command: cmd.to_string(), params: stored.clone(), blend: photocraft_color::BlendMode::Normal, opacity: 1.0, visible: true };
             return crate::smart_cmds::add_smart_filter(doc, id, sf, selection.as_ref());
         }
-        if l.locks.all || l.locks.pixels {
+        if locks.all || locks.pixels {
             return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
         }
         // A Background layer gains transparency when the edge mode exposes it (as in Photoshop).
-        if float_bg && l.locks.position && l.name == "Background" {
+        if float_bg && background {
             l.locks.position = false;
             l.locks.transparency = false;
             l.name = "Layer 0".into();
@@ -344,14 +369,50 @@ fn adaptive_wide_angle(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
+/// The transfer curve Camera Raw decodes `doc`'s values with ([`CameraRaw::encoding_gamma`]):
+/// ProPhoto's gamma 1.8 (raws open in it), Adobe RGB's 563/256, 1 for linear sRGB, else 0 for
+/// the sRGB curve.
+pub fn encoding_gamma(doc: &Document) -> f32 {
+    use photocraft_cms::Builtin;
+    let profile = crate::color_cmds::document_profile(doc);
+    [(Builtin::ProPhotoCompat, 1.8), (Builtin::AdobeRgbCompat, 563.0 / 256.0), (Builtin::LinearSrgb, 1.0)]
+        .into_iter()
+        .find(|(b, _)| profile.same_colors(b.profile()))
+        .map_or(0.0, |(_, g)| g)
+}
+
 fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    // The document's transfer curve goes with the settings, so a Smart Filter keeps it.
+    let mut p = p.clone();
+    if p.get("encodingGamma").is_none()
+        && let Some(g) = s.active().map(|d| encoding_gamma(&d.doc)).filter(|g| *g > 0.0)
+        && let Value::Object(m) = &mut p
+    {
+        m.insert("encodingGamma".into(), json!((f64::from(g) * 1e4).round() / 1e4));
+    }
+    let p = &p;
     let cr = raw_params(RAW, p)?;
+    // New settings are strict; stored Smart Filters re-apply through the lenient `raw_params`.
+    cr.validate().map_err(|e| bad(RAW, e))?;
+    // The pixel path works on the canvas plus the layer's content in one buffer; a legal
+    // 65536×65536 canvas is 2^32 pixels, which overflowed the u32 size arithmetic (#962).
+    if !cr.is_identity() {
+        let d = s.active().ok_or(EngineError::NoDocument)?;
+        let id = target(s, p)?;
+        let area = d.doc.layer(id).and_then(Layer::surface).map_or(d.doc.bounds(), |sf| d.doc.bounds().union(&sf.content_bounds()));
+        if raw_pixels(area).is_none() {
+            return Err(bad(
+                RAW,
+                format!("the image is too large for Camera Raw ({}×{} px; max {} megapixels)", area.width(), area.height(), MAX_RAW_PIXELS / 1_000_000),
+            ));
+        }
+    }
     let t0 = Stopwatch::start();
     let id = run_filter(s, RAW, "Camera Raw Filter", p.clone(), false, &|surf, canvas| camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr))?;
     Ok(json!({"layer": id.0, "identity": cr.is_identity(), "ms": t0.ms()}))
 }
 
-fn lens_batch(_s: &mut Session, p: &Value) -> Result<Value> {
+fn lens_batch(s: &mut Session, p: &Value) -> Result<Value> {
     let inputs = crate::file_cmds::batch_inputs(p, LENS_BATCH)?;
     let output = crate::file_cmds::str_param(p, "output", LENS_BATCH)?.to_string();
     let format = p.get("format").and_then(Value::as_str).unwrap_or("same").to_string();
@@ -363,7 +424,7 @@ fn lens_batch(_s: &mut Session, p: &Value) -> Result<Value> {
         // Batch default: the EXIF-driven profile, as Photoshop's dialog suggests.
         m.entry("profile").or_insert(json!("auto"));
     }
-    let r = crate::file_cmds::process_files(&inputs, &output, &format, crate::file_cmds::f64_param(p, "quality"), "", &|scratch| {
+    let r = crate::file_cmds::process_files(&inputs, &output, &format, crate::file_cmds::SaveOpts::from_params(s, p, LENS_BATCH)?, "", &|scratch| {
         if scratch.active().is_some_and(|d| d.doc.layers.len() > 1) {
             scratch.execute("layer.flattenImage", json!({}))?;
         }
@@ -401,7 +462,7 @@ pub fn specs() -> Vec<CommandSpec> {
             id: RAW,
             label: "Camera Raw Filter…",
             menu: &["Filter"],
-            shortcut: None,
+            shortcut: Some("Cmd+Shift+A"),
             params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","seed":u32=0}"##,
             enabled: raw_enabled,
             run: camera_raw_cmd,
@@ -529,12 +590,65 @@ mod tests {
         assert!(active_px(&s, 10, 40)[1] < inside_before[1]);
         assert_eq!(active_px(&s, 100, 40), outside_before);
         assert!(s.execute(RAW, json!({"exposure": "bright"})).is_err());
+        let legacy_curve = json!([[0, 0], [60, 40], [60, 200], [255, 255]]);
+        assert!(s.execute(RAW, json!({"pointCurve": legacy_curve})).is_err(), "new curves are validated");
+        // A curve an older editor saved must still re-apply as a Smart Filter.
+        let surf = s.active().unwrap().doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().clone();
+        let stored = apply_to_surface(RAW, &json!({"pointCurve": legacy_curve, "exposure": 1.0}), &surf, Rect::new(0, 0, 120, 80));
+        assert!(stored.is_some(), "a stored legacy curve must not drop the whole filter");
         // Smart filter.
         let mut s = session(8);
         s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
         s.execute(RAW, json!({"saturation": -100})).unwrap();
         let p = active_px(&s, 60, 40);
         assert!((p[0] - p[2]).abs() < 0.01, "{p:?}");
+    }
+
+    #[test]
+    fn camera_raw_decodes_light_with_the_documents_curve() {
+        // A raw opens in ProPhoto (gamma 1.8): the filter keeps that with its settings, so Whites,
+        // Blacks, Shadows and Highlights work on the same light as when it was applied.
+        let mut s = session(16);
+        s.execute("edit.assignProfile", json!({"profile": "prophoto-compat"})).unwrap();
+        assert_eq!(encoding_gamma(&s.active().unwrap().doc), 1.8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute(RAW, json!({"shadows": 40, "whites": -30})).unwrap();
+        let d = s.active().unwrap();
+        let filters = match &d.doc.layer(d.active_layer.unwrap()).unwrap().content {
+            LayerContent::Smart(so) => so.smart_filters.clone(),
+            _ => panic!("smart object expected"),
+        };
+        assert_eq!(filters[0].params["encodingGamma"], json!(1.8));
+        // sRGB documents use the sRGB curve, the default, and store nothing.
+        let mut s = session(8);
+        assert_eq!(encoding_gamma(&s.active().unwrap().doc), 0.0);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute(RAW, json!({"shadows": 40})).unwrap();
+        let d = s.active().unwrap();
+        if let LayerContent::Smart(so) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content {
+            assert!(so.smart_filters[0].params.get("encodingGamma").is_none());
+        }
+    }
+
+    #[test]
+    fn camera_raw_rejects_an_area_too_large_to_develop() {
+        // #962: `area.width() * area.height()` overflowed u32 on a legal 65536×65536 canvas,
+        // so `run` panicked and dispatch reported an internal error.
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
+        s.execute("image.canvasSize", json!({"width": 65536, "height": 65536, "extensionColor": "transparent"})).unwrap();
+        let err = s.execute(RAW, json!({"exposure": 1})).unwrap_err();
+        assert!(matches!(err, EngineError::BadParams { .. }), "{err}");
+        assert!(err.to_string().contains("too large"), "{err}");
+        // The surface function itself never overflows either: an oversized area is left alone.
+        let d = s.active().unwrap();
+        let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
+        let cr = raw_params(RAW, &json!({"exposure": 1})).unwrap();
+        let out = camera_raw_surface(surf, Rect::from_xywh(0, 0, 65536, 65536), &cr);
+        assert_eq!(out.content_bounds(), surf.content_bounds());
+        // A normal document still develops.
+        let mut s = session(8);
+        s.execute(RAW, json!({"exposure": 1})).unwrap();
     }
 
     #[cfg(not(target_arch = "wasm32"))]

@@ -104,7 +104,7 @@ pub(crate) fn transform_layer_geometry(l: &mut Layer, a: &Affine, content: bool,
             t.transform = a.mul(&t.transform);
             retag_text(dpi, t);
         }
-        LayerContent::Smart(sm) if content => sm.transform = crate::smart_cmds::snap_affine(a.mul(&sm.transform)),
+        LayerContent::Smart(sm) if content => crate::smart_cmds::transform_placement(sm, a),
         LayerContent::Group(g) => {
             if let Some(ab) = &mut g.artboard {
                 ab.rect = map_rect(a, ab.rect);
@@ -148,12 +148,12 @@ pub(crate) fn transform_doc_marks(doc: &mut Document, a: &Affine) {
     let [m0, m1, m2, m3, tx, ty] = a.m;
     let g = &mut doc.guides;
     if m1.abs() < EPS && m2.abs() < EPS {
-        g.horizontal.iter_mut().for_each(|y| *y = (m3 * f64::from(*y) + ty) as f32);
-        g.vertical.iter_mut().for_each(|x| *x = (m0 * f64::from(*x) + tx) as f32);
+        g.horizontal.iter_mut().for_each(|y| *y = m3 * *y + ty);
+        g.vertical.iter_mut().for_each(|x| *x = m0 * *x + tx);
     } else if m0.abs() < EPS && m3.abs() < EPS {
         // A horizontal guide at y becomes a vertical one at x' = m2·y + tx, and vice versa.
-        let v: Vec<f32> = g.horizontal.iter().map(|y| (m2 * f64::from(*y) + tx) as f32).collect();
-        let h: Vec<f32> = g.vertical.iter().map(|x| (m1 * f64::from(*x) + ty) as f32).collect();
+        let v: Vec<f64> = g.horizontal.iter().map(|y| m2 * y + tx).collect();
+        let h: Vec<f64> = g.vertical.iter().map(|x| m1 * x + ty).collect();
         g.horizontal = h;
         g.vertical = v;
     } else {

@@ -80,8 +80,11 @@ fn srgb_is_the_identity_fast_path() {
         assert!(s.color.canvas_lut(&d, 9).unwrap().is_none(), "no GPU LUT either");
         assert!(close(shown(&s, &d), [204.0, 127.5, 76.5], 0.6));
     }
-    // Untagged gray (sGray), CMYK (shown in sRGB) and Lab composites are sRGB too.
-    let g = Document::with_background("g", Size::new(4, 4), ColorMode::Grayscale, SampleType::U8, Color::gray(0.3));
+    // sGray-tagged gray and CMYK (shown in sRGB) composites are sRGB too; untagged gray takes the
+    // default working gray (Dot Gain 20 %-compatible), which is not.
+    let mut g = Document::with_background("g", Size::new(4, 4), ColorMode::Grayscale, SampleType::U8, Color::gray(0.3));
+    assert!(!s.color.canvas_display(&g).unwrap().is_identity());
+    g.icc_profile = Some(Builtin::SGray.profile().to_bytes());
     assert!(s.color.canvas_display(&g).unwrap().is_identity());
     assert!(s.color.canvas_display(&cmyk_doc(None, [0.1, 0.5, 0.5, 0.0])).unwrap().is_identity());
     // Cached: the same Arc for the same profiles.
@@ -191,6 +194,26 @@ fn exr_round_trip_is_linear() {
 }
 
 #[test]
+fn gray_exr_round_trip_is_linear() {
+    let mut s = Session::new();
+    // An sGray document exported to EXR is linearised (#2386); re-opened it is tagged linear gray
+    // and displays as before.
+    let mut d = Document::with_background("t", Size::new(8, 8), ColorMode::Grayscale, SampleType::U8, Color::gray(128.0 / 255.0));
+    d.icc_profile = Some(Builtin::SGray.profile().to_bytes());
+    let r = photocraft_io::export(&d, "x.exr", &photocraft_io::ExportOptions::default()).unwrap();
+    let back = photocraft_io::import("x.exr", &r.bytes).unwrap().document;
+    let icc = back.icc_profile.clone().expect("tagged");
+    assert_eq!(Profile::parse(&icc).unwrap().content_hash(), photocraft_cms::builtin::linear_gray().content_hash());
+    let v = back.layers[0].surface().unwrap().pixel(1, 1);
+    assert!((v[0] - 0.2159).abs() < 1e-3, "stored linear: {v:?}");
+    assert!(close(shown(&s, &back), shown(&s, &d), 1.0), "{:?} vs {:?}", shown(&s, &back), shown(&s, &d));
+    // Opening keeps it linear without a mismatch prompt.
+    let (_, report) = s.open_document(back, None);
+    assert_eq!(report["action"], "kept");
+    assert!(report.get("ask").is_none());
+}
+
+#[test]
 fn monitor_profile_setting() {
     let mut s = Session::new();
     let srgb = rgb_doc(None, [0.8, 0.5, 0.3], SampleType::U8);
@@ -207,16 +230,141 @@ fn monitor_profile_setting() {
     // `auto` uses the platform's profile when supplied, else sRGB.
     s.execute("edit.colorSettings", json!({"monitorProfile": "auto"})).unwrap();
     assert!(s.color.canvas_display(&srgb).unwrap().is_identity());
-    s.color.monitor_profile = Some(Builtin::DisplayP3.profile().to_bytes());
+    s.color.set_displays(Ok(vec![display(1, [0.0, 0.0, 100.0, 100.0], Some(Builtin::DisplayP3.profile().to_bytes().to_vec()))]));
     assert_eq!(s.color.monitor().description, "Display P3");
     assert!(s.color.canvas_display(&p3).unwrap().is_identity());
     // Garbage platform bytes fall back to sRGB.
-    s.color.monitor_profile = Some(Arc::new(vec![0u8; 16]));
+    s.color.set_displays(Ok(vec![display(1, [0.0, 0.0, 100.0, 100.0], Some(vec![0u8; 16]))]));
     assert_eq!(s.color.monitor().content_hash(), Builtin::Srgb.profile().content_hash());
     // The signature follows the monitor.
     let a = s.color.display_signature(&p3);
     s.execute("edit.colorSettings", json!({"monitorProfile": "display-p3"})).unwrap();
     assert_ne!(a, s.color.display_signature(&p3));
+}
+
+fn display(id: u32, frame: [f64; 4], icc: Option<Vec<u8>>) -> crate::display_color::Display {
+    crate::display_color::Display { id, name: format!("Display {id}"), frame, profile_name: None, icc: icc.map(Arc::new) }
+}
+
+fn p3() -> Option<Vec<u8>> {
+    Some(Builtin::DisplayP3.profile().to_bytes().to_vec())
+}
+
+#[test]
+fn monitor_status_says_what_is_applied() {
+    use crate::display_color::MonitorDetection;
+    let mut s = Session::new();
+    let status = |s: &mut Session| s.execute("edit.colorSettings", json!({})).unwrap()["monitorStatus"].clone();
+    // No platform reader: sRGB, and the reply says it's a fallback.
+    let st = status(&mut s);
+    assert_eq!((st["requested"].as_str(), st["source"].as_str()), (Some("auto"), Some("fallback")));
+    assert_eq!(st["detection"]["state"], "unsupported");
+    assert!(st["reason"].as_str().unwrap().contains("doesn't report"), "{st}");
+    s.color.monitor_detection = MonitorDetection::Pending;
+    assert!(status(&mut s)["reason"].as_str().unwrap().contains("hasn't been read"));
+    // A profile read for a named display.
+    let mut studio = display(7, [0.0, 0.0, 100.0, 100.0], p3());
+    studio.name = "Studio Display".into();
+    studio.profile_name = Some("Studio Display (calibrated)".into());
+    s.color.set_displays(Ok(vec![studio]));
+    let st = status(&mut s);
+    assert_eq!((st["source"].as_str(), st["profile"].as_str()), (Some("auto"), Some("Display P3")));
+    assert_eq!((st["display"].as_str(), st["detection"]["state"].as_str()), (Some("Studio Display"), Some("found")));
+    assert_eq!(st["fingerprint"], format!("{:016x}", Builtin::DisplayP3.profile().content_hash()));
+    assert!(st["reason"].is_null());
+    assert_eq!(s.color.monitor_status().summary(), "Studio Display (calibrated) (auto)");
+    // Bytes that aren't a profile, a non-RGB profile, one that can't be a destination and none
+    // at all fall back to sRGB with the reason.
+    let mut link = Builtin::Srgb.profile().clone();
+    link.class = photocraft_cms::ProfileClass::DeviceLink;
+    let link = link.with_encoded_bytes();
+    for (icc, why) in [
+        (Some(vec![0u8; 16]), "can't be read"),
+        (Some(Builtin::SGray.profile().to_bytes().to_vec()), "not RGB"),
+        (Some(link.to_bytes().to_vec()), "can't be used as a display profile"),
+        (None, "Display 2 has no ICC profile"),
+    ] {
+        s.color.set_displays(Ok(vec![display(2, [0.0, 0.0, 100.0, 100.0], icc)]));
+        let st = status(&mut s);
+        assert_eq!(st["source"], "fallback", "{why}");
+        assert!(st["reason"].as_str().unwrap().contains(why), "{st}");
+        assert_eq!(s.color.monitor().content_hash(), Builtin::Srgb.profile().content_hash());
+    }
+    // A failed re-read keeps the displays read before and is returned for the log.
+    s.color.set_displays(Ok(vec![display(2, [0.0, 0.0, 100.0, 100.0], p3())]));
+    assert_eq!(s.color.set_displays(Err("osascript failed".into())).as_deref(), Some("osascript failed"));
+    assert_eq!((s.color.monitor().description.as_str(), s.color.displays.len()), ("Display P3", 1));
+    // ... and the status says the reading is an earlier one.
+    let st = status(&mut s);
+    assert_eq!((st["source"].as_str(), st["detection"]["state"].as_str()), (Some("auto"), Some("retained")));
+    assert_eq!(st["detection"]["reason"], "osascript failed");
+    // A later successful read makes it current again.
+    s.color.set_displays(Ok(vec![display(2, [0.0, 0.0, 100.0, 100.0], p3())]));
+    assert_eq!(status(&mut s)["detection"]["state"], "found");
+    // Without displays read before, the failure is the reason.
+    let mut fresh = Session::new();
+    assert_eq!(fresh.color.set_displays(Err("osascript failed".into())), None);
+    let st = status(&mut fresh);
+    assert_eq!((st["source"].as_str(), st["reason"].as_str()), (Some("fallback"), Some("osascript failed")));
+    // A manual choice wins over the display's profile.
+    s.execute("edit.colorSettings", json!({"monitorProfile": "rec2020"})).unwrap();
+    let st = status(&mut s);
+    assert_eq!((st["requested"].as_str(), st["source"].as_str()), (Some("rec2020"), Some("manual")));
+    assert_ne!(st["profile"], "Display P3");
+}
+
+#[test]
+fn each_display_gets_its_own_profile() {
+    let mut s = Session::new();
+    // Built-in (primary, menu bar) left, a wide-gamut external display right and higher up,
+    // as on the #569 setup (frames in points, y down).
+    s.color.set_displays(Ok(vec![display(1, [0.0, 0.0, 1728.0, 1117.0], None), display(4, [1728.0, -667.0, 3008.0, 1692.0], p3())]));
+    let displays = s.color.displays.clone();
+    let at = |r: [f64; 4]| crate::display_color::display_at(&displays, r);
+    assert_eq!(at([100.0, 100.0, 800.0, 600.0]), Some(1));
+    assert_eq!(at([2000.0, -500.0, 800.0, 600.0]), Some(4));
+    // Spanning both: the one showing more of it.
+    assert_eq!(at([1500.0, 100.0, 800.0, 600.0]), Some(4));
+    assert_eq!(at([1200.0, 100.0, 800.0, 600.0]), Some(1));
+    assert_eq!(at([-5000.0, 0.0, 10.0, 10.0]), None);
+    // Display 1 has no profile here (sRGB fallback); display 4 is P3; unknown = the primary.
+    let srgb = rgb_doc(None, [0.8, 0.5, 0.3], SampleType::U8);
+    assert_eq!(s.color.monitor_for(Some(4)).description, "Display P3");
+    assert_eq!(s.color.monitor_for(Some(1)).content_hash(), Builtin::Srgb.profile().content_hash());
+    assert_eq!(s.color.monitor_for(None).content_hash(), s.color.monitor_for(Some(1)).content_hash());
+    assert_eq!(s.color.monitor_for(Some(99)).content_hash(), s.color.monitor_for(Some(1)).content_hash());
+    // The same document has a different display (and LUT signature) per display; the texture key
+    // (what the GPU canvas texture stores) is shared.
+    let (a, b) = (s.color.canvas_display_for(&srgb, Some(1)).unwrap(), s.color.canvas_display_for(&srgb, Some(4)).unwrap());
+    assert!(a.is_identity() && !b.is_identity());
+    assert_ne!(a.key, b.key);
+    assert_eq!(a.texture_key, b.texture_key);
+    assert_ne!(s.color.display_signature_for(&srgb, Some(1)), s.color.display_signature_for(&srgb, Some(4)));
+    assert!(s.color.gpu_canvas_lut_for(&srgb, 9, Some(1)).unwrap().is_none());
+    assert!(s.color.gpu_canvas_lut_for(&srgb, 9, Some(4)).unwrap().is_some());
+    // The main window's display is what the unqualified methods use.
+    s.color.main_display = Some(4);
+    assert_eq!(s.color.monitor().description, "Display P3");
+    assert_eq!(s.color.display_signature(&srgb), s.color.display_signature_for(&srgb, Some(4)));
+    let statuses = s.color.display_statuses();
+    assert_eq!((statuses.len(), statuses[1]["main"].as_bool()), (2, Some(true)));
+    assert_eq!(statuses[0]["status"]["source"], "fallback");
+    // Proof Colors follow the display too.
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let doc = s.active().unwrap().doc.clone();
+    s.execute("view.proofColors", json!({"on": true})).unwrap();
+    assert_ne!(s.color.gpu_canvas_lut_for(&doc, 9, Some(1)).unwrap(), s.color.gpu_canvas_lut_for(&doc, 9, Some(4)).unwrap());
+}
+
+#[test]
+fn saved_monitor_profile_that_is_gone_is_reported() {
+    // Preferences load settings without validating them: a saved .icc path deleted since.
+    let mut s = Session::new();
+    s.color.settings.monitor_profile = "/nonexistent/photocraft/display.icc".into();
+    let st = s.color.monitor_status();
+    assert_eq!((st.requested.as_str(), st.source), ("/nonexistent/photocraft/display.icc", "fallback"));
+    assert!(st.reason.as_deref().unwrap_or("").contains("cannot read profile"), "{st:?}");
+    assert_eq!(s.color.monitor().content_hash(), Builtin::Srgb.profile().content_hash());
 }
 
 #[test]
@@ -248,4 +396,62 @@ fn proof_colors_still_apply_on_top() {
     let sig = s.color.display_signature(&d);
     s.execute("view.gamutWarning", json!({"on": true})).unwrap();
     assert_ne!(sig, s.color.display_signature(&d));
+}
+
+#[test]
+fn parallel_linear_encodes_match_the_scalar_curve() {
+    // Several parallel pieces, a ragged last one, and HDR, negative and NaN values.
+    let n: usize = 3 * 16 * 1024 + 77;
+    let px: Vec<[f32; 4]> = (0..n)
+        .map(|i| {
+            let v = match i % 9 {
+                0 => f32::NAN,
+                1 => -0.5,
+                2 => 3.25,
+                _ => (i % 1001) as f32 / 1000.0,
+            };
+            [v, (i % 257) as f32 / 256.0, 1.0 - (i % 113) as f32 / 112.0, (i % 5) as f32 / 4.0]
+        })
+        .collect();
+    let buf = photocraft_compose::Buffer { rect: Rect::new(-4, 2, -4 + n as i32, 3), px };
+    let mut doc = Document::new("t", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+    doc.icc_profile = Some(Builtin::LinearSrgb.profile().to_bytes());
+    let mut color = crate::color_cmds::ColorState::default();
+    color.settings.monitor_profile = "srgb".into();
+    let d = color.canvas_display(&doc).unwrap();
+    assert!(d.encode_srgb);
+    let enc = |v: f32| photocraft_color::convert::linear_to_srgb(v.clamp(0.0, 65504.0));
+    let tex = d.texture_buffer(&buf);
+    assert_eq!(tex.rect, buf.rect);
+    for (t, p) in tex.px.iter().zip(&buf.px) {
+        let want = [enc(p[0]), enc(p[1]), enc(p[2]), p[3]];
+        assert!(t.iter().zip(want).all(|(a, b)| a.to_bits() == b.to_bits()), "{p:?} -> {t:?}, want {want:?}");
+    }
+    let code = |v: f32| (photocraft_color::convert::linear_to_srgb(((v.clamp(0.0, 1.0) * 65535.0 + 0.5) as usize) as f32 / 65535.0) * 255.0 + 0.5) as u8;
+    let img = d.to_rgba8(&buf);
+    for (o, p) in img.pixels.as_chunks::<4>().0.iter().zip(&buf.px) {
+        assert_eq!(*o, [code(p[0]), code(p[1]), code(p[2]), (p[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8], "{p:?}");
+    }
+}
+
+#[test]
+fn parallel_plain_quantize_matches_the_scalar_rounding() {
+    let n: usize = 3 * 16 * 1024 + 77;
+    let px: Vec<[f32; 4]> = (0..n)
+        .map(|i| {
+            let v = match i % 9 {
+                0 => f32::NAN,
+                1 => -0.5,
+                2 => 3.25,
+                _ => (i % 1001) as f32 / 1000.0,
+            };
+            [v, (i % 257) as f32 / 256.0, 1.0 - (i % 113) as f32 / 112.0, (i % 5) as f32 / 4.0]
+        })
+        .collect();
+    let buf = photocraft_compose::Buffer { rect: Rect::new(-4, 2, -4 + n as i32, 3), px };
+    let img = buf.to_rgba8();
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    for (o, p) in img.pixels.as_chunks::<4>().0.iter().zip(&buf.px) {
+        assert_eq!(*o, p.map(q), "{p:?}");
+    }
 }

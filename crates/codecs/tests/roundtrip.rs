@@ -131,6 +131,12 @@ mod ico {
 mod pnm {
     cases!(Format::Pnm);
 }
+mod fits {
+    cases!(Format::Fits);
+}
+mod dpx {
+    cases!(Format::Dpx);
+}
 mod qoi {
     cases!(Format::Qoi);
 }
@@ -190,6 +196,14 @@ fn tiff_all_compressions_lossless() {
             for comp in [TiffCompression::None, TiffCompression::Lzw, TiffCompression::Deflate, TiffCompression::PackBits] {
                 let opts = EncodeOptions { tiff_compression: comp, ..Default::default() };
                 let back = decode(&encode(&img, Format::Tiff, &opts).unwrap()).unwrap();
+                if layout.is_lab() && sample != SampleType::U8 {
+                    // CIELab holds a* and b* as 256·a at 16 bits and has no float form: 16-bit and
+                    // float Lab come back within one 16-bit step (the PSD's 16-bit Lab does the same).
+                    let (a, b) = (img.to_normalized(), back.convert(layout, sample).to_normalized());
+                    let worst = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+                    assert!(worst <= 1.5 / 65535.0, "{layout:?} {sample:?} {comp:?}: {worst}");
+                    continue;
+                }
                 assert_eq!(back, img.clone().with_meta(back.meta.clone()), "{layout:?} {sample:?} {comp:?}");
             }
         }
@@ -226,10 +240,15 @@ fn jpeg_444_beats_420_on_chroma_detail() {
 }
 
 #[test]
-fn webp_lossy_request_is_honest_error() {
+fn webp_lossy_request_is_a_lossy_file() {
     let img = test_image(ChannelLayout::Rgb, SampleType::U8);
-    let e = encode(&img, Format::WebP, &EncodeOptions { webp_lossless: false, ..Default::default() }).unwrap_err();
-    assert!(matches!(e, CodecError::Unsupported { format: Format::WebP, .. }));
+    let bytes = encode(&img, Format::WebP, &EncodeOptions { webp_lossless: false, ..Default::default() }).unwrap();
+    assert_eq!(&bytes[12..16], b"VP8 ", "a bare lossy frame");
+    let back = decode(&bytes).unwrap();
+    assert_eq!(back.dimensions(), img.dimensions());
+    assert!(
+        fidelity_warnings_with(&img, Format::WebP, &EncodeOptions { webp_lossless: false, ..Default::default() }).contains(&FidelityWarning::LossyCompression)
+    );
 }
 
 #[test]

@@ -39,7 +39,10 @@ pub const TABLE: &[(&str, Class)] = &[
     ("raster", Class::Layer(0)),
     ("psd", Class::Standalone),
     ("codecs", Class::Standalone),
+    // Optional HEIF/HEIC decoder (heic-rs), used only by `codecs` behind its `heif` feature.
+    ("heif", Class::Standalone),
     ("raw", Class::Standalone),
+    ("affinity", Class::Standalone),
     ("adobe-assets", Class::Standalone),
     // Pen tablet input (the one isolated `unsafe` helper: AppKit interop on macOS).
     ("tablet", Class::Standalone),
@@ -66,6 +69,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("photocraft", Class::Exempt),
     ("cli", Class::Exempt),
     ("web", Class::Exempt),
+    ("web-boot", Class::Exempt),
     ("xtask", Class::Exempt),
 ];
 
@@ -83,9 +87,19 @@ fn intra_layer_allowed(from: &str, to: &str) -> bool {
     })
 }
 
+/// The only workspace dependencies a standalone crate may have: (from, to), both standalone and
+/// both publishable. `codecs` uses the optional `heif` decoder crate behind its `heif` feature, so
+/// distributors can leave HEVC decoding out of a build; `heif` itself depends on no workspace crate.
+pub const STANDALONE_EXCEPTIONS: &[(&str, &str)] = &[("codecs", "heif")];
+
+fn standalone_exception(from: &str, to: &str) -> bool {
+    let (from, to) = (short_name(from), short_name(to));
+    classify(to) == Some(Class::Standalone) && STANDALONE_EXCEPTIONS.iter().any(|(f, t)| *f == from && *t == to)
+}
+
 /// External crates that constitute a UI toolkit / windowing dependency.
 /// Entries ending in `*` are prefixes.
-pub const UI_CRATES: &[&str] = &["egui", "eframe", "winit", "egui_kittest", "rfd", "bevy*"];
+pub const UI_CRATES: &[&str] = &["egui", "eframe", "winit", "egui_kittest", "craft-ui", "rfd", "bevy*"];
 
 /// First layer allowed to use UI crates.
 pub const UI_MIN_LAYER: u8 = 6;
@@ -177,6 +191,9 @@ pub fn check(crates: &[Crate]) -> Vec<Violation> {
             }
             if d.workspace {
                 if class == Class::Standalone {
+                    if standalone_exception(&c.name, &d.name) {
+                        continue;
+                    }
                     out.push(Violation::StandaloneHasWorkspaceDep { krate: c.name.clone(), dep: d.name.clone() });
                     continue;
                 }
@@ -307,6 +324,20 @@ mod tests {
     }
 
     #[test]
+    fn standalone_exception_is_exactly_codecs_to_heif() {
+        assert!(check(&[c("photocraft-codecs", &[("photocraft-heif", Normal, true)])]).is_empty());
+        assert!(check(&[c("photocraft-codecs", &[("photocraft-heif", Dev, true)])]).is_empty());
+        // Not the other way round, not for other standalone crates, and heif stays dependency-free.
+        for (from, to) in [("photocraft-heif", "photocraft-codecs"), ("photocraft-psd", "photocraft-heif"), ("photocraft-heif", "photocraft-geom")] {
+            let v = check(&[c(from, &[(to, Normal, true)])]);
+            assert!(matches!(v[..], [Violation::StandaloneHasWorkspaceDep { .. }]), "{from} -> {to}");
+        }
+        // The exception does not open codecs up to layered crates.
+        let v = check(&[c("photocraft-codecs", &[("photocraft-geom", Normal, true)])]);
+        assert!(matches!(v[..], [Violation::StandaloneHasWorkspaceDep { .. }]));
+    }
+
+    #[test]
     fn standalone_is_usable_from_higher_layers() {
         assert!(check(&[c("photocraft-io", &[("photocraft-psd", Normal, true)])]).is_empty());
         let v = check(&[c("photocraft-geom", &[("photocraft-codecs", Normal, true)])]);
@@ -315,11 +346,12 @@ mod tests {
 
     #[test]
     fn ui_crates_below_l6_flagged() {
-        for dep in ["egui", "eframe", "winit", "egui_kittest", "rfd", "bevy_ecs", "bevy"] {
+        for dep in ["egui", "eframe", "winit", "egui_kittest", "craft-ui", "rfd", "bevy_ecs", "bevy"] {
             let v = check(&[c("photocraft-engine", &[(dep, Normal, false)])]);
             assert!(matches!(v[..], [Violation::UiBelowL6 { layer: 5, .. }]), "{dep}");
         }
         assert!(check(&[c("photocraft-engine", &[("egui_extras_not", Normal, false)])]).is_empty());
+        assert!(check(&[c("photocraft-ui-egui", &[("craft-ui", Normal, false)])]).is_empty());
         assert!(check(&[c("photocraft-platform", &[("winit", Normal, false)])]).is_empty());
     }
 
@@ -342,7 +374,7 @@ mod tests {
 
     #[test]
     fn apps_and_xtask_exempt() {
-        for app in ["photocraft", "photocraft-cli", "photocraft-web", "xtask"] {
+        for app in ["photocraft", "photocraft-cli", "photocraft-web", "photocraft-web-boot", "xtask"] {
             assert!(check(&[c(app, &[("egui", Normal, false), ("photocraft-ui-egui", Normal, true)])]).is_empty());
         }
     }

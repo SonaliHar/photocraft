@@ -1,5 +1,5 @@
 //! The second batch of `filter.*` commands: Pixelate, Stylize, Distort (Displace, Shear,
-//! ZigZag), Render (Fibers, Lens Flare, Lighting Effects), Reduce Noise, Smart/Lens/Shape Blur,
+//! ZigZag), Render (Fibers, Lens Flare, Lighting Effects, Relight), Reduce Noise, Smart/Lens/Shape Blur,
 //! Blur Gallery, Other (Custom, HSB/HSL) and Video.
 //!
 //! They run through [`crate::filters::run_filter`] (selection, smart objects, history and
@@ -153,7 +153,8 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
             vertical: f(p, "vertical", 10.0).clamp(-999.0, 999.0),
             stretch: s(p, "fit", "stretch") != "tile",
             undefined: undefined(p, "repeat"),
-            map: None,
+            // A Displace imported from PSD carries its map; `mapPath` / `mapDocument` resolve later.
+            map: photocraft_io::smart_map::displace_embedded_map(p),
         },
         "filter.distort.shear" => FilterParams::Shear {
             points: list::<[f32; 2]>(p, "points").unwrap_or_else(|| {
@@ -189,6 +190,14 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
                 "moviePrime" => LensType::MoviePrime,
                 _ => LensType::Zoom,
             },
+        },
+        "filter.render.relight" => FilterParams::Relight {
+            angle: f(p, "angle", 45.0).clamp(-180.0, 180.0),
+            elevation: f(p, "elevation", 40.0).clamp(0.0, 90.0),
+            intensity: f(p, "intensity", 40.0).clamp(0.0, 100.0),
+            ambient: f(p, "ambient", 55.0).clamp(0.0, 100.0),
+            warmth: f(p, "warmth", 0.0).clamp(-100.0, 100.0),
+            softness: f(p, "softness", 25.0).clamp(1.0, 100.0),
         },
         "filter.render.lightingEffects" => FilterParams::LightingEffects {
             lights: list::<Light>(p, "lights").unwrap_or_else(|| {
@@ -321,25 +330,44 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
             pins: list::<FieldPin>(p, "pins").unwrap_or_else(|| vec![FieldPin { x: f(p, "centerX", 0.5), y: f(p, "centerY", 0.5), blur: blur(15.0) }]),
         },
         "filter.blurGallery.spinBlur" => FilterParams::SpinBlur {
-            pins: list::<SpinPin>(p, "pins").unwrap_or_else(|| {
-                vec![SpinPin {
-                    x: f(p, "centerX", 0.5),
-                    y: f(p, "centerY", 0.5),
-                    radius_x: f(p, "radiusX", 0.3).max(0.001),
-                    radius_y: f(p, "radiusY", 0.3).max(0.001),
-                    angle: f(p, "angle", 0.0),
-                    blur_angle: f(p, "blurAngle", 15.0).clamp(0.0, 360.0),
-                }]
-            }),
+            pins: list::<SpinPin>(p, "pins")
+                .map(|mut v| {
+                    for pin in &mut v {
+                        pin.angle = if pin.angle.is_finite() { pin.angle.clamp(-360.0, 360.0) } else { 0.0 };
+                        pin.blur_angle = if pin.blur_angle.is_finite() { pin.blur_angle.clamp(0.0, 360.0) } else { 0.0 };
+                    }
+                    v
+                })
+                .unwrap_or_else(|| {
+                    let a = f(p, "angle", 0.0);
+                    vec![SpinPin {
+                        x: f(p, "centerX", 0.5),
+                        y: f(p, "centerY", 0.5),
+                        radius_x: f(p, "radiusX", 0.3).max(0.001),
+                        radius_y: f(p, "radiusY", 0.3).max(0.001),
+                        angle: if a.is_finite() { a.clamp(-360.0, 360.0) } else { 0.0 },
+                        blur_angle: f(p, "blurAngle", 15.0).clamp(0.0, 360.0),
+                    }]
+                }),
         },
         "filter.blurGallery.pathBlur" => FilterParams::PathBlur {
-            paths: list::<BlurPath>(p, "paths").unwrap_or_else(|| {
-                vec![BlurPath {
-                    points: vec![[f(p, "startX", 0.2), f(p, "startY", 0.5)], [f(p, "endX", 0.8), f(p, "endY", 0.5)]],
-                    speed: f(p, "speed", 50.0).clamp(0.0, 500.0),
-                    taper: f(p, "taper", 0.0).clamp(0.0, 100.0),
-                }]
-            }),
+            paths: list::<BlurPath>(p, "paths")
+                .map(|mut v| {
+                    // Entry speeds bypass the scalar clamp above; the halo
+                    // casts one to i32 and adds, so an unclamped value
+                    // overflows (#708).
+                    for b in &mut v {
+                        b.speed = b.speed.clamp(0.0, 500.0);
+                    }
+                    v
+                })
+                .unwrap_or_else(|| {
+                    vec![BlurPath {
+                        points: vec![[f(p, "startX", 0.2), f(p, "startY", 0.5)], [f(p, "endX", 0.8), f(p, "endY", 0.5)]],
+                        speed: f(p, "speed", 50.0).clamp(0.0, 500.0),
+                        taper: f(p, "taper", 0.0).clamp(0.0, 100.0),
+                    }]
+                }),
         },
         // ---- Other ----
         "filter.other.custom" => FilterParams::Custom {
@@ -359,6 +387,7 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
             };
             FilterParams::HsbHsl { input: m("inputMode", "rgb"), output: m("rowOrder", "hsb") }
         }
+        crate::color_to_alpha_cmds::ID => crate::color_to_alpha_cmds::params(p),
         // ---- Video ----
         "filter.video.deInterlace" => FilterParams::DeInterlace {
             eliminate_even: s(p, "eliminate", "oddFields") == "evenFields",
@@ -407,10 +436,8 @@ pub(crate) fn resolve(s: &Session, fp: &mut FilterParams, p: &Value) -> Result<(
         return Ok(());
     }
     let layer = p.get("mapLayer").and_then(Value::as_u64);
-    let img = if let Some(path) = p.get("mapPath").and_then(Value::as_str).filter(|p| !p.is_empty()) {
-        let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("cannot read displacement map `{path}`: {e}")))?;
-        let imported = photocraft_io::import(path, &bytes).map_err(|e| EngineError::Other(format!("cannot open displacement map `{path}`: {e}")))?;
-        map_from_document(&imported.document, layer)
+    let img = if let Some(path) = map_path(p) {
+        map_from_path(path, layer)?
     } else if let Some(d) = p.get("mapDocument") {
         let docs = s.documents();
         let found = match d {
@@ -426,6 +453,30 @@ pub(crate) fn resolve(s: &Session, fp: &mut FilterParams, p: &Value) -> Result<(
     Ok(())
 }
 
+fn map_path(p: &Value) -> Option<&str> {
+    p.get("mapPath").and_then(Value::as_str).filter(|p| !p.is_empty())
+}
+
+/// Displace's map read from a file (flattened, or its `mapLayer`).
+fn map_from_path(path: &str, layer: Option<u64>) -> Result<Option<algo::Image>> {
+    let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("cannot read displacement map `{path}`: {e}")))?;
+    let imported = crate::file_cmds::import(path, &bytes).map_err(|e| EngineError::Other(format!("cannot open displacement map `{path}`: {e}")))?;
+    Ok(map_from_document(&imported, layer))
+}
+
+/// The session-free part of [`resolve`]: Displace's `mapPath`. Smart filters record params, not
+/// the map, so their re-render reads the map again here; without it the filter passed the pixels
+/// through. `mapDocument` needs the session and is left unresolved.
+pub(crate) fn resolve_map_path(fp: &mut FilterParams, p: &Value) -> Result<()> {
+    if let FilterParams::Displace { map, .. } = fp
+        && map.is_none()
+        && let Some(path) = map_path(p)
+    {
+        *map = map_from_path(path, p.get("mapLayer").and_then(Value::as_u64))?.map(Arc::new);
+    }
+    Ok(())
+}
+
 /// Resolves inputs read from the target layer itself: the layer mask as Lens Blur depth.
 pub(crate) fn resolve_in_layer(fp: &mut FilterParams, layer: &Layer, bounds: Rect) {
     if let FilterParams::LensBlur { depth: DepthSource::LayerMask, depth_map, .. } = fp
@@ -434,6 +485,61 @@ pub(crate) fn resolve_in_layer(fp: &mut FilterParams, layer: &Layer, bounds: Rec
     {
         *depth_map = Some(Arc::new(algo::Image::read(&m.surface, bounds)));
     }
+}
+
+fn relight_bad(msg: &str) -> EngineError {
+    EngineError::BadParams { cmd: "filter.render.relight".into(), msg: msg.into() }
+}
+
+fn relight_num(p: &Value, key: &str, default: f32, min: f32, max: f32) -> Result<f32> {
+    match p.get(key) {
+        None => Ok(default),
+        Some(Value::Number(n)) => {
+            let Some(x) = n.as_f64() else {
+                return Err(relight_bad(&format!("\"{key}\" must be a finite number")));
+            };
+            let x = x as f32;
+            if !x.is_finite() {
+                return Err(relight_bad(&format!("\"{key}\" must be finite")));
+            }
+            if x < min || x > max {
+                return Err(relight_bad(&format!("\"{key}\" must be in {min}..{max}")));
+            }
+            Ok(x)
+        }
+        Some(_) => Err(relight_bad(&format!("\"{key}\" must be a number"))),
+    }
+}
+
+fn validate_relight(p: &Value) -> Result<()> {
+    if p.is_null() {
+        return Err(relight_bad("params must be a JSON object"));
+    }
+    if !p.is_object() {
+        return Err(relight_bad("params must be a JSON object"));
+    }
+    relight_num(p, "angle", 45.0, -180.0, 180.0)?;
+    relight_num(p, "elevation", 40.0, 0.0, 90.0)?;
+    relight_num(p, "intensity", 40.0, 0.0, 100.0)?;
+    relight_num(p, "ambient", 55.0, 0.0, 100.0)?;
+    relight_num(p, "warmth", 0.0, -100.0, 100.0)?;
+    relight_num(p, "softness", 25.0, 1.0, 100.0)?;
+    Ok(())
+}
+
+fn relight_enabled(s: &Session) -> std::result::Result<(), String> {
+    crate::filters::has_filterable_layer(s)?;
+    if crate::channel_cmds::edits_channel(s) {
+        return Ok(());
+    }
+    let l = crate::active_layer_of(s)?;
+    let locks = s.active().ok_or("no document open")?.doc.effective_locks(l.id);
+    if locks.pixels || locks.all { Err(format!("the layer \"{}\" is locked", l.name)) } else { Ok(()) }
+}
+
+fn run_relight(s: &mut Session, p: &Value) -> Result<Value> {
+    validate_relight(p)?;
+    crate::filters::run_filter(s, "filter.render.relight", p)
 }
 
 macro_rules! cmd {
@@ -526,6 +632,16 @@ pub fn specs() -> Vec<CommandSpec> {
             ["Filter", "Render"],
             r##"{"lightType":"spot|point|infinite","intensity":-100..100=75,"lightX":0..1=0.25,"lightY":0..1=0.2,"lightZ":0..2=0.6,"targetX":0..1=0.5,"targetY":0..1=0.55,"cone":1..89=45,"hotspot":0..100=50,"angle":-180..180=135,"elevation":0..90=45,"gloss":-100..100=0,"metallic":-100..100=0,"exposure":-100..100=0,"ambience":-100..100=8,"texture":"none|red|green|blue|alpha|luminance","height":0..100=50,"whiteIsHigh":bool=true,"lights":json}"##
         ),
+        CommandSpec {
+            id: "filter.render.relight",
+            label: "Relight…",
+            menu: &["Filter", "Render"],
+            shortcut: None,
+            params: r##"{"angle":-180..180=45,"elevation":0..90=40,"intensity":0..100=40,"ambient":0..100=55,"warmth":-100..100=0,"softness":1..100=25}"##,
+            enabled: relight_enabled,
+            run: run_relight,
+            journal: true,
+        },
         // Noise
         cmd!(
             "filter.noise.reduceNoise",

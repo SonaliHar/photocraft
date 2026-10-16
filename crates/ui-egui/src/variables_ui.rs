@@ -17,6 +17,16 @@ pub fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key("__variables")
 }
 
+/// Alt+Cancel (Reset): restore `__variables` from the open-time snapshot.
+pub fn reset(fields: &mut Map<String, Value>) {
+    if !owns(fields) {
+        return;
+    }
+    if let Some(orig) = fields.get("__variablesOrig").cloned() {
+        fields.insert("__variables".into(), orig);
+    }
+}
+
 /// Layers available to bind, top to bottom: (id, display name, is-text).
 fn layer_options(app: &PhotocraftApp) -> Vec<(u64, String, bool)> {
     let Some(st) = app.session.active() else { return Vec::new() };
@@ -31,6 +41,8 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
             let page = if id.ends_with("dataSets") { "dataSets" } else { "define" };
             let mut f = Map::new();
             let state = app.session.active().map(|st| crate::variables_ui::to_state(&st.doc.variables)).unwrap_or_else(|| json!({"defs": [], "dataSets": []}));
+            // Snapshot at open so Alt+Reset restores the document's variables.
+            f.insert("__variablesOrig".into(), state.clone());
             f.insert("__variables".into(), state);
             f.insert("__page".into(), json!(page));
             f.insert("__label".into(), json!("Variables"));
@@ -40,6 +52,7 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
             // No data set named: open the dialog on the Data Sets page to pick one.
             let mut f = Map::new();
             let state = app.session.active().map(|st| crate::variables_ui::to_state(&st.doc.variables)).unwrap_or_else(|| json!({"defs": [], "dataSets": []}));
+            f.insert("__variablesOrig".into(), state.clone());
             f.insert("__variables".into(), state);
             f.insert("__page".into(), json!("dataSets"));
             f.insert("__label".into(), json!("Variables"));
@@ -110,7 +123,7 @@ const METHODS: &[(&str, &str)] = &[("fit", "Fit"), ("fill", "Fill"), ("conform",
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let layers = layer_options(app);
-    let mut state = fields.get("__variables").cloned().unwrap_or_else(|| json!({"defs": [], "dataSets": []}));
+    let mut state = normalize(fields.get("__variables").unwrap_or(&Value::Null));
     let mut page = fields.get("__page").and_then(Value::as_str).unwrap_or("define").to_string();
 
     ui.set_min_width(420.0);
@@ -135,6 +148,22 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
 
     fields.insert("__variables".into(), state);
     fields.insert("__page".into(), json!(page));
+}
+
+/// The dialog state with only object entries in `defs`, `dataSets` and each set's `values`.
+/// `ui.dialog.set` can store any JSON in `__variables`, and the pages write fields into entries
+/// (`d["name"] = …`), which panics on a number or a string.
+fn normalize(state: &Value) -> Value {
+    let objects =
+        |v: Option<&Value>| -> Vec<Value> { v.and_then(Value::as_array).map(|a| a.iter().filter(|e| e.is_object()).cloned().collect()).unwrap_or_default() };
+    let sets: Vec<Value> = objects(state.get("dataSets"))
+        .into_iter()
+        .map(|mut set| {
+            set["values"] = Value::Array(objects(set.get("values")));
+            set
+        })
+        .collect();
+    json!({"defs": objects(state.get("defs")), "dataSets": sets})
 }
 
 fn define_page(ui: &mut egui::Ui, _t: &Tokens, layers: &[(u64, String, bool)], state: &mut Value) {
@@ -183,6 +212,13 @@ fn define_page(ui: &mut egui::Ui, _t: &Tokens, layers: &[(u64, String, bool)], s
     }
 }
 
+fn data_set_index(fields: &Map<String, Value>, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    fields.get("__cur").and_then(Value::as_u64).and_then(|v| usize::try_from(v).ok()).filter(|&i| i < len).unwrap_or(0)
+}
+
 fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mut Map<String, Value>) {
     let def_meta: Vec<(String, String)> = state
         .get("defs")
@@ -200,14 +236,28 @@ fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mu
         return;
     }
     let Some(sets) = state.get_mut("dataSets").and_then(Value::as_array_mut) else { return };
-    let mut cur = fields.get("__cur").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let mut cur = data_set_index(fields, sets.len());
 
     ui.horizontal(|ui| {
         if ui.button("◀").clicked() && cur > 0 {
             cur -= 1;
         }
-        let name = sets.get(cur).and_then(|s| s.get("name")).and_then(Value::as_str).unwrap_or("(none)").to_string();
-        ui.label(format!("Data Set: {name}  ({}/{})", if sets.is_empty() { 0 } else { cur + 1 }, sets.len()));
+        let name = sets
+            .get(cur)
+            .and_then(|s| s.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| {
+                let empty = "(none)";
+                tl!(empty)
+            })
+            .to_string();
+        ui.label({
+            let template = "Data Set: {name}  ({index}/{total})";
+            crate::i18n::fmt(
+                tl!(template),
+                &[("name", &name), ("index", &(if sets.is_empty() { 0 } else { cur + 1 }).to_string()), ("total", &sets.len().to_string())],
+            )
+        });
         if ui.button("▶").clicked() && cur + 1 < sets.len() {
             cur += 1;
         }
@@ -317,6 +367,38 @@ mod tests {
         assert_eq!(s["dataSets"][0]["name"], "A");
         assert_eq!(s["dataSets"][0]["values"][0]["kind"], "visibility");
         assert_eq!(s["dataSets"][0]["values"][0]["value"], false);
+    }
+
+    #[test]
+    fn data_set_index_rejects_out_of_range_control_values() {
+        let mut fields = Map::new();
+        assert_eq!(data_set_index(&fields, 1), 0);
+        fields.insert("__cur".into(), json!(999));
+        assert_eq!(data_set_index(&fields, 1), 0);
+        fields.insert("__cur".into(), json!(u64::MAX));
+        assert_eq!(data_set_index(&fields, 1), 0);
+        fields.insert("__cur".into(), json!(1));
+        assert_eq!(data_set_index(&fields, 3), 1);
+        assert_eq!(data_set_index(&fields, 0), 0);
+    }
+
+    #[test]
+    fn normalize_keeps_only_object_entries() {
+        let s = normalize(&json!({"defs": [1, {"name": "a"}], "dataSets": ["x", {"name": "A", "values": [true, {"variable": "a"}]}, {"values": 3}]}));
+        assert_eq!(s, json!({"defs": [{"name": "a"}], "dataSets": [{"name": "A", "values": [{"variable": "a"}]}, {"values": []}]}));
+        for bad in [Value::Null, json!(5), json!("s"), json!([1]), json!({"defs": "x", "dataSets": {}})] {
+            assert_eq!(normalize(&bad), json!({"defs": [], "dataSets": []}), "{bad}");
+        }
+    }
+
+    #[test]
+    fn alt_reset_restores_open_snapshot() {
+        let mut f = Map::new();
+        let orig = json!({"defs": [{"name": "a"}], "dataSets": []});
+        f.insert("__variables".into(), json!({"defs": [{"name": "edited"}], "dataSets": []}));
+        f.insert("__variablesOrig".into(), orig.clone());
+        reset(&mut f);
+        assert_eq!(f["__variables"], orig);
     }
 
     #[test]
