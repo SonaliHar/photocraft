@@ -307,13 +307,17 @@ pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
 }
 
 /// The Color Picker's OK for a colour of the open gallery ([`show`] opens it): the selected
-/// effect's Glow Color (`glow`).
+/// effect's Glow Color (`glow`), foreground or background colour.
 pub fn set_color(app: &mut PhotocraftApp, which: &str, rgb: [f32; 3]) -> Result<(), String> {
     let d = app.distort.gallery.as_mut().ok_or("the Filter Gallery is closed")?;
     match which {
         "glow" => {
             let e = d.effects.get_mut(d.selected).ok_or("no effect is selected")?;
             e.params.insert("glowColor".into(), json!([rgb[0], rgb[1], rgb[2], 1.0]));
+        }
+        "foreground" | "background" => {
+            let e = d.effects.get_mut(d.selected).ok_or("no effect is selected")?;
+            e.params.insert(which.into(), json!([rgb[0], rgb[1], rgb[2], 1.0]));
         }
         _ => return Err(format!("the Filter Gallery has no colour {which}")),
     }
@@ -758,6 +762,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let params_h = (inner.height() - 110.0 - list_h).max(80.0);
         egui::ScrollArea::vertical().id_salt("gallery-params").max_height(params_h).show(&mut ru, |ui| {
             let sel = d.selected;
+            let (fg, bg) = (d.foreground, d.background);
             let e = &mut d.effects[sel];
             for p in parse_spec(e.filter.params_doc()) {
                 let label = crate::filter_dialog::label(&p.key);
@@ -804,8 +809,21 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     _ => {}
                 }
             }
+            // The effect's foreground and background colours, a setting of each Sketch filter in
+            // Photoshop: its own once picked, else the gallery's (started from the tool colours).
+            // Each swatch opens the Color Picker.
             if e.filter.uses_colours() {
-                ui.label(egui::RichText::new(tl!("Uses the foreground and background colours.")).color(t.text_faint).size(11.0));
+                let own = |key: &str, gallery: [f32; 4]| colour_param(&json!({ key: e.params.get(key) }), key).unwrap_or(gallery);
+                let (fg, bg) = (own("foreground", fg), own("background", bg));
+                for (which, name, c) in [("gallery:foreground", tl!("Foreground Color"), fg), ("gallery:background", tl!("Background Color"), bg)] {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(name).color(t.text_dim));
+                        let rgb = [c[0], c[1], c[2]];
+                        if widgets::color_swatch_button(ui, color32(rgb), name).clicked() {
+                            pick = Some((which, tl!("Color Picker").to_string(), rgb));
+                        }
+                    });
+                }
             }
         });
         // Effect layers (top of the list = applied last).
@@ -1253,10 +1271,65 @@ mod picker_tests {
         assert_eq!(glow(&h), json!([1.0, 0.0, 1.0, 1.0]));
     }
 
+    /// The Sketch filters' foreground and background open the Color Picker ("Color Picker", as in
+    /// Photoshop) on the effect's colours (at first the tool colours); OK sets them on that effect
+    /// only, which the preview and OK use, and leaves the tool colours alone.
+    #[test]
+    fn sketch_filter_colours_open_the_color_picker() {
+        let mut h = harness();
+        h.state_mut().run("tools.setColors", json!({"foreground": "#000000", "background": "#ffffff"})).unwrap();
+        close_and_reopen(&mut h);
+        h.state_mut().distort.gallery.as_mut().unwrap().set_filter(GalleryFilter::Photocopy);
+        h.run_steps(3);
+        for (k, key, hex, want) in [(0, "foreground", "#000000", [1.0, 0.0, 0.0, 1.0]), (1, "background", "#ffffff", [0.0, 0.0, 1.0, 1.0])] {
+            let swatch = h.get_all_by_role(egui::accesskit::Role::ColorWell).nth(k).expect("two swatches").rect().center();
+            press(&mut h, swatch);
+            let picker = crate::color_picker_ui::top(h.state()).unwrap_or_else(|| panic!("{key}: the swatch opens the Color Picker"));
+            let fields = h.state().ui.dialogs.iter().find(|d| d.id == picker).unwrap().fields.clone();
+            assert_eq!(fields["__label"], json!("Color Picker"), "{key}");
+            assert_eq!(fields["color"], json!(hex), "{key}: on the gallery's colour");
+            let new = if k == 0 { "#ff0000" } else { "#0000ff" };
+            h.state_mut().ui.dialog_mut(picker).unwrap().fields.insert("color".into(), json!(new));
+            crate::dialogs::confirm(h.state_mut(), picker).unwrap();
+            h.run_steps(3);
+            let d = h.state().distort.gallery.as_ref().expect("the gallery stays open");
+            assert_eq!(d.params()["effects"][d.selected]["params"][key], json!(want), "{key}");
+        }
+        assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 0.0, 1.0], "the tool colours are untouched");
+        // A new effect layer copies the selected one, colours too (as in Photoshop); then each
+        // keeps its own: the copy's foreground changes, the original's stays.
+        h.state_mut().distort.gallery.as_mut().unwrap().add();
+        h.run_steps(3);
+        let swatch = h.get_all_by_role(egui::accesskit::Role::ColorWell).next().unwrap().rect().center();
+        press(&mut h, swatch);
+        let picker = crate::color_picker_ui::top(h.state()).unwrap();
+        let fields = h.state().ui.dialogs.iter().find(|d| d.id == picker).unwrap().fields.clone();
+        assert_eq!(fields["color"], json!("#ff0000"), "the copy starts with the original's colour");
+        h.state_mut().ui.dialog_mut(picker).unwrap().fields.insert("color".into(), json!("#00ff00"));
+        crate::dialogs::confirm(h.state_mut(), picker).unwrap();
+        h.run_steps(3);
+        // The engine composites each layer with its own colours.
+        let d = h.state().distort.gallery.as_ref().unwrap();
+        let effects = photocraft_engine::gallery_cmds::effects_from_json(&d.params()).unwrap();
+        let fgs: Vec<_> = effects.iter().map(|e| e.foreground).collect();
+        assert_eq!(fgs.len(), 2);
+        assert!(fgs.contains(&[1.0, 0.0, 0.0, 1.0]) && fgs.contains(&[0.0, 1.0, 0.0, 1.0]), "{fgs:?}");
+    }
+
+    /// Opens the gallery again, so it starts from the current tool colours.
+    fn close_and_reopen(h: &mut egui_kittest::Harness<'static, PhotocraftApp>) {
+        h.state_mut().distort.gallery = None;
+        h.run_steps(2);
+        open(h.state_mut()).unwrap();
+        h.run_steps(4);
+    }
+
     /// With no gallery open, a gallery colour from the picker is an error, not a panic.
     #[test]
     fn a_gallery_colour_with_the_gallery_closed_is_refused() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        assert!(set_color(&mut app, "glow", [1.0, 0.0, 0.0]).is_err());
+        for which in ["glow", "foreground", "background", "nonsense"] {
+            assert!(set_color(&mut app, which, [1.0, 0.0, 0.0]).is_err(), "{which}");
+        }
     }
 }

@@ -3899,3 +3899,4 @@ curves	Smooth	Згладити
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Вільне трансформування ще застосовується; спробуйте знову, коли воно завершиться.
 	The transform couldn't be applied.	Не вдалося застосувати трансформування.
+	Color Picker	Вибір кольору

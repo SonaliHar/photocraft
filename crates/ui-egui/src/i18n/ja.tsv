@@ -3876,3 +3876,4 @@ curves	Smooth	スムーズ
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	自由変形を適用中です。完了してからもう一度お試しください。
 	The transform couldn't be applied.	変形を適用できませんでした。
+	Color Picker	カラーピッカー
