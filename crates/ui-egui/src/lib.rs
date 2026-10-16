@@ -2567,7 +2567,7 @@ impl PhotocraftApp {
                         && d.fields
                             .get("name")
                             .and_then(serde_json::Value::as_str)
-                            .map_or(false, |name| photocraft_engine::file_cmds::is_taken_untitled(candidate, name))
+                            .is_some_and(|name| photocraft_engine::file_cmds::is_taken_untitled(candidate, name))
                 })
         });
         f.insert("name".into(), serde_json::Value::String(default_name));
