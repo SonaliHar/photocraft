@@ -3213,3 +3213,9 @@ curves	Smooth	Lisser
 	This document's layers: {needed} of {budget} for layers	Calques de ce document : {needed} sur {budget} pour les calques
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Les calques de ce document ont besoin de {needed} mais peuvent occuper {budget} : le document entier se redessine sur le CPU
 	GPU Memory (MB, 0 = Automatic)	Mémoire GPU (Mo, 0 = Automatique)
+# Plug-in panels (ABI v2)
+	Restart Plug-in	Redémarrer l’extension
+	The plug-in has disabled this.	L’extension a désactivé ceci.
+	This plug-in stopped.	Cette extension s’est arrêtée.
+	This plug-in has not drawn anything yet.	Cette extension n’a encore rien dessiné.
+	This host does not capture documents for plug-ins yet, so a panel has no images.	Cet hôte ne capture pas encore de documents pour les extensions, donc un panneau n’a pas d’images.

@@ -3908,3 +3908,9 @@ curves	Smooth	Εξομάλυνση
 	This document's layers: {needed} of {budget} for layers	Επίπεδα αυτού του εγγράφου: {needed} από {budget} για επίπεδα
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Τα επίπεδα αυτού του εγγράφου χρειάζονται {needed} αλλά μπορούν να καταλάβουν {budget}: η επανασχεδίαση όλου του εγγράφου γίνεται στη CPU
 	GPU Memory (MB, 0 = Automatic)	Μνήμη GPU (MB, 0 = Αυτόματο)
+# Plug-in panels (ABI v2)
+	Restart Plug-in	Επανεκκίνηση προσθέτου
+	The plug-in has disabled this.	Αυτό έχει απενεργοποιηθεί από το πρόσθετο.
+	This plug-in stopped.	Αυτό το πρόσθετο σταμάτησε.
+	This plug-in has not drawn anything yet.	Αυτό το πρόσθετο δεν έχει σχεδιάσει ακόμη τίποτα.
+	This host does not capture documents for plug-ins yet, so a panel has no images.	Αυτός ο φιλοξενητής δεν καταγράφει ακόμη έγγραφα για πρόσθετα, οπότε ένα πλαίσιο δεν έχει εικόνες.

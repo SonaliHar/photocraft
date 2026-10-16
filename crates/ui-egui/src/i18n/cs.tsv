@@ -3816,3 +3816,9 @@ navigator	Zoom	Zvětšení
 	This document's layers: {needed} of {budget} for layers	Vrstvy tohoto dokumentu: {needed} z {budget} pro vrstvy
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Vrstvy tohoto dokumentu potřebují {needed}, ale mohou zabrat {budget}: překreslení celého dokumentu probíhá na CPU
 	GPU Memory (MB, 0 = Automatic)	Paměť GPU (MB, 0 = Automaticky)
+# Plug-in panels (ABI v2)
+	Restart Plug-in	Restartovat zásuvný modul
+	The plug-in has disabled this.	Zásuvný modul to vypnul.
+	This plug-in stopped.	Tento zásuvný modul se zastavil.
+	This plug-in has not drawn anything yet.	Tento zásuvný modul zatím nic nenakreslil.
+	This host does not capture documents for plug-ins yet, so a panel has no images.	Tento hostitel zatím nezachycuje dokumenty pro zásuvné moduly, takže panel nemá žádné obrazy.

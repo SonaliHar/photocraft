@@ -3210,3 +3210,9 @@ curves	Smooth	Glätten
 	This document's layers: {needed} of {budget} for layers	Ebenen dieses Dokuments: {needed} von {budget} für Ebenen
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Die Ebenen dieses Dokuments brauchen {needed}, dürfen aber {budget} belegen: Das ganze Dokument wird auf der CPU neu gezeichnet
 	GPU Memory (MB, 0 = Automatic)	GPU-Speicher (MB, 0 = Automatisch)
+# Plug-in panels (ABI v2)
+	Restart Plug-in	Plug-in neu starten
+	The plug-in has disabled this.	Das Plug-in hat dies deaktiviert.
+	This plug-in stopped.	Dieses Plug-in wurde angehalten.
+	This plug-in has not drawn anything yet.	Dieses Plug-in hat noch nichts gezeichnet.
+	This host does not capture documents for plug-ins yet, so a panel has no images.	Dieser Host erfasst noch keine Dokumente für Plug-ins, sodass ein Bedienfeld keine Bilder hat.

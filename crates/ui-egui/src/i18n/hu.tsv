@@ -4127,3 +4127,9 @@ cameraRaw	Yellow	Sárga
 	This document's layers: {needed} of {budget} for layers	A dokumentum rétegei: {needed} / {budget} a rétegeknek
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	A dokumentum rétegeinek {needed} kell, de {budget} foglalhatnak: a teljes dokumentum újrarajzolása a CPU-n fut
 	GPU Memory (MB, 0 = Automatic)	GPU-memória (MB, 0 = Automatikus)
+# Plug-in panels (ABI v2)
+	Restart Plug-in	Bővítmény újraindítása
+	The plug-in has disabled this.	A bővítmény letiltotta ezt.
+	This plug-in stopped.	Ez a bővítmény leállt.
+	This plug-in has not drawn anything yet.	Ez a bővítmény még semmit sem rajzolt.
+	This host does not capture documents for plug-ins yet, so a panel has no images.	Ez a gazdaalkalmazás még nem rögzít dokumentumokat a bővítmények számára, ezért a panelnek nincsenek képei.

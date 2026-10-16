@@ -3178,3 +3178,9 @@ curves	Smooth	Сгладить
 	This document's layers: {needed} of {budget} for layers	Слои этого документа: {needed} из {budget} для слоёв
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Слоям этого документа нужно {needed}, но занимать они могут {budget}: весь документ перерисовывается на CPU
 	GPU Memory (MB, 0 = Automatic)	Память GPU (МБ, 0 = автоматически)
+# Plug-in panels (ABI v2)
+	Restart Plug-in	Перезапустить плагин
+	The plug-in has disabled this.	Это отключено плагином.
+	This plug-in stopped.	Этот плагин остановился.
+	This plug-in has not drawn anything yet.	Этот плагин пока ничего не нарисовал.
+	This host does not capture documents for plug-ins yet, so a panel has no images.	Этот хост пока не захватывает документы для плагинов, поэтому у панели нет изображений.

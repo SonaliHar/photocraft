@@ -3907,3 +3907,9 @@ curves	Smooth	Згладити
 	This document's layers: {needed} of {budget} for layers	Шари цього документа: {needed} з {budget} для шарів
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Шарам цього документа потрібно {needed}, але займати вони можуть {budget}: увесь документ перемальовується на CPU
 	GPU Memory (MB, 0 = Automatic)	Пам'ять GPU (МБ, 0 = автоматично)
+# Plug-in panels (ABI v2)
+	Restart Plug-in	Перезапустити плагін
+	The plug-in has disabled this.	Це вимкнено плагіном.
+	This plug-in stopped.	Цей плагін зупинився.
+	This plug-in has not drawn anything yet.	Цей плагін ще нічого не намалював.
+	This host does not capture documents for plug-ins yet, so a panel has no images.	Цей хост ще не захоплює документи для плагінів, тому в панелі немає зображень.
