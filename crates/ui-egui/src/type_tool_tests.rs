@@ -2066,3 +2066,83 @@ fn type_mask_shift_adds_and_alt_subtracts_without_a_layer_row() {
     assert!(at(&app, stem.0, stem.1) < 0.01, "⌥ subtracts the glyphs");
     assert!(at(&app, 1050, 150) > 0.99, "and keeps the rest");
 }
+
+/// #6819: every edge handle of the paragraph box resizes it through the canvas, as the corners do,
+/// at any zoom, HiDPI scale or layer transform (View › Snap is on, as by default).
+#[test]
+fn dragging_each_edge_handle_of_the_paragraph_box_resizes_it() {
+    use photocraft_doc::text::TextShape;
+    for ppp in [1.0f32, 2.0] {
+        for zoom in [0.25f32, 0.5, 1.0, 2.0] {
+            for tf in [
+                Affine::translate(350.0, 300.0),
+                Affine::translate(350.0, 300.0).mul(&Affine::scale(0.5)),
+                Affine::translate(350.0, 300.0).mul(&Affine::rotate(0.3)),
+            ] {
+                let (app, id) = transform_app(true, false, tf);
+                let mut h = harness(ppp, app);
+                let q = crate::type_transform::frame(h.state_mut()).unwrap().quad;
+                let c = [((q[0][0] + q[2][0]) / 2.0) as f32, ((q[0][1] + q[2][1]) / 2.0) as f32];
+                let v = &mut h.state_mut().ui.views[0];
+                (v.zoom, v.center, v.fit_pending) = (zoom, c, false);
+                h.run_steps(2);
+                let ctx = format!("ppp {ppp} zoom {zoom} tf {tf:?}");
+                let d = 30.0 / f64::from(zoom);
+                {
+                    let TextShape::Box { width: w0, height: h0, .. } = text(h.state(), id).shape else { panic!("paragraph box") };
+                    let q = crate::type_transform::frame(h.state_mut()).unwrap().quad;
+                    let a = frame_point(h.state(), q[2]);
+                    let b = frame_point(h.state(), [q[2][0] + d, q[2][1] + d]);
+                    h.hover_at(a);
+                    h.run_steps(2);
+                    let cursor = h.output().platform_output.cursor_icon;
+                    drag(&mut h, a, b);
+                    let TextShape::Box { width: w1, height: h1, .. } = text(h.state(), id).shape else { panic!("paragraph box") };
+                    assert!(w1 - w0 > 5.0 && h1 - h0 > 5.0, "{ctx}: corner 2 ({cursor:?}): {w0}x{h0} -> {w1}x{h1}");
+                }
+                // Quad order: top-left, top-right, bottom-right, bottom-left; mids: top, right, bottom, left.
+                for (i, dx, dy) in [(0usize, 0.0, -d), (1, d, 0.0), (2, 0.0, d), (3, -d, 0.0)] {
+                    let TextShape::Box { width: w0, height: h0, .. } = text(h.state(), id).shape else { panic!("paragraph box") };
+                    let q = crate::type_transform::frame(h.state_mut()).unwrap().quad;
+                    let m = [(q[i][0] + q[(i + 1) % 4][0]) / 2.0, (q[i][1] + q[(i + 1) % 4][1]) / 2.0];
+                    let a = frame_point(h.state(), m);
+                    h.hover_at(a);
+                    h.run_steps(2);
+                    let cursor = h.output().platform_output.cursor_icon;
+                    assert_ne!(cursor, egui::CursorIcon::Text, "{ctx}: handle {i}: hover shows a resize cursor, got {cursor:?}");
+                    let b = frame_point(h.state(), [m[0] + dx, m[1] + dy]);
+                    drag(&mut h, a, b);
+                    let TextShape::Box { width: w1, height: h1, .. } = text(h.state(), id).shape else { panic!("paragraph box") };
+                    let grew = if i % 2 == 0 { (h1 - h0, w1 - w0) } else { (w1 - w0, h1 - h0) };
+                    assert!(grew.0 > 5.0 && grew.1.abs() < 0.5, "{ctx}: handle {i} ({cursor:?}): {w0}x{h0} -> {w1}x{h1}");
+                }
+            }
+        }
+    }
+}
+
+/// #6819: a press on an edge handle grabs it where it landed, inside View › Snap's reach of a
+/// guide; the drag then snaps the edge to the guide, never to the glyph bounds of its own text.
+#[test]
+fn an_edge_handle_press_is_not_snapped_and_its_drag_ignores_its_own_text() {
+    use crate::canvas::{ToolEvent, tool_event};
+    use photocraft_doc::text::TextShape;
+    let (mut app, id) = transform_app(true, false, Affine::translate(350.0, 300.0));
+    let tol = crate::snap_ui::tolerance(&app);
+    let guide = 590.0 + tol * 0.9;
+    app.run("view.newGuide", json!({"orientation": "vertical", "position": guide})).unwrap();
+    let glyph_right = 350.0 + f64::from(layout(&mut app, id).unwrap().0.bounds().unwrap()[2]);
+    assert!(glyph_right + tol < 590.0, "the text ends well inside the box: {glyph_right}");
+    let right = |app: &mut PhotocraftApp| crate::type_transform::frame(app).unwrap().quad[1][0];
+    let m = Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 590.0, y: 390.0, pressure: 1.0 }, m);
+    assert_eq!(app.ui.text_edit.as_ref().unwrap().resize, Some(5), "the right edge handle is grabbed, not the snapped point");
+    tool_event(&mut app, ToolEvent::Move { x: guide + tol * 0.5, y: 390.0, pressure: 1.0 }, m);
+    assert!((right(&mut app) - guide).abs() < 0.01, "the edge snaps to the guide: {}", right(&mut app));
+    tool_event(&mut app, ToolEvent::Move { x: glyph_right + tol * 0.5, y: 390.0, pressure: 1.0 }, m);
+    assert!((right(&mut app) - (glyph_right + tol * 0.5)).abs() < 0.01, "the edge passes its own glyph bounds: {} vs {glyph_right}", right(&mut app));
+    tool_event(&mut app, ToolEvent::Up { x: glyph_right + tol * 0.5, y: 390.0 }, m);
+    assert!(app.ui.text_edit.as_ref().unwrap().resize.is_none());
+    let TextShape::Box { height, .. } = text(&app, id).shape else { panic!("paragraph box") };
+    assert_eq!(height, 180.0, "a horizontal edge drag keeps the height");
+}

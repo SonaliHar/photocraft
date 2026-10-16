@@ -5102,6 +5102,17 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
 }
 
 /// Tool state machine. Shared by mouse input and automation.
+/// Where a press landed before View › Snap moved it. The Type tool picks a paragraph box handle
+/// or a caret position there: the snap reach (8 px) is longer than a handle's (6 px), and the
+/// edited layer's own glyph bounds sit a few pixels inside its box, so the snapped point missed
+/// every edge handle (#6819). The drag that follows still snaps.
+fn press_point(raw: ToolEvent, x: f64, y: f64) -> [f64; 2] {
+    match raw {
+        ToolEvent::Down { x, y, .. } => [x, y],
+        _ => [x, y],
+    }
+}
+
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
     // A press anywhere but on a guide deselects the selected guide (`guide_select`).
     if let ToolEvent::Down { x, y, .. } = ev
@@ -5445,7 +5456,9 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     polygon_click(app, x, y, mods);
                     return;
                 }
-                Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask if crate::type_tool::pointer_down(app, x, y, mods) => {
+                Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask
+                    if crate::type_tool::pointer_down(app, press_point(raw, x, y)[0], press_point(raw, x, y)[1], mods) =>
+                {
                     return;
                 }
                 _ => {}

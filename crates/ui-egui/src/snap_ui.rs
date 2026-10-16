@@ -109,6 +109,15 @@ fn selection_rect(app: &PhotocraftApp) -> Option<[f64; 4]> {
     (!r.is_empty()).then(|| [r.x0, r.y0, r.x1, r.y1].map(f64::from))
 }
 
+/// The edited text layer when a Type tool press lands on one of its paragraph box handles.
+fn type_handle_layer(app: &mut PhotocraftApp, tool: Tool, p: [f64; 2]) -> Option<LayerId> {
+    if !matches!(tool, Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask) {
+        return None;
+    }
+    let id = LayerId(app.ui.text_edit.as_ref()?.layer);
+    crate::type_tool::box_handle_at(app, id, p[0], p[1]).map(|_| id)
+}
+
 fn is_point_tool(t: Tool) -> bool {
     matches!(
         t,
@@ -235,6 +244,10 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
         // doesn't snap to its own layer.
         let exclude = if cut { app.session.active().map(|s| s.selected_layers()).unwrap_or_default() } else { Vec::new() };
         selection_rect(app).map(|rect| (Gesture::SelectionMove { rect }, exclude))
+    } else if let Some(id) = type_handle_layer(app, tool, p) {
+        // Dragging a paragraph box's handle snaps that edge to guides and other layers, never to
+        // the glyph bounds of the text being resized (#6819).
+        Some((Gesture::Point, vec![id]))
     } else if is_point_tool(tool) {
         Some((Gesture::Point, Vec::new()))
     } else {
