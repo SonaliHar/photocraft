@@ -65,12 +65,12 @@ if a later step fails, earlier successful actions remain. Undoable edits stay in
 navigation, document duplication and explicit Undo/Redo commands have their own semantics.
 Proposed guest state is committed only after the relevant successful operation.
 
-API-2 broker edits use a distinct contract: a single bounded rename/visibility batch either
+current API broker edits use a distinct contract: a single bounded rename/visibility batch either
 commits as one Undo step or changes no document/history/state. Host-created principals and
 opaque handles bind requests to the session, owning installation, document incarnation and
 revision. Captured and current automation restrictions both apply, including deferred-event
 retries. Inspector events are read-only; they cannot execute editing commands or native jobs.
-See [panel API 2](plugin-api-v2.md) for its experimental scope and reported limits.
+See [the PhotoCraft Plugin API](plugin-api.md) for its experimental scope and reported limits.
 
 Pixel filters use a different ABI and different fuel/memory limits. They process temporary
 band data; a failed filter does not commit partially processed pixel bands. Output samples,
@@ -146,7 +146,7 @@ not stop other valid installations from loading. To repair a corrupt installatio
 
 1. Start normally; the manager reports the failed installation.
 2. Choose a known-good plugin file and review its identity and requested access again.
-3. Select **Replace or repair an existing installation**, then **Install plugin**.
+3. Use the secondary **Reinstall / Repair** maintenance action and confirm the reviewed file.
 4. Enable the repaired installation explicitly if it was disabled before repair.
 
 Explicit replacement can back up bounded corrupt metadata and publish a validated replacement.
@@ -175,7 +175,7 @@ to create it; filesystems without working locks fail closed.
 Native image/task workers hold a read lease through execution. Completion and preview Apply
 recheck the selected installation record's hash, package, activation epoch and disabled marker, holding
 a short shared store guard and generation lease through result/state admission. Packaged-filter
-previews and API-2 document/view/state commits also retain the shared store guard through their
+previews and current API document/view/state commits also retain the shared store guard through their
 final validation and mutation. An update/remove/disable in another current host
 therefore rejects an obsolete result. Completed previews do not retain a long-running OS lease.
 Each management operation advances a bounded per-plugin epoch in `<id>.activation.json`.

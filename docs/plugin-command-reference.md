@@ -1,7 +1,7 @@
 # Panel plugin command reference
 
 Generated from this PhotoCraft build's `extension.commands` and CLI command descriptions.
-Panel API version **1**; **46** permitted command ids.
+The current PhotoCraft Plugin API; **46** permitted command ids.
 The running host remains authoritative. Start with the [handbook](plugin-development.md).
 
 ## How to use this reference

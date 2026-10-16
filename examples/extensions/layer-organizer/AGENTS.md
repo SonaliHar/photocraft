@@ -15,9 +15,9 @@ For a derivative, change metadata and use an ID you control. Update every contri
 command to the new `pluginId.localId` namespace and keep handler event IDs aligned.
 Rebuild embedded manifests and keep the stable ID for updates to an existing plugin.
 
-## Experimental API-2 contract
+## Experimental current API contract
 
-This is panel API 2, package format 2, and import-free core WASM with `pce_*` exports.
+This is the PhotoCraft Plugin API, package format 2, and import-free core WASM with `pce_*` exports.
 It requests `host.document.read` and `host.document.edit`; it does not need legacy
 `documentRead` summary access or broad engine command grants. Capability availability
 is not authority. Older panel-1-only hosts reject the current authoring API.
@@ -56,12 +56,12 @@ host acceptance must also check namespaced command discovery, user shortcuts whe
 configured, stale revisions, locked layers, and atomic Undo/Redo on scratch documents.
 Current restricted MCP denies installation; an authorized local test route is needed
 for that step. A passing guest test or package check is not real-host acceptance.
-Report artifact/source paths, required API-2 host, checks, and remaining limitations.
+Report artifact/source paths, required current API host, checks, and remaining limitations.
 
 ## Optional typed SDK authoring
 
 This existing project keeps its supported wire versions and needs no SDK migration.
-For a new API-2 project, `photocraft-plugin new AUTHORING_JSON FRESH_PROJECT` supplies
+For a new current API project, `photocraft-plugin new AUTHORING_JSON FRESH_PROJECT` supplies
 private API/SDK 0.1 sources, locks, licenses and a local guide. Edit `authoring.json`
 and the handler; generated manifests/bindings belong in Cargo `OUT_DIR`. Keep local
 SDK dependencies inside that project and retain its release hash index. Do not link

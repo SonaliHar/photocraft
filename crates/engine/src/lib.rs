@@ -43,6 +43,7 @@ pub mod exr_cmds;
 pub mod extension_cmds;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod extension_package;
+pub mod extension_update_cmds;
 pub mod extra_cmds;
 pub mod file_cmds;
 pub mod fill_cmds;

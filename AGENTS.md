@@ -138,21 +138,32 @@ Then append a terse entry to `log/devlog.md` (what landed, numbers, what's still
 
 ## Plugin platform ownership and contracts
 
-Read `docs/plugin-development.md`, `docs/plugin-sdk.md`, `docs/plugin-api-v2.md` and
+Read `docs/plugin-development.md`, `docs/plugin-sdk.md`, `docs/plugin-api.md` and
 `docs/plugin-platform-plan.md` before changing the platform. Public SDK/API crates must
 build independently of engine/UI sources. New guests can use `photocraft-plugin new`
 with one `authoring.json`; generated manifests and bindings belong in Cargo `OUT_DIR`.
-Never require an existing plugin to adopt the SDK or rebuild to keep its supported ABI.
+Support one current PhotoCraft Plugin API. Its internal panel discriminator is `2`; reject old
+panel version `1` and migrate owned panels rather than retaining a second panel API. SDK use is
+optional. Extend the API until a genuine breaking change requires another major. Filter ABI 1,
+package format 2 and native worker protocols 1/2 are independent and remain supported.
 
 Feature algorithms, model catalogs, binaries, licenses and acceptance suites for separately
 released plugins belong in those plugins' repositories. Keep core regressions neutral and
 extend existing suites; generated SDK acceptance projects and packages stay temporary.
 Regenerate all public JSON Schema snapshots when their Rust contracts change.
 
+Optional GitHub release metadata belongs to each plugin's embedded descriptor. Keep release
+checks/downloads off the UI thread; bind candidates to the installed identity/source/hash,
+verify digest/version/compatibility and use the existing reviewed store transaction. Never
+silently expand grants, downgrade a release or derive update repositories from plugin IDs.
+Read docs/plugin-updates.md before changing this path. docs/plugin-marketplace.md is a future
+design only; do not add a placeholder marketplace or a second installation/runtime path.
+
 Discovery uses host-created cached descriptors. Panel activation reads only bounded panel
 code; scheduled jobs stream-verify the full closure before native execution or filter loading.
 Never hash model payloads or compile package filters during UI preparation. Compare the embedded
-panel descriptor with its cached authority. Preserve the eager adapter for old records and all existing wire bytes.
+panel descriptor with its cached authority. Older store records may use eager discovery only
+for a panel implementing the current API; never restore support for obsolete panel versions.
 Worker protocol 2 is an explicit verified runtime/worker-v2.json opt-in; never probe or silently
 upgrade legacy executables. Each installation/generation owns its persistent process and data.
 
@@ -161,7 +172,7 @@ include the private store, plugin, generation, activation epoch and private runt
 store must not supply resident credits or receive cancellation. Admission estimates are not OS
 containment. Restricted native execution remains unavailable until Phase 7 verifies it per OS.
 
-Store publication uses a short OS lock; execution and idle workers retain per-generation leases.
+An OS store lock serializes installation/publication; execution and idle workers retain per-generation leases.
 Never replace/delete lock files or activation tombstones. Managed-data migration requires an
 exclusive source-generation lease, stages a private snapshot, validates quotas and publishes the
 active code/state record last. Preserve one rollback pair and never touch external plugin caches.

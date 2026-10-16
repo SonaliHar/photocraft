@@ -1,6 +1,6 @@
 # Document Inspector
 
-An independently built API-2 WASM plugin with a native, read-only inspector view.
+An independently built current API WASM plugin with a native, read-only inspector view.
 Opening the panel activates its document-change subscription. PhotoCraft coalesces
 changes and invokes the handler; the guest requests a bounded snapshot and returns
 label/value rows for native rendering. No guest code runs just to paint a frame.

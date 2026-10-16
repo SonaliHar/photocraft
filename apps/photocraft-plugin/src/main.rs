@@ -166,13 +166,14 @@ mod tests {
     }
 
     #[test]
-    fn original_standalone_panel_passes_the_real_host_abi_and_grant_checks() {
+    fn standalone_panel_passes_the_real_host_abi_and_grant_checks() {
         let dir = tempfile::tempdir().unwrap();
         let panel = dir.path().join("panel.pcext");
-        std::fs::write(&panel, include_bytes!("../../../tests/plugin-compatibility/frozen/image-gain-panel-v1.wasm")).unwrap();
+        std::fs::write(&panel, include_bytes!("../../../tests/plugin-compatibility/frozen/image-gain-panel-v2.wasm")).unwrap();
         let report = check(&panel).unwrap();
         assert_eq!(report["status"], "passed");
         assert_eq!(report["inspection"]["manifest"]["id"], "org.example.image-gain");
+        assert_eq!(report["inspection"]["manifest"]["apiVersion"], 2);
     }
 
     #[test]

@@ -28,7 +28,7 @@ The proposed `package.json` contains:
 | Field | Purpose |
 |---|---|
 | `packageVersion: 3` | Selects this package reader explicitly |
-| `descriptor` | Complete panel-2 identity, requested capabilities and contributions |
+| `descriptor` | Complete current panel identity, requested capabilities and contributions |
 | `hostApi` | Supported host metadata major/range; independent from editor release version |
 | `activation` | Bounded command/view/event triggers; no automatic startup execution |
 | `payloads` | Declared target, entry modules and explicitly versioned transport |
@@ -37,8 +37,9 @@ The proposed `package.json` contains:
 
 The embedded guest identity/contract digest must agree with the generated installation
 descriptor. Identity conflicts, unsupported required features and target mismatches fail before
-publishing an installation. Existing format-2 package metadata stays unchanged. API-1/filter-1/
-worker-1 adapters stay available; a version number alone never selects a weaker trust mode.
+publishing an installation. The proposal changes a future package container, not the supported
+Plugin API. Filter ABI 1 and native transport versions remain independent; a version number
+alone never selects a weaker trust mode. There is no old-panel compatibility adapter.
 
 The SDK should generate the installation descriptor, embedded manifest, schema bindings and
 digest from one source. PhotoCraft persists its own validated descriptor as installed metadata;

@@ -1,16 +1,16 @@
 //! Compatibility tests consume frozen compiled guests, never rebuild guest source.
-//! The large-package tests fail when explicitly selected without their pinned corpus.
+//! Native tests fail when explicitly selected without their pinned transport executable.
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use photocraft_engine::{EngineError, Session, jobs::JobCtx};
-use photocraft_format::zip::{ZipReader, ZipWriter};
+use photocraft_format::zip::ZipWriter;
 use photocraft_plugins::extension::Extension;
 use serde_json::{Value, json};
 
-const PANEL: &[u8] = include_bytes!("../../../tests/plugin-compatibility/frozen/image-gain-panel-v1.wasm");
+const PANEL: &[u8] = include_bytes!("../../../tests/plugin-compatibility/frozen/image-gain-panel-v2.wasm");
 const FILTER: &[u8] = include_bytes!("../../../tests/plugin-compatibility/frozen/channel-gain-filter-v1.wasm");
 const ID: &str = "org.example.image-gain";
 
@@ -23,8 +23,7 @@ fn catalog() -> Value {
 }
 
 fn portable_package() -> Vec<u8> {
-    // This small cross-platform wrapper is synthetic; the two compiled guests inside are
-    // the exact old published bytes. The full original native archive is pinned separately.
+    // This cross-platform wrapper uses the current panel fixture and the original filter.
     let mut zip = ZipWriter::new();
     let info = json!({"packageVersion":2,"module":"plugin.pcext","filters":[{"module":"filters/channel-gain.wasm"}]});
     zip.add("package.json", &serde_json::to_vec(&info).unwrap()).unwrap();
@@ -145,7 +144,14 @@ fn corpus_path(artifact: &Value) -> PathBuf {
             .expect("set PHOTOCRAFT_PLUGIN_COMPAT_ROOT to the pinned artifact store; see tests/plugin-compatibility/README.md"),
     );
     let flat = root.join(artifact["name"].as_str().unwrap());
-    if flat.is_file() { flat } else { root.join("upstream/photocraft").join(artifact["path"].as_str().unwrap()) }
+    let relative = root.join(artifact["path"].as_str().unwrap());
+    if flat.is_file() {
+        flat
+    } else if relative.is_file() {
+        relative
+    } else {
+        root.join("upstream/photocraft").join(artifact["path"].as_str().unwrap())
+    }
 }
 
 fn verify_artifact(artifact: &Value) -> PathBuf {
@@ -153,18 +159,27 @@ fn verify_artifact(artifact: &Value) -> PathBuf {
     let bytes = std::fs::read(&path).unwrap_or_else(|error| panic!("missing pinned artifact {}: {error}; do not rebuild a baseline", path.display()));
     assert_eq!(bytes.len() as u64, artifact["size"].as_u64().unwrap(), "{}", path.display());
     assert_eq!(blake3::hash(&bytes).to_hex().as_str(), artifact["blake3"].as_str().unwrap(), "{}", path.display());
-    let zip = ZipReader::new(&bytes).unwrap();
-    assert!(zip.find("LICENSE").is_some());
-    assert!(zip.find("THIRD-PARTY-NOTICES.md").is_some());
     path
 }
 
+fn native_package(artifact: &Value) -> Vec<u8> {
+    let worker = std::fs::read(verify_artifact(artifact)).unwrap();
+    let mut zip = ZipWriter::new();
+    zip.add("package.json", &serde_json::to_vec(&artifact["package"]).unwrap()).unwrap();
+    zip.add("plugin.pcext", PANEL).unwrap();
+    zip.add("filters/channel-gain.wasm", FILTER).unwrap();
+    zip.add(artifact["package"]["native"]["entry"].as_str().unwrap(), &worker).unwrap();
+    zip.add("LICENSE", include_bytes!("../../../tests/plugin-compatibility/licenses/LICENSE")).unwrap();
+    zip.add("THIRD-PARTY-NOTICES.md", include_bytes!("../../../tests/plugin-compatibility/licenses/THIRD-PARTY-NOTICES.md")).unwrap();
+    zip.finish().unwrap()
+}
+
 #[test]
-#[ignore = "requires the unchanged pinned package corpus; run scripts/plugins/test-compatibility.ps1"]
+#[ignore = "requires the pinned native transport executable; run scripts/plugins/test-compatibility.ps1"]
 fn pinned_native_packages_install_restart_cancel_and_repair() {
     let catalog = catalog();
     for artifact in catalog["artifacts"].as_array().unwrap() {
-        let source = verify_artifact(artifact);
+        let package = native_package(artifact);
         assert_eq!(
             artifact["package"]["native"]["platform"],
             format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
@@ -172,7 +187,7 @@ fn pinned_native_packages_install_restart_cancel_and_repair() {
         );
         let dir = tempfile::tempdir().unwrap();
         let download = dir.path().join("download.pcplugin");
-        std::fs::copy(&source, &download).unwrap();
+        std::fs::write(&download, &package).unwrap();
         let folder = dir.path().join("Extensions");
         let mut installer = Session::new();
         installer.extensions.attach_folder(folder.clone()).unwrap();
@@ -210,7 +225,8 @@ fn pinned_native_packages_install_restart_cancel_and_repair() {
         assert!(Arc::ptr_eq(&document, &damaged.active().unwrap().doc));
         assert_eq!(damaged.plugin_previews().count(), 0);
         damaged.execute("extension.enable", json!({"id":id,"enabled":false})).unwrap();
-        damaged.execute("extension.install", json!({"path":source,"allowNative":true,"replace":true})).unwrap();
+        std::fs::write(&download, &package).unwrap();
+        damaged.execute("extension.install", json!({"path":download,"allowNative":true,"replace":true})).unwrap();
         drop(damaged);
         let mut repaired = Session::new();
         repaired.extensions.attach_folder(folder).unwrap();
@@ -221,7 +237,7 @@ fn pinned_native_packages_install_restart_cancel_and_repair() {
 }
 
 fn process_case(package_name: &str, event: &str, values: Value) {
-    // Immutable native guests may own persistent caches. The explicit runner redirects them
+    // Native workers may own persistent caches. The explicit runner redirects them
     // into this workspace rather than touching the user's real plugin/runtime cache.
     let cache =
         PathBuf::from(std::env::var_os("PHOTOCRAFT_PLUGIN_COMPAT_CACHE").expect("run scripts/plugins/test-compatibility.ps1 to isolate native worker caches"))
@@ -231,19 +247,22 @@ fn process_case(package_name: &str, event: &str, values: Value) {
     assert!(local.starts_with(&cache), "native compatibility tests require an isolated worker cache");
     let catalog = catalog();
     let artifact = catalog["artifacts"].as_array().unwrap().iter().find(|artifact| artifact["name"] == package_name).unwrap();
-    let source = verify_artifact(artifact);
+    let package = native_package(artifact);
     let dir = tempfile::tempdir().unwrap();
     let folder = dir.path().join("Extensions");
+    let download = dir.path().join("download.pcplugin");
+    std::fs::write(&download, &package).unwrap();
     let mut session = Session::new();
     session.extensions.attach_folder(folder.clone()).unwrap();
-    let installed = session.execute("extension.install", json!({"path":source,"allowNative":true})).unwrap();
+    let installed = session.execute("extension.install", json!({"path":download,"allowNative":true})).unwrap();
     let id = installed["manifest"]["id"].as_str().unwrap().to_owned();
     drop(session);
+    std::fs::remove_file(&download).unwrap();
     let mut session = Session::new();
     session.extensions.attach_folder(folder).unwrap();
     if session.extensions.installed[&id].extension.manifest.panel.buttons.iter().any(|button| button.id == "model_status") {
         let status = session.execute("extension.invoke", json!({"id":id,"event":"model_status","values":values})).unwrap();
-        assert!(status["data"].is_object(), "legacy native task protocol must return structured data");
+        assert!(status["data"].is_object(), "native task protocol must return structured data");
         assert!(session.documents().is_empty());
     }
     new_document(&mut session);
@@ -261,7 +280,7 @@ fn process_case(package_name: &str, event: &str, values: Value) {
     assert_eq!(result.size, original.size);
     let pixel = result.layers.first().unwrap().surface().unwrap().pixel(1, 1);
     assert!(pixel.iter().all(|sample| sample.is_finite() && (0.0..=1.0).contains(sample)));
-    if package_name == "Image-Gain-windows-x86_64.pcplugin" {
+    if package_name == "Image-Gain-worker-windows-x86_64.exe" {
         for (actual, expected) in pixel.iter().zip([0.5, 0.5, 0.5, 1.0]) {
             assert!((actual - expected).abs() < 0.01, "native protocol must preserve gain, channel order and alpha: {pixel:?}");
         }
@@ -280,7 +299,7 @@ fn process_case(package_name: &str, event: &str, values: Value) {
 }
 
 #[test]
-#[ignore = "requires unchanged pinned Windows native starter"]
+#[ignore = "requires the pinned Windows native transport executable"]
 fn pinned_image_gain_native_processes_and_applies() {
-    process_case("Image-Gain-windows-x86_64.pcplugin", "process", json!({"backend":"Native worker","gain":0.5}));
+    process_case("Image-Gain-worker-windows-x86_64.exe", "process", json!({"backend":"Native worker","gain":0.5}));
 }

@@ -7,8 +7,9 @@ runtime. SDK/API 0.1 are a foundation preview; platform-wide stable certificatio
 
 Native plugins may independently opt into [persistent worker protocol 2](plugin-worker-v2.md)
 and [managed storage migrations](plugin-managed-storage.md). The public API crate contains
-the worker descriptor and typed frames. Existing worker 1, panel 1/2 and filter 1 binaries stay
-supported without adopting the SDK. See [lifecycle and budgets](plugin-lifecycle.md).
+the worker descriptor and typed frames. The SDK is optional: current panels, filter ABI 1 and
+native worker transports 1/2 can be implemented without it. Old panel version 1 is rejected
+and requires a rebuild for the current API. See [lifecycle and budgets](plugin-lifecycle.md).
 
 ## One source manifest
 
@@ -72,7 +73,7 @@ The host remains responsible for permissions, handle ownership, locks, revisions
 Query continuations remain bounded and host-driven. The SDK does not provide persistent guest
 instances, arbitrary callbacks or implicit asynchronous/native authority. Module globals do not
 persist between events. A successful atomic edit is terminal; no guest continuation runs after
-commit. Legacy command lists remain sequential and are not edit transactions.
+commit. Command lists remain sequential and are not edit transactions.
 
 ## Clean builds and real-host checks
 
@@ -99,10 +100,10 @@ plugin binaries, catalogs and tests belong in their own repositories.
 
 - Plugin release versions, SDK crate versions, panel ABI, package version, host metadata and
   capability versions are separate. An SDK upgrade never silently upgrades a plugin's wire ABI.
-- Target one production authoring API, currently panel 2. Preserve temporary panel-1/worker-1
-  adapters for our own compiled plugins until their independent migration is verified. There
-  is no external ecosystem support window or new API major for each implementation phase.
-  Package 2 and filter 1 remain unchanged; no additional package format is needed here.
+- Target the PhotoCraft Plugin API, the only supported authoring API. Its internal panel
+  discriminator is currently `2`; version `1` is rejected. Rebuild older owned panels for the
+  current contract. Package format 2, filter ABI 1 and native worker protocols 1/2 remain
+  independent. Implementation phases do not create parallel APIs or new majors.
 - The implemented capability-v1 methods and message/error semantics retain their meaning.
   Extend this one current API during development. A new major requires an actual unavoidable
   breaking wire/behavior change, rather than a completed implementation phase.

@@ -159,6 +159,19 @@ fn capability_negotiation_rejects_required_and_preserves_optional_unknown_ids() 
 }
 
 #[test]
+fn discovery_and_validation_expose_only_the_current_plugin_api() {
+    let mut session = Session::new();
+    let capabilities = session.execute("extension.capabilities", json!({})).unwrap();
+    assert_eq!(capabilities["panelApis"], json!([photocraft_plugin_api::PANEL_API_VERSION]));
+    assert_eq!(session.execute("extension.commands", json!({})).unwrap()["apiVersion"], photocraft_plugin_api::PANEL_API_VERSION);
+    let mut manifest = Manifest::parse(&serde_json::to_vec(&editor_manifest(OWNER)).unwrap()).unwrap();
+    for unsupported in [0, 1, 3, u32::MAX] {
+        manifest.api_version = unsupported;
+        assert_code(compatibility(&manifest), ErrorCode::UnsupportedVersion);
+    }
+}
+
+#[test]
 fn host_injected_principals_are_session_owned_and_revocable() {
     let mut first = installed_editor();
     let principal = principal(&mut first, OWNER).unwrap();
@@ -642,13 +655,10 @@ fn contributed_native_tasks_use_background_job_dispatch_and_preserve_state_on_wo
     use crate::extension_cmds::{Installed, StorageSize};
     use crate::extension_package::{InstalledNative, NativeInfo, PackageInfo};
 
-    for route in ["direct", "panel1", "contributed2"] {
+    for route in ["direct", "panel", "contributed"] {
         let mut value = descriptor(OWNER, &[KnownCapability::CommandsInvoke]);
         value["permissions"]["commands"] = json!(["plugin.processImage", "plugin.runTask"]);
-        if route == "panel1" {
-            value["apiVersion"] = json!(1);
-            value.as_object_mut().unwrap().remove("capabilities");
-        } else {
+        if route == "contributed" {
             value["contributes"] = json!({"commands":[{"id":"org.example.platform.task","label":"Task","event":"apply"}]});
         }
         let extension = Arc::new(Extension::load(&guest(&value, &json!({"state":{"runs":1},"commands":[{"command":"plugin.runTask","params":{}}]}))).unwrap());
@@ -684,7 +694,7 @@ fn contributed_native_tasks_use_background_job_dispatch_and_preserve_state_on_wo
         let floating = s.active().unwrap().floating.as_ref().unwrap().clone();
         let started = match route {
             "direct" => s.start("plugin.runTask", json!({"id":OWNER})),
-            "panel1" => s.start("extension.invoke", json!({"id":OWNER,"event":"apply"})),
+            "panel" => s.start("extension.invoke", json!({"id":OWNER,"event":"apply"})),
             _ => s.start("org.example.platform.task", json!({})),
         };
         let crate::jobs::Started::Job(job) = started.unwrap() else { panic!("expected {route} task to start a job") };

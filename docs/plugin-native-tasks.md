@@ -2,8 +2,8 @@
 
 `plugin.runTask` runs document-independent maintenance in an installed version-2 package's
 own native worker. Use it for explicit asset management, diagnostics or other operations that
-do not need an image. It requires a host build containing this command; panel API version 1
-and package format version 2 remain unchanged. Older hosts reject the unsupported grant.
+do not need an image. It uses the current PhotoCraft Plugin API and package format 2.
+Hosts without this command reject its unsupported grant.
 
 ## Grant and invoke
 

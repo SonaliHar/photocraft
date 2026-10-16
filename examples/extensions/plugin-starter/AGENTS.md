@@ -17,7 +17,7 @@ PhotoCraft core contributor instructions are not required to build this standalo
 
 ## Supported contract
 
-This starter uses panel API 1 and produces `Hello-PhotoCraft.pcext`. It exports
+This starter uses the PhotoCraft Plugin API and produces `Hello-PhotoCraft.pcext`. It exports
 `memory` and `pce_api_version`, `pce_manifest`, `pce_alloc`, `pce_handle` from import-free
 `wasm32-unknown-unknown` code. Keep the documented Rust export attributes; do not
 introduce unsafe pointer access, WASI, filesystem/network imports, or guest UI frameworks.
@@ -26,17 +26,20 @@ Native controls are number/int/bool/choice fields and buttons. Free-text fields,
 custom layouts, and general event callbacks are not provided. Keep field defaults,
 allowed choices, button IDs, and handler validation consistent.
 
-The host supplies `event`, `values`, `state`, and optional document summary metadata.
+The typed host envelope supplies `apiVersion`, `host`, optional `compatibility`, `event`,
+`values`, `state`, `document` and `responses`. Accept additive metadata; validate the
+current discriminator (2), host metadata, and declared command capability.
 `documentRead` does not grant pixels, file paths, or an editable layer tree. Each
 event uses a fresh instance; preserve unchanged state explicitly, including in
 no-document/invalid-input replies. Do not rely on persistent guest globals.
 
 Declare every requested engine command in `permissions.commands`. The host's
 `extension.commands` allowlist and normal command preconditions also apply.
-Use only APIs actually available in the target build. API-1 command lists are
-sequential, not atomic; a later failure leaves earlier completed edits in history.
-API-2 capabilities/requests are not valid API-1 fields. Report missing host support
-instead of adding plugin-specific editor code or pretending an unsupported API exists.
+Declare `host.commands.invoke` as a required capability as well as each exact
+command grant. Command lists are sequential, not atomic; a later failure leaves
+earlier completed edits in history. The host accepts only the current panel
+contract; rebuild obsolete panel modules. Read `docs/plugin-api.md` in the matching
+source/kit before using additional broker capabilities.
 
 ## Build and verify
 
@@ -64,8 +67,8 @@ requirements, checks performed, and any unverified behavior.
 
 ## Optional typed SDK authoring
 
-This existing project keeps its supported wire versions and needs no SDK migration.
-For a new API-2 project, `photocraft-plugin new AUTHORING_JSON FRESH_PROJECT` supplies
+This project implements the current API directly; the SDK is optional.
+For a new typed project, `photocraft-plugin new AUTHORING_JSON FRESH_PROJECT` supplies
 private API/SDK 0.1 sources, locks, licenses and a local guide. Edit `authoring.json`
 and the handler; generated manifests/bindings belong in Cargo `OUT_DIR`. Keep local
 SDK dependencies inside that project and retain its release hash index. Do not link

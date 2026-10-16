@@ -9,8 +9,9 @@ runtime service.
 
 New installations persist the validated embedded panel descriptor in the host's installation
 record and immutable ownership record. Startup reads those records instead of loading every
-WASM module or hashing every model. Legacy records without a cached descriptor retain their
-original loading adapter. Loose descriptor sidecars are not installation authority.
+WASM module or hashing every model. Older installation records without a cached descriptor
+may eagerly load a panel implementing the current API. Obsolete panel versions are rejected;
+there is no older panel API adapter. Loose descriptor sidecars are not installation authority.
 
 `extension.list` includes `lifecycle`: `disabled`, `idle`, `active`, or `failed`. Discovery and
 compatibility validation precede the idle state. The first panel action verifies only its
@@ -26,6 +27,12 @@ The registry accepts at most 4096 installed plugins. The thousand-descriptor reg
 checks dormant discovery and verifies that payloads are still unopened. This is a functional
 scale gate, not a claim that the later release-performance budgets have been certified on
 every operating system.
+
+Release checks and verified downloads run in background jobs and do not start plugin workers.
+They prepare a reviewed candidate; publication uses the existing managed store transaction.
+Optional GitHub metadata is owned by each independent plugin. See [updates](plugin-updates.md)
+for version, identity and review rules. A future [marketplace](plugin-marketplace.md) will use
+the same lifecycle rather than introduce a separate runtime or installer.
 
 ## Scheduling
 
@@ -80,18 +87,26 @@ a plugin creates a fresh activation and clears its deferred-activation quarantin
 
 ## Store transactions and recovery
 
-Current updates are explicit local-package replacements through the manager or
-`extension.install` with `replace:true`, using the same plugin ID. The embedded manifest
-records the plugin author's release version. Automatic repository/release checks are planned
-in the [distribution phase](plugin-platform-plan.md#74-distribution-and-publisher-trust).
+Updates use the same plugin ID through local package selection or explicit GitHub release
+checks and verified downloads. The manager reviews access before applying either source
+through `extension.install`. The embedded manifest records the plugin author's release
+version. See [plugin updates](plugin-updates.md) for source metadata and command details.
 
-A short operating-system store lock serializes publication. Separate per-generation reader
+An operating-system store lock serializes installation and publication. Separate per-generation reader
 leases protect immutable code while it is in use, including an idle persistent worker.
 Updating another plugin remains possible. Copying managed data or reusing a destination
 requires that generation to be idle. Removing or publishing the selected record revokes
 old work immediately; leased old bytes are retained until safe collection, with a warning
 when cleanup must be deferred. Lock files retain their filesystem identity and are never
 replaced as a way to break a lease.
+
+An idle processing engine can therefore temporarily block an update or reinstall until its
+declared idle timeout expires (1–300 seconds). Wait and retry, or disable the plugin, let its
+engine stop, then inspect the file or check/download its update again. Disabling changes the
+activation and invalidates the previous review. Command clients can use
+`extension.runtime {"id":"org.example.plugin","action":"retry"}` to retire an idle engine
+without changing activation, then retry once cleanup releases its lease. Runtime `reset`
+keeps the engine alive and does not release this lease.
 
 Updates prepare [managed storage](plugin-managed-storage.md) in a separate generation, validate
 the complete package, preserve a previous code/state record, and publish the active record

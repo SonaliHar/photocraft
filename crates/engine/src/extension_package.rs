@@ -1081,10 +1081,69 @@ fn cleanup_leased(root: &Path, record: &Record, lease: &GenerationLease) -> Resu
     Ok(())
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReviewGuard {
+    pub expected_store_hash: String,
+    pub expected_installed_hash: String,
+    pub expected_activation: u64,
+}
+
+/// Fingerprint the active pointer, including damaged metadata that an explicit repair may
+/// replace. The activation tombstone also detects remove/reinstall of identical bytes.
+fn review_guard_inner(root: &Path, id: &str) -> Result<ReviewGuard> {
+    let record = record_path(root, id)?;
+    let loose = checked_path(root, &format!("{id}.pcext"))?;
+    let hash = if record.exists() {
+        blake3::hash(&read_bounded(&record, MAX_RECORD)?).to_hex().to_string()
+    } else if loose.exists() {
+        blake3::hash(&read_bounded(&loose, photocraft_plugins::extension::MAX_MODULE_BYTES)?).to_hex().to_string()
+    } else {
+        String::new()
+    };
+    let canonical = root.canonicalize().map_err(error)?;
+    Ok(ReviewGuard {
+        expected_store_hash: blake3::hash(canonical.as_os_str().as_encoded_bytes()).to_hex().to_string(),
+        expected_installed_hash: hash,
+        expected_activation: activation(root, id)?,
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn review_guard(root: &Path, id: &str) -> Result<ReviewGuard> {
+    let _store = StoreGuard::read(root)?;
+    review_guard_inner(root, id)
+}
+
+pub(crate) fn review_guard_for(root: &Path, id: &str, expected: Option<&photocraft_plugins::extension::Manifest>) -> Result<ReviewGuard> {
+    let _store = StoreGuard::read(root)?;
+    // A different process may have published a newer descriptor since this session loaded it.
+    // Damaged metadata is still reviewable for explicit repair, fingerprinted as raw bytes.
+    if let Ok(Some(record)) = read_record(root, id)
+        && (expected.is_none() || record.descriptor.as_ref().zip(expected).is_some_and(|(actual, expected)| actual != expected))
+    {
+        return Err(error("The installed plugin changed in another PhotoCraft instance. Restart to reload plugins before updating."));
+    }
+    review_guard_inner(root, id)
+}
+
+pub(crate) fn install_checked(
+    root: &Path,
+    id: &str,
+    bytes: &[u8],
+    package: Option<&Package>,
+    replace: bool,
+    guard: Option<&ReviewGuard>,
+) -> Result<InstalledPayload> {
+    install_guarded_with_publication(root, id, bytes, package, replace, guard, |path, bytes| photocraft_format::atomic_write(path, bytes).map_err(error))
+}
+
+#[cfg(test)]
 pub(crate) fn install(root: &Path, id: &str, bytes: &[u8], package: Option<&Package>, replace: bool) -> Result<InstalledPayload> {
     install_with_publication(root, id, bytes, package, replace, |path, bytes| photocraft_format::atomic_write(path, bytes).map_err(error))
 }
 
+#[cfg(test)]
 fn install_with_publication(
     root: &Path,
     id: &str,
@@ -1093,7 +1152,24 @@ fn install_with_publication(
     replace: bool,
     publish: impl FnOnce(&Path, &[u8]) -> Result<()>,
 ) -> Result<InstalledPayload> {
+    install_guarded_with_publication(root, id, bytes, package, replace, None, publish)
+}
+
+fn install_guarded_with_publication(
+    root: &Path,
+    id: &str,
+    bytes: &[u8],
+    package: Option<&Package>,
+    replace: bool,
+    guard: Option<&ReviewGuard>,
+    publish: impl FnOnce(&Path, &[u8]) -> Result<()>,
+) -> Result<InstalledPayload> {
     let _store = StoreGuard::write(root)?;
+    if let Some(expected) = guard
+        && review_guard_inner(root, id)? != *expected
+    {
+        return Err(error("The installed plugin changed since review. Inspect it again."));
+    }
     activation(root, id)?.checked_add(1).ok_or_else(|| error("plugin activation limit reached"))?;
     let (previous, corrupt) = previous_record(root, id, replace)?;
     let older = rollback_record(root, id, previous.as_ref().map(|record| record.hash.as_str()))?;
@@ -1296,10 +1372,10 @@ pub(crate) fn remove_with_data(root: &Path, id: &str, purge_data: bool) -> Resul
     let record = read_record(root, id)?;
     let previous = rollback_record(root, id, record.as_ref().map(|record| record.hash.as_str()))?;
     revoke_activation(root, id)?;
-    // Remove a legacy fallback before the authoritative record, so it cannot reappear at restart.
-    let legacy = checked_path(root, &format!("{id}.pcext"))?;
-    if legacy.exists() {
-        std::fs::remove_file(legacy).map_err(error)?;
+    // Remove a loose module before its authoritative record so it cannot reappear at restart.
+    let loose_module = checked_path(root, &format!("{id}.pcext"))?;
+    if loose_module.exists() {
+        std::fs::remove_file(loose_module).map_err(error)?;
     }
     if let Some(record) = record {
         std::fs::remove_file(record_path(root, id)?).map_err(error)?;

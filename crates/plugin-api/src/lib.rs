@@ -1,4 +1,4 @@
-//! Standalone, data-only contracts for PhotoCraft plugin API 2.
+//! Standalone, data-only contracts for the PhotoCraft Plugin API.
 //!
 //! No editor, UI, image or plugin implementation is a dependency of this crate.
 //! Deserialization is followed by explicit validation at every trust boundary.

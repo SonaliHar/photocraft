@@ -15,9 +15,9 @@ When creating a derivative, change the embedded identity/authorship/version and
 rename inspector/subscription IDs into the new plugin namespace. Keep handler event
 names and matching subscription handlers consistent. Rebuild after manifest changes.
 
-## Read-only API-2 behavior
+## Read-only current API behavior
 
-This guest uses experimental panel API 2 and existing package format 2. Its required
+This guest uses experimental the PhotoCraft Plugin API and existing package format 2. Its required
 capabilities are `host.document.read`, `host.events`, and `host.ui.views`; it needs
 no document-edit capability or legacy command grants. Core WASM remains import-free,
 with `pce_*` exports and fresh instances using host-carried JSON state. Richer
@@ -58,12 +58,12 @@ desktop host, use scratch documents to verify updates after edits, selection, Un
 and document switching; closing/disabling/replacing the plugin must stop stale updates.
 Guest tests and screenshots alone do not establish subscription cleanup or host isolation.
 Restricted MCP denies installation; use an authorized local test route or report it
-untested. Deliver source/package paths, API-2 requirements, checks, and limitations.
+untested. Deliver source/package paths, current API requirements, checks, and limitations.
 
 ## Optional typed SDK authoring
 
 This existing project keeps its supported wire versions and needs no SDK migration.
-For a new API-2 project, `photocraft-plugin new AUTHORING_JSON FRESH_PROJECT` supplies
+For a new current API project, `photocraft-plugin new AUTHORING_JSON FRESH_PROJECT` supplies
 private API/SDK 0.1 sources, locks, licenses and a local guide. Edit `authoring.json`
 and the handler; generated manifests/bindings belong in Cargo `OUT_DIR`. Keep local
 SDK dependencies inside that project and retain its release hash index. Do not link

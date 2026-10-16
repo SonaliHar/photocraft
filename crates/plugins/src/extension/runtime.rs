@@ -63,14 +63,13 @@ impl Extension {
         }
         let mut live = Self::instantiate(&engine, &module)?;
         let version = live.func::<(), i32>("pce_api_version")?.call(&mut live.store, ()).map_err(trap)?;
-        if !matches!(version, 1 | 2) {
-            return Err(Error::Abi("unsupported extension API version (expected 1 or 2)".into()));
+        if version != photocraft_plugin_api::PANEL_API_VERSION as i32 {
+            return Err(Error::Abi(format!(
+                "unsupported panel API export version {version}; expected 2 for the current PhotoCraft Plugin API. Rebuild or update this plugin"
+            )));
         }
         let packed = live.func::<(), i64>("pce_manifest")?.call(&mut live.store, ()).map_err(trap)?;
         let manifest = Manifest::parse(live.read(packed, crate::manifest::MAX_MANIFEST_BYTES)?)?;
-        if manifest.api_version != version as u32 {
-            return Err(Error::Abi("extension export API version differs from its manifest".into()));
-        }
         live.func::<i32, i32>("pce_alloc")?;
         live.func::<(i32, i32), i64>("pce_handle")?;
         Ok(Self { manifest, runtime: Runtime::Ready { engine, module }, authority: None })
@@ -177,6 +176,6 @@ impl Extension {
         let dst = live.memory.data_mut(&mut live.store).get_mut(ptr..end).ok_or_else(|| Error::Abi("extension allocation outside memory".into()))?;
         dst.copy_from_slice(&bytes);
         let packed = live.func::<(i32, i32), i64>("pce_handle")?.call(&mut live.store, (ptr as i32, bytes.len() as i32)).map_err(trap)?;
-        Response::parse_for_version(live.read(packed, MAX_JSON_BYTES)?, self.manifest.api_version)
+        Response::parse(live.read(packed, MAX_JSON_BYTES)?)
     }
 }

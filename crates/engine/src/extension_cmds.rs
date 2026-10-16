@@ -40,6 +40,7 @@ pub struct Installed {
 
 #[derive(Default)]
 pub struct ExtensionHost {
+    pub(crate) updates: crate::extension_update_cmds::UpdateState,
     pub(crate) platform: crate::plugin_host::Platform,
     pub installed: BTreeMap<String, Installed>,
     /// Bounded image comparisons are dropped when their installation changes.
@@ -174,6 +175,7 @@ impl ExtensionHost {
         self.task_epochs.clear();
         self.installed.clear();
         self.platform = Default::default();
+        self.updates = Default::default();
         let records = crate::extension_package::record_ids(&folder)?;
         let record_ids = records.iter().cloned().collect::<std::collections::BTreeSet<_>>();
         if records.len() > 4096 {
@@ -359,7 +361,72 @@ fn module(p: &Value) -> Result<Input> {
     })
 }
 
+pub(crate) fn inspect_payload(p: &Value) -> Result<Value> {
+    let input = module(p)?;
+    Ok(json!({"manifest": input.extension.manifest, "hash": blake3::hash(&input.bytes).to_hex().as_str(),
+        "package": input.package_info(), "storage": input.storage(), "downloadBytes": input.bytes.len()}))
+}
+
+pub(crate) fn installation_guard(s: &Session, id: &str) -> Result<Value> {
+    let guard = json!({"expectedStoreHash":"", "expectedInstalledHash":"", "expectedActivation":0, "expectedSessionRevision":s.extensions.revision});
+    #[cfg(not(target_arch = "wasm32"))]
+    let guard = if let Some(folder) = &s.extensions.folder {
+        let mut guard = guard;
+        // Persistent installations have a per-plugin pointer and activation epoch. An
+        // unrelated plugin's installation must not invalidate this reviewed update.
+        guard["expectedSessionRevision"] = json!(0);
+        let expected = s.extensions.installed.get(id).map(|installed| &installed.extension.manifest);
+        let disk = serde_json::to_value(crate::extension_package::review_guard_for(folder, id, expected)?).map_err(error)?;
+        guard["expectedStoreHash"] = disk["expectedStoreHash"].clone();
+        guard["expectedInstalledHash"] = disk["expectedInstalledHash"].clone();
+        guard["expectedActivation"] = disk["expectedActivation"].clone();
+        guard
+    } else {
+        guard
+    };
+    #[cfg(target_arch = "wasm32")]
+    let _ = id;
+    Ok(guard)
+}
+
+fn disposition(installed: Option<&str>, target: &str) -> (&'static str, Option<&'static str>) {
+    let Some(installed) = installed else { return ("install", None) };
+    if installed == target {
+        return ("reinstall", Some("This version is already installed. Reinstall or repair it under Advanced."));
+    }
+    match (semver::Version::parse(installed.strip_prefix('v').unwrap_or(installed)), semver::Version::parse(target.strip_prefix('v').unwrap_or(target))) {
+        (Ok(old), Ok(new)) => match new.cmp_precedence(&old) {
+            std::cmp::Ordering::Greater => ("update", None),
+            std::cmp::Ordering::Equal => ("reinstall", Some("This version is already installed. Reinstall or repair it under Advanced.")),
+            std::cmp::Ordering::Less => ("downgrade", Some("This file is older than the installed plugin.")),
+        },
+        _ => ("replace", Some("These version labels cannot be compared. Replace only if you trust this file.")),
+    }
+}
+
+pub(crate) fn finish_inspection(s: &Session, mut result: Value) -> Result<Value> {
+    let manifest: Manifest = serde_json::from_value(result["manifest"].clone()).map_err(error)?;
+    let installed = s.extensions.installed.get(&manifest.id);
+    let mut installation = installation_guard(s, &manifest.id)?;
+    let (mut action, reason) = disposition(installed.map(|installed| installed.extension.manifest.version.as_str()), &manifest.version);
+    if installed.is_none() && installation["expectedInstalledHash"].as_str().is_some_and(|hash| !hash.is_empty()) {
+        action = "repair";
+    }
+    installation["action"] = json!(action);
+    installation["installedVersion"] = json!(installed.map(|installed| &installed.extension.manifest.version));
+    installation["targetVersion"] = json!(manifest.version);
+    installation["reason"] = json!(reason);
+    result["installation"] = installation;
+    Ok(result)
+}
+
+pub(crate) fn inspect(s: &Session, p: &Value) -> Result<Value> {
+    finish_inspection(s, inspect_payload(p)?)
+}
+
 fn install(s: &mut Session, p: &Value) -> Result<Value> {
+    #[cfg(not(target_arch = "wasm32"))]
+    s.extensions.updates.expire();
     let input = module(p)?;
     let storage = input.storage();
     let bytes = &input.bytes;
@@ -371,8 +438,31 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(error("extension changed since review; inspect it again"));
     }
     let id = extension.manifest.id.clone();
+    let action = disposition(s.extensions.installed.get(&id).map(|installed| installed.extension.manifest.version.as_str()), &extension.manifest.version).0;
+    let intent = p.get("intent").and_then(Value::as_str);
+    if let Some(intent) = intent {
+        if p.get("expectedHash").and_then(Value::as_str).is_none_or(|hash| hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit())) {
+            return Err(error("Inspect the plugin file before applying this action."));
+        }
+        if !["install", "update", "repair", "reinstall", "downgrade", "replace"].contains(&intent) {
+            return Err(error("Unknown plugin installation action"));
+        }
+        if intent != action && !(intent == "repair" && ["install", "reinstall", "replace"].contains(&action)) {
+            return Err(error("The installation action changed. Inspect the plugin again."));
+        }
+        if p.get("expectedSessionRevision") != installation_guard(s, &id)?.get("expectedSessionRevision") {
+            return Err(error("The plugin selection changed since review. Inspect it again."));
+        }
+        if p.get("expectedStoreHash").and_then(Value::as_str).is_none()
+            || p.get("expectedInstalledHash").and_then(Value::as_str).is_none()
+            || p.get("expectedActivation").and_then(Value::as_u64).is_none()
+        {
+            return Err(error("Inspect the installed plugin before applying this action."));
+        }
+    }
     let replacing = s.extensions.installed.contains_key(&id);
-    if replacing && !p.get("replace").and_then(Value::as_bool).unwrap_or(false) {
+    let replace = p.get("replace").and_then(Value::as_bool) == Some(true) || intent.is_some_and(|intent| intent != "install");
+    if replacing && !replace {
         #[cfg(not(target_arch = "wasm32"))]
         let repair = s.extensions.folder.as_deref().map(|folder| crate::extension_package::needs_repair(folder, &id)).transpose()?.unwrap_or(false);
         #[cfg(target_arch = "wasm32")]
@@ -396,8 +486,12 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
     }
     #[cfg(not(target_arch = "wasm32"))]
     let (native, enabled) = if let Some(folder) = &s.extensions.folder {
-        let replace = p.get("replace").and_then(Value::as_bool) == Some(true);
-        let installed = crate::extension_package::install(folder, &id, bytes, input.package.as_ref(), replace)?;
+        let guard = if p.get("expectedInstalledHash").is_some() || p.get("expectedActivation").is_some() {
+            Some(serde_json::from_value::<crate::extension_package::ReviewGuard>(p.clone()).map_err(error)?)
+        } else {
+            None
+        };
+        let installed = crate::extension_package::install_checked(folder, &id, bytes, input.package.as_ref(), replace, guard.as_ref())?;
         // A repaired installation is usable now; keep other startup failures and any new warning.
         let startup_prefix = format!("{id}: ");
         s.extensions.load_errors.retain(|message| !message.starts_with(&startup_prefix));
@@ -408,7 +502,7 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         (None, enabled)
     };
-    let result = json!({"manifest": extension.manifest, "enabled": enabled, "replaced": replacing, "storage": storage});
+    let result = json!({"manifest": extension.manifest, "enabled": enabled, "replaced": replacing, "storage": storage, "action":intent.unwrap_or(action)});
     s.forget_plugin_preview(&id);
     crate::plugin_host::revoke(s, &id);
     let extension = input.extension;
@@ -418,6 +512,8 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         extension
     };
+    #[cfg(not(target_arch = "wasm32"))]
+    s.extensions.updates.invalidate(&id);
     s.extensions.installed.insert(
         id,
         Installed {
@@ -528,6 +624,8 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     }
     crate::plugin_host::revoke(s, id);
     s.extensions.installed.remove(id);
+    #[cfg(not(target_arch = "wasm32"))]
+    s.extensions.updates.invalidate(id);
     s.extensions.task_epochs.remove(id);
     s.forget_plugin_preview(id);
     s.extensions.revision = s.extensions.revision.wrapping_add(1);
@@ -555,6 +653,7 @@ fn rollback(s: &mut Session, p: &Value) -> Result<Value> {
         s.extensions.task_epochs.remove(id);
         s.forget_plugin_preview(id);
         let enabled = !crate::extension_package::checked_path(&folder, &format!("{id}.disabled"))?.exists();
+        s.extensions.updates.invalidate(id);
         s.extensions.installed.insert(
             id.into(),
             Installed {
@@ -643,15 +742,11 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec("extension.commands", "Extension Commands", "{}", |s, _| {
             Ok(
-                json!({"commands": COMMANDS.iter().filter(|id| crate::commands::find(id).is_some()).collect::<Vec<_>>(), "apiVersion": 1, "maxJsonBytes": MAX_JSON_BYTES,
+                json!({"commands": COMMANDS.iter().filter(|id| crate::commands::find(id).is_some()).collect::<Vec<_>>(), "apiVersion": photocraft_plugin_api::PANEL_API_VERSION, "maxJsonBytes": MAX_JSON_BYTES,
                     "maxInstalledPlugins":4096, "workerProtocols":[1,2], "restrictedNative":false, "scheduler":s.plugin_scheduler.status()}),
             )
         }),
-        spec("extension.inspect", "Inspect Extension", r#"{"path":text,"data":text}"#, |_, p| {
-            let input = module(p)?;
-            Ok(json!({"manifest": input.extension.manifest, "hash": blake3::hash(&input.bytes).to_hex().as_str(),
-                "package": input.package_info(), "storage": input.storage(), "downloadBytes": input.bytes.len()}))
-        }),
+        spec("extension.inspect", "Inspect Extension", r#"{"path":text,"data":text}"#, |s, p| inspect(s, p)),
         spec("extension.install", "Install Extension", r#"{"path":text,"data":text,"replace":bool=false,"allowNative":bool=false}"#, install),
         spec("extension.list", "List Extensions", "{}", |s, _| Ok(s.extensions.list())),
         spec("extension.invoke", "Run Extension Action", r#"{"id":text,"event":text,"values":json}"#, invoke),

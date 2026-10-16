@@ -7,7 +7,7 @@ optional developer tools, not a runtime dependency of your plugin.
 
 For the [guest SDK](plugin-sdk.md), `scripts/plugins/test-platform-examples.py` generates a
 neutral project outside the editor, audits its private dependencies, builds release WASM,
-packages it, then invokes a real broker edit and Undo. It also retains the existing API-2
+packages it, then invokes a real broker edit and Undo. It also retains the existing current API
 starter checks. Use `--sdk-only` for the generated guest and `--export-parent` outside the
 checkout when your normal temporary directory is inside it. No generated project is committed.
 
@@ -251,7 +251,7 @@ option, not part of the plugin's own runtime and not required for installation/u
 
 ## CI and release gate
 
-The host's regular workspace tests exercise the frozen panel-1/filter-1 compatibility corpus
+The host's regular workspace tests exercise the pinned current-API panel and unchanged filter-1 compatibility corpus
 and the capability/authority validators. Its CI also checks generated schema snapshots and
 builds the Layer Organizer and Document Inspector examples in fresh directories outside the
 checkout, then explicitly runs their four actual-package integration tests:
@@ -264,7 +264,7 @@ python scripts/plugins/test-platform-examples.py
 The Python helper uses the current Python executable for each exported project's build,
 omits existing build outputs, and points the host at only those newly built packages. Missing
 packages or failed host tests fail the run. It requires the `wasm32-unknown-unknown` Rust target;
-pass `--offline` when dependencies are already cached. Panel API 2 is the current pre-release contract; these
+pass `--offline` when dependencies are already cached. PhotoCraft Plugin API is the current pre-release contract; these
 tests do not establish a support window for future host releases.
 For a local host built without optional HEIF support, pass `--host-features=`; CI retains the
 default `heif` selection.

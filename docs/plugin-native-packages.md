@@ -91,7 +91,8 @@ an external JSON file cannot replace its `pce_manifest` export.
 
 The package schema version, panel API version, filter ABI version, native job protocol version
 and author's release version are independent. General packages use `packageVersion: 2` while
-panels can select API 1 or API 2, filters retain ABI 1, and native workers retain job protocol 1
+panels use the PhotoCraft Plugin API (internal discriminator `2`), filters retain ABI 1,
+and native workers retain job protocol 1
 unless they explicitly declare [worker protocol 2](plugin-worker-v2.md) in the recorded
 `runtime/worker-v2.json` member. Existing workers need no descriptor or rebuild. An optional
 `runtime/managed-v1.json` member declares a bounded host-managed state migration; see
@@ -186,9 +187,13 @@ archive after packaging is complete.
 
 ## Review, native-code grant and installation
 
-The desktop manager's **Browse…**, file-drop and **Review plugin** flows call `extension.inspect`.
+The desktop manager's file picker, file-drop and typed-path inspection call `extension.inspect`.
 Its result contains `manifest`, the whole-input BLAKE3 `hash`, parsed `package` metadata,
-the selected file's `downloadBytes`, and `storage: {installedBytes, modelBytes}`. Installed
+the selected file's `downloadBytes`, `storage: {installedBytes, modelBytes}` and `installation`
+review metadata. The latter includes the proposed action and expected installed hash,
+activation and session revision. Pass those expected values with an explicit `intent`
+(`install`, `update`, `reinstall`, `repair`, `downgrade` or deliberate `replace`) to bind
+confirmation to the reviewed installation. Installed
 bytes are the sum of the validated, uncompressed payload files. Model bytes are the subset
 under `runtime/models/`, including model configuration files; they are already included in
 the installed total. Manage Plugins shows these sizes during review and on installed entries.
@@ -199,14 +204,15 @@ zero model bytes. Model files downloaded separately outside the managed payload 
 When model bytes are zero, the manager hides the Models text and still shows Installed size.
 The manager shows the plugin identity, requested commands and the native-code disclosure. When
 the user installs it, the manager passes that hash as `expectedHash`, `allowNative: true`, and
-the selected replacement flag to `extension.install`.
+the reviewed installation intent to `extension.install`. The manager offers **Update** for
+a newer release of the same identity and keeps reinstall/repair under maintenance actions.
 
 Trusted engine callers can use the same two-step flow:
 
 | Command | Inputs relevant to native packages | Result or rule |
 |---|---|---|
 | `extension.inspect` | `path` to the final local archive | Validates package and guest; returns manifest, BLAKE3 hash and package metadata |
-| `extension.install` | `path`, `allowNative: true`, returned `expectedHash`; `replace: true` for an installed id | Validates again, checks reviewed bytes and installs into the attached store |
+| `extension.install` | `path`, `allowNative: true`, returned `expectedHash` and reviewed installation intent | Validates again, checks reviewed bytes/revision and installs into the attached store |
 | `extension.list` | `{}` | Installed manifests, enabled/lifecycle state, package metadata and startup/cleanup errors |
 | `extension.enable` | `id`, boolean `enabled` | Persists enabled state; disabling invalidates retained comparisons |
 | `extension.remove` | `id`, optional `purgeData` (default false) | Removes the active installation; managed data is preserved unless explicitly requested |
@@ -292,9 +298,10 @@ ownership/path checks. Do not modify installed assets in place. Publish a rebuil
 replace the installation instead. After successful installation, PhotoCraft uses its managed
 copy; the original download can be moved or deleted.
 
-An update is identified by the embedded guest id, not by comparing display-version strings.
-An existing registered id requires explicit `replace: true`; there is no automatic semantic
-version ordering or downgrade prohibition. Replacement preserves enabled/disabled state,
+An update retains the embedded guest ID and uses a newer semantic release version.
+Same-version reinstall/repair and older-version installation require explicit maintenance
+intent. Optional [GitHub release updates](plugin-updates.md) prepare a verified package for
+the same review and installation transaction. Replacement preserves enabled/disabled state,
 resets the guest's JSON state, and invalidates retained previews. Changing the id creates a
 different plugin. Raw guests and native packages can replace one another under the same id,
 with native consent required when the replacement contains native code.

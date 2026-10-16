@@ -1,7 +1,7 @@
 //! Versioned plugin capabilities. Identity is supplied by the host, never decoded from a guest.
 mod broker;
+mod command_effects;
 mod events;
-mod legacy;
 
 use std::sync::{Arc, Weak};
 
@@ -33,8 +33,8 @@ pub fn host_api() -> HostApi {
 }
 
 pub(crate) fn compatibility(manifest: &Manifest) -> Result<Value> {
-    if manifest.api_version == 1 {
-        return Ok(json!({"panelApi":1,"legacy":true}));
+    if manifest.api_version != photocraft_plugin_api::PANEL_API_VERSION {
+        return Err(failure(ErrorCode::UnsupportedVersion, "Unsupported panel version; rebuild the plugin for the current PhotoCraft Plugin API"));
     }
     for contributed in &manifest.contributes.commands {
         let root = contributed.id.split('.').next().unwrap_or_default();
@@ -158,7 +158,7 @@ pub(crate) fn event_request(s: &Session, extension: &Extension, event: &str, val
         "event":event,"values":values,"state":state,"document":document,"responses":responses})
 }
 
-/// Runs a user-invoked panel action. API-1 requests keep their original JSON shape and semantics.
+/// Runs a user-invoked panel action through the current event and capability contract.
 pub(crate) fn invoke(s: &mut Session, id: &str, event: &str, values: &Value) -> Result<Value> {
     let identity = principal(s, id)?;
     authorize(s, &identity, "extension.invoke", &json!({"id":id,"event":event,"values":values}))?;
@@ -170,9 +170,6 @@ pub(crate) fn invoke(s: &mut Session, id: &str, event: &str, values: &Value) -> 
     }
     let values = Value::Object(extension.manifest.values(values).map_err(|e| EngineError::Other(e.to_string()))?);
     let state = s.extensions.installed.get(id).map(|installed| installed.state.clone()).unwrap_or(Value::Null);
-    if extension.manifest.api_version == 1 {
-        return legacy::invoke(s, identity, extension, event, values, state);
-    }
     let mut request = event_request(s, &extension, event, values.clone(), state, json!([]));
     for _ in 0..4 {
         let response = extension.handle(&request).map_err(|e| EngineError::Other(e.to_string()))?;
@@ -182,10 +179,10 @@ pub(crate) fn invoke(s: &mut Session, id: &str, event: &str, values: &Value) -> 
         }
         if !response.commands.is_empty() {
             if response.view.is_some() {
-                return Err(failure(ErrorCode::UnsupportedOperation, "A view update cannot be combined with legacy commands"));
+                return Err(failure(ErrorCode::UnsupportedOperation, "A view update cannot be combined with command effects"));
             }
             require(s, &identity, KnownCapability::CommandsInvoke)?;
-            return legacy::apply(s, identity, extension, response);
+            return command_effects::apply(s, identity, extension, response);
         }
         #[cfg(not(target_arch = "wasm32"))]
         let _admission = s.extensions.folder.as_deref().map(crate::extension_package::AdmissionGuard::store).transpose()?;
@@ -318,7 +315,7 @@ pub fn specs() -> Vec<CommandSpec> {
     let spec = |id, label, params, run| CommandSpec { id, label, params, run, menu: &[], shortcut: None, enabled: crate::commands::always, journal: false };
     vec![
         spec("extension.capabilities", "Plugin Capabilities", "{}", |s, _| {
-            Ok(json!({"host":host_api(),"panelApis":[1,2],"packageFormats":[2],
+            Ok(json!({"host":host_api(),"panelApis":[photocraft_plugin_api::PANEL_API_VERSION],"packageFormats":[2],
             "limits":{"queryRounds":4,"requests":8,"layerPage":128,"editBatch":128,"handles":4096,"eventWorkers":4,"inspectorsPerPlugin":1,
                 "installedPlugins":4096,"retainedPreviews":16,"previewBytes":512_u64<<20},
             "features":{"package3":false,"worker2":!cfg!(target_arch="wasm32"),"restrictedNative":false,"lazyDescriptors":!cfg!(target_arch="wasm32"),"managedStorage":!cfg!(target_arch="wasm32")},

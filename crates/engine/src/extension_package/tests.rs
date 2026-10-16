@@ -11,6 +11,38 @@ fn storage_variant(id: &str, name: u8) -> Vec<u8> {
 }
 
 #[test]
+fn reviewed_publication_rejects_cross_process_changes_and_identical_reinstallation() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = root(temporary.path()).unwrap();
+    let id = "org.example.reviewed-update";
+    let a = storage_variant(id, b'a');
+    let b = storage_variant(id, b'b');
+    let absent = review_guard(&root, id).unwrap();
+    install_checked(&root, id, &a, None, false, Some(&absent)).unwrap();
+    let reviewed = review_guard(&root, id).unwrap();
+    install(&root, id, &a, None, true).unwrap();
+    assert!(install_checked(&root, id, &b, None, true, Some(&reviewed)).err().unwrap().to_string().contains("changed since review"));
+    assert_eq!(load(&root, id).unwrap().module, a);
+    let other = tempfile::tempdir().unwrap();
+    let other_root = super::root(other.path()).unwrap();
+    install(&other_root, id, &a, None, false).unwrap();
+    install(&other_root, id, &a, None, true).unwrap();
+    let current = review_guard(&root, id).unwrap();
+    let other_guard = review_guard(&other_root, id).unwrap();
+    assert_eq!(current.expected_installed_hash, other_guard.expected_installed_hash);
+    assert_eq!(current.expected_activation, other_guard.expected_activation);
+    assert_ne!(current.expected_store_hash, other_guard.expected_store_hash);
+    assert!(install_checked(&other_root, id, &b, None, true, Some(&current)).is_err(), "review is bound to its store");
+    let reviewed = review_guard(&root, id).unwrap();
+    install(&root, id, &b, None, true).unwrap();
+    assert!(install_checked(&root, id, &a, None, true, Some(&reviewed)).is_err());
+    let reviewed = review_guard(&root, id).unwrap();
+    remove(&root, id).unwrap();
+    assert!(install_checked(&root, id, &a, None, true, Some(&reviewed)).is_err());
+    assert!(!record_path(&root, id).unwrap().exists());
+}
+
+#[test]
 fn failed_active_publication_preserves_the_previous_rollback_and_managed_data() {
     let temporary = tempfile::tempdir().unwrap();
     let root = root(temporary.path()).unwrap();
@@ -445,7 +477,8 @@ fn corrupt_activation_metadata_never_triggers_owned_payload_repair() {
 
 fn guest_for(id: &str, service: &str) -> Vec<u8> {
     let manifest = serde_json::to_string(&json!({
-        "apiVersion":1,"id":id,"name":"Package test","version":"1","permissions":{
+        "apiVersion":2,"id":id,"name":"Package test","version":"1",
+        "capabilities":{"required":[{"id":"host.commands.invoke","minVersion":1}]},"permissions":{
             "commands":if service.is_empty() {vec![]} else {vec![service]}},
         "panel":{"buttons":[{"id":"run","label":"Run"}]}
     }))
@@ -456,7 +489,7 @@ fn guest_for(id: &str, service: &str) -> Vec<u8> {
         (memory (export "memory") 1)
         (data (i32.const 16) "{escaped}")
         (data (i32.const 2048) "{{}}")
-        (func (export "pce_api_version") (result i32) i32.const 1)
+        (func (export "pce_api_version") (result i32) i32.const 2)
         (func (export "pce_manifest") (result i64) i64.const {})
         (func (export "pce_alloc") (param i32) (result i32) i32.const 4096)
         (func (export "pce_handle") (param i32 i32) (result i64) i64.const {}))"#,
