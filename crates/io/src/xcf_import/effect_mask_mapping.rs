@@ -37,7 +37,7 @@ pub(super) fn map<P: MappingPlane>(
     map_inner(drawable,owner,first_filter,next_mask,state,budget,ctl,canvas_group_mask,finite_raster_mask,value_precision_mask,color_balance_depth_mask,exposure_geometry_mask,point_replace_canvas,observational_box_canvas,None)
 }
 /// Private sealed-source entry; callers must already own exact nonempty
-/// MaskedExposure source admission. The actual immutable mask is scanned here.
+/// Selected masked singleton source admission. The actual immutable mask is scanned here.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn map_masked_source<P:MappingPlane>(drawable:&mut Drawable<P>,owner:photocraft_doc::item_identity::ItemRef,first_filter:u64,next_mask:&mut u64,state:&mut photocraft_doc::XcfState,budget:&mut Budget,ctl:&Interrupt<'_>,canvas:Rect,source_budget:&photocraft_xcf::Budget<'_>)->Result<Vec<Option<photocraft_doc::item_identity::ItemRef>>,IoError>{
     if drawable.effects.len()!=1{return Err(unsupported(drawable,"masked source singleton mapper"));}

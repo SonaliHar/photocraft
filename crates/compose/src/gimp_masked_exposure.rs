@@ -81,6 +81,9 @@ pub(crate) struct PreparedMix {
     working: WorkingSpace,
 }
 impl PreparedMix {
+    /// Borrow this actual owned fixed analytic Space; callers pay leaf work and
+    /// keep the owning Mix and its real fee live through leaf plus mask mixing.
+    pub(crate) fn linear_space(&self) -> &WorkingSpace { &self.working }
     pub(crate) fn prepare<B: PlanBudget>(outer: u64, i: &Interrupt<'_>, b: &mut B) -> Result<(Self, B::Lease), E> {
         charge(b, i, 512)?;
         let basis = photocraft_cms::Builtin::Srgb.profile();

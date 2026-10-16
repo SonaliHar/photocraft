@@ -375,7 +375,7 @@ impl<'a> Request<'a> {
                 ctl.check(1)?;
                 if !state.history.current()?.shares_state(&state.doc) { return Err(BackingError::Integrity.into()); }
             }
-            EditStorage::ImplicitPoint => {owner.validate_readonly_point_storage(ctl)?;if (semi_flatten_edit_candidate(owner) || crate::xcf_filter_cmds::hue_chroma_owner(owner) || crate::xcf_filter_cmds::vibrance_owner(owner) || crate::xcf_filter_cmds::loaded_exposure_point_owner(owner) || crate::xcf_filter_cmds::masked_exposure_point_owner(owner)) && !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into());}},
+            EditStorage::ImplicitPoint => {owner.validate_readonly_point_storage(ctl)?;if (semi_flatten_edit_candidate(owner) || crate::xcf_filter_cmds::hue_chroma_owner(owner) || crate::xcf_filter_cmds::vibrance_owner(owner) || crate::xcf_filter_cmds::loaded_exposure_point_owner(owner) || crate::xcf_filter_cmds::masked_exposure_point_owner(owner) || crate::xcf_filter_cmds::masked_scalar_point_owner(owner)) && !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into());}},
             EditStorage::AssignedBox => {
                 owner.validate_readonly_assigned_point_storage(ctl)?;
                 ctl.check(1)?;
@@ -410,7 +410,7 @@ impl<'a> Request<'a> {
             }
             for candidate in &stack.nodes {
                 ctl.check(8192)?;
-                if !(semi_flatten_edit_candidate(owner) || crate::xcf_filter_cmds::hue_chroma_owner(owner) || crate::xcf_filter_cmds::vibrance_owner(owner) || crate::xcf_filter_cmds::loaded_exposure_point_owner(owner) || crate::xcf_filter_cmds::masked_exposure_point_owner(owner)) && (candidate.operation.schema_epoch != STACK_EDITS_EPOCH
+                if !(semi_flatten_edit_candidate(owner) || crate::xcf_filter_cmds::hue_chroma_owner(owner) || crate::xcf_filter_cmds::vibrance_owner(owner) || crate::xcf_filter_cmds::loaded_exposure_point_owner(owner) || crate::xcf_filter_cmds::masked_exposure_point_owner(owner) || self.id=="xcf.filter.remove" && crate::xcf_filter_cmds::masked_scalar_point_owner(owner)) && (candidate.operation.schema_epoch != STACK_EDITS_EPOCH
                     || candidate.composition.as_ref().is_none_or(|p| p.compatibility_epoch != STACK_EDITS_EPOCH))
                 {
                     return Err(BackingError::Unsupported.into());
@@ -470,7 +470,21 @@ impl<'a> Request<'a> {
             .and_then(|v| v.checked_add(std::mem::size_of::<Prepared<'_>>() + 512))
             .ok_or(BackingError::Length)?;
         lease.reconcile_capacity(actual as u64).map_err(|_| BackingError::Allocation)?;
+        // Existing512 inline allowance already pays the real Point array. Only
+        // these new selected families admit an ABI-computed needed deficit;
+        // retained Request Fields[10] are already in sizeof(Prepared).
+        let _masked_patch_fee = if crate::xcf_filter_cmds::masked_scalar_point_owner(owner) {
+            let required=std::mem::size_of::<[PointArgumentPatch<'_>;10]>().checked_add(std::mem::size_of::<Option<photocraft_raster::backing::quota::QuotaLease>>()).and_then(|n|n.checked_add(128)).ok_or(BackingError::Length)?;
+            let extra=required.saturating_sub(512);
+            if extra==0{None}else{Some(owner.quota().reserve(QuotaKind::Index,u64::try_from(extra).map_err(|_|BackingError::Length)?).map_err(|_|BackingError::Quota)?)}
+        }else{None};
         validate_recipe(owner, ctl)?;
+        let masked_kind=if crate::xcf_filter_cmds::masked_scalar_point_owner(owner){crate::xcf_filter_cmds::masked_scalar_point_node_kind(node)}else{None};
+        if let Some(kind)=masked_kind{
+            use photocraft_compose::MaskedScalarKind as K;
+            let limit=match kind{K::InvertLinear|K::InvertGamma=>0,K::BrightnessContrast=>2,K::GeglLevels=>4};
+            if self.fields.count>limit || self.structured.is_some(){return Err(BackingError::Unsupported.into());}
+        }
         // Fixed stack storage retains the original argument names and enum domains.
         // No parser proxy or per-operation arithmetic is reconstructed here.
         let staged = if matches!(self.storage,EditStorage::AssignedBox) {
@@ -521,6 +535,17 @@ impl<'a> Request<'a> {
                     let PointArgumentValue::Float32Bits(bits)=argument.value else{return Err(BackingError::Unsupported.into())};
                     let value=f64::from(f32::from_bits(bits));
                     if !value.is_finite() || !matches!(argument.name,"exposure"|"black-level") || argument.name=="black-level" && !(-0.1..=0.1).contains(&value){return Err(BackingError::Unsupported.into())}
+                }
+                if let Some(kind)=masked_kind {
+                    use photocraft_compose::MaskedScalarKind as K;
+                    let PointArgumentValue::Float32Bits(bits)=argument.value else{return Err(BackingError::Unsupported.into())};
+                    let value=f64::from(f32::from_bits(bits));
+                    let valid=argument.domain.is_none()&&value.is_finite()&&match kind{
+                        K::InvertLinear|K::InvertGamma=>false,
+                        K::BrightnessContrast=>match argument.name{"brightness"=>(-3.0..=3.0).contains(&value),"contrast"=>(-5.0..=5.0).contains(&value),_=>false},
+                        K::GeglLevels=>matches!(argument.name,"in-low"|"in-high"|"out-low"|"out-high"),
+                    };
+                    if !valid{return Err(BackingError::Unsupported.into());}
                 }
                 let stored = node.arguments.iter().find(|v| v.name == argument.name).ok_or(BackingError::Unsupported)?;
                 use photocraft_doc::xcf_filters::{ExactNumber, FilterValue};
@@ -791,3 +816,7 @@ mod residual_geometry_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="exposure_masked_tests.rs"]
 mod exposure_masked_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="masked_scalar_tests.rs"]
+mod masked_scalar_tests;

@@ -1831,3 +1831,74 @@ are separate from deferred numerical/native GUI/visual/corpus/performance and
 parent/final acceptance. SC002 matched display<=2/255 and exact source/native/
 ICC/structure criteria remain. Other masked families/topologies and stock work
 continue; this checkpoint does not complete full XCF support.
+
+
+Nonempty singleton masks now have four additional ordinary Point identities:
+`xcf22-gegl-invert-linear-masked-wide-v1`,
+`xcf22-gegl-invert-gamma-masked-wide-v1`,
+`xcf22-gegl-brightness-contrast-masked-wide-v1` and
+`xcf22-gegl-levels-masked-wide-v1`. Each operation is exact version0:0 with
+zero/zero/two/four F32 parameters respectively. Brightness/Contrast retains
+stored contrast-before-brightness order; Levels retains its four named words.
+Scalar range/finite/difference checks stay authoritative. These identities
+separate the new roles from old zero-mask, PointStack, mixed and Exposure paths.
+
+Linear Invert, Brightness/Contrast and Levels borrow the actual paid Linear
+Space owned by the unchanged masked Exposure mix. Gamma uses a declared known
+Profile RGB same-space copy before Invert. Every enabled sample evaluates the
+complete old prepared scalar and full mask mix, including local0/1 and neutral
+parameters; the mixed affine native-identity shortcut is not used. Lower-kernel
+identity behavior stays intact inside the actual working conversions. The mix
+still computes Linear premultiplied differences, exact-zero-alpha hidden RGB
+fallback, nonlinear encoding and checked RGBA Float output without clamp,
+epsilon or alpha restoration. Disabled input receives full retained recipe,
+profile/native/default/mask/input/coverage proof before wide pass-through.
+
+Actual ordinary Point one-root/one-node association, visible/full-opacity Source,
+filteropacity1, Replace62/present opaque3/clip0/region0/noaux, RGBNL650/750 unit
+native/originalNone/current ImplicitSrgb, positive-origin bounds and census caps
+remain. Selected mask data stays raw and nonnegative finite with checked Float
+coverage[0,1]; raw numeric nonzero is determined before conversion. The existing
+F64 rounding preimage of1 and tiny positive values rounding0 remain declared
+policy. Physical mask payload is capped at16MiB before scans, with byte-zero
+default/padding and independently paid96/sample proof. Larger geometry and
+fractional/preimage cases beyond the observed8x6 all/half controls are explicit
+compatibility extensions within these caps. Source HDR/Gray/assigned profiles,
+offsets, nonunit filter opacity, mask painting and mixed masked topology remain
+separate work. Old empty/signedzero-only sentinels keep their original routing.
+
+The real1024 mask-mix runtime allowance is held before pixel/mask decoding and
+through the independent512 active leaf and full mix. Numeric work3584 for the
+Linear/affine leaves or2816 Gamma, plus context256, gives3840/3072 active;
+disabled384 excludes unchanged outer provider/Normal work. Actual holder,
+profile/Space/header/mask-copy preparation remains independently paid. The
+ordinary Point mapper prepays actual prospective2N argument/numeric capacity,
+headers and names before fill. Every phase uses the original quota/control.
+
+Point already has a real ten-slot patch array and its existing wire grammar.
+These targets add strict zero/zero/two/four-field qualification and complete
+merged tuple validation, preserving explicit empty-arguments plus activation
+and literal unit-opacity no-ops. Any actual array/header deficit against the
+existing512 envelope is paid only for the selected new families, before copy
+and through STAGED validation. Full OLD/history/lock/no-op/MAX/source/reply/
+journal/publication fences remain. Captured Invert/BC/Levels controls preserve
+passive words/order, combine intentional parameter/activation changes, and
+provide no new opacity or Move grant. Existing remove/undo remains available.
+
+The generic closed singleton mask proof and native11 Point coverage intent are
+reused without a Doc/format field/version change. The portable writer pays
+each new exact epoch comparison and proves complete actual CURRENT before
+coverage serialization. Native .pcraft save/reopen preserves original masks,
+native raster and metadata; this is not XCF export. Existing exact Point marker
+routing, source protection and intentional empty continuation stay intact.
+
+One guarded GIMP author run recorded24 originals and48 live/same-process captures
+at both depths. Native source words stayed exact; raw white F64 coverage above1
+was retained. Every all-white case changed six alpha negative-zero words to
+positive zero, and local zero coverage changed52 RGB words from native at each
+depth. This supports full endpoint evaluation, not exact numerical/FMA/large-
+geometry or independent reload qualification. Sixteen genuine nonempty source
+bindings are separate from eight old-route none-mask baselines. Sixteen new
+ignored contracts remain UNRUN and uncompiled. Desktop/WebAssembly production
+checks are recorded separately; numerical/native GUI/visual/corpus/performance/
+parent and final acceptance stay deferred. Full XCF support remains unfinished.

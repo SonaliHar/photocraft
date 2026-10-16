@@ -31,7 +31,21 @@ fn claims(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<bool, Format
                     return Err(backing(BackingError::Length));
                 }
                 c.check(text.len() as u64 + 1).map_err(backing)?;
-                found |= text == photocraft_compose::EXPOSURE_MASKED_EPOCH;
+                if text == photocraft_compose::EXPOSURE_MASKED_EPOCH {
+                    found = true;
+                } else {
+                    // Preserve the old Exposure comparison charge; each new
+                    // candidate comparison has its own bounded original work.
+                    let extra = (text.len() as u64).checked_add(1).and_then(|n| n.checked_mul(4)).ok_or_else(|| backing(BackingError::Length))?;
+                    c.check(extra).map_err(backing)?;
+                    found |= matches!(
+                        text,
+                        photocraft_compose::INVERT_LINEAR_MASKED_EPOCH
+                            | photocraft_compose::INVERT_GAMMA_MASKED_EPOCH
+                            | photocraft_compose::BRIGHTNESS_CONTRAST_MASKED_EPOCH
+                            | photocraft_compose::GEGL_LEVELS_MASKED_EPOCH
+                    );
+                }
             }
         }
     }

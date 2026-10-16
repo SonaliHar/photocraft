@@ -112,6 +112,8 @@ mod gimp_exposure;
 mod gimp_mixed_filter_opacity;
 pub use gimp_exposure::{EPOCH as EXPOSURE_MIXED_EPOCH, Parameters as ExposureParameters, PreparedExposure, parameters as exposure_mixed_parameters};
 pub use gimp_exposure::{LOADED_POINT_EPOCH as EXPOSURE_LOADED_POINT_EPOCH, LOADED_MIXED_EPOCH as EXPOSURE_LOADED_MIXED_EPOCH, LoadedParameters as LoadedExposureParameters, loaded_parameters as loaded_exposure_parameters};
+mod gimp_masked_scalar;
+pub use gimp_masked_scalar::{INVERT_LINEAR_EPOCH as INVERT_LINEAR_MASKED_EPOCH, INVERT_GAMMA_EPOCH as INVERT_GAMMA_MASKED_EPOCH, BRIGHTNESS_CONTRAST_EPOCH as BRIGHTNESS_CONTRAST_MASKED_EPOCH, GEGL_LEVELS_EPOCH as GEGL_LEVELS_MASKED_EPOCH, Kind as MaskedScalarKind, Parameters as MaskedScalarParameters, parameters as masked_scalar_parameters};
 mod gimp_masked_exposure;
 pub use gimp_masked_exposure::{EPOCH as EXPOSURE_MASKED_EPOCH, parameters as masked_exposure_parameters};
 mod gimp_stock_rgb;

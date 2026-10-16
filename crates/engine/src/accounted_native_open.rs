@@ -744,3 +744,7 @@ mod stock_rgb_native_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "accounted_hsl_native_tests.rs"]
 mod hsl_native_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "accounted_masked_scalar_native_tests.rs"]
+mod masked_scalar_native_tests;

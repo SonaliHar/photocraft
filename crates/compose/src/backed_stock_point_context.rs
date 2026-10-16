@@ -37,6 +37,8 @@ mod owned_vibrance;
 mod loaded_exposure;
 #[path = "backed_stock_point_masked_exposure.rs"]
 mod masked_exposure;
+#[path = "backed_stock_point_masked_scalar.rs"]
+mod masked_scalar;
 
 #[derive(Clone, Copy)]
 enum Recipe {
@@ -533,6 +535,7 @@ enum StockPointProgram {
     Ordered(OrderedStack),
     LoadedExposure { candidate: crate::gimp_exposure::PreparedExposure, enabled: bool },
     MaskedExposure { candidate: crate::gimp_masked_exposure::PreparedMaskedExposure, mask: photocraft_raster::Surface, extent: Rect, enabled: bool },
+    MaskedScalar { candidate: crate::gimp_masked_scalar::PreparedMaskedScalar, mask: photocraft_raster::Surface, extent: Rect, enabled: bool },
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PreparationPurpose { Source, Current }
@@ -593,6 +596,18 @@ fn prepare_plan<B: PlanBudget>(
         || doc.source_color_context.as_ref().is_none_or(|source| source.original_icc.is_some())
     {
         return Err(scope());
+    }
+    if crate::gimp_masked_scalar::claims_epoch(node.operation.schema_epoch.as_str()) {
+        if state.items.len()!=2 || state.filter_masks.len()!=1 { return Err(scope()); }
+        let (extent,format,default) = match &layer.content {
+            LayerContent::BackedRaster(backed)=>(backed.operative_bounds(),backed.format(),backed.default_bytes()),
+            LayerContent::Raster(surface)=>{
+                let item=state.items.iter().find(|i|i.item==ItemRef::Layer(layer.id)).ok_or_else(scope)?;
+                (item.raster_bounds.ok_or_else(scope)?,surface.format(),surface.default_bytes())
+            }
+            _=>return Err(scope()),
+        };
+        return masked_scalar::prepare(doc,supplied,purpose,header,extent,format,default,interrupt,budget);
     }
     if node.operation.schema_epoch == crate::gimp_masked_exposure::EPOCH {
         let (extent,format,default) = match &layer.content {
@@ -814,6 +829,18 @@ impl PreparedStockPointPipeline {
         match &self.plan.stack {
             StockPointProgram::Ordered(stack) => evaluate_bound_point(stack, self.plan.format, self.plan.unit_input, self.plan.half_input, self.plan.opaque_input, &self.quota, raw, format, position, control),
             StockPointProgram::MaskedExposure {candidate,mask,extent,enabled}=>{
+                control.check(256).map_err(BackedNormalError::Backing)?;
+                let _mix_scratch=candidate.reserve_runtime(&self.quota,control)?;
+                if position.0<extent.x0 || position.0>=extent.x1 || position.1<extent.y0 || position.1>=extent.y1 { return Err(scope()); }
+                if format!=self.plan.format || raw.len()!=format.bytes_per_pixel() { return Err(scope()); }
+                let read=|channel|try_read_sample_f64(raw,format.sample,channel).map_err(|_|length());
+                let before=[read(0)?,read(1)?,read(2)?,read(3)?];
+                let mut scalar=[0.;1];
+                mask.try_read_pixel_f64(position.0,position.1,&mut scalar).map_err(|_|length())?;
+                let [coverage]=scalar;
+                candidate.evaluate(before,*enabled,coverage,&self.quota,control)
+            }
+            StockPointProgram::MaskedScalar {candidate,mask,extent,enabled}=>{
                 control.check(256).map_err(BackedNormalError::Backing)?;
                 let _mix_scratch=candidate.reserve_runtime(&self.quota,control)?;
                 if position.0<extent.x0 || position.0>=extent.x1 || position.1<extent.y0 || position.1>=extent.y1 { return Err(scope()); }
@@ -1090,3 +1117,7 @@ mod residual_origin_geometry_tests;
 #[cfg(test)]
 #[path="backed_stock_point_masked_exposure_tests.rs"]
 mod masked_exposure_tests;
+
+#[cfg(test)]
+#[path="backed_stock_point_masked_scalar_tests.rs"]
+mod masked_scalar_tests;

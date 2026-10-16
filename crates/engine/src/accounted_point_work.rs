@@ -65,6 +65,12 @@ pub fn is_current_pure_point_work_candidate(owner: &AccountedDocument, c: &ReadC
             if node.operation.name=="gegl:exposure" && node.operation.stored_version=="1:0"
                 && node.operation.schema_epoch==photocraft_compose::EXPOSURE_MASKED_EPOCH
                 && compat==Some(photocraft_compose::EXPOSURE_MASKED_EPOCH){return Ok(true)}
+            if node.operation.stored_version=="0:0" && compat==Some(node.operation.schema_epoch.as_str())
+                && matches!((node.operation.name.as_str(),node.operation.schema_epoch.as_str()),
+                    ("gegl:invert-linear",photocraft_compose::INVERT_LINEAR_MASKED_EPOCH)
+                    |("gegl:invert-gamma",photocraft_compose::INVERT_GAMMA_MASKED_EPOCH)
+                    |("gegl:brightness-contrast",photocraft_compose::BRIGHTNESS_CONTRAST_MASKED_EPOCH)
+                    |("gegl:levels",photocraft_compose::GEGL_LEVELS_MASKED_EPOCH)){return Ok(true)}
             // Existing positive routes retain their exact prior checks/debits.
             if existing {
                 return Ok(true);

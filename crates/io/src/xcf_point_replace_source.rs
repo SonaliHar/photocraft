@@ -42,6 +42,8 @@ pub(crate) mod vibrance_source;
 pub(crate) mod loaded_exposure_source;
 #[path="xcf_exposure_masked_source.rs"]
 pub(crate) mod masked_exposure_source;
+#[path="xcf_masked_stock_point_source.rs"]
+pub(crate) mod masked_stock_source;
 
 /// Exact source argument validation without allocating a mapped filter stack.
 fn finite_alpha_operation<P>(effect: &photocraft_xcf::Effect<P>) -> Option<photocraft_algo::gimp::alpha_clip_finite::AlphaClipFinite> {
