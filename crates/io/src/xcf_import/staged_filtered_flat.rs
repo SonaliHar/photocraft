@@ -10,6 +10,14 @@ pub(super) fn hint<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &p
     if !(1..=4096).contains(&f.layers.len()) || f.layers.len()==1 && f.layers.first().is_none_or(|d|d.effects.len()<2) {
         return Ok(false);
     }
+    // Preserve the exact existing staged_source::point_stack::hint identity
+    // before new mixed-name claims. The old selector/strict qualifier remains
+    // final; this is metadata identity, never an acceptance/native fallback.
+    work(i,b,8)?;
+    if f.layers.len()==1 && f.layers.first().is_some_and(|d| !d.effects.is_empty()
+        && (d.blend_space,d.composite_space,d.composite_mode)==(0,2,1)) {
+        return Ok(false);
+    }
     let mut count=0usize;
     let mut known=false;
     for d in &f.layers {
@@ -18,7 +26,7 @@ pub(super) fn hint<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &p
         if count>4096 {return Err(IoError::Unsupported("filtered flat node count".into()));}
         for e in &d.effects {
             work(i,b,e.operation.len() as u64+1)?;
-            known |= matches!(e.operation.as_str(),"gimp:semi-flatten"|"gegl:hue-chroma"|"gegl:vibrance"|"gegl:exposure");
+            known |= matches!(e.operation.as_str(),"gimp:semi-flatten"|"gegl:hue-chroma"|"gegl:vibrance"|"gegl:exposure"|"gegl:invert-linear"|"gegl:invert-gamma");
         }
     }
     Ok(known)
@@ -223,3 +231,7 @@ mod ordered_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_filtered_flat_exposure_tests.rs"]
 mod exposure_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "staged_filtered_flat_invert_tests.rs"]
+mod invert_tests;

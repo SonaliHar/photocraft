@@ -1408,3 +1408,56 @@ with existing aggregate bounds; assigned profiles, source HDR and arbitrary
 offsets are outside this increment. PhotoCraft regression drafts remain
 ignored, uncompiled and unrun; all behavioral, native, visual and performance
 acceptance remains deferred.
+
+
+Mixed filtered-flat stacks include zero-argument `gegl:invert-linear` and
+`gegl:invert-gamma`, each stored version `0:0`, with distinct declared epochs
+`xcf22-gegl-invert-linear-mixed-wide-v1` and
+`xcf22-gegl-invert-gamma-mixed-wide-v1`. Each node must match its own operation,
+schema and composition epoch. Older singleton identities retain their routes.
+The source adapter uses the existing bounded positive full-canvas origin policy
+for implicit nonlinear RGB F32/650 and F64/750, with unit native samples and
+unchanged profile, source, default, physical mask and aggregate proof.
+Mixed source hints decline the older single-root PointStack raw identity
+`(0, 2, 1)` after a constant shared-budget debit. This restores the original
+selector order and strict old validator, including its final refusal for bad
+native data. The newer root identity `(0, -1, -1)` remains separate.
+
+Both kinds use the existing finite f64 scalar `1 - value`. Linear converts
+known implicit nonlinear sRGB to linear RGB and back; Gamma uses the existing
+same-space profile path. Incoming wide alpha is preserved. Disabled nodes still
+receive complete preparation and input proof and pass their wide input through
+exactly. No invert output is narrowed independently, and adjacent inversions
+are not cancelled. The shared declared NL Float handoff before each later
+enabled kernel remains separate. Source input is unit-range; later derived RGB
+may be finite outside that range. Value Invert remains outside this batch
+because its current kernel and source roles require separate work.
+
+Paid preparation retains actual stage/vector/profile ownership and same-quota
+scratch. Active Linear/Gamma calls debit 1536/768 work units respectively;
+disabled calls debit 256. Gamma's zero transfer-curve work does not waive
+construction, native/profile validation or other ownership costs. Sole invert
+nodes retain a paid ordered stage, and empty CURRENT continuation remains plain.
+
+These nodes use existing enable, move, remove, undo and reader10 native routes.
+They have no editable scalar arguments. The registered mixed command accepts
+enabled-only edits with arguments omitted. Its existing outer parser refuses
+target-only requests, explicit empty arguments even with enabled, and any
+opacityF64Bits field including unit opacity. Nonempty argument patches have no
+supported name for these zero-argument nodes. A broader inner wire helper does
+not change the registered route. The UI captures the actual target and offers its
+checkbox and existing stack controls. Native hints recognize the new epochs,
+including a sole remaining invert, without selecting by old operation name.
+Complete OLD/history/STAGED proof, locks, original source custody, cumulative
+controls and publication fences remain mandatory.
+
+Four GIMP-authored sources span both depths at 8x6 and 130x65, with eight
+roots per file. All 32 native planes, 128 chosen F64 precision samples,
+60 logical zero masks, stored settings and filter order survive independent
+reloads. Pairwise rendered RGB differences reach about 0.0000334 at F32/8x6
+and 0.0000547 at F32/130x65; the two F64 cohorts are byte-stable in these runs.
+Alpha words are exact. Effective ICC date bytes vary separately from retained
+Babl profile bytes. These observations do not recover unique internal formats
+or producer physical padding/default behavior. GIMP observations, ignored
+regression drafts and production compilation do not establish PhotoCraft
+numerical, native, visual, performance or full-stock acceptance.

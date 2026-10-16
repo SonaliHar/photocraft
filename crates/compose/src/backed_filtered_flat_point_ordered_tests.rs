@@ -379,3 +379,6 @@ mod derived_current;
 
 #[path = "backed_filtered_flat_point_exposure_tests.rs"]
 mod exposure;
+
+#[path = "backed_filtered_flat_point_invert_tests.rs"]
+mod invert;

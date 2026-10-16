@@ -146,6 +146,8 @@ fn family(node: &photocraft_doc::xcf_filters::FilterNode) -> Option<u8> {
         "gegl:hue-chroma" => (1, "0:0", photocraft_compose::HUE_CHROMA_EPOCH),
         "gegl:vibrance" => (2, "0:0", photocraft_compose::VIBRANCE_EPOCH),
         "gegl:exposure" => (3, "1:0", photocraft_compose::EXPOSURE_MIXED_EPOCH),
+        "gegl:invert-linear" => (4, "0:0", photocraft_compose::INVERT_LINEAR_MIXED_EPOCH),
+        "gegl:invert-gamma" => (5, "0:0", photocraft_compose::INVERT_GAMMA_MIXED_EPOCH),
         _ => return None,
     };
     (node.operation.stored_version == version && node.operation.schema_epoch == epoch && node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == epoch)).then_some(kind)
@@ -175,6 +177,7 @@ fn number_in_domain(kind:u8,name:&str,bits:u32)->bool {
 fn valid_node(node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
     use photocraft_doc::xcf_filters::{ExactNumber, FilterValue};
     let Some(kind) = family(node) else { return false };
+    if matches!(kind,4|5) { return node.arguments.is_empty(); }
     if kind == 0 {
         return matches!(node.arguments.as_slice(),[a] if a.name=="color"&&matches!(&a.value,FilterValue::Color{components,encoding:photocraft_doc::SampleEncoding::Linear|photocraft_doc::SampleEncoding::NonlinearProfile,profile:None} if components.len()==4&&components.iter().all(|v|matches!(v,ExactNumber::Float32Bits(b) if f32::from_bits(*b).is_finite()&&(0.0..=1.0).contains(&f32::from_bits(*b))))));
     }
@@ -585,3 +588,7 @@ mod current_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_exposure_tests.rs"]
 mod exposure_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="filtered_flat_invert_tests.rs"]
+mod invert_tests;

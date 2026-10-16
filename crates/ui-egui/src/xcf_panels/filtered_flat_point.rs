@@ -92,6 +92,14 @@ fn controls(ui: &mut egui::Ui, node: &FilterNode, enabled_ui: bool) -> Option<(&
     let mut enabled = node.enabled;
     let caption: String = node.source_display_name.as_deref().filter(|name| !name.is_empty()).unwrap_or(&node.operation.name).chars().take(128).collect();
     match node.operation.name.as_str() {
+        "gegl:invert-linear" | "gegl:invert-gamma" => {
+            if !node.arguments.is_empty(){return None}
+            ui.add_enabled_ui(enabled_ui,|ui|{
+                ui.checkbox(&mut enabled,caption);
+                ui.label(tl!("No parameters"));
+            });
+            (enabled!=node.enabled).then(||("xcf.filter.enable",json!({"filterId":node.id.0.to_string(),"enabled":enabled})))
+        }
         "gegl:exposure" => {
             let word=|name:&str|match &node.arguments.iter().find(|a|a.name==name)?.value {
                 photocraft_doc::xcf_filters::FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Float32Bits(bits))=>Some(*bits),
@@ -230,3 +238,7 @@ mod current_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_point_exposure_tests.rs"]
 mod exposure_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="filtered_flat_point_invert_tests.rs"]
+mod invert_tests;

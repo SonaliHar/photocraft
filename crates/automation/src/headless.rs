@@ -1113,3 +1113,7 @@ mod owned_filtered_flat_current_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="headless/owned_filtered_flat_exposure_tests.rs"]
 mod owned_filtered_flat_exposure_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="headless/owned_filtered_flat_invert_tests.rs"]
+mod owned_filtered_flat_invert_tests;
