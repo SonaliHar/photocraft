@@ -81,7 +81,7 @@ fn shape_rows(
     c.check(1)?;
     if !(1..=4096).contains(&layers.len())
         || doc.mode != crate::ColorMode::Rgb
-        || !(native_sample(doc.depth) || allow_quantized && matches!(doc.depth, crate::SampleType::U8 | crate::SampleType::U16))
+        || !(native_sample(doc.depth) || allow_quantized && matches!(doc.depth, crate::SampleType::U8 | crate::SampleType::U16 | crate::SampleType::U32))
         || doc.sample_encoding != Some(crate::SampleEncoding::NonlinearProfile)
         || doc.selection.is_some()
         || doc.selection_channel_id.is_some()
@@ -96,7 +96,7 @@ fn shape_rows(
     let source = doc.source_color_context.as_ref().ok_or(BackingError::Unsupported)?;
     if source.original_icc.is_some()
         || !(matches!((doc.depth, source.source_precision), (crate::SampleType::F32, 650) | (crate::SampleType::F64, 750))
-            || allow_quantized && matches!((doc.depth, source.source_precision), (crate::SampleType::U8, 150) | (crate::SampleType::U16, 250)))
+            || allow_quantized && matches!((doc.depth, source.source_precision), (crate::SampleType::U8, 150) | (crate::SampleType::U16, 250) | (crate::SampleType::U32, 350)))
         || doc.icc_profile.as_ref().is_none_or(|v| v.is_empty() || v.len() > 16 << 20)
     {
         return refused();

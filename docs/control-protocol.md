@@ -3209,3 +3209,19 @@ inverse-curve plateaus and CLUT corner visits. The original gesture cancellation
 and deadline remain observable during those scans. Fixed scratch overlaps the
 existing profile/transform fee; old evaluator APIs retain their behavior. New
 contracts for low-bit arithmetic, cancellation and atomic output are deferred.
+
+
+Plain Normal hierarchy import and current/native13 continuation also accept
+exact nonlinear RGB U32/350, alongside U8/150,U16/250,F32/650,F64/750 in the
+existing bounded domain. Original ICC is absent and current implicit sRGB,
+actual source12/13/22 epochs/full-origin leaves/isolated Normal raw policy and
+complete zero-node/zero-mask checks remain required before selected allocation.
+The private U32 visitor handles at most64 complete RGBA pixels per callback
+on the original work/control ledger; native codes, padding/defaults and empty
+anchors remain exact. Current/source/native/copy/history repeat the actual rule.
+Existing f64 Normal rendering and generic host services need no new wire, field
+or format floor. Old routes retain priority; no failed selected route retries.
+No readonly hierarchy pixel-edit permission is implied by the separate Legacy
+U32 brush support. Gray/assigned profiles, other encodings/geometries and stored
+integer filter/mask support remain open. Behavioral tests/test compilation and
+numerical/native/UI/performance acceptance remain deferred.

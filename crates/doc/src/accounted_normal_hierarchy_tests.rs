@@ -407,3 +407,6 @@ mod masked_current_tests;
 
 #[path="accounted_normal_hierarchy_plain_tests.rs"]
 mod plain_quantized_tests;
+
+#[path="accounted_normal_hierarchy_u32_tests.rs"]
+mod u32_plain_tests;

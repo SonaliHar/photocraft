@@ -120,7 +120,7 @@ pub(super) fn modern_plain_old_partition<P>(f:&XcfFile<P>,i:&Interrupt<'_>,b:&ph
  if !staged_accounted_group::hint(f){return Ok(false);}
  work(i,b,512)?;
  if !matches!(f.version,12|13|22)||f.model!=Model::Rgb||f.encoding!=Encoding::NonlinearProfile||!f.icc.is_empty()
-  ||!matches!((f.sample,f.precision),(Sample::U8,150)|(Sample::U16,250)|(Sample::F32,650)|(Sample::F64,750))
+  ||!matches!((f.sample,f.precision),(Sample::U8,150)|(Sample::U16,250)|(Sample::U32,350)|(Sample::F32,650)|(Sample::F64,750))
   ||f.width==0||f.height==0||f.width>262144||f.height>262144||u64::from(f.width).checked_mul(u64::from(f.height)).is_none_or(|n|n>1<<30){return Ok(false);}
  let Some((groups,leaves,_))=paths(f,i,b)? else{return Ok(false)};
  if groups==0||leaves==0{return Ok(false);}
@@ -145,7 +145,7 @@ pub(super) fn descriptors<'b, 'a>(
 ) -> Result<Option<super::staged_masked_filtered_flat::DescriptorPlan<'b, 'a>>, IoError> {
     if !matches!(f.version, 12 | 13 | 22)
         || f.model != Model::Rgb
-        || !matches!((f.sample, f.precision), (Sample::U8,150)|(Sample::U16,250)|(Sample::F32, 650) | (Sample::F64, 750))
+        || !matches!((f.sample, f.precision), (Sample::U8,150)|(Sample::U16,250)|(Sample::U32,350)|(Sample::F32, 650) | (Sample::F64, 750))
         || f.encoding != Encoding::NonlinearProfile
         || !f.icc.is_empty()
         || f.width == 0
@@ -256,7 +256,7 @@ pub(super) fn validate_source_body<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Inte
     if !matches!(f.version, 12 | 13 | 22)
         || f.model != Model::Rgb
         || f.encoding != Encoding::NonlinearProfile
-        || !matches!((f.sample, f.precision), (Sample::U8,150)|(Sample::U16,250)|(Sample::F32, 650) | (Sample::F64, 750))
+        || !matches!((f.sample, f.precision), (Sample::U8,150)|(Sample::U16,250)|(Sample::U32,350)|(Sample::F32, 650) | (Sample::F64, 750))
         || !f.icc.is_empty()
         || f.width == 0
         || f.height == 0

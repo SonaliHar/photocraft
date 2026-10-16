@@ -490,3 +490,6 @@ mod masked;
 
 #[path = "backed_normal_hierarchy_integer_tests.rs"]
 mod integer;
+
+#[path="backed_normal_hierarchy_u32_tests.rs"]
+mod u32_plain;

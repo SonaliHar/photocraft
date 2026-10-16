@@ -2111,3 +2111,13 @@ COW/history remain with the actual document transaction. Old U8/U16/F32 brush
 paths keep their arithmetic. This does not grant hierarchy/filter pixel edits.
 Production compilation and static review remain distinct from the deferred
 numerical, native workflow, UI and performance acceptance.
+
+
+The plain nonlinear RGB Normal hierarchy role additionally admits U32/350.
+Native channels decode directly as f64(code)/f64(u32::MAX) into the existing
+isolated Normal fold; raw storage stays U32 with no F32 bridge. This completes
+the five native sample depths for that bounded plain RGB role. Global zero-node
+and zero-mask proof, original/current profile rules, full-origin geometry,
+source epochs, group limits, bands, fees and native13 continuation remain.
+This is a declared compatibility extension; generated low-bit contracts remain
+unrun and do not establish external numerical or native workflow acceptance.

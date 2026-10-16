@@ -21,6 +21,9 @@ pub fn dimensions(layout: usize) -> (u32, u32) {
 }
 /// Native endian RGBA codes, unequalRGB and alpha0/fraction/max. External input.
 pub fn native(depth: usize, layout: usize, leaf: usize) -> Vec<u8> {
+    if depth == 2 {
+        return native_u32(layout, leaf);
+    }
     assert!(depth < 2 && layout < 2 && leaf < 3);
     let (w, h) = dimensions(layout);
     let mut v = Vec::new();
@@ -49,9 +52,46 @@ pub fn native(depth: usize, layout: usize, leaf: usize) -> Vec<u8> {
     }
     v
 }
+/// U32-only additive seed. Adjacent first red words0x80000000/0x80000001
+/// intentionally differ below normalizedF32 precision; old0/1 seeds unchanged.
+pub fn words_u32(layout: usize, leaf: usize, x: u32, y: u32) -> [u32; 4] {
+    assert!(layout < 2 && leaf < 3);
+    let (w, h) = dimensions(layout);
+    assert!(x < w && y < h);
+    let n = x + y * w + leaf as u32 * 13;
+    [
+        0x80000000 | (n % 256),
+        0x40000003 + 2 * (n % 31),
+        0xc0000005 - 2 * (n % 19),
+        match n % 4 {
+            0 => 0,
+            1 => u32::MAX,
+            2 => 0x80000001,
+            _ => 0xc0000001,
+        },
+    ]
+}
+fn native_u32(layout: usize, leaf: usize) -> Vec<u8> {
+    let (w, h) = dimensions(layout);
+    let mut v = Vec::new();
+    for y in 0..h {
+        for x in 0..w {
+            for word in words_u32(layout, leaf, x, y) {
+                v.extend_from_slice(&word.to_ne_bytes());
+            }
+        }
+    }
+    v
+}
 fn hierarchy(v: &mut Vec<u8>, depth: usize, layout: usize, leaf: usize) {
     let (w, h) = dimensions(layout);
-    let word = if depth == 0 { 1usize } else { 2 };
+    let word = if depth == 2 {
+        4usize
+    } else if depth == 0 {
+        1usize
+    } else {
+        2
+    };
     let bpp = 4 * word;
     u32be(v, w);
     u32be(v, h);
@@ -81,6 +121,10 @@ fn hierarchy(v: &mut Vec<u8>, depth: usize, layout: usize, leaf: usize) {
                 let bytes = &raw[start..start + tw as usize * bpp];
                 if word == 1 {
                     v.extend_from_slice(bytes);
+                } else if word == 4 {
+                    for c in bytes.chunks_exact(4) {
+                        v.extend_from_slice(&u32::from_ne_bytes(c.try_into().unwrap()).to_be_bytes());
+                    }
                 } else {
                     for c in bytes.chunks_exact(2) {
                         v.extend_from_slice(&u16::from_ne_bytes(c.try_into().unwrap()).to_be_bytes());
@@ -93,7 +137,7 @@ fn hierarchy(v: &mut Vec<u8>, depth: usize, layout: usize, leaf: usize) {
 /// layout0 is exactly4records/firstgroup without nesting, exercising the paid
 /// modern implicit priority partition. layout1 has nested+emptygroups.
 pub fn image_version(depth: usize, layout: usize, version: u32) -> Vec<u8> {
-    assert!(depth < 2 && layout < 2 && matches!(version, 12 | 13 | 22));
+    assert!(depth < 3 && layout < 2 && matches!(version, 12 | 13 | 22));
     let (w, h) = dimensions(layout);
     let rows: Vec<(&str, bool, Vec<u32>, Option<usize>)> = if layout == 0 {
         vec![
@@ -116,7 +160,16 @@ pub fn image_version(depth: usize, layout: usize, version: u32) -> Vec<u8> {
     u32be(&mut v, w);
     u32be(&mut v, h);
     u32be(&mut v, 0);
-    u32be(&mut v, if depth == 0 { 150 } else { 250 });
+    u32be(
+        &mut v,
+        if depth == 2 {
+            350
+        } else if depth == 0 {
+            150
+        } else {
+            250
+        },
+    );
     prop(&mut v, 17, &[0]);
     prop(&mut v, 0, &[]);
     let table = v.len();

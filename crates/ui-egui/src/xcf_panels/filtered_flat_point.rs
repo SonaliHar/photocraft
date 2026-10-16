@@ -307,3 +307,7 @@ mod normal_hierarchy_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="plain_integer_hierarchy_tests.rs"]
 mod plain_integer_hierarchy_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="u32_plain_hierarchy_tests.rs"]
+mod u32_plain_hierarchy_tests;

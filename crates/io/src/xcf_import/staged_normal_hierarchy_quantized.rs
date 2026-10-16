@@ -2,7 +2,7 @@
 use super::*;
 use crate::xcf_import::staged_filtered_flat::work;
 pub(super) fn exact_depth<P>(f: &XcfFile<P>) -> bool {
-    matches!((f.sample, f.precision), (Sample::U8, 150) | (Sample::U16, 250))
+    matches!((f.sample, f.precision), (Sample::U8, 150) | (Sample::U16, 250) | (Sample::U32, 350))
 }
 /// Metadata planning miss is permanently old-only, not a new Source failure.
 pub(super) fn plan_eligible<P>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
@@ -43,6 +43,7 @@ pub(super) fn native<P: ExactParsedPlane>(
     let word = match sample {
         Sample::U8 => 1usize,
         Sample::U16 => 2,
+        Sample::U32 => 4,
         _ => return Ok(false),
     };
     let pixel = 4usize.checked_mul(word).ok_or_else(|| IoError::Unsupported("integer hierarchy pixel stride".into()))?;
@@ -70,3 +71,7 @@ pub(super) fn native<P: ExactParsedPlane>(
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_normal_hierarchy_quantized_tests.rs"]
 mod tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="staged_normal_hierarchy_u32_tests.rs"]
+mod u32_tests;

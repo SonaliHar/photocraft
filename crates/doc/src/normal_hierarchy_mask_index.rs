@@ -116,14 +116,14 @@ fn vector_bytes<T>(n: usize) -> Result<u64, E> {
 /// Closed integer plain role check, before any selected index allocation.
 /// Float callers incur no new work or role restriction here.
 pub(crate) fn plain_quantized_header(d: &Document, check: &dyn Fn(u64) -> Result<(), E>) -> Result<bool, E> {
-    if !matches!(d.depth, crate::SampleType::U8 | crate::SampleType::U16) {
+    if !matches!(d.depth, crate::SampleType::U8 | crate::SampleType::U16 | crate::SampleType::U32) {
         return Ok(false);
     }
     check(1)?;
     if d.mode != crate::ColorMode::Rgb
         || d.sample_encoding != Some(crate::SampleEncoding::NonlinearProfile)
         || d.source_color_context.as_ref().is_none_or(|source| {
-            source.original_icc.is_some() || !matches!((d.depth, source.source_precision), (crate::SampleType::U8, 150) | (crate::SampleType::U16, 250))
+            source.original_icc.is_some() || !matches!((d.depth, source.source_precision), (crate::SampleType::U8, 150) | (crate::SampleType::U16, 250) | (crate::SampleType::U32, 350))
         })
     {
         return Err(E::Unsupported);

@@ -312,11 +312,11 @@ fn header(doc: &Document) -> Result<(), E> {
 // Check every actual stack before any selected tree index allocation.
 fn plain_quantized(doc: &Document, mut check: impl FnMut(u64) -> Result<(), E>) -> Result<bool, E> {
     check(1)?;
-    if !matches!(doc.depth, SampleType::U8 | SampleType::U16) {
+    if !matches!(doc.depth, SampleType::U8 | SampleType::U16 | SampleType::U32) {
         return Ok(false);
     }
     let source = doc.source_color_context.as_ref().ok_or_else(scope)?;
-    if !matches!((doc.depth, source.source_precision), (SampleType::U8, 150) | (SampleType::U16, 250)) {
+    if !matches!((doc.depth, source.source_precision), (SampleType::U8, 150) | (SampleType::U16, 250) | (SampleType::U32, 350)) {
         return Err(scope());
     }
     let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
@@ -344,7 +344,7 @@ fn header_mode(doc: &Document, plain_integer: bool) -> Result<(), E> {
         || doc.mode != ColorMode::Rgb
         || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
         || !(matches!((doc.depth, source.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750))
-            || plain_integer && matches!((doc.depth, source.source_precision), (SampleType::U8, 150) | (SampleType::U16, 250)))
+            || plain_integer && matches!((doc.depth, source.source_precision), (SampleType::U8, 150) | (SampleType::U16, 250) | (SampleType::U32, 350)))
         || source.original_icc.is_some()
         || s.provenance.format != "xcf"
         || !matches!(s.provenance.format_version, 12 | 13 | 22)

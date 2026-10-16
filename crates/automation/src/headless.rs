@@ -1153,3 +1153,7 @@ mod owned_plain_integer_hierarchy_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="headless/owned_native_wide_stroke_tests.rs"]
 mod owned_native_wide_stroke_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="headless/owned_u32_plain_hierarchy_tests.rs"]
+mod owned_u32_plain_hierarchy_tests;

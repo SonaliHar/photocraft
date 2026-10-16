@@ -1553,3 +1553,11 @@ mod wide_plain_xcf_source_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="accounted_native_wide_stroke_native_tests.rs"]
 mod native_wide_stroke_native_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_u32_plain_hierarchy_tests.rs"]
+mod u32_plain_hierarchy_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_u32_normal_hierarchy_native_tests.rs"]
+mod u32_normal_hierarchy_native_tests;
