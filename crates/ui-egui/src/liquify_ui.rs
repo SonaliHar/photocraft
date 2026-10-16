@@ -1247,47 +1247,48 @@ mod tests {
     #[test]
     fn feathered_translucent_selection_preview_matches_commit_5989() {
         for depth in [8, 16, 32] {
-        let ctx = egui::Context::default();
-        let mut app = app_with_layer_at_depth(depth);
-        app.session
-            .edit("smooth translucent pixels", |doc, active| {
-                let s = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
-                for y in 0..80 {
-                    for x in 0..120 {
-                        s.write_pixel(x, y, &[x as f32 / 120.0, y as f32 / 80.0, 0.3, 0.5]);
+            let ctx = egui::Context::default();
+            let mut app = app_with_layer_at_depth(depth);
+            app.session
+                .edit("smooth translucent pixels", |doc, active| {
+                    let s = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                    for y in 0..80 {
+                        for x in 0..120 {
+                            s.write_pixel(x, y, &[x as f32 / 120.0, y as f32 / 80.0, 0.3, 0.5]);
+                        }
                     }
+                    Ok(())
+                })
+                .unwrap();
+            app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 65, "height": 80})).unwrap();
+            app.session.execute("select.modify.feather", json!({"radius": 4})).unwrap();
+            let selection = app.session.active().unwrap().doc.selection.as_ref().unwrap();
+            let edge = selection.read_pixel(64, 40)[0];
+            assert!(edge > 0.0 && edge < 1.0, "actual feathered edge: {edge}");
+            assert!(selection.read_pixel(50, 40)[0] > edge);
+            assert!(selection.read_pixel(80, 40)[0] < edge);
+            open(&mut app, &ctx).unwrap();
+            let before = app.distort.liquify.as_ref().unwrap().out.clone();
+            control(&mut app, &json!({"tool": "forwardWarp", "size": 24})).unwrap();
+            for ev in
+                [ToolEvent::Down { x: 60.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 70.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 70.0, y: 40.0 }]
+            {
+                pointer(&mut app, ev, egui::Modifiers::NONE);
+            }
+            let preview = app.distort.liquify.as_ref().unwrap().out.clone();
+            assert_ne!(before, preview, "fractional selection must still show the warp");
+            commit(&mut app);
+            let (_, committed, _) = crate::distort_ui::active_pixels(&app).unwrap();
+            let expected = ProxyImage::new(&committed, Rect::new(0, 0, 120, 80), PROXY_SIDE);
+            for (p, expected) in preview.iter().zip(expected.px) {
+                for c in 0..4 {
+                    let expected = (expected[c].clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                    // Commit uses bicubic sampling and the layer depth; the preview is bilinear RGBA8.
+                    assert!(p[c].abs_diff(expected) <= 2, "preview {p:?}, committed channel {c}: {expected}");
                 }
-                Ok(())
-            })
-            .unwrap();
-        app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 65, "height": 80})).unwrap();
-        app.session.execute("select.modify.feather", json!({"radius": 4})).unwrap();
-        let selection = app.session.active().unwrap().doc.selection.as_ref().unwrap();
-        let edge = selection.read_pixel(64, 40)[0];
-        assert!(edge > 0.0 && edge < 1.0, "actual feathered edge: {edge}");
-        assert!(selection.read_pixel(50, 40)[0] > edge);
-        assert!(selection.read_pixel(80, 40)[0] < edge);
-        open(&mut app, &ctx).unwrap();
-        let before = app.distort.liquify.as_ref().unwrap().out.clone();
-        control(&mut app, &json!({"tool": "forwardWarp", "size": 24})).unwrap();
-        for ev in [ToolEvent::Down { x: 60.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 70.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 70.0, y: 40.0 }]
-        {
-            pointer(&mut app, ev, egui::Modifiers::NONE);
-        }
-        let preview = app.distort.liquify.as_ref().unwrap().out.clone();
-        assert_ne!(before, preview, "fractional selection must still show the warp");
-        commit(&mut app);
-        let (_, committed, _) = crate::distort_ui::active_pixels(&app).unwrap();
-        let expected = ProxyImage::new(&committed, Rect::new(0, 0, 120, 80), PROXY_SIDE);
-        for (p, expected) in preview.iter().zip(expected.px) {
-            for c in 0..4 {
-                let expected = (expected[c].clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-                // Commit uses bicubic sampling and the layer depth; the preview is bilinear RGBA8.
-                assert!(p[c].abs_diff(expected) <= 2, "preview {p:?}, committed channel {c}: {expected}");
             }
         }
     }
-        }
 
     #[test]
     fn preview_mask_downsampling_preserves_partial_coverage_and_density_5989() {
