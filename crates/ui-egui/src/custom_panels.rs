@@ -80,6 +80,12 @@ pub enum PanelItem {
         /// One of [`photocraft_engine::actions_cmds::BUTTON_COLORS`]; empty is none.
         #[serde(default)]
         color: String,
+        /// How many grid columns the button is wide.
+        #[serde(default = "one", skip_serializing_if = "is_one")]
+        span: u8,
+        /// A tool button shows the tool's icon instead of its name.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        icon: bool,
     },
     /// A button that plays an action from the Actions panel.
     Action {
@@ -91,20 +97,72 @@ pub enum PanelItem {
         label: String,
         #[serde(default)]
         color: String,
+        #[serde(default = "one", skip_serializing_if = "is_one")]
+        span: u8,
     },
     /// A section title; clicking it folds the items up to the next heading.
     Heading {
         label: String,
         #[serde(default)]
         collapsed: bool,
+        /// Buttons per row in this section; none uses the panel's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        columns: Option<u8>,
+    },
+    /// A small centred title inside a section ("Sharpen", "Curves").
+    Label {
+        label: String,
+        /// Buttons per row from here on; none keeps the current count.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        columns: Option<u8>,
     },
     /// A thin line between buttons.
-    Separator,
+    Separator {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        columns: Option<u8>,
+    },
+}
+
+fn one() -> u8 {
+    1
+}
+
+fn is_one(n: &u8) -> bool {
+    *n == 1
+}
+
+fn clamp_columns(c: u8) -> u8 {
+    c.clamp(*COLUMNS.start(), *COLUMNS.end())
 }
 
 impl PanelItem {
     fn is_button(&self) -> bool {
         matches!(self, PanelItem::Command { .. } | PanelItem::Action { .. })
+    }
+
+    /// Grid columns the button takes (1 for anything that isn't a button).
+    pub fn span(&self) -> u8 {
+        match self {
+            PanelItem::Command { span, .. } | PanelItem::Action { span, .. } => (*span).max(1),
+            _ => 1,
+        }
+    }
+
+    /// The buttons-per-row a heading, label or divider sets.
+    pub fn columns(&self) -> Option<u8> {
+        match self {
+            PanelItem::Heading { columns, .. } | PanelItem::Label { columns, .. } | PanelItem::Separator { columns } => *columns,
+            _ => None,
+        }
+    }
+
+    fn label_mut(&mut self) -> Option<&mut String> {
+        match self {
+            PanelItem::Command { label, .. } | PanelItem::Action { label, .. } | PanelItem::Heading { label, .. } | PanelItem::Label { label, .. } => {
+                Some(label)
+            }
+            PanelItem::Separator { .. } => None,
+        }
     }
 
     fn color(&self) -> &str {
@@ -118,32 +176,41 @@ impl PanelItem {
     /// action's name.
     pub fn display_label(&self) -> String {
         match self {
-            PanelItem::Command { label, .. } | PanelItem::Action { label, .. } | PanelItem::Heading { label, .. } if !label.trim().is_empty() => label.clone(),
+            PanelItem::Command { label, .. } | PanelItem::Action { label, .. } | PanelItem::Heading { label, .. } | PanelItem::Label { label, .. }
+                if !label.trim().is_empty() =>
+            {
+                label.clone()
+            }
             PanelItem::Command { id, .. } => default_label(id),
             PanelItem::Action { action, .. } => action.clone(),
             PanelItem::Heading { .. } => tl!("Section").to_string(),
-            PanelItem::Separator => String::new(),
+            PanelItem::Label { .. } | PanelItem::Separator { .. } => String::new(),
         }
     }
 
     /// Clamp text, drop unknown colours and keep tool ids and command ids well formed.
     fn sanitize(&mut self) {
         match self {
-            PanelItem::Command { label, color, params, .. } => {
+            PanelItem::Command { label, color, params, span, .. } => {
                 *label = clip(label);
                 *color = known_color(color);
+                *span = clamp_columns(*span);
                 if !(params.is_null() || params.is_object()) {
                     *params = Value::Null;
                 }
             }
-            PanelItem::Action { action, set, label, color } => {
+            PanelItem::Action { action, set, label, color, span } => {
                 *action = action.trim().to_string();
                 *set = set.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
                 *label = clip(label);
                 *color = known_color(color);
+                *span = clamp_columns(*span);
             }
-            PanelItem::Heading { label, .. } => *label = clip(label),
-            PanelItem::Separator => {}
+            PanelItem::Heading { label, columns, .. } | PanelItem::Label { label, columns } => {
+                *label = clip(label);
+                *columns = columns.map(clamp_columns);
+            }
+            PanelItem::Separator { columns } => *columns = columns.map(clamp_columns),
         }
     }
 }
@@ -158,19 +225,22 @@ pub struct CustomPanel {
     pub visible: bool,
     pub columns: u8,
     pub width: f32,
+    /// One section open at a time: headings are drawn as full-width bars, and opening one folds
+    /// the others.
+    pub accordion: bool,
     pub items: Vec<PanelItem>,
 }
 
 impl Default for CustomPanel {
     fn default() -> Self {
-        Self { uid: 0, name: String::new(), visible: true, columns: 3, width: 260.0, items: Vec::new() }
+        Self { uid: 0, name: String::new(), visible: true, columns: 3, width: 260.0, accordion: false, items: Vec::new() }
     }
 }
 
 impl CustomPanel {
     fn sanitize(&mut self) {
         self.name = clip(&self.name);
-        self.columns = self.columns.clamp(*COLUMNS.start(), *COLUMNS.end());
+        self.columns = clamp_columns(self.columns);
         self.width = if self.width.is_finite() { self.width.clamp(*WIDTH.start(), *WIDTH.end()) } else { CustomPanel::default().width };
         self.items.truncate(MAX_ITEMS);
         for item in &mut self.items {
@@ -270,6 +340,14 @@ fn item_from(p: &Value, check: bool, app: &PhotocraftApp) -> Result<PanelItem, S
     let kind = str_param(p, "kind").unwrap_or(if p.get("action").is_some() { "action" } else { "command" });
     let label = str_param(p, "label").unwrap_or("").to_string();
     let color = str_param(p, "color").unwrap_or("").to_string();
+    let span = match p.get("span") {
+        None | Some(Value::Null) => 1,
+        Some(v) => v.as_u64().and_then(|n| u8::try_from(n).ok()).filter(|n| COLUMNS.contains(n)).ok_or("`span` must be 1 to 6")?,
+    };
+    let columns = match p.get("columns") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_u64().and_then(|n| u8::try_from(n).ok()).filter(|n| COLUMNS.contains(n)).ok_or("`columns` must be 1 to 6")?),
+    };
     let mut item = match kind {
         "command" | "tool" => {
             let id = str_param(p, "id").map(str::trim).filter(|s| !s.is_empty()).ok_or("a command button needs an `id`")?.to_string();
@@ -280,7 +358,11 @@ fn item_from(p: &Value, check: bool, app: &PhotocraftApp) -> Result<PanelItem, S
             if !(params.is_null() || params.is_object()) {
                 return Err("`params` must be an object".into());
             }
-            PanelItem::Command { id, params, label, color }
+            let icon = p.get("icon").and_then(Value::as_bool).unwrap_or(false);
+            if icon && crate::tool_shortcuts::tool(&id).is_none() {
+                return Err("only tool buttons can show an icon".into());
+            }
+            PanelItem::Command { id, params, label, color, span, icon }
         }
         "action" => {
             let action = str_param(p, "action").map(str::trim).filter(|s| !s.is_empty()).ok_or("an action button needs an `action` name")?.to_string();
@@ -288,11 +370,12 @@ fn item_from(p: &Value, check: bool, app: &PhotocraftApp) -> Result<PanelItem, S
             if check && !app.session.actions.list.iter().any(|a| a.name == action && set.as_ref().is_none_or(|s| a.set.as_ref() == Some(s))) {
                 return Err(format!("no action named `{action}` in the Actions panel"));
             }
-            PanelItem::Action { action, set, label, color }
+            PanelItem::Action { action, set, label, color, span }
         }
-        "heading" => PanelItem::Heading { label, collapsed: p.get("collapsed").and_then(Value::as_bool).unwrap_or(false) },
-        "separator" => PanelItem::Separator,
-        other => return Err(format!("unknown item kind `{other}` (command, action, heading or separator)")),
+        "heading" => PanelItem::Heading { label, collapsed: p.get("collapsed").and_then(Value::as_bool).unwrap_or(false), columns },
+        "label" => PanelItem::Label { label, columns },
+        "separator" => PanelItem::Separator { columns },
+        other => return Err(format!("unknown item kind `{other}` (command, action, heading, label or separator)")),
     };
     item.sanitize();
     Ok(item)
@@ -479,11 +562,34 @@ fn command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) ->
         "window.customPanel.updateItem" => {
             let i = find(app, p)?;
             let index = index_param(p, "index")?;
-            let item = panel_mut(app, i)?.items.get_mut(index).ok_or("no such item")?;
+            let panel = panel_mut(app, i)?;
+            let accordion = panel.accordion;
+            let item = panel.items.get_mut(index).ok_or("no such item")?;
             if let Some(l) = str_param(p, "label") {
+                *item.label_mut().ok_or("a divider has no label")? = clip(l);
+            }
+            if let Some(v) = p.get("span") {
+                let n = v.as_u64().and_then(|n| u8::try_from(n).ok()).filter(|n| COLUMNS.contains(n)).ok_or("`span` must be 1 to 6")?;
                 match item {
-                    PanelItem::Command { label, .. } | PanelItem::Action { label, .. } | PanelItem::Heading { label, .. } => *label = clip(l),
-                    PanelItem::Separator => return Err("a divider has no label".into()),
+                    PanelItem::Command { span, .. } | PanelItem::Action { span, .. } => *span = n,
+                    _ => return Err("only buttons have a width".into()),
+                }
+            }
+            if let Some(v) = p.get("columns") {
+                let n = if v.is_null() {
+                    None
+                } else {
+                    Some(v.as_u64().and_then(|n| u8::try_from(n).ok()).filter(|n| COLUMNS.contains(n)).ok_or("`columns` must be 1 to 6 or null")?)
+                };
+                match item {
+                    PanelItem::Heading { columns, .. } | PanelItem::Label { columns, .. } | PanelItem::Separator { columns } => *columns = n,
+                    _ => return Err("only headings, labels and dividers set buttons per row".into()),
+                }
+            }
+            if let Some(v) = p.get("icon").and_then(Value::as_bool) {
+                match item {
+                    PanelItem::Command { id, icon, .. } if crate::tool_shortcuts::tool(id).is_some() => *icon = v,
+                    _ => return Err("only tool buttons can show an icon".into()),
                 }
             }
             if let Some(c) = str_param(p, "color") {
@@ -496,11 +602,13 @@ fn command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) ->
                     _ => return Err("only buttons have a colour".into()),
                 }
             }
+            let mut opened = false;
             if let Some(v) = p.get("collapsed").and_then(Value::as_bool) {
                 match item {
                     PanelItem::Heading { collapsed, .. } => *collapsed = v,
                     _ => return Err("only headings fold".into()),
                 }
+                opened = !v;
             }
             if let Some(params) = p.get("params") {
                 match item {
@@ -509,7 +617,18 @@ fn command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) ->
                     _ => return Err("only command buttons take params".into()),
                 }
             }
-            Ok(serde_json::to_value(&*item).unwrap_or(Value::Null))
+            let out = serde_json::to_value(&*item).unwrap_or(Value::Null);
+            // One section open at a time: opening this heading folds the others.
+            if accordion && opened {
+                for (k, other) in panel_mut(app, i)?.items.iter_mut().enumerate() {
+                    if let PanelItem::Heading { collapsed, .. } = other
+                        && k != index
+                    {
+                        *collapsed = true;
+                    }
+                }
+            }
+            Ok(out)
         }
         "window.customPanel.removeItem" => {
             let i = find(app, p)?;
@@ -544,12 +663,25 @@ fn command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) ->
             let i = find(app, p)?;
             let panel = panel_mut(app, i)?;
             if let Some(c) = p.get("columns").and_then(Value::as_u64) {
-                panel.columns = u8::try_from(c).unwrap_or(u8::MAX).clamp(*COLUMNS.start(), *COLUMNS.end());
+                panel.columns = clamp_columns(u8::try_from(c).unwrap_or(u8::MAX));
             }
             if let Some(w) = p.get("width").and_then(Value::as_f64).filter(|w| w.is_finite()) {
                 panel.width = (w as f32).clamp(*WIDTH.start(), *WIDTH.end());
             }
-            Ok(json!({"columns": panel.columns, "width": panel.width}))
+            if let Some(a) = p.get("accordion").and_then(Value::as_bool) {
+                panel.accordion = a;
+                // Keep at most the first open section open.
+                if a {
+                    let mut seen_open = false;
+                    for item in &mut panel.items {
+                        if let PanelItem::Heading { collapsed, .. } = item {
+                            *collapsed = seen_open || *collapsed;
+                            seen_open |= !*collapsed;
+                        }
+                    }
+                }
+            }
+            Ok(json!({"columns": panel.columns, "width": panel.width, "accordion": panel.accordion}))
         }
         "window.customPanel.run" => {
             let i = find(app, p)?;
@@ -620,7 +752,7 @@ fn file_stem(name: &str) -> String {
 pub fn export(panel: &CustomPanel) -> Value {
     json!({
         "version": EXPORT_VERSION,
-        "panel": {"name": panel.name, "columns": panel.columns, "width": panel.width, "items": panel.items},
+        "panel": {"name": panel.name, "columns": panel.columns, "width": panel.width, "accordion": panel.accordion, "items": panel.items},
     })
 }
 
@@ -673,7 +805,7 @@ pub fn run_item(app: &mut PhotocraftApp, ctx: &egui::Context, item: &PanelItem) 
             }
             r
         }
-        PanelItem::Heading { .. } | PanelItem::Separator => Err("headings and dividers aren't buttons".into()),
+        PanelItem::Heading { .. } | PanelItem::Label { .. } | PanelItem::Separator { .. } => Err("headings, labels and dividers aren't buttons".into()),
     };
     app.ui.custom_panels.running = false;
     if let Err(e) = &r {
@@ -707,7 +839,7 @@ fn picker_hits(app: &PhotocraftApp, query: &str) -> Vec<Hit> {
                 Hit {
                     label: a.name.clone(),
                     hint,
-                    item: PanelItem::Action { action: a.name.clone(), set: a.set.clone(), label: String::new(), color: a.color.clone() },
+                    item: PanelItem::Action { action: a.name.clone(), set: a.set.clone(), label: String::new(), color: a.color.clone(), span: 1 },
                 },
             ));
         }
@@ -723,7 +855,11 @@ fn picker_hits(app: &PhotocraftApp, query: &str) -> Vec<Hit> {
             if let Some(s) = crate::palette::fuzzy_score(q, &format!("{label} {path} {}", m.label)) {
                 hits.push((
                     s,
-                    Hit { label, hint: path, item: PanelItem::Command { id: m.id, params: Value::Null, label: String::new(), color: String::new() } },
+                    Hit {
+                        label,
+                        hint: path,
+                        item: PanelItem::Command { id: m.id, params: Value::Null, label: String::new(), color: String::new(), span: 1, icon: false },
+                    },
                 ));
             }
         }
@@ -736,7 +872,7 @@ fn picker_hits(app: &PhotocraftApp, query: &str) -> Vec<Hit> {
                     Hit {
                         label,
                         hint: tl!("Tool").to_string(),
-                        item: PanelItem::Command { id, params: Value::Null, label: String::new(), color: String::new() },
+                        item: PanelItem::Command { id, params: Value::Null, label: String::new(), color: String::new(), span: 1, icon: false },
                     },
                 ));
             }
@@ -759,14 +895,23 @@ enum Intent {
     Rename(String),
     Label(usize, String),
     Color(usize, &'static str),
+    Span(usize, u8),
+    ItemColumns(usize, Option<u8>),
+    Icon(usize, bool),
     Move(usize, usize),
     Remove(usize),
     Add(PanelItem),
     Picker(Option<String>),
     Columns(u8),
+    Accordion(bool),
     Delete,
     Export,
 }
+
+/// Height of a button and of a section bar.
+const ROW_H: f32 = 24.0;
+/// Space between buttons.
+const GAP: f32 = 4.0;
 
 /// Fill and text colour of a button: the Actions panel's Button Mode colours, and the field
 /// colour for an uncoloured button.
@@ -865,7 +1010,91 @@ fn title_row(ui: &mut egui::Ui, panel: &CustomPanel, editing: bool, name_draft: 
     ui.add_space(4.0);
 }
 
-/// The buttons, headings and dividers. Returns the area's response for its context menu.
+/// One row of buttons: `(item index, columns it spans)`, laid out on a `cols`-column grid.
+fn button_row(
+    ui: &mut egui::Ui,
+    panel: &CustomPanel,
+    row: &[(usize, u8)],
+    (cols, width): (u8, f32),
+    (editing, selected, enabled): (bool, Option<usize>, &[bool]),
+    intents: &mut Vec<Intent>,
+    t: &Tokens,
+) {
+    if row.is_empty() {
+        return;
+    }
+    let cols_f = f32::from(cols.max(1));
+    let cell = ((width - GAP * (cols_f - 1.0)) / cols_f).max(12.0);
+    ui.horizontal(|ui| {
+        for &(i, span) in row {
+            let Some(item) = panel.items.get(i) else { continue };
+            let span_f = f32::from(span.max(1));
+            let w = cell * span_f + GAP * (span_f - 1.0);
+            let (fill, text) = button_colors(item.color(), t);
+            let label = item.display_label();
+            let tool_icon = match item {
+                PanelItem::Command { id, icon: true, .. } => crate::tool_shortcuts::tool(id).map(crate::icons::tool_icon),
+                _ => None,
+            };
+            let on = enabled.get(i).copied().unwrap_or(false);
+            let caption = if tool_icon.is_some() { String::new() } else { label.clone() };
+            let size = fit_size(ui, &caption, w - 2.0 * ui.spacing().button_padding.x - 6.0);
+            let mut b = egui::Button::new(RichText::new(caption).color(text).size(size)).fill(fill).truncate();
+            if selected == Some(i) {
+                b = b.stroke(Stroke::new(2.0, t.accent));
+            }
+            let resp = ui.add_enabled_ui(on || editing, |ui| ui.add_sized(vec2(w, ROW_H), b)).inner;
+            if let Some(icon) = tool_icon {
+                let tint = if on || editing { t.text } else { t.text_dim };
+                crate::icons::paint(ui, resp.rect, icon, 15.0, tint);
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on || editing, &label));
+            }
+            let resp = match item {
+                PanelItem::Action { action, .. } => resp.on_hover_text(format!("{}: {action}", tl!("Play"))),
+                _ => resp.on_hover_text(&label),
+            };
+            if resp.clicked() {
+                intents.push(if editing { Intent::Select(Some(i)) } else { Intent::Run(i) });
+            }
+        }
+    });
+}
+
+/// Button text size: 11 pt, shrunk down to 8.5 pt so a long name fits its button before it is
+/// cut short.
+fn fit_size(ui: &egui::Ui, text: &str, room: f32) -> f32 {
+    const FULL: f32 = 11.0;
+    const SMALLEST: f32 = 8.5;
+    if text.is_empty() || room <= 0.0 {
+        return FULL;
+    }
+    // Measure in the font buttons use, at the full size.
+    let family = egui::TextStyle::Button.resolve(ui.style()).family;
+    let width = ui.fonts_mut(|f| f.layout_no_wrap(text.to_string(), egui::FontId::new(FULL, family), Color32::WHITE).size().x);
+    if width <= room || !width.is_finite() { FULL } else { (FULL * room / width).clamp(SMALLEST, FULL) }
+}
+
+/// A section title: a full-width bar when one section opens at a time, else a fold arrow and
+/// the title.
+fn heading(ui: &mut egui::Ui, panel: &CustomPanel, i: usize, collapsed: bool, selected: bool, t: &Tokens) -> egui::Response {
+    let label = panel.items.get(i).map(PanelItem::display_label).unwrap_or_default();
+    let color = if selected { t.accent } else { t.text };
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), if panel.accordion { ROW_H } else { 20.0 }), Sense::click());
+    if panel.accordion {
+        let fill = if resp.hovered() || !collapsed { t.hover } else { t.field };
+        let stroke = if selected { Stroke::new(2.0, t.accent) } else { Stroke::new(1.0, t.card_border) };
+        ui.painter().rect(rect, t.radius_sm, fill, stroke, egui::StrokeKind::Inside);
+        ui.painter().text(rect.left_center() + vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, &label, egui::FontId::proportional(11.5), color);
+    } else {
+        let chevron = if collapsed { "chevron-right" } else { "chevron-down" };
+        crate::icons::paint(ui, egui::Rect::from_min_size(rect.min, vec2(16.0, rect.height())), chevron, 12.0, t.text_dim);
+        ui.painter().text(rect.left_center() + vec2(18.0, 0.0), egui::Align2::LEFT_CENTER, &label, egui::FontId::proportional(11.5), color);
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+    resp
+}
+
+/// The buttons, headings, labels and dividers. Returns the area's response for its context menu.
 fn items(
     ui: &mut egui::Ui,
     panel: &CustomPanel,
@@ -875,66 +1104,56 @@ fn items(
     intents: &mut Vec<Intent>,
     t: &Tokens,
 ) -> egui::Response {
-    let gap = 4.0;
-    let cols = usize::from(panel.columns.max(1));
-    let cell = ((ui.available_width() - gap * (cols as f32 - 1.0)) / cols as f32).max(24.0);
+    let width = ui.available_width();
+    let state = (editing, selected, enabled);
     let inner = ui.vertical(|ui| {
-        ui.spacing_mut().item_spacing = vec2(gap, gap);
+        ui.spacing_mut().item_spacing = vec2(GAP, GAP);
         // In edit mode the Add buttons right below say what to do.
         if panel.items.is_empty() && !editing {
             ui.label(RichText::new(tl!("This panel is empty. Click the pencil to add buttons.")).color(t.text_dim).size(11.0));
         }
+        let mut cols = panel.columns.max(1);
         let mut folded = false;
-        let mut row: Vec<usize> = Vec::new();
-        let flush = |ui: &mut egui::Ui, row: &mut Vec<usize>, intents: &mut Vec<Intent>| {
-            if row.is_empty() {
-                return;
-            }
-            ui.horizontal(|ui| {
-                for &i in row.iter() {
-                    let Some(item) = panel.items.get(i) else { continue };
-                    let (fill, text) = button_colors(item.color(), t);
-                    let label = item.display_label();
-                    let on = enabled.get(i).copied().unwrap_or(false);
-                    let mut b = egui::Button::new(RichText::new(&label).color(text).size(11.0)).fill(fill).min_size(vec2(cell, 24.0)).truncate();
-                    if selected == Some(i) {
-                        b = b.stroke(Stroke::new(2.0, t.accent));
-                    }
-                    let resp = ui.add_enabled_ui(on || editing, |ui| ui.add_sized(vec2(cell, 24.0), b)).inner;
-                    let resp = match item {
-                        PanelItem::Action { action, .. } => resp.on_hover_text(format!("{}: {action}", tl!("Play"))),
-                        _ => resp.on_hover_text(&label),
-                    };
-                    if resp.clicked() {
-                        intents.push(if editing { Intent::Select(Some(i)) } else { Intent::Run(i) });
-                    }
-                }
-            });
-            row.clear();
-        };
+        let mut row: Vec<(usize, u8)> = Vec::new();
+        let mut used: u8 = 0;
         for (i, item) in panel.items.iter().enumerate() {
+            let is_selected = selected == Some(i);
             match item {
-                PanelItem::Heading { collapsed, .. } => {
-                    flush(ui, &mut row, intents);
+                PanelItem::Heading { collapsed, columns, .. } => {
+                    button_row(ui, panel, &row, (cols, width), state, intents, t);
+                    (row, used) = (Vec::new(), 0);
+                    cols = columns.unwrap_or(panel.columns).max(1);
                     folded = *collapsed && !editing;
-                    let label = item.display_label();
-                    let color = if selected == Some(i) { t.accent } else { t.text };
-                    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::click());
-                    let chevron = if *collapsed { "chevron-right" } else { "chevron-down" };
-                    crate::icons::paint(ui, egui::Rect::from_min_size(rect.min, vec2(16.0, rect.height())), chevron, 12.0, t.text_dim);
-                    ui.painter().text(rect.left_center() + vec2(18.0, 0.0), egui::Align2::LEFT_CENTER, &label, egui::FontId::proportional(11.5), color);
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
-                    if resp.clicked() {
+                    if heading(ui, panel, i, *collapsed, is_selected, t).clicked() {
                         intents.push(if editing { Intent::Select(Some(i)) } else { Intent::Fold(i) });
                     }
                 }
-                PanelItem::Separator => {
-                    flush(ui, &mut row, intents);
+                PanelItem::Label { columns, .. } | PanelItem::Separator { columns } => {
+                    button_row(ui, panel, &row, (cols, width), state, intents, t);
+                    (row, used) = (Vec::new(), 0);
+                    if let Some(c) = columns {
+                        cols = (*c).max(1);
+                    }
                     if folded {
                         continue;
                     }
-                    if editing {
-                        let color = if selected == Some(i) { t.accent } else { t.text_dim };
+                    let is_label = matches!(item, PanelItem::Label { .. });
+                    let color = if is_selected {
+                        t.accent
+                    } else if is_label {
+                        t.text
+                    } else {
+                        t.text_dim
+                    };
+                    if is_label {
+                        let (rect, resp) = ui.allocate_exact_size(vec2(width, 16.0), Sense::click());
+                        let text = item.display_label();
+                        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, &text, egui::FontId::proportional(11.0), color);
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, &text));
+                        if editing && resp.clicked() {
+                            intents.push(Intent::Select(Some(i)));
+                        }
+                    } else if editing {
                         let resp = ui.add(egui::Label::new(RichText::new(format!("—— {} ——", tl!("Divider"))).color(color).size(10.0)).sense(Sense::click()));
                         if resp.clicked() {
                             intents.push(Intent::Select(Some(i)));
@@ -945,16 +1164,41 @@ fn items(
                 }
                 _ if folded => {}
                 _ => {
-                    row.push(i);
-                    if row.len() == cols {
-                        flush(ui, &mut row, intents);
+                    let span = item.span().min(cols);
+                    if used.saturating_add(span) > cols {
+                        button_row(ui, panel, &row, (cols, width), state, intents, t);
+                        (row, used) = (Vec::new(), 0);
+                    }
+                    row.push((i, span));
+                    used = used.saturating_add(span);
+                    if used >= cols {
+                        button_row(ui, panel, &row, (cols, width), state, intents, t);
+                        (row, used) = (Vec::new(), 0);
                     }
                 }
             }
         }
-        flush(ui, &mut row, intents);
+        button_row(ui, panel, &row, (cols, width), state, intents, t);
     });
     inner.response.interact(Sense::click())
+}
+
+/// A − n + stepper; returns the new value when one of its buttons was clicked.
+fn stepper(ui: &mut egui::Ui, label: &str, value: Option<u8>, t: &Tokens) -> Option<Option<u8>> {
+    let mut out = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(label).color(t.text_dim).size(11.0));
+        let n = value.unwrap_or(0);
+        if ui.add_enabled(n > *COLUMNS.start(), egui::Button::new("−").small()).clicked() {
+            out = Some(Some(n - 1));
+        }
+        let shown = value.map_or_else(|| tl!("Auto").to_string(), |v| v.to_string());
+        ui.label(RichText::new(shown).color(t.text).size(11.0));
+        if ui.add_enabled(n < *COLUMNS.end(), egui::Button::new("+").small()).clicked() {
+            out = Some(Some(if value.is_none() { *COLUMNS.start() } else { n + 1 }));
+        }
+    });
+    out
 }
 
 /// Edit mode: the selected item's settings and the add / layout / delete controls.
@@ -963,16 +1207,13 @@ fn editor(ui: &mut egui::Ui, panel: &CustomPanel, selected: Option<usize>, picke
     crate::widgets::hairline(ui);
     ui.add_space(4.0);
     if let Some((i, item)) = selected.and_then(|i| panel.items.get(i).map(|it| (i, it))) {
-        if !matches!(item, PanelItem::Separator) {
+        let mut copy = item.clone();
+        if let Some(label) = copy.label_mut() {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(tl!("Label")).color(t.text_dim).size(11.0));
-                let mut text = match item {
-                    PanelItem::Command { label, .. } | PanelItem::Action { label, .. } | PanelItem::Heading { label, .. } => label.clone(),
-                    PanelItem::Separator => String::new(),
-                };
                 let hint = item.display_label();
-                if ui.add(egui::TextEdit::singleline(&mut text).char_limit(MAX_TEXT).hint_text(hint).desired_width(ui.available_width())).changed() {
-                    intents.push(Intent::Label(i, text));
+                if ui.add(egui::TextEdit::singleline(label).char_limit(MAX_TEXT).hint_text(hint).desired_width(ui.available_width())).changed() {
+                    intents.push(Intent::Label(i, label.clone()));
                 }
             });
         }
@@ -988,6 +1229,19 @@ fn editor(ui: &mut egui::Ui, panel: &CustomPanel, selected: Option<usize>, picke
                     }
                 }
             });
+            if let Some(Some(n)) = stepper(ui, tl!("Width"), Some(item.span()), t) {
+                intents.push(Intent::Span(i, n));
+            }
+            if let PanelItem::Command { id, icon, .. } = item
+                && crate::tool_shortcuts::tool(id).is_some()
+            {
+                let mut on = *icon;
+                if ui.checkbox(&mut on, tl!("Show as Icon")).changed() {
+                    intents.push(Intent::Icon(i, on));
+                }
+            }
+        } else if let Some(c) = stepper(ui, tl!("Columns"), item.columns(), t) {
+            intents.push(Intent::ItemColumns(i, c));
         }
         ui.horizontal(|ui| {
             if ui.add_enabled(i > 0, egui::Button::new(tl!("Move Up")).small()).clicked() {
@@ -1033,22 +1287,20 @@ fn editor(ui: &mut egui::Ui, panel: &CustomPanel, selected: Option<usize>, picke
                     intents.push(Intent::Picker(Some(String::new())));
                 }
                 if ui.add(egui::Button::new(tl!("Add Heading")).small()).clicked() {
-                    intents.push(Intent::Add(PanelItem::Heading { label: tl!("Section").to_string(), collapsed: false }));
+                    intents.push(Intent::Add(PanelItem::Heading { label: tl!("Section").to_string(), collapsed: false, columns: None }));
+                }
+                if ui.add(egui::Button::new(tl!("Add Text")).small()).clicked() {
+                    intents.push(Intent::Add(PanelItem::Label { label: tl!("Section").to_string(), columns: None }));
                 }
                 if ui.add(egui::Button::new(tl!("Add Divider")).small()).clicked() {
-                    intents.push(Intent::Add(PanelItem::Separator));
+                    intents.push(Intent::Add(PanelItem::Separator { columns: None }));
                 }
             });
         }
     }
     ui.horizontal(|ui| {
-        ui.label(RichText::new(tl!("Columns")).color(t.text_dim).size(11.0));
-        if ui.add_enabled(panel.columns > *COLUMNS.start(), egui::Button::new("−").small()).clicked() {
-            intents.push(Intent::Columns(panel.columns - 1));
-        }
-        ui.label(RichText::new(panel.columns.to_string()).color(t.text).size(11.0));
-        if ui.add_enabled(panel.columns < *COLUMNS.end(), egui::Button::new("+").small()).clicked() {
-            intents.push(Intent::Columns(panel.columns + 1));
+        if let Some(Some(c)) = stepper(ui, tl!("Columns"), Some(panel.columns), t) {
+            intents.push(Intent::Columns(c));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.add(egui::Button::new(tl!("Export Panel…")).small()).clicked() {
@@ -1056,6 +1308,10 @@ fn editor(ui: &mut egui::Ui, panel: &CustomPanel, selected: Option<usize>, picke
             }
         });
     });
+    let mut accordion = panel.accordion;
+    if ui.checkbox(&mut accordion, tl!("One section open at a time")).changed() {
+        intents.push(Intent::Accordion(accordion));
+    }
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         if crate::widgets::secondary_button(ui, tl!("Delete Panel"), 0.0).clicked() {
@@ -1072,6 +1328,7 @@ fn editor(ui: &mut egui::Ui, panel: &CustomPanel, selected: Option<usize>, picke
 /// Apply what the user did in panel `index` through the same commands automation uses.
 fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize, panel: &CustomPanel, intents: Vec<Intent>) {
     let at = json!(index);
+    let item = |i: usize, key: &str, v: Value| Map::from_iter([("index".to_string(), json!(i)), (key.to_string(), v)]);
     for intent in intents {
         let (id, mut p): (&str, Map<String, Value>) = match intent {
             Intent::Run(i) => {
@@ -1098,20 +1355,23 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize, panel: &Cus
             }
             Intent::Fold(i) => {
                 let collapsed = matches!(panel.items.get(i), Some(PanelItem::Heading { collapsed: true, .. }));
-                ("window.customPanel.updateItem", Map::from_iter([("index".into(), json!(i)), ("collapsed".into(), json!(!collapsed))]))
+                ("window.customPanel.updateItem", item(i, "collapsed", json!(!collapsed)))
             }
             Intent::Rename(name) => ("window.customPanel.rename", Map::from_iter([("name".into(), json!(name))])),
-            Intent::Label(i, label) => ("window.customPanel.updateItem", Map::from_iter([("index".into(), json!(i)), ("label".into(), json!(label))])),
-            Intent::Color(i, c) => ("window.customPanel.updateItem", Map::from_iter([("index".into(), json!(i)), ("color".into(), json!(c))])),
+            Intent::Label(i, label) => ("window.customPanel.updateItem", item(i, "label", json!(label))),
+            Intent::Color(i, c) => ("window.customPanel.updateItem", item(i, "color", json!(c))),
+            Intent::Span(i, n) => ("window.customPanel.updateItem", item(i, "span", json!(n))),
+            Intent::ItemColumns(i, c) => ("window.customPanel.updateItem", item(i, "columns", json!(c))),
+            Intent::Icon(i, on) => ("window.customPanel.updateItem", item(i, "icon", json!(on))),
             Intent::Move(from, to) => ("window.customPanel.moveItem", Map::from_iter([("from".into(), json!(from)), ("to".into(), json!(to))])),
             Intent::Remove(i) => ("window.customPanel.removeItem", Map::from_iter([("index".into(), json!(i))])),
-            Intent::Add(item) => {
-                let mut m = serde_json::to_value(&item).ok().and_then(|v| v.as_object().cloned()).unwrap_or_default();
+            Intent::Add(new) => {
+                let mut m = serde_json::to_value(&new).ok().and_then(|v| v.as_object().cloned()).unwrap_or_default();
                 // Insert after the selection, as Photoshop inserts after the selected action.
                 if let Some(s) = app.ui.custom_panels.selected {
                     m.insert("at".into(), json!(s + 1));
                 }
-                if matches!(item, PanelItem::Command { .. } | PanelItem::Action { .. }) {
+                if new.is_button() {
                     app.ui.custom_panels.picker = None;
                 }
                 ("window.customPanel.addItem", m)
@@ -1121,6 +1381,7 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize, panel: &Cus
                 continue;
             }
             Intent::Columns(c) => ("window.customPanel.setLayout", Map::from_iter([("columns".into(), json!(c))])),
+            Intent::Accordion(on) => ("window.customPanel.setLayout", Map::from_iter([("accordion".into(), json!(on))])),
             Intent::Delete => ("window.customPanel.delete", Map::new()),
             Intent::Export => ("window.customPanel.exportFile", Map::new()),
         };
@@ -1254,7 +1515,10 @@ mod tests {
         inv(&mut app, &ctx, "window.customPanel.removeItem", json!({"panel": "P", "index": 1})).unwrap();
         let items = &app.ui.custom_panels.panels[0].items;
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0], PanelItem::Command { id: "edit.redo".into(), params: Value::Null, label: "Redo it".into(), color: "green".into() });
+        assert_eq!(
+            items[0],
+            PanelItem::Command { id: "edit.redo".into(), params: Value::Null, label: "Redo it".into(), color: "green".into(), span: 1, icon: false }
+        );
         assert!(matches!(&items[1], PanelItem::Command { id, .. } if id == "edit.undo"));
     }
 
@@ -1326,6 +1590,65 @@ mod tests {
         assert_eq!(file_stem("A/B: Share?"), "A-B- Share-");
         assert_eq!(file_stem("///"), "---");
         assert_eq!(file_stem("  "), "Custom Panel");
+    }
+
+    #[test]
+    fn accordion_opens_one_section_at_a_time() {
+        let (mut app, ctx) = app();
+        inv(&mut app, &ctx, "window.customPanel.new", json!({"name": "A", "edit": false})).unwrap();
+        for label in ["One", "Two", "Three"] {
+            inv(&mut app, &ctx, "window.customPanel.addItem", json!({"panel": "A", "kind": "heading", "label": label})).unwrap();
+            inv(&mut app, &ctx, "window.customPanel.addItem", json!({"panel": "A", "id": "edit.undo"})).unwrap();
+        }
+        let open = |app: &PhotocraftApp| -> Vec<bool> {
+            app.ui.custom_panels.panels[0]
+                .items
+                .iter()
+                .filter_map(|i| if let PanelItem::Heading { collapsed, .. } = i { Some(!collapsed) } else { None })
+                .collect()
+        };
+        // Turning it on keeps only the first open section.
+        inv(&mut app, &ctx, "window.customPanel.setLayout", json!({"panel": "A", "accordion": true})).unwrap();
+        assert_eq!(open(&app), [true, false, false]);
+        // Opening another folds the rest.
+        inv(&mut app, &ctx, "window.customPanel.updateItem", json!({"panel": "A", "index": 4, "collapsed": false})).unwrap();
+        assert_eq!(open(&app), [false, false, true]);
+        // Without it, sections open independently.
+        inv(&mut app, &ctx, "window.customPanel.setLayout", json!({"panel": "A", "accordion": false})).unwrap();
+        inv(&mut app, &ctx, "window.customPanel.updateItem", json!({"panel": "A", "index": 0, "collapsed": false})).unwrap();
+        assert_eq!(open(&app), [true, false, true]);
+        let def = inv(&mut app, &ctx, "window.customPanel.export", json!({"panel": "A"})).unwrap();
+        assert_eq!(def["panel"]["accordion"], false);
+    }
+
+    #[test]
+    fn labels_row_counts_wide_buttons_and_icons() {
+        let (mut app, ctx) = app();
+        inv(&mut app, &ctx, "window.customPanel.new", json!({"name": "L", "edit": false})).unwrap();
+        let add = |app: &mut PhotocraftApp, v: Value| {
+            let mut v = v;
+            v["panel"] = json!("L");
+            inv(app, &ctx, "window.customPanel.addItem", v)
+        };
+        add(&mut app, json!({"kind": "label", "label": "Radius", "columns": 5})).unwrap();
+        add(&mut app, json!({"id": "edit.undo", "span": 2})).unwrap();
+        let eraser = crate::tool_shortcuts::id(crate::state::Tool::Eraser);
+        add(&mut app, json!({"id": eraser, "icon": true})).unwrap();
+        assert!(add(&mut app, json!({"id": "edit.undo", "icon": true})).is_err(), "only tools have icons");
+        assert!(add(&mut app, json!({"id": "edit.undo", "span": 9})).is_err());
+        assert!(add(&mut app, json!({"kind": "label", "label": "x", "columns": 0})).is_err());
+        inv(&mut app, &ctx, "window.customPanel.updateItem", json!({"panel": "L", "index": 0, "columns": null})).unwrap();
+        assert_eq!(app.ui.custom_panels.panels[0].items[0].columns(), None);
+        assert!(inv(&mut app, &ctx, "window.customPanel.updateItem", json!({"panel": "L", "index": 1, "columns": 3})).is_err(), "buttons don't set columns");
+        inv(&mut app, &ctx, "window.customPanel.updateItem", json!({"panel": "L", "index": 1, "span": 3})).unwrap();
+        assert_eq!(app.ui.custom_panels.panels[0].items[1].span(), 3);
+        // Older saved items (no span, unit divider) still load, and new fields round-trip.
+        let old: PanelItem = serde_json::from_value(json!({"kind": "separator"})).unwrap();
+        assert_eq!(old, PanelItem::Separator { columns: None });
+        let old: PanelItem = serde_json::from_value(json!({"kind": "command", "id": "edit.undo"})).unwrap();
+        assert_eq!(old.span(), 1);
+        let item = app.ui.custom_panels.panels[0].items[2].clone();
+        assert_eq!(serde_json::from_value::<PanelItem>(serde_json::to_value(&item).unwrap()).unwrap(), item);
     }
 
     #[test]

@@ -3905,3 +3905,6 @@ curves	Smooth	スムーズ
 	{name} isn't available right now	{name} は現在使用できません
 	Import Panel…	パネルを読み込み…
 	Export Panel…	パネルを書き出し…
+	Add Text	テキストを追加
+	Show as Icon	アイコンで表示
+	One section open at a time	一度に 1 つのセクションだけ開く
