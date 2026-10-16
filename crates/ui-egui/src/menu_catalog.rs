@@ -52,6 +52,8 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["File", "Automate"], "Merge to HDR Pro…", None, "file.automate.mergeToHdrPro"),
     (&["File", "Automate"], "Photomerge…", None, "file.automate.photomerge"),
     (&["File", "Scripts"], "Image Processor…", None, "file.scripts.imageProcessor"),
+    (&["File", "Scripts"], "Recompress JPEG as JPEG XL…", None, "file.scripts.jpegToJpegXl"),
+    (&["File", "Scripts"], "Restore Original JPEG from JPEG XL…", None, "file.scripts.jpegXlToJpeg"),
     (&["File", "Scripts"], "---", None, "---"),
     (&["File", "Scripts"], "Delete All Empty Layers", None, "file.scripts.deleteAllEmptyLayers"),
     (&["File", "Scripts"], "Flatten All Layer Effects", None, "file.scripts.flattenAllLayerEffects"),

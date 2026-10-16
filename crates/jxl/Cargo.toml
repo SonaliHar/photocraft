@@ -1,0 +1,24 @@
+[package]
+name = "photocraft-jxl"
+description = "Optional JPEG XL decoder and encoder for PhotoCraft (thin, panic-guarded wrappers around jxl-oxide and jixel)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Pure Rust (MIT OR Apache-2.0), no C code. Without `rayon` it also builds for wasm32 (the shipped
+# web build leaves it out: the decoder does not fit under the 25 MiB wasm cap, see apps/photocraft-web).
+jxl-oxide = { version = "0.12.6", default-features = false }
+# The encoder: pure Rust (BSD-3-Clause OR Apache-2.0), a port of libjxl-tiny. Lossy VarDCT and
+# lossless Modular, 8/16-bit and float, ICC, EXIF and XMP, and lossless JPEG recompression. Pinned
+# exactly: a young crate, updated on purpose. The `splines` feature (experimental tools this crate
+# never turns on) is left out.
+jixel = { version = "=0.4.2", default-features = false, features = ["avx", "neon", "sse", "wasm"] }
+
+# Groups and passes decode in parallel on native; wasm stays single-threaded.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+jxl-oxide = { version = "0.12.6", default-features = false, features = ["rayon"] }
+
+[lints]
+workspace = true

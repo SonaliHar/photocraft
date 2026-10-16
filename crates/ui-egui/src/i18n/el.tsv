@@ -97,6 +97,13 @@
 	Photomerge…	Σύνθεση φωτογραφιών…
 	Scripts	Δέσμες ενεργειών
 	Image Processor…	Επεξεργαστής εικόνων…
+	Recompress JPEG as JPEG XL…	Επανασυμπίεση JPEG ως JPEG XL…
+	Restore Original JPEG from JPEG XL…	Επαναφορά αρχικού JPEG από JPEG XL…
+	Effort	Προσπάθεια
+	Higher effort makes a smaller file and takes longer to save	Μεγαλύτερη προσπάθεια δίνει μικρότερο αρχείο, αλλά η αποθήκευση διαρκεί περισσότερο
+	A coarse picture shows first and refines as the file loads	Εμφανίζεται πρώτα μια αδρή εικόνα που βελτιώνεται καθώς φορτώνεται το αρχείο
+	Recompressed {n} JPEG files as JPEG XL, {pct}% smaller	Επανασυμπιέστηκαν {n} αρχεία JPEG ως JPEG XL, {pct}% μικρότερα
+	Restored {n} original JPEG files	Επαναφέρθηκαν {n} αρχικά αρχεία JPEG
 	Delete All Empty Layers	Διαγραφή όλων των κενών επιπέδων
 	Flatten All Layer Effects	Ενοποίηση όλων των εφέ επιπέδων
 	Flatten All Masks	Ενοποίηση όλων των μασκών

@@ -115,6 +115,13 @@
 	Photomerge…	Photomerge…
 	Scripts	Secuencias de comandos
 	Image Processor…	Procesador de imágenes…
+	Recompress JPEG as JPEG XL…	Recomprimir JPEG como JPEG XL…
+	Restore Original JPEG from JPEG XL…	Restaurar el JPEG original desde JPEG XL…
+	Effort	Esfuerzo
+	Higher effort makes a smaller file and takes longer to save	Más esfuerzo da un archivo más pequeño y tarda más en guardar
+	A coarse picture shows first and refines as the file loads	Primero aparece una imagen aproximada que se afina mientras se carga el archivo
+	Recompressed {n} JPEG files as JPEG XL, {pct}% smaller	{n} archivos JPEG recomprimidos como JPEG XL, un {pct} % más pequeños
+	Restored {n} original JPEG files	{n} archivos JPEG originales restaurados
 	Delete All Empty Layers	Eliminar todas las capas vacías
 	Flatten All Layer Effects	Acoplar todos los efectos de capa
 	Flatten All Masks	Acoplar todas las máscaras

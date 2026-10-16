@@ -753,3 +753,28 @@ fn batch_plays_a_photoshop_actions_file() {
     assert!(err.contains("Generative Fill"), "{err}");
     assert!(!o.status.success());
 }
+
+/// JPEG XL output: lossless without a quality, lossy with one, effort and progressive accepted,
+/// and a bad effort refused.
+#[cfg(feature = "jxl")]
+#[test]
+fn convert_to_jpeg_xl_lossless_lossy_effort_and_progressive() {
+    let d = tmp("convert-jxl");
+    let a = d.join("a.png");
+    write_png(&a, 37, 23, 7);
+    let (lossless, lossy) = (d.join("lossless.jxl"), d.join("lossy.jxl"));
+    ok(bin().args(["convert"]).arg(&a).arg(&lossless));
+    let x = photocraft_codecs::decode(&std::fs::read(&a).unwrap()).unwrap();
+    let y = photocraft_codecs::decode(&std::fs::read(&lossless).unwrap()).unwrap();
+    assert_eq!(x.to_rgba8(), y.to_rgba8(), "no quality: lossless");
+    ok(bin().args(["convert"]).arg(&a).arg(&lossy).args(["--quality", "50", "--effort", "7", "--progressive"]));
+    // A repeating pattern compresses to almost nothing losslessly, so the lossy file shows itself
+    // by its samples, not its size.
+    let z = photocraft_codecs::decode(&std::fs::read(&lossy).unwrap()).unwrap();
+    assert_eq!(z.dimensions(), x.dimensions());
+    assert_ne!(z.to_rgba8(), x.to_rgba8(), "a quality: lossy");
+    for bad in ["0", "10", "x"] {
+        assert!(!bin().args(["convert"]).arg(&a).arg(d.join("bad.jxl")).args(["--effort", bad]).output().unwrap().status.success(), "--effort {bad}");
+    }
+    std::fs::remove_dir_all(d).unwrap();
+}

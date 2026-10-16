@@ -158,6 +158,13 @@
 	Image	Kép
 	Image Assets	Képelemek
 	Image Processor…	Képfeldolgozó…
+	Recompress JPEG as JPEG XL…	JPEG újratömörítése JPEG XL formátumba…
+	Restore Original JPEG from JPEG XL…	Eredeti JPEG visszaállítása JPEG XL fájlból…
+	Effort	Ráfordítás
+	Higher effort makes a smaller file and takes longer to save	Nagyobb ráfordítás kisebb fájlt ad, de a mentés tovább tart
+	A coarse picture shows first and refines as the file loads	Előbb durva kép jelenik meg, amely a betöltés közben finomodik
+	Recompressed {n} JPEG files as JPEG XL, {pct}% smaller	{n} JPEG-fájl újratömörítve JPEG XL formátumba, {pct}%-kal kisebb
+	Restored {n} original JPEG files	{n} eredeti JPEG-fájl visszaállítva
 	Image Rotation	Képforgatás
 	Indexed Color	Indexelt szín
 	Interface…	Felület…

@@ -120,6 +120,13 @@
 	Photomerge…	Spojit fotografie…
 	Scripts	Skripty
 	Image Processor…	Zpracování obrazů…
+	Recompress JPEG as JPEG XL…	Překomprimovat JPEG jako JPEG XL…
+	Restore Original JPEG from JPEG XL…	Obnovit původní JPEG z JPEG XL…
+	Effort	Úsilí
+	Higher effort makes a smaller file and takes longer to save	Vyšší úsilí vytvoří menší soubor, ale ukládání trvá déle
+	A coarse picture shows first and refines as the file loads	Nejprve se zobrazí hrubý obraz, který se při načítání zpřesňuje
+	Recompressed {n} JPEG files as JPEG XL, {pct}% smaller	Překomprimováno {n} souborů JPEG jako JPEG XL, o {pct} % menší
+	Restored {n} original JPEG files	Obnoveno {n} původních souborů JPEG
 	Delete All Empty Layers	Odstranit všechny prázdné vrstvy
 	Flatten All Layer Effects	Sloučit všechny efekty vrstev
 	Flatten All Masks	Sloučit všechny masky

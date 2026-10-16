@@ -61,6 +61,7 @@ pub mod image_cmds;
 pub mod inspect;
 pub mod installed_profiles;
 pub mod jobs;
+pub mod jxl_cmds;
 pub mod kys;
 pub mod layer_copy_cmds;
 pub mod layer_label_cmds;

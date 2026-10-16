@@ -114,6 +114,13 @@
 	Photomerge…	写真を貼り合わせ…
 	Scripts	スクリプト
 	Image Processor…	画像プロセッサー…
+	Recompress JPEG as JPEG XL…	JPEG を JPEG XL に再圧縮…
+	Restore Original JPEG from JPEG XL…	JPEG XL から元の JPEG を復元…
+	Effort	エフォート
+	Higher effort makes a smaller file and takes longer to save	エフォートを上げるとファイルは小さくなり、保存に時間がかかります
+	A coarse picture shows first and refines as the file loads	最初に粗い画像が表示され、読み込みに従って鮮明になります
+	Recompressed {n} JPEG files as JPEG XL, {pct}% smaller	{n} 個の JPEG ファイルを JPEG XL に再圧縮しました（{pct}% 縮小）
+	Restored {n} original JPEG files	{n} 個の元の JPEG ファイルを復元しました
 	Delete All Empty Layers	空のレイヤーをすべて削除
 	Flatten All Layer Effects	すべてのレイヤー効果を統合
 	Flatten All Masks	すべてのマスクを統合

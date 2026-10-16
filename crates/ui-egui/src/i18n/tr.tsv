@@ -97,6 +97,13 @@
 	Photomerge…	Fotoğraf Birleştir…
 	Scripts	Komut dosyaları
 	Image Processor…	Görüntü İşlemcisi…
+	Recompress JPEG as JPEG XL…	JPEG'i JPEG XL olarak yeniden sıkıştır…
+	Restore Original JPEG from JPEG XL…	JPEG XL'den özgün JPEG'i geri yükle…
+	Effort	Çaba
+	Higher effort makes a smaller file and takes longer to save	Daha yüksek çaba daha küçük dosya verir ve kaydetme daha uzun sürer
+	A coarse picture shows first and refines as the file loads	Önce kaba bir resim görünür, dosya yüklendikçe netleşir
+	Recompressed {n} JPEG files as JPEG XL, {pct}% smaller	{n} JPEG dosyası JPEG XL olarak yeniden sıkıştırıldı, %{pct} daha küçük
+	Restored {n} original JPEG files	{n} özgün JPEG dosyası geri yüklendi
 	Delete All Empty Layers	Tüm Boş Katmanları Sil
 	Flatten All Layer Effects	Tüm Katman Efektlerini Düzleştir
 	Flatten All Masks	Tüm Maskeleri Düzleştir

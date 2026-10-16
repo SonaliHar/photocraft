@@ -44,6 +44,8 @@ roxmltree = "0.20"
 tempfile = "3"
 
 [dev-dependencies]
+# JPEG XL for the File › Scripts JPEG ↔ JPEG XL tests (the apps enable it through photocraft-io).
+photocraft-codecs = { workspace = true, features = ["jxl"] }
 photocraft-affinity = { workspace = true, features = ["synth"] }
 # Synthetic camera raw files for the open tests.
 photocraft-raw = { workspace = true, features = ["testgen"] }

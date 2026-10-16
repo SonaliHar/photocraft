@@ -11,6 +11,7 @@ use photocraft_engine::web_cmds::{self, Optimized, WebSettings};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
+use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
 use crate::state::DialogKind;
 use crate::theme::Tokens;
 
@@ -60,6 +61,27 @@ fn form(app: &mut PhotocraftApp, command: &str, label: &str, fields: Value, choi
 /// "not Photoshop ExtendScript" error instead of hiding those files from the picker.
 const SCRIPT_EXTENSIONS: &[&str] = &["psjs", "ccjs", "jsx", "js", "jsxbin", "json", "txt", "pcdroplet"];
 
+/// Recompress JPEG as JPEG XL… / Restore Original JPEG from JPEG XL…: pick the files, convert
+/// each next to itself, and say how much space it saved (or took).
+fn convert_files(app: &mut PhotocraftApp, id: &str) -> Result<Value, String> {
+    let to_jxl = id == "file.scripts.jpegToJpegXl";
+    let extensions: &[&str] = if to_jxl { &["jpg", "jpeg", "jpe"] } else { &["jxl"] };
+    let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
+    let request = FileDialogRequest::Open { multiple: true, initial_dir, extensions: Some(extensions.iter().map(|e| (*e).to_string()).collect()) };
+    let id = id.to_string();
+    let r = app.ask_file(request, move |app, answer| {
+        let FileDialogAnswer::Paths(paths) = answer else { return Err("this script converts files on disk".into()) };
+        let r = app.run(&id, json!({"paths": paths}))?;
+        let n = r.get("files").and_then(Value::as_array).map_or(0, Vec::len);
+        let (before, after) = (r.get("bytes").and_then(Value::as_u64).unwrap_or(0), r.get("outBytes").and_then(Value::as_u64).unwrap_or(0));
+        let pct = if before > 0 { (100.0 - after as f64 * 100.0 / before as f64).round() } else { 0.0 };
+        let template = if to_jxl { "Recompressed {n} JPEG files as JPEG XL, {pct}% smaller" } else { "Restored {n} original JPEG files" };
+        app.ui.status = crate::i18n::fmt(tl!(template), &[("n", &n.to_string()), ("pct", &pct.to_string())]);
+        Ok(r)
+    });
+    r.or_else(|e| if e == crate::file_dialog::CANCELLED { Ok(Value::Null) } else { Err(e) })
+}
+
 /// Menu items fronted here (dialogs before the engine command). `None` when not ours.
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if !no_params(params) {
@@ -104,6 +126,7 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             )
         }
         "file.scripts.statistics" => json!({"dialog": crate::stack_dialog::open_statistics(app)}),
+        "file.scripts.jpegToJpegXl" | "file.scripts.jpegXlToJpeg" => return Some(convert_files(app, id)),
         "file.scripts.browse" => {
             return Some(app.pick_file_bytes_filtered(SCRIPT_EXTENSIONS, |app, name, bytes| {
                 let r = app.run("file.scripts.browse", json!({"name": name, "script": String::from_utf8_lossy(&bytes)}));

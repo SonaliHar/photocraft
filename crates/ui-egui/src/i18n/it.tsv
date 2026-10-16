@@ -113,6 +113,13 @@
 	Photomerge…	Photomerge…
 	Scripts	Script
 	Image Processor…	Elaborazione immagini…
+	Recompress JPEG as JPEG XL…	Ricomprimi JPEG come JPEG XL…
+	Restore Original JPEG from JPEG XL…	Ripristina il JPEG originale da JPEG XL…
+	Effort	Impegno
+	Higher effort makes a smaller file and takes longer to save	Un impegno maggiore dà un file più piccolo e il salvataggio richiede più tempo
+	A coarse picture shows first and refines as the file loads	Prima appare un’immagine grossolana che si affina durante il caricamento
+	Recompressed {n} JPEG files as JPEG XL, {pct}% smaller	{n} file JPEG ricompressi come JPEG XL, più piccoli del {pct}%
+	Restored {n} original JPEG files	{n} file JPEG originali ripristinati
 	Delete All Empty Layers	Elimina tutti i livelli vuoti
 	Flatten All Layer Effects	Unisci tutti gli effetti livello
 	Flatten All Masks	Unisci tutte le maschere

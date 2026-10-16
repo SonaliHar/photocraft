@@ -106,6 +106,13 @@
 	Photomerge…	Photomerge…
 	Scripts	스크립트
 	Image Processor…	이미지 프로세서…
+	Recompress JPEG as JPEG XL…	JPEG를 JPEG XL로 다시 압축…
+	Restore Original JPEG from JPEG XL…	JPEG XL에서 원본 JPEG 복원…
+	Effort	노력
+	Higher effort makes a smaller file and takes longer to save	노력을 높이면 파일이 작아지고 저장 시간이 길어집니다
+	A coarse picture shows first and refines as the file loads	거친 이미지가 먼저 표시되고 파일을 불러오면서 선명해집니다
+	Recompressed {n} JPEG files as JPEG XL, {pct}% smaller	JPEG 파일 {n}개를 JPEG XL로 다시 압축했습니다({pct}% 작아짐)
+	Restored {n} original JPEG files	원본 JPEG 파일 {n}개를 복원했습니다
 	Delete All Empty Layers	빈 레이어 모두 삭제
 	Flatten All Layer Effects	모든 레이어 효과 병합
 	Flatten All Masks	모든 마스크 병합

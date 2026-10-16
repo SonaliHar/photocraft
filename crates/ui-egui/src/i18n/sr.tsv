@@ -111,6 +111,13 @@
 	Photomerge…	Spajanje fotografija…
 	Scripts	Skripte
 	Image Processor…	Obrada slika…
+	Recompress JPEG as JPEG XL…	Поново компримуј JPEG као JPEG XL…
+	Restore Original JPEG from JPEG XL…	Врати оригинални JPEG из JPEG XL…
+	Effort	Труд
+	Higher effort makes a smaller file and takes longer to save	Већи труд даје мању датотеку, али чување траје дуже
+	A coarse picture shows first and refines as the file loads	Прво се приказује груба слика која се изоштрава док се датотека учитава
+	Recompressed {n} JPEG files as JPEG XL, {pct}% smaller	Поново компримовано JPEG датотека као JPEG XL: {n}, мање за {pct}%
+	Restored {n} original JPEG files	Враћено оригиналних JPEG датотека: {n}
 	Delete All Empty Layers	Obriši sve prazne slojeve
 	Flatten All Layer Effects	Spljošti sve efekte slojeva
 	Flatten All Masks	Spljošti sve maske

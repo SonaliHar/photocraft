@@ -13,7 +13,15 @@ use crate::state::DialogKind;
 use crate::theme::Tokens;
 use crate::{ExportSettings, PhotocraftApp};
 
-const FORMATS: [(&str, &str); 6] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP"), ("tif", "TIFF"), ("tga", "TGA"), ("ico", "ICO")];
+const FORMATS: [(&str, &str); 7] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "WebP"), ("jxl", "JPEG XL"), ("tif", "TIFF"), ("tga", "TGA"), ("ico", "ICO")];
+
+/// The formats this build writes: JPEG XL only with the `jxl` feature (not on the web).
+fn formats() -> impl Iterator<Item = &'static (&'static str, &'static str)> {
+    FORMATS.iter().filter(|(k, _)| *k != "jxl" || photocraft_codecs::caps(photocraft_codecs::Format::Jxl).write)
+}
+
+/// The JPEG XL quality the dialog starts at: 90 is visually lossless.
+const JXL_QUALITY: u8 = 90;
 
 /// Preferences ▸ remembered dialog settings: Export As writes the settings it was used with
 /// last under its command id and seeds the next dialog from them, as Fill, Liquify and the
@@ -24,7 +32,7 @@ pub(crate) const COMMAND: &str = "file.export.exportAs";
 /// no longer matches a control (a hand-edited preferences file) is left at its default.
 fn seed_remembered(app: &PhotocraftApp, f: &mut Map<String, Value>) {
     let Some(Value::Object(saved)) = app.session.prefs().dialogs.get(COMMAND) else { return };
-    if let Some(v) = saved.get("format").and_then(Value::as_str).filter(|v| FORMATS.iter().any(|(k, _)| k == v)) {
+    if let Some(v) = saved.get("format").and_then(Value::as_str).filter(|v| formats().any(|(k, _)| k == v)) {
         f.insert("format".into(), json!(v));
     }
     if let Some(v) = saved.get("quality").and_then(Value::as_f64).filter(|v| (1.0..=100.0).contains(v)) {
@@ -33,7 +41,10 @@ fn seed_remembered(app: &PhotocraftApp, f: &mut Map<String, Value>) {
     if let Some(v) = saved.get("scale").and_then(Value::as_f64).filter(|v| (1.0..=1000.0).contains(v)) {
         f.insert("scale".into(), json!(v));
     }
-    for key in ["lossless", "transparency"] {
+    if let Some(v) = saved.get("effort").and_then(Value::as_f64).filter(|v| (1.0..=9.0).contains(v)) {
+        f.insert("effort".into(), json!(v));
+    }
+    for key in ["lossless", "transparency", "progressive"] {
         if let Some(v) = saved.get(key).and_then(Value::as_bool) {
             f.insert(key.into(), json!(v));
         }
@@ -65,8 +76,23 @@ fn seed_remembered(app: &PhotocraftApp, f: &mut Map<String, Value>) {
 
 /// Record the settings for the next Export As (see [`seed_remembered`]).
 fn remember(app: &mut PhotocraftApp, f: &Map<String, Value>) {
-    const KEYS: [&str; 13] =
-        ["format", "quality", "lossless", "transparency", "scale", "metadata", "tgaBits", "sizing", "width", "height", "lockAspect", "profile", "embedProfile"];
+    const KEYS: [&str; 15] = [
+        "format",
+        "quality",
+        "lossless",
+        "effort",
+        "progressive",
+        "transparency",
+        "scale",
+        "metadata",
+        "tgaBits",
+        "sizing",
+        "width",
+        "height",
+        "lockAspect",
+        "profile",
+        "embedProfile",
+    ];
     let saved: Map<String, Value> = KEYS.iter().filter_map(|k| f.get(*k).map(|v| ((*k).to_string(), v.clone()))).collect();
     app.session.prefs.edit(|p| {
         p.dialogs.insert(COMMAND.into(), Value::Object(saved));
@@ -360,6 +386,13 @@ fn set_format_defaults(f: &mut Map<String, Value>, fmt: &str, prefs: &photocraft
             f.insert("quality".into(), json!(prefs.webp_quality));
             f.insert("lossless".into(), json!(prefs.webp_lossless));
         }
+        // JPEG XL starts lossless, as a save keeps every sample; lossy starts visually lossless.
+        "jxl" => {
+            f.insert("quality".into(), json!(JXL_QUALITY));
+            f.insert("lossless".into(), json!(true));
+            f.insert("effort".into(), json!(photocraft_codecs::EncodeOptions::default().jxl_effort));
+            f.insert("progressive".into(), json!(false));
+        }
         _ => {}
     }
 }
@@ -387,6 +420,10 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
         jpeg_quality: (fmt == "jpg").then_some(quality),
         webp_lossless: fmt != "webp" || lossless(f),
         webp_quality: (fmt == "webp" && !lossless(f)).then_some(quality),
+        jxl_lossless: fmt != "jxl" || lossless(f),
+        jxl_quality: (fmt == "jxl" && !lossless(f)).then_some(quality),
+        jxl_effort: (fmt == "jxl").then(|| n(f, "effort", 4.0).clamp(1.0, 9.0) as u8),
+        jxl_progressive: fmt == "jxl" && f.get("progressive").and_then(Value::as_bool).unwrap_or(false),
         xmp_all: metadata == "all",
         tga_bits: if fmt == "tga" { tga_bits(f) } else { None },
         embed_icc: f.get("embedProfile").and_then(Value::as_bool).unwrap_or(true),
@@ -713,21 +750,31 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tl!("Format")).color(t.text_dim));
                 let mut fmt = s_fmt(f);
-                let opts: Vec<(String, &str)> = FORMATS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
+                let opts: Vec<(String, &str)> = formats().map(|(k, l)| (k.to_string(), *l)).collect();
                 if crate::widgets::dropdown(ui, "export-format", &mut fmt, &opts, 130.0) {
                     set_format_defaults(f, &fmt, &app.session.prefs().export);
                 }
             });
             let fmt = s_fmt(f);
-            if fmt == "webp" {
+            if fmt == "webp" || fmt == "jxl" {
                 let mut ll = lossless(f);
                 crate::widgets::checkbox(ui, &mut ll, tl!("Lossless"));
                 f.insert("lossless".into(), json!(ll));
             }
-            if fmt == "jpg" || (fmt == "webp" && !lossless(f)) {
+            if fmt == "jpg" || ((fmt == "webp" || fmt == "jxl") && !lossless(f)) {
                 let mut q = n(f, "quality", 85.0) as f32;
                 crate::widgets::slider_row(ui, tl!("Quality"), &mut q, 1.0..=100.0, "%", None);
                 f.insert("quality".into(), json!(q.round()));
+            }
+            if fmt == "jxl" {
+                // Effort as libjxl numbers it: 1 is fastest, 9 the smallest file.
+                let mut e = n(f, "effort", 4.0) as f32;
+                crate::widgets::slider_row(ui, tl!("Effort"), &mut e, 1.0..=9.0, "", None)
+                    .on_hover_text(tl!("Higher effort makes a smaller file and takes longer to save"));
+                f.insert("effort".into(), json!(e.round()));
+                let mut pr = f.get("progressive").and_then(Value::as_bool).unwrap_or(false);
+                crate::widgets::checkbox(ui, &mut pr, tl!("Progressive")).on_hover_text(tl!("A coarse picture shows first and refines as the file loads"));
+                f.insert("progressive".into(), json!(pr));
             }
             if fmt == "tga" {
                 ui.horizontal(|ui| {
@@ -784,10 +831,12 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             let layer = f.get("__layer").and_then(Value::as_u64);
             let key = egui::Id::new(("export-preview", doc.id.0, app.session.active().map_or(0, |s| s.revision), layer));
             let sig = format!(
-                "{}{}{}{}{}{}{}{}{}{}{}{}",
+                "{}{}{}{}{}{}{}{}{}{}{}{}{}{}",
                 s_fmt(f),
                 n(f, "quality", 85.0),
                 lossless(f),
+                n(f, "effort", 4.0),
+                f.get("progressive").and_then(Value::as_bool).unwrap_or(false),
                 f.get("transparency").map(|v| v.to_string()).unwrap_or_default(),
                 n(f, "scale", 100.0),
                 n(f, "width", 0.0),
@@ -1309,5 +1358,30 @@ mod tests {
         assert_eq!(f.get("width"), Some(&json!(100.0)));
         assert_eq!(f.get("height"), Some(&json!(50.0)));
         assert_eq!(f.get("sizing"), Some(&json!("scale")));
+    }
+
+    /// JPEG XL starts lossless; a lossy one takes the quality, and effort and progressive reach
+    /// the encoder. Other formats leave the JPEG XL settings at their defaults.
+    #[test]
+    fn jpeg_xl_settings_reach_the_encoder() {
+        let mut f = Map::new();
+        set_format_defaults(&mut f, "jxl", &photocraft_engine::prefs::Export::default());
+        assert_eq!((f["lossless"].clone(), f["quality"].clone()), (json!(true), json!(JXL_QUALITY)));
+        let s = settings(&f);
+        assert!(s.jxl_lossless && s.jxl_quality.is_none());
+        f.insert("lossless".into(), json!(false));
+        f.insert("quality".into(), json!(70));
+        f.insert("effort".into(), json!(8));
+        f.insert("progressive".into(), json!(true));
+        let o = settings(&f).io_options().encode;
+        assert_eq!((o.jxl_lossless, o.jxl_quality, o.jxl_effort, o.jxl_progressive), (false, 70, 8, true));
+        // An effort out of range is clamped, never passed on.
+        f.insert("effort".into(), json!(40));
+        assert_eq!(settings(&f).jxl_effort, Some(9));
+        f.insert("format".into(), json!("png"));
+        let png = settings(&f);
+        assert!(png.jxl_lossless && png.jxl_effort.is_none() && !png.jxl_progressive);
+        // The format is offered only where this build writes it.
+        assert_eq!(formats().any(|(k, _)| *k == "jxl"), photocraft_codecs::caps(photocraft_codecs::Format::Jxl).write);
     }
 }

@@ -15,19 +15,22 @@ pub const USAGE: &str = "\
 photocraft-cli: headless Photocraft
 
 USAGE:
-  photocraft-cli convert <in> <out> [--format <ext>] [--quality <1-100>] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>]
+  photocraft-cli convert <in> <out> [--format <ext>] [--quality <1-100>] [--effort <1-9>] [--progressive] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>]
       Convert between formats (.pcraft, .psd, .png, .jpg, .tif, .webp, .exr, …).
       TIFF output is flat unless --tiff-layers keeps the layers (Photoshop layer data).
-      --quality sets the JPEG or WebP quality; a WebP written with a quality is lossy, without one lossless.
+      --quality sets the JPEG, WebP or JPEG XL quality; a WebP or JPEG XL written with a quality is lossy,
+      without one lossless.
+      --effort sets the JPEG XL encoder effort (1 fastest, 9 smallest; default 4), and --progressive
+      writes a JPEG XL that shows a coarse picture first.
       --tga-bits sets a TGA's bits per pixel: 32 writes the alpha channel (or else the transparency) as
       its alpha, 24 none. Without it: 32 with an alpha channel or transparency, else 24.
       --dpx-bits sets a DPX's bits per sample. Without it: 8 for an 8-bit document, else 16.
   photocraft-cli info <file> [--compact]
       Print the document as JSON (size, mode, depth, layer tree).
-  photocraft-cli run (<file> | --new <json>) --cmd <id> [--params <json>] [--cmd …] [--out <file>] [--format <ext>] [--quality <1-100>] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>]
+  photocraft-cli run (<file> | --new <json>) --cmd <id> [--params <json>] [--cmd …] [--out <file>] [--format <ext>] [--quality <1-100>] [--effort <1-9>] [--progressive] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>]
       Open a file, run engine commands in order, save the result. Each --params
       applies to the preceding --cmd. Prints each command's JSON result.
-  photocraft-cli batch --actions <actions.json|set.atn> [--action <name>] --in <dir> --out <dir> [--format <ext>] [--quality <1-100>] [--in-place] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>]
+  photocraft-cli batch --actions <actions.json|set.atn> [--action <name>] --in <dir> --out <dir> [--format <ext>] [--quality <1-100>] [--effort <1-9>] [--progressive] [--in-place] [--tiff-layers] [--tga-bits <24|32>] [--dpx-bits <8|10|12|16>]
       Apply an action list to every image in a directory. A Photoshop Actions file (.atn) is a
       set: its action --action names plays, as below. JSON steps are [id, params] pairs,
       {\"command\": id, \"params\": {…}} objects or bare ids, as a recorded action or droplet stores them
@@ -69,18 +72,23 @@ struct Subcommand {
 }
 
 const SUBCOMMANDS: &[Subcommand] = &[
-    Subcommand { name: "convert", values: &["--format", "--quality", "--tga-bits", "--dpx-bits"], bare: &["--tiff-layers"], run: convert },
+    Subcommand {
+        name: "convert",
+        values: &["--format", "--quality", "--effort", "--tga-bits", "--dpx-bits"],
+        bare: &["--tiff-layers", "--progressive"],
+        run: convert,
+    },
     Subcommand { name: "info", values: &[], bare: &["--compact"], run: |a, out, _| info(a, out) },
     Subcommand {
         name: "run",
-        values: &["--new", "--cmd", "--params", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits"],
-        bare: &["--tiff-layers"],
+        values: &["--new", "--cmd", "--params", "--out", "--format", "--quality", "--effort", "--tga-bits", "--dpx-bits"],
+        bare: &["--tiff-layers", "--progressive"],
         run: run_cmds,
     },
     Subcommand {
         name: "batch",
-        values: &["--actions", "--action", "--in", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits"],
-        bare: &["--in-place", "--tiff-layers"],
+        values: &["--actions", "--action", "--in", "--out", "--format", "--quality", "--effort", "--tga-bits", "--dpx-bits"],
+        bare: &["--in-place", "--tiff-layers", "--progressive"],
         run: batch,
     },
     Subcommand { name: "droplet", values: &["--out"], bare: &[], run: droplet },
@@ -208,10 +216,17 @@ fn export_opts(a: &Args) -> Result<ExportOptions, String> {
     if let Some(q) = a.get("--quality") {
         let q = q.parse().ok().filter(|q| (1..=100).contains(q)).ok_or_else(|| format!("bad --quality `{q}`: expected a whole number from 1 to 100"))?;
         o.encode.jpeg_quality = q;
-        // Asking for a quality asks for a lossy WebP; the default WebP stays lossless.
+        // Asking for a quality asks for a lossy WebP or JPEG XL; by default both stay lossless.
         o.encode.webp_quality = q;
         o.encode.webp_lossless = false;
+        o.encode.jxl_quality = q;
+        o.encode.jxl_lossless = false;
     }
+    if let Some(e) = a.get("--effort") {
+        o.encode.jxl_effort =
+            e.parse().ok().filter(|e| (1..=9).contains(e)).ok_or_else(|| format!("bad --effort `{e}`: expected a whole number from 1 to 9"))?;
+    }
+    o.encode.jxl_progressive = a.has("--progressive");
     if let Some(b) = a.get("--tga-bits") {
         o.tga_bits = Some(b.parse().ok().and_then(photocraft_io::TgaBits::from_bits).ok_or_else(|| format!("bad --tga-bits `{b}`: expected 24 or 32"))?);
     }

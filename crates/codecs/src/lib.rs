@@ -44,7 +44,7 @@ pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_
 pub use crate::source_settings::{WebpEncoding, jpeg_quality, webp_encoding};
 pub use half::f16;
 
-use crate::codecs::{dds, dpx, exr, fits, heif, jpeg, pcx, png, pnm, tiff, via_image, webp, xpm};
+use crate::codecs::{dds, dpx, exr, fits, heif, jpeg, jxl, pcx, png, pnm, tiff, via_image, webp, xpm};
 
 /// Detect the format and decode with default [`Limits`].
 pub fn decode(bytes: &[u8]) -> Result<Image, CodecError> {
@@ -64,8 +64,8 @@ pub fn decode_as(format: Format, bytes: &[u8]) -> Result<Image, CodecError> {
 
 /// Decode as a specific format.
 pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Result<Image, CodecError> {
-    // HEIF without the `heif` feature: its decoder stub says what is missing from this build.
-    if !caps(format).read && format != Format::Heif {
+    // HEIF and JPEG XL without their feature: the decoder stub says what is missing from this build.
+    if !caps(format).read && !matches!(format, Format::Heif | Format::Jxl) {
         return Err(CodecError::unsupported(format, "decoding is not available for this format"));
     }
     let l = &opts.limits;
@@ -83,6 +83,7 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Cineon => dpx::decode_cineon(bytes, l),
         Format::OpenExr => exr::decode(bytes, l),
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
+        Format::Jxl => jxl::decode(bytes, l, opts.keep_orientation),
         Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::decode(format, bytes, l),
     }?;
     // Without a resolution of the format's own (PNG pHYs, TIFF tags, JPEG's metadata), the
@@ -94,10 +95,11 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
     }
     // Turn the pixels upright, like Photoshop: a TIFF records it in the decoded page's own
     // directory, the others in their EXIF block. The metadata is rewritten to Orientation = 1
-    // on the way. HEIF keeps it in its container, and its decoder has already applied it.
+    // on the way. HEIF keeps it in its container and JPEG XL in its codestream header, and their
+    // decoders have already applied it.
     let o = match format {
         Format::Tiff => tiff::orientation(bytes, None),
-        Format::Heif => 1,
+        Format::Heif | Format::Jxl => 1,
         Format::Dpx => dpx::orientation(bytes),
         Format::Cineon => dpx::cineon_orientation(bytes),
         _ => img.meta.exif.as_deref().map_or(1, exif_orientation),
@@ -150,6 +152,26 @@ pub fn decode_tiff_page(bytes: &[u8], page: usize, opts: &DecodeOptions) -> Resu
 /// [`MAX_GIF_FRAMES`] and `opts.limits` for what is refused.
 pub fn decode_gif_frames(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<AnimationFrame>, CodecError> {
     crate::codecs::gif_frames::decode(bytes, opts)
+}
+
+/// Decodes every frame of a JPEG XL file (a still one yields one), each a full, upright picture
+/// with its duration. [`decode`] keeps the first frame only. At most [`MAX_GIF_FRAMES`] frames,
+/// and all of them within `opts.limits`.
+pub fn decode_jxl_frames(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<AnimationFrame>, CodecError> {
+    jxl::decode_frames(bytes, opts)
+}
+
+/// Recompresses a JPEG file as JPEG XL losslessly: about 20% smaller, the pixels exactly the
+/// JPEG's, and the original file can be rebuilt byte for byte ([`jxl_to_jpeg`]). A JPEG whose
+/// coefficients would not fit in `limits.max_alloc` is refused before anything is allocated.
+pub fn jpeg_to_jxl(jpeg: &[u8], limits: &Limits) -> Result<Vec<u8>, CodecError> {
+    jxl::recompress_jpeg(jpeg, limits)
+}
+
+/// The original JPEG file of a JPEG XL file recompressed from one ([`jpeg_to_jxl`], or libjxl's
+/// `cjxl` on a `.jpg`), rebuilt byte for byte. `Ok(None)` when the file was not made from a JPEG.
+pub fn jxl_to_jpeg(bytes: &[u8], limits: &Limits) -> Result<Option<Vec<u8>>, CodecError> {
+    jxl::reconstruct_jpeg(bytes, limits)
 }
 
 /// The Orientation (1–8) of the page [`decode`] opens from a TIFF or BigTIFF file; 1 when it is
@@ -258,6 +280,7 @@ pub fn encode(image: &Image, format: Format, opts: &EncodeOptions) -> Result<Vec
         Format::Cineon => Err(CodecError::unsupported(format, "Cineon is import-only; save as DPX, TIFF or EXR instead")),
         Format::OpenExr => exr::encode(image, plan, opts),
         Format::Heif => Err(CodecError::unsupported(format, "encoding is not available in this build")),
+        Format::Jxl => jxl::encode(image, plan, opts),
         Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::encode(format, image, plan, opts),
     }
 }

@@ -123,6 +123,13 @@
 	Photomerge…	Photomerge…
 	Scripts	指令碼
 	Image Processor…	影像處理器…
+	Recompress JPEG as JPEG XL…	將 JPEG 重新壓縮為 JPEG XL…
+	Restore Original JPEG from JPEG XL…	從 JPEG XL 還原原始 JPEG…
+	Effort	力度
+	Higher effort makes a smaller file and takes longer to save	力度越高，檔案越小，儲存用時越長
+	A coarse picture shows first and refines as the file loads	先顯示粗略影像，隨著檔案載入逐漸清晰
+	Recompressed {n} JPEG files as JPEG XL, {pct}% smaller	已將 {n} 個 JPEG 檔案重新壓縮為 JPEG XL，縮小 {pct}%
+	Restored {n} original JPEG files	已還原 {n} 個原始 JPEG 檔案
 	Delete All Empty Layers	刪除所有空白圖層
 	Flatten All Layer Effects	平面化所有圖層效果
 	Flatten All Masks	平面化所有遮色片

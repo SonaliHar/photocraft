@@ -260,6 +260,14 @@ pub struct ExportSettings {
     pub webp_lossless: bool,
     /// Lossy WebP quality 1–100 (None = codec default).
     pub webp_quality: Option<u8>,
+    /// JPEG XL: lossless (Modular) rather than lossy (VarDCT at [`Self::jxl_quality`]).
+    pub jxl_lossless: bool,
+    /// Lossy JPEG XL quality 1–100 (None = codec default, 90).
+    pub jxl_quality: Option<u8>,
+    /// JPEG XL encoder effort 1–9 (None = codec default).
+    pub jxl_effort: Option<u8>,
+    /// JPEG XL progressive: a coarse picture first that refines as the file loads.
+    pub jxl_progressive: bool,
     /// TIFF: keep the layers (Photoshop layer data); `false` is "Discard Layers and Save a Copy".
     pub tiff_layers: bool,
     /// Embed the document's whole XMP packet. `true` by default (Save As keeps the metadata);
@@ -289,6 +297,10 @@ impl Default for ExportSettings {
             jpeg_quality: None,
             webp_lossless: true,
             webp_quality: None,
+            jxl_lossless: true,
+            jxl_quality: None,
+            jxl_effort: None,
+            jxl_progressive: false,
             tiff_layers: true,
             xmp_all: true,
             tga_bits: None,
@@ -312,6 +324,14 @@ impl ExportSettings {
         if let Some(q) = self.webp_quality {
             opts.encode.webp_quality = q;
         }
+        opts.encode.jxl_lossless = self.jxl_lossless;
+        if let Some(q) = self.jxl_quality {
+            opts.encode.jxl_quality = q;
+        }
+        if let Some(e) = self.jxl_effort {
+            opts.encode.jxl_effort = e;
+        }
+        opts.encode.jxl_progressive = self.jxl_progressive;
         opts.encode.embed_icc = self.embed_icc;
         opts.encode.embed_metadata = self.embed_metadata;
         opts.tiff_layers = self.tiff_layers;

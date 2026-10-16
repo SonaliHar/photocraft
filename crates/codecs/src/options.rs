@@ -176,6 +176,15 @@ pub struct EncodeOptions {
     pub exr_compression: ExrCompression,
     /// DPX bits per sample. `None` follows the image: 8 for 8-bit, 16 otherwise.
     pub dpx_bits: Option<DpxBits>,
+    /// JPEG XL: lossless (Modular, every sample kept) rather than lossy (VarDCT at
+    /// [`Self::jxl_quality`]).
+    pub jxl_lossless: bool,
+    /// Lossy JPEG XL quality 1..=100 on the JPEG-like scale (90 is visually lossless).
+    pub jxl_quality: u8,
+    /// JPEG XL encoder effort 1..=9 (as libjxl's `-e`): higher is slower and smaller.
+    pub jxl_effort: u8,
+    /// JPEG XL progressive: a coarse picture first that refines as the file loads.
+    pub jxl_progressive: bool,
     /// Embed the ICC profile when the format supports it.
     pub embed_icc: bool,
     /// Embed EXIF/XMP/DPI/text when the format supports it.
@@ -195,6 +204,10 @@ impl Default for EncodeOptions {
             tiff_bigtiff: false,
             exr_compression: ExrCompression::Zip16,
             dpx_bits: None,
+            jxl_lossless: true,
+            jxl_quality: 90,
+            jxl_effort: 4,
+            jxl_progressive: false,
             embed_icc: true,
             embed_metadata: true,
         }

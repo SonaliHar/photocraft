@@ -241,7 +241,7 @@ fn fps_from_delays(delays: &[u32]) -> Option<f32> {
     best.map(|(d, _)| 1000.0 / d as f32)
 }
 
-/// Load frames from `path`: a single image (1 frame, or every frame of an animated GIF), or a
+/// Load frames from `path`: a single image (1 frame, or every frame of an animated GIF or JPEG XL), or a
 /// directory of images (sorted = an image sequence). Each becomes a full raster frame in the
 /// document's format.
 fn load_frames(path: &str, fmt: photocraft_color::PixelFormat) -> Result<Footage> {
@@ -249,7 +249,7 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat) -> Result<Footage
     let is_img = |f: &std::path::Path| {
         matches!(
             f.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(),
-            Some("png" | "jpg" | "jpeg" | "tif" | "tiff" | "webp" | "bmp" | "gif" | "tga" | "exr" | "pcraft" | "psd")
+            Some("png" | "jpg" | "jpeg" | "tif" | "tiff" | "webp" | "bmp" | "gif" | "jxl" | "tga" | "exr" | "pcraft" | "psd")
         )
     };
     let files: Vec<std::path::PathBuf> = if p.is_dir() {
@@ -271,13 +271,19 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat) -> Result<Footage
     for f in &files {
         let bytes = std::fs::read(f).map_err(|e| EngineError::Other(format!("read `{}`: {e}", f.display())))?;
         let name = f.to_string_lossy();
-        if photocraft_codecs::detect(&bytes) == Some(photocraft_codecs::Format::Gif) {
-            photocraft_io::import_gif_frames(&name, &bytes, &mut |doc, delay_ms| {
+        let format = photocraft_codecs::detect(&bytes);
+        if matches!(format, Some(photocraft_codecs::Format::Gif | photocraft_codecs::Format::Jxl)) {
+            let mut each = |doc: photocraft_doc::Document, delay_ms| {
                 frames.push(crate::file_cmds::flattened(&doc, fmt));
                 delays.push(delay_ms);
                 Ok(())
-            })
-            .map_err(|e| EngineError::Other(format!("`{}`: {e}", f.display())))?;
+            };
+            let read = if format == Some(photocraft_codecs::Format::Gif) {
+                photocraft_io::import_gif_frames(&name, &bytes, &mut each)
+            } else {
+                photocraft_io::import_jxl_frames(&name, &bytes, &mut each)
+            };
+            read.map_err(|e| EngineError::Other(format!("`{}`: {e}", f.display())))?;
             continue;
         }
         let mut doc = crate::file_cmds::import(&name, &bytes)?;
@@ -287,7 +293,7 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat) -> Result<Footage
         }
         frames.push(crate::file_cmds::flattened(&doc, fmt));
     }
-    // Only a lone GIF says how fast it plays; a sequence mixing files has no single rate.
+    // Only a lone GIF or JPEG XL says how fast it plays; a sequence mixing files has no single rate.
     let fps = if files.len() == 1 { fps_from_delays(&delays) } else { None };
     Ok(Footage { frames, fps })
 }

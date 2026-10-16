@@ -35,6 +35,8 @@ pub enum Format {
     Dpx,
     /// Kodak Cineon (`.cin`, the 10-bit film-scan format DPX grew from): read-only.
     Cineon,
+    /// JPEG XL: read and written behind the `jxl` feature (jxl-oxide and jixel, both pure Rust).
+    Jxl,
 }
 
 /// What a format can hold **and** what this crate reads/writes for it.
@@ -104,7 +106,7 @@ const TIFF_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::
 
 impl Format {
     /// Every format known to the crate (enabled or not).
-    pub const ALL: [Format; 20] = [
+    pub const ALL: [Format; 21] = [
         Format::Png,
         Format::Jpeg,
         Format::Tiff,
@@ -125,6 +127,7 @@ impl Format {
         Format::Fits,
         Format::Dpx,
         Format::Cineon,
+        Format::Jxl,
     ];
 
     pub fn caps(self) -> FormatCaps {
@@ -159,6 +162,7 @@ impl Format {
             Format::Fits => "FITS",
             Format::Dpx => "DPX",
             Format::Cineon => "Cineon",
+            Format::Jxl => "JPEG XL",
         }
     }
 
@@ -186,6 +190,7 @@ impl Format {
             Format::Fits => &["fits", "fit", "fts"],
             Format::Dpx => &["dpx"],
             Format::Cineon => &["cin"],
+            Format::Jxl => &["jxl"],
         }
     }
 
@@ -211,6 +216,7 @@ impl Format {
             Format::Fits => "image/fits",
             Format::Dpx => "image/x-dpx",
             Format::Cineon => "image/x-cin",
+            Format::Jxl => "image/jxl",
         }
     }
 
@@ -267,6 +273,20 @@ pub fn caps(format: Format) -> FormatCaps {
         // `text`: the DPX header fields only (see `fidelity_warnings_with`).
         Format::Dpx => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], text: true, ..base },
         Format::Cineon => FormatCaps { read: true, write: false, depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
+        // Lossy or lossless by `EncodeOptions::jxl_lossless` (see `fidelity_warnings_with`); F16
+        // is written as F32, which holds it exactly.
+        Format::Jxl => FormatCaps {
+            read: cfg!(feature = "jxl"),
+            write: cfg!(feature = "jxl"),
+            depths: &[S::U8, S::U16, S::F32],
+            layouts: RGB_GRAY,
+            icc: true,
+            exif: true,
+            xmp: true,
+            animation: true,
+            lossy: false,
+            ..base
+        },
     }
 }
 
@@ -279,6 +299,10 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     }
     if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
         return Some(Format::Jpeg);
+    }
+    // A bare JPEG XL codestream, or the ISO/IEC 18181-2 container's signature box.
+    if b.starts_with(&[0xFF, 0x0A]) || b.starts_with(b"\0\0\0\x0cJXL \r\n\x87\n") {
+        return Some(Format::Jxl);
     }
     if b.starts_with(b"II*\0") || b.starts_with(b"MM\0*") || b.starts_with(b"II+\0") || b.starts_with(b"MM\0+") {
         return Some(Format::Tiff);

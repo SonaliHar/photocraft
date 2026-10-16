@@ -115,6 +115,13 @@
 	Photomerge…	照片合并…
 	Scripts	脚本
 	Image Processor…	图像处理器…
+	Recompress JPEG as JPEG XL…	将 JPEG 重新压缩为 JPEG XL…
+	Restore Original JPEG from JPEG XL…	从 JPEG XL 恢复原始 JPEG…
+	Effort	力度
+	Higher effort makes a smaller file and takes longer to save	力度越高，文件越小，存储用时越长
+	A coarse picture shows first and refines as the file loads	先显示粗略图像，随着文件载入逐渐清晰
+	Recompressed {n} JPEG files as JPEG XL, {pct}% smaller	已将 {n} 个 JPEG 文件重新压缩为 JPEG XL，缩小 {pct}%
+	Restored {n} original JPEG files	已恢复 {n} 个原始 JPEG 文件
 	Delete All Empty Layers	删除所有空图层
 	Flatten All Layer Effects	合并所有图层效果
 	Flatten All Masks	合并所有蒙版

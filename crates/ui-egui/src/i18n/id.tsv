@@ -111,6 +111,13 @@
 	Photomerge…	Photomerge…
 	Scripts	Skrip
 	Image Processor…	Pemroses Gambar…
+	Recompress JPEG as JPEG XL…	Kompres Ulang JPEG sebagai JPEG XL…
+	Restore Original JPEG from JPEG XL…	Pulihkan JPEG Asli dari JPEG XL…
+	Effort	Upaya
+	Higher effort makes a smaller file and takes longer to save	Upaya lebih tinggi menghasilkan file lebih kecil dan penyimpanan lebih lama
+	A coarse picture shows first and refines as the file loads	Gambar kasar muncul lebih dulu lalu makin tajam saat file dimuat
+	Recompressed {n} JPEG files as JPEG XL, {pct}% smaller	{n} file JPEG dikompres ulang sebagai JPEG XL, {pct}% lebih kecil
+	Restored {n} original JPEG files	{n} file JPEG asli dipulihkan
 	Delete All Empty Layers	Hapus Semua Layer Kosong
 	Flatten All Layer Effects	Ratakan Semua Efek Layer
 	Flatten All Masks	Ratakan Semua Mask

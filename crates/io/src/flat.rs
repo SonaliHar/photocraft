@@ -66,6 +66,18 @@ pub fn import_gif_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document
     Ok(n)
 }
 
+/// Every frame of a JPEG XL file as a single-layer document, handed to `each` in order with its
+/// duration in milliseconds (a still file has one frame of 0 ms), as [`import_gif_frames`] does
+/// for a GIF. Returns the number of frames; stops at the first error `each` gives.
+pub fn import_jxl_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>) -> Result<usize, IoError> {
+    let frames = codecs::decode_jxl_frames(bytes, &codecs::DecodeOptions::default())?;
+    let n = frames.len();
+    for f in frames {
+        each(image_to_document(name, &f.image)?.document, f.delay_ms)?;
+    }
+    Ok(n)
+}
+
 /// The lossy settings `bytes` were encoded with, for File › Save to keep: a JPEG's quality
 /// (estimated from its quantisation tables) and a WebP's lossless or lossy encoding with its
 /// quality. A lossy WebP whose quality can't be read gets [`DEFAULT_LOSSY_WEBP_QUALITY`].

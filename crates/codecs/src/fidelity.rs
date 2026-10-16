@@ -163,6 +163,12 @@ pub(crate) fn plan(image: &Image, format: Format, opts: &EncodeOptions) -> Plan 
             layout: if layout == ChannelLayout::GrayA { ChannelLayout::Gray } else { pick_layout(layout, c.layouts, c.alpha) },
             sample: crate::codecs::dpx::plan_sample(opts.dpx_bits, sample),
         },
+        // jixel keeps float gray exact only as RGB (its gray encoder is lossy, and gray + alpha
+        // has no float entry point), so with a profile, which would be a gray one, such an image
+        // is written as RGB(A) with the profile converted. Without one the encoder does it.
+        Format::Jxl if layout.is_gray() && sample.is_float() && image.icc.is_some() && (opts.jxl_lossless || layout.has_alpha()) => {
+            Plan { layout: if layout.has_alpha() { ChannelLayout::Rgba } else { ChannelLayout::Rgb }, sample: SampleType::F32 }
+        }
         // CIELab has no float form: float Lab is written with 16 bits.
         Format::Tiff if layout.is_lab() && sample.is_float() => Plan { layout: pick_layout(layout, c.layouts, c.alpha), sample: SampleType::U16 },
         _ => Plan { layout: pick_layout(layout, c.layouts, c.alpha), sample: pick_sample(sample, c.depths) },
@@ -227,7 +233,7 @@ pub fn fidelity_warnings_with(image: &Image, format: Format, opts: &EncodeOption
     // Compression
     if format == Format::Gif {
         w.push(W::PaletteQuantized);
-    } else if c.lossy || (format == Format::WebP && !opts.webp_lossless) {
+    } else if c.lossy || (format == Format::WebP && !opts.webp_lossless) || (format == Format::Jxl && !opts.jxl_lossless) {
         w.push(W::LossyCompression);
     }
 
