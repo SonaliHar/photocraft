@@ -3210,3 +3210,21 @@ curves	Smooth	Glätten
 	This document's layers: {needed} of {budget} for layers	Ebenen dieses Dokuments: {needed} von {budget} für Ebenen
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Die Ebenen dieses Dokuments brauchen {needed}, dürfen aber {budget} belegen: Das ganze Dokument wird auf der CPU neu gezeichnet
 	GPU Memory (MB, 0 = Automatic)	GPU-Speicher (MB, 0 = Automatisch)
+
+# Color panel menu: modes, copy commands and colour ramps (#6000)
+	Hue Cube	Farbtonwürfel
+	Brightness Cube	Helligkeitswürfel
+	Color Wheel	Farbkreis
+	Grayscale Slider	Graustufen-Regler
+	RGB Sliders	RGB-Regler
+	HSB Sliders	HSB-Regler
+	CMYK Sliders	CMYK-Regler
+	Lab Sliders	Lab-Regler
+	Web Color Sliders	Webfarben-Regler
+	Copy Color as HTML	Farbe als HTML kopieren
+	Copy Color's Hex Code	Hex-Code der Farbe kopieren
+	RGB Spectrum	RGB-Spektrum
+	CMYK Spectrum	CMYK-Spektrum
+	Grayscale Ramp	Graustufenbalken
+	Current Colors	Aktuelle Farben
+	Make Ramp Web Safe	Farbbalken auf Webfarben beschränken

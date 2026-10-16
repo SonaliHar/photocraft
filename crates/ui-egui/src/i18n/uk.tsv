@@ -3907,3 +3907,20 @@ curves	Smooth	Згладити
 	This document's layers: {needed} of {budget} for layers	Шари цього документа: {needed} з {budget} для шарів
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Шарам цього документа потрібно {needed}, але займати вони можуть {budget}: увесь документ перемальовується на CPU
 	GPU Memory (MB, 0 = Automatic)	Пам'ять GPU (МБ, 0 = автоматично)
+
+# Color panel menu: modes, copy commands and colour ramps (#6000)
+	Hue Cube	Куб тону
+	Brightness Cube	Куб яскравості
+	Color Wheel	Колірне коло
+	RGB Sliders	Повзунки RGB
+	HSB Sliders	Повзунки HSB
+	CMYK Sliders	Повзунки CMYK
+	Lab Sliders	Повзунки Lab
+	Web Color Sliders	Повзунки вебкольорів
+	Copy Color as HTML	Копіювати колір як HTML
+	Copy Color's Hex Code	Копіювати шістнадцятковий код кольору
+	RGB Spectrum	Спектр RGB
+	CMYK Spectrum	Спектр CMYK
+	Grayscale Ramp	Шкала градацій сірого
+	Current Colors	Поточні кольори
+	Make Ramp Web Safe	Зробити шкалу безпечною для вебу
