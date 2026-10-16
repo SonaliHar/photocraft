@@ -28,6 +28,12 @@ pub struct TimelineUi {
     /// Frames copied with ⌘C, for ⌘V to paste after the selected frame.
     #[serde(default, skip)]
     pub clipboard: Vec<photocraft_doc::AnimFrame>,
+    /// The selected frames of a frame animation (the shown frame is always among them).
+    #[serde(default, skip)]
+    pub sel: std::collections::BTreeSet<usize>,
+    /// Where a ⇧-click range starts.
+    #[serde(default, skip)]
+    pub anchor: usize,
     /// Where the panel was drawn last frame: the timeline's keys work while the pointer is over it.
     #[serde(default, skip)]
     pub panel_rect: Option<egui::Rect>,
@@ -63,6 +69,7 @@ struct Out {
     close: bool,
     toggle_play: bool,
     toggle_float: bool,
+    clicked: Option<(usize, crate::frame_strip_ui::Click)>,
     rect: Option<egui::Rect>,
 }
 
@@ -75,6 +82,7 @@ fn contents(app: &PhotocraftApp, ui: &mut egui::Ui, ctx: &egui::Context, out: &m
     let tl = app.session.active().and_then(|d| d.doc.timeline.clone());
     let anim = app.session.active().and_then(|d| d.doc.frame_animation.clone());
     let doc = app.session.active().map(|d| (d.doc.clone(), d.revision));
+    let selection = selection(app);
 
     ui.horizontal(|ui| {
         ui.label(RichText::new(tl!("Timeline")).strong().color(t.text));
@@ -98,7 +106,16 @@ fn contents(app: &PhotocraftApp, ui: &mut egui::Ui, ctx: &egui::Context, out: &m
         crate::frame_strip_ui::body(
             ui,
             ctx,
-            crate::frame_strip_ui::Strip { doc: d, revision: *revision, animation: a, playing, acts: &mut out.acts, toggle_play: &mut out.toggle_play },
+            crate::frame_strip_ui::Strip {
+                doc: d,
+                revision: *revision,
+                animation: a,
+                selection: &selection,
+                playing,
+                acts: &mut out.acts,
+                clicked: &mut out.clicked,
+                toggle_play: &mut out.toggle_play,
+            },
         );
         return;
     }
@@ -159,12 +176,14 @@ fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, out: Out) {
     if out.toggle_play {
         toggle_play(app, ctx);
     }
+    if let Some((i, click)) = out.clicked {
+        click_frame(app, ctx, i, click);
+    }
     if let Some((cmd, p)) = out.act {
         let _ = app.run(cmd, p);
     }
     for (cmd, p) in out.acts {
-        let _ = app.run(cmd, p);
-        crate::frame_strip_ui::ran(app, ctx, cmd);
+        act(app, ctx, cmd, p);
     }
 }
 
@@ -174,10 +193,42 @@ fn toggle_play(app: &mut PhotocraftApp, ctx: &egui::Context) {
     app.ui.timeline.plays_done = 0;
 }
 
-/// Runs a frame-animation command from a key, keeping the thumbnails in step.
+/// The selected frames, kept valid: inside the animation and including the shown frame.
+pub fn selection(app: &PhotocraftApp) -> std::collections::BTreeSet<usize> {
+    let Some(a) = app.session.active().and_then(|d| d.doc.frame_animation.as_ref()) else { return Default::default() };
+    let mut sel: std::collections::BTreeSet<usize> = app.ui.timeline.sel.iter().copied().filter(|i| *i < a.frames.len()).collect();
+    if !sel.contains(&a.current) {
+        sel = std::collections::BTreeSet::from([a.current]);
+    }
+    sel
+}
+
+/// A click on frame `i` in the strip: changes the selection and shows that frame.
+fn click_frame(app: &mut PhotocraftApp, ctx: &egui::Context, i: usize, click: crate::frame_strip_ui::Click) {
+    let Some(current) = app.session.active().and_then(|d| d.doc.frame_animation.as_ref()).map(|a| a.current) else { return };
+    let sel = selection(app);
+    let (sel, now, anchor) = crate::frame_strip_ui::click_selection(&sel, current, app.ui.timeline.anchor, i, click);
+    app.ui.timeline.sel = sel;
+    app.ui.timeline.anchor = anchor;
+    if now != current {
+        let _ = app.run("animation.selectFrame", json!({ "frame": now }));
+        crate::frame_strip_ui::ran(app, ctx, "animation.selectFrame");
+    }
+}
+
+/// Runs a frame-animation command, keeping the thumbnails and the frame selection in step.
 fn act(app: &mut PhotocraftApp, ctx: &egui::Context, cmd: &'static str, params: Value) {
-    let _ = app.run(cmd, params);
+    let before = app.session.active().and_then(|d| d.doc.frame_animation.as_ref()).map(|a| a.frames.len());
+    let result = app.run(cmd, params);
     crate::frame_strip_ui::ran(app, ctx, cmd);
+    let Ok(v) = result else { return };
+    if let Some(list) = v.get("selection").and_then(Value::as_array) {
+        app.ui.timeline.sel = list.iter().filter_map(Value::as_u64).filter_map(|n| usize::try_from(n).ok()).collect();
+        app.ui.timeline.anchor = app.ui.timeline.sel.iter().next().copied().unwrap_or(0);
+    } else if cmd == "animation.reverseFrames" {
+        let n = before.unwrap_or(0);
+        app.ui.timeline.sel = app.ui.timeline.sel.iter().map(|i| n.saturating_sub(1 + i)).collect();
+    }
 }
 
 /// Is the pointer over the Timeline panel? Its keys only work there, so Space, the arrows and ⌘C
@@ -187,9 +238,10 @@ fn pointer_over(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
 }
 
 /// Keys for the Timeline, while the pointer is over it (and no text field has the keyboard):
-/// Space plays or pauses; ← → step the selected frame, Home / End jump to the first / last;
-/// ⌥← ⌥→ move the selected frame; ⌘C copies it and ⌘V pastes it after the selected frame;
-/// Delete removes it. True when a key was taken.
+/// Space plays or pauses; ← → step the selected frame, Home / End jump to the first / last, and
+/// with ⇧ they extend the selection; ⌘A selects every frame; ⌥← ⌥→ move the selected frames;
+/// ⌘C copies them and ⌘V pastes after the last selected frame; Delete removes them. True when a
+/// key was taken.
 pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     use egui::{Key, Modifiers};
     if !pointer_over(app, ctx) {
@@ -205,6 +257,8 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     }
     let Some(a) = anim else { return false };
     let last = a.frames.len().saturating_sub(1);
+    let sel: Vec<usize> = selection(app).into_iter().collect();
+    let (first_sel, last_sel) = (sel.first().copied().unwrap_or(a.current), sel.last().copied().unwrap_or(a.current));
     // Copy and Paste reach egui as clipboard events, not key presses; take both forms.
     let clip = |ctx: &egui::Context, copy: bool| {
         ctx.input_mut(|i| {
@@ -214,28 +268,40 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         })
     };
     if clip(ctx, true) | press(Modifiers::COMMAND, Key::C) {
-        app.ui.timeline.clipboard = a.frames.get(a.current).cloned().into_iter().collect();
+        app.ui.timeline.clipboard = sel.iter().filter_map(|i| a.frames.get(*i).cloned()).collect();
         return true;
     }
     if clip(ctx, false) | press(Modifiers::COMMAND, Key::V) {
         let frames: Vec<Value> =
             app.ui.timeline.clipboard.iter().map(|f| json!({ "delayMs": f.delay_ms, "hidden": f.hidden.iter().map(|l| l.0).collect::<Vec<_>>() })).collect();
         if !frames.is_empty() {
-            act(app, ctx, "animation.pasteFrames", json!({ "frames": frames }));
+            act(app, ctx, "animation.pasteFrames", json!({ "frames": frames, "after": last_sel }));
         }
         return true;
     }
+    if press(Modifiers::COMMAND, Key::A) {
+        app.ui.timeline.sel = (0..a.frames.len()).collect();
+        app.ui.timeline.anchor = 0;
+        return true;
+    }
     if press(Modifiers::ALT, Key::ArrowLeft) {
-        if a.current > 0 {
-            act(app, ctx, "animation.moveFrame", json!({ "from": a.current, "to": a.current - 1 }));
+        if first_sel > 0 {
+            act(app, ctx, "animation.moveFrames", json!({ "frames": sel, "slot": first_sel - 1 }));
         }
         return true;
     }
     if press(Modifiers::ALT, Key::ArrowRight) {
-        if a.current < last {
-            act(app, ctx, "animation.moveFrame", json!({ "from": a.current, "to": a.current + 1 }));
+        if last_sel < last {
+            act(app, ctx, "animation.moveFrames", json!({ "frames": sel, "slot": last_sel + 2 }));
         }
         return true;
+    }
+    // ⇧ with an arrow, Home or End extends the selection from its anchor.
+    for (k, to) in [(Key::ArrowLeft, a.current.saturating_sub(1)), (Key::ArrowRight, (a.current + 1).min(last)), (Key::Home, 0), (Key::End, last)] {
+        if press(Modifiers::SHIFT, k) {
+            click_frame(app, ctx, to, crate::frame_strip_ui::Click::Range);
+            return true;
+        }
     }
     let target = if press(Modifiers::NONE, Key::ArrowLeft) {
         Some(a.current.saturating_sub(1))
@@ -249,11 +315,11 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         None
     };
     if let Some(frame) = target {
-        act(app, ctx, "animation.selectFrame", json!({ "frame": frame }));
+        click_frame(app, ctx, frame, crate::frame_strip_ui::Click::Plain);
         return true;
     }
-    if (press(Modifiers::NONE, Key::Delete) || press(Modifiers::NONE, Key::Backspace)) && a.frames.len() > 1 {
-        act(app, ctx, "animation.deleteFrame", json!({}));
+    if (press(Modifiers::NONE, Key::Delete) || press(Modifiers::NONE, Key::Backspace)) && sel.len() < a.frames.len() {
+        act(app, ctx, "animation.deleteFrame", json!({ "frames": sel }));
         return true;
     }
     false

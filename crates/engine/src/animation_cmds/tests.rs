@@ -214,3 +214,49 @@ fn pasting_drops_layers_the_document_lacks_and_rejects_bad_params() {
     }
     assert_eq!(delays(&s).len(), 2);
 }
+
+fn four(s: &mut Session) {
+    for (i, ms) in [10, 20, 30, 40].iter().enumerate() {
+        s.execute("animation.setDelay", json!({"delayMs": ms, "frames": [i]})).unwrap();
+    }
+}
+
+fn four_frames() -> Session {
+    let mut s = session(&["A", "B", "C"]);
+    s.execute("animation.makeFramesFromLayers", json!({})).unwrap();
+    four(&mut s);
+    s
+}
+
+#[test]
+fn several_frames_delete_and_duplicate_together() {
+    let mut s = four_frames();
+    let r = s.execute("animation.newFrame", json!({"frames": [1, 2]})).unwrap();
+    assert_eq!(delays(&s), [10, 20, 30, 20, 30, 40]);
+    assert_eq!(r["selection"], json!([3, 4]));
+    assert_eq!(current(&s), 4);
+    let r = s.execute("animation.deleteFrame", json!({"frames": [0, 3, 4]})).unwrap();
+    assert_eq!(delays(&s), [20, 30, 40]);
+    assert_eq!(r["selection"], json!([2]), "the selected frame was deleted: the one after it takes over");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(delays(&s).len(), 6);
+    assert!(s.execute("animation.deleteFrame", json!({"frames": [0, 1, 2, 3, 4, 5]})).is_err(), "one frame stays");
+}
+
+#[test]
+fn a_group_of_frames_moves_into_a_gap_in_order() {
+    let mut s = four_frames();
+    s.execute("animation.selectFrame", json!({"frame": 1})).unwrap();
+    let r = s.execute("animation.moveFrames", json!({"frames": [0, 1], "slot": 4})).unwrap();
+    assert_eq!(delays(&s), [30, 40, 10, 20]);
+    assert_eq!(r["selection"], json!([2, 3]));
+    assert_eq!(current(&s), 3, "the selected frame went with its group");
+    let r = s.execute("animation.moveFrames", json!({"frames": [1, 3], "slot": 0})).unwrap();
+    assert_eq!(delays(&s), [40, 20, 30, 10]);
+    assert_eq!(r["selection"], json!([0, 1]));
+    s.execute("animation.moveFrames", json!({"frames": [2], "slot": 2})).unwrap();
+    assert_eq!(delays(&s), [40, 20, 30, 10], "dropping a frame into its own gap changes nothing");
+    for bad in [json!({"frames": [0]}), json!({"frames": [0], "slot": 5}), json!({"frames": [9], "slot": 0}), json!({"frames": [], "slot": 0})] {
+        assert!(s.execute("animation.moveFrames", bad).is_err());
+    }
+}

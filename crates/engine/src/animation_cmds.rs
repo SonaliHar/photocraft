@@ -43,6 +43,25 @@ fn frame_param(cmd: &str, p: &Value, key: &str, a: &FrameAnimation) -> Result<us
         .ok_or_else(|| bad(cmd, format!("`{key}` must be a frame from 0 to {}, got {v}", a.frames.len() - 1)))
 }
 
+/// The frames a command works on: the `frames` list, else `frame`, else the selected frame; sorted,
+/// without repeats.
+fn frames_param(cmd: &str, p: &Value, a: &FrameAnimation) -> Result<Vec<usize>> {
+    let Some(list) = p.get("frames").filter(|v| !v.is_null()) else { return Ok(vec![frame_param(cmd, p, "frame", a)?]) };
+    let list = list.as_array().filter(|l| !l.is_empty()).ok_or_else(|| bad(cmd, format!("`frames` must be a non-empty list of frames, got {list}")))?;
+    let mut out = Vec::with_capacity(list.len());
+    for v in list {
+        let i = v
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| *n < a.frames.len())
+            .ok_or_else(|| bad(cmd, format!("`frames` holds {v}, which is not a frame from 0 to {}", a.frames.len() - 1)))?;
+        out.push(i);
+    }
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
+}
+
 /// A delay in milliseconds from `delayMs` or `seconds`, if either is given.
 fn delay_param(cmd: &str, p: &Value) -> Result<Option<u32>> {
     let ms = match (p.get("delayMs").filter(|v| !v.is_null()), p.get("seconds").filter(|v| !v.is_null())) {
@@ -120,38 +139,58 @@ fn make_frames_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
     info(s)
 }
 
-/// Duplicate Selected Frame: a copy after it, selected.
-fn new_frame(s: &mut Session, _p: &Value) -> Result<Value> {
+/// Duplicate Selected Frames: copies of the `frames` (the selected frame when absent), in order,
+/// after the last of them; the copies are selected.
+fn new_frame(s: &mut Session, p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    if st.doc.frame_animation.as_ref().is_some_and(|a| a.frames.len() >= MAX_FRAMES) {
+    let count = frames_param(
+        "animation.newFrame",
+        p,
+        st.doc.frame_animation.as_ref().ok_or_else(|| bad("animation.newFrame", "no frame animation (create one first)".into()))?,
+    )?
+    .len();
+    if st.doc.frame_animation.as_ref().is_some_and(|a| a.frames.len() + count > MAX_FRAMES) {
         return Err(EngineError::Other(format!("an animation holds at most {MAX_FRAMES} frames")));
     }
+    let mut selection = Vec::new();
     s.edit("New Frame", |doc, _| {
         let a = animation(doc, "animation.newFrame")?;
         a.clamp();
-        let copy = a.frames[a.current].clone();
-        a.current += 1;
-        a.frames.insert(a.current, copy);
+        let which = frames_param("animation.newFrame", p, a)?;
+        let copies: Vec<AnimFrame> = which.iter().map(|i| a.frames[*i].clone()).collect();
+        let at = which[which.len() - 1] + 1;
+        a.frames.splice(at..at, copies);
+        selection = (at..at + which.len()).collect();
+        a.current = at + which.len() - 1;
         Ok(())
     })?;
-    info(s)
+    info_selecting(s, selection)
 }
 
+/// Delete the `frames` (the selected frame when absent). The selected frame becomes the one that
+/// took its place; at least one frame stays.
 fn delete_frame(s: &mut Session, p: &Value) -> Result<Value> {
+    let mut selection = Vec::new();
     s.edit("Delete Frame", |doc, _| {
         let a = animation(doc, "animation.deleteFrame")?;
         a.clamp();
-        let at = frame_param("animation.deleteFrame", p, "frame", a)?;
-        if a.frames.len() < 2 {
+        let gone = frames_param("animation.deleteFrame", p, a)?;
+        if gone.len() >= a.frames.len() {
             return Err(EngineError::Other("an animation keeps at least one frame; delete the animation instead".into()));
         }
-        a.frames.remove(at);
-        a.current = if at < a.current || a.current >= a.frames.len() { a.current.saturating_sub(1) } else { a.current };
+        let kept_before = (0..a.current).filter(|i| gone.binary_search(i).is_err()).count();
+        let mut i = 0;
+        a.frames.retain(|_| {
+            i += 1;
+            gone.binary_search(&(i - 1)).is_err()
+        });
+        a.current = kept_before.min(a.frames.len() - 1);
+        selection = vec![a.current];
         let cur = a.current;
         doc.select_animation_frame(cur);
         Ok(())
     })?;
-    info(s)
+    info_selecting(s, selection)
 }
 
 fn select_frame(s: &mut Session, p: &Value) -> Result<Value> {
@@ -272,6 +311,7 @@ fn paste_frames(s: &mut Session, p: &Value) -> Result<Value> {
     if st.doc.frame_animation.as_ref().is_some_and(|a| a.frames.len() + pasted.len() > MAX_FRAMES) {
         return Err(EngineError::Other(format!("an animation holds at most {MAX_FRAMES} frames")));
     }
+    let mut selection = Vec::new();
     s.edit("Paste Frames", |doc, _| {
         let known = |id: u64| doc.layer(photocraft_doc::LayerId(id)).is_some();
         let frames: Vec<AnimFrame> = pasted
@@ -290,12 +330,43 @@ fn paste_frames(s: &mut Session, p: &Value) -> Result<Value> {
         let n = frames.len();
         a.frames.splice(at..at, frames);
         a.current = at + n - 1;
+        selection = (at..at + n).collect();
         let cur = a.current;
         let a = a.clone();
         a.apply(cur, &mut doc.layers);
         Ok(())
     })?;
-    info(s)
+    info_selecting(s, selection)
+}
+
+/// Move the `frames` together, keeping their order, into the gap `slot` (0 is before the first
+/// frame, the frame count is after the last); the moved frames are selected and the selected frame
+/// stays on its own frame.
+fn move_frames(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "animation.moveFrames";
+    let mut selection = Vec::new();
+    s.edit("Move Frames", |doc, _| {
+        let a = animation(doc, CMD)?;
+        a.clamp();
+        let moving = frames_param(CMD, p, a)?;
+        let v = p.get("slot").ok_or_else(|| bad(CMD, "need `slot`".into()))?;
+        let slot = v
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| *n <= a.frames.len())
+            .ok_or_else(|| bad(CMD, format!("`slot` must be a gap from 0 to {}, got {v}", a.frames.len())))?;
+        let mut order: Vec<usize> = (0..a.frames.len()).collect();
+        let before = moving.iter().filter(|i| **i < slot).count();
+        order.retain(|i| moving.binary_search(i).is_err());
+        let at = slot - before;
+        order.splice(at..at, moving.iter().copied());
+        selection = (at..at + moving.len()).collect();
+        a.current = order.iter().position(|i| *i == a.current).unwrap_or(0);
+        let mut old: Vec<Option<AnimFrame>> = std::mem::take(&mut a.frames).into_iter().map(Some).collect();
+        a.frames = order.iter().filter_map(|i| old[*i].take()).collect();
+        Ok(())
+    })?;
+    info_selecting(s, selection)
 }
 
 fn reverse_frames(s: &mut Session, _p: &Value) -> Result<Value> {
@@ -321,6 +392,14 @@ pub(crate) fn info_of(doc: &Document) -> Value {
     }
 }
 
+/// The animation plus the frames a command left selected (`selection`), for a UI that selects
+/// several frames.
+fn info_selecting(s: &mut Session, selection: Vec<usize>) -> Result<Value> {
+    let mut v = info(s)?;
+    v["selection"] = json!(selection);
+    Ok(v)
+}
+
 fn info(s: &mut Session) -> Result<Value> {
     Ok(info_of(&s.active().ok_or(EngineError::NoDocument)?.doc))
 }
@@ -338,8 +417,12 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("animation.makeFramesFromLayers", "Make Frames From Layers", r#"{seconds?:0, delayMs?} → {animation}"#, has_doc, true, |s, p| {
             make_frames_from_layers(s, p)
         }),
-        spec!("animation.newFrame", "Duplicate Selected Frame", "{} → {animation}", has_animation, true, |s, p| new_frame(s, p)),
-        spec!("animation.deleteFrame", "Delete Frame", r#"{frame?:selected} → {animation}"#, has_animation, true, |s, p| delete_frame(s, p)),
+        spec!("animation.newFrame", "Duplicate Selected Frame", r#"{frames?:selected} → {animation, selection}"#, has_animation, true, |s, p| new_frame(
+            s, p
+        )),
+        spec!("animation.deleteFrame", "Delete Frame", r#"{frames?:[i..] | frame?:selected} → {animation, selection}"#, has_animation, true, |s, p| {
+            delete_frame(s, p)
+        }),
         spec!("animation.selectFrame", "Select Frame", r#"{frame} → {animation}"#, has_animation, false, |s, p| select_frame(s, p)),
         spec!("animation.nextFrame", "Next Frame", "{} → {animation}", has_animation, false, |s, _| step(s, 1, false)),
         spec!("animation.previousFrame", "Previous Frame", "{} → {animation}", has_animation, false, |s, _| step(s, -1, false)),
@@ -348,6 +431,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         spec!("animation.setLoop", "Loop Count", r#"{loops:"once"|"forever"|plays} → {animation}"#, has_animation, true, |s, p| set_loop(s, p)),
         spec!("animation.moveFrame", "Move Frame", r#"{from, to} → {animation}"#, has_animation, true, |s, p| move_frame(s, p)),
+        spec!("animation.moveFrames", "Move Frames", r#"{frames:[i..], slot} → {animation, selection}"#, has_animation, true, |s, p| move_frames(s, p)),
         spec!(
             "animation.pasteFrames",
             "Paste Frames",
