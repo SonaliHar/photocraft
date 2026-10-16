@@ -1226,6 +1226,31 @@ checks the supplied known sRGB basis separately from actual current-profile
 binding. Native reopen selects the strict class before Point; selected failures
 never retry a generic endpoint. Native save, title, preview and paid inspection
 retain their original source, quota, deadline, reply and publication fences.
-Generic adoption, mutations, Move (including zero), filter/selection edits and
-editable UI controls are closed for this initial class. Existing classes retain
-their policies. Regression groups are ignored, unrun and uncompiled.
+Target-aware `xcf.filter.set` and `xcf.filter.enable` now edit an actual root's
+existing Semi-Flatten, Hue-Chroma or Vibrance node. The dedicated UI captures
+the document and revision, root, stack owner/revision and filter before dispatch;
+final idle, association and lock checks precede publication. The actual class
+returns before generic mask, insertion or stack controls. Old Point factories
+and command scopes retain their policies.
+
+Compound `layer.setProps` supports name, visibility and opacity on this class.
+The existing captured `layer.renameLayer` command also uses that transaction,
+retaining its trimmed nonempty name, Rename Layer history label, null reply,
+original command journal and native all/pixels or imported-content lock union.
+Compound metadata retains its existing field-specific lock and coalescing rules.
+Individual low-level property APIs do not acquire this authority.
+
+Every admitted edit, including no-op and shared-owner cases, receives complete
+OLD, history and STAGED operative proof on the same cumulative controls before
+return or publication. Whole-document paid copies retain original source,
+native planes, profiles, raw properties and mask custody directly; a changed
+filter increments only its target stack revision once. Metadata synchronizes
+the actual canonical name, visibility and opacity without changing filter data.
+Actual copies, reply and original journal overlap are paid, and failure drops
+payloads before their fee receipts. Preview and native continuation remain
+`.pcraft`; the source XCF remains protected.
+
+Generic adoption, Move (including zero), insertion/removal/reorder, masks,
+pixel/selection editing and unrelated mutations remain closed. A filter edit
+candidate is a routing hint, not semantic qualification. Regression groups are
+ignored, unrun and uncompiled; behavioral and numerical acceptance is deferred.

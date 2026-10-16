@@ -12,6 +12,7 @@ use photocraft_raster::Surface;
 #[path = "accounted_point_readonly_patch.rs"]
 mod patch;
 pub use patch::{PointArgumentPatch, PointArgumentValue, PointFilterPatch};
+pub(super) use patch::{original as original_argument_value, apply_value as apply_argument_value};
 #[path = "accounted_point_readonly/structured.rs"]
 mod structured;
 pub use structured::{PointArgumentShape, point_argument_shape, point_argument_shape_with, point_value_shape, point_values_equal, point_values_same_shape};

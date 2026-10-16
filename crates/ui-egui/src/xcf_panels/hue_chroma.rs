@@ -11,7 +11,7 @@ pub(super) fn scope(document: &DocumentSnapshot, node: &FilterNode) -> bool {
 fn valid(index: usize, value: f32) -> bool {
     value.is_finite() && if index == 0 { (-180.0..=180.0).contains(&value) } else { (-100.0..=100.0).contains(&value) }
 }
-fn words(node: &FilterNode) -> Option<[u32; 3]> {
+pub(super) fn words(node: &FilterNode) -> Option<[u32; 3]> {
     if node.arguments.len() != 3 {
         return None;
     }

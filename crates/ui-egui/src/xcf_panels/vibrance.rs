@@ -15,7 +15,7 @@ mod tests;
 fn valid(index: usize, value: f32) -> bool {
     value.is_finite() && if index == 0 { (-100.0..=100.0).contains(&value) } else { (0.0..=10.0).contains(&value) }
 }
-fn words(node: &FilterNode) -> Option<[u32; 2]> {
+pub(super) fn words(node: &FilterNode) -> Option<[u32; 2]> {
     if node.arguments.len() != 2 {
         return None;
     }

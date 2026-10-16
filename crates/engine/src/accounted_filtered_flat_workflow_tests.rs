@@ -8,7 +8,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 #[test]
-#[ignore = "UNRUN:authentic mixedsource→paid larger syntheticCURRENT/native, genericSession bypass and directMovezero closures, all registered mutations refused, retained pagedquery/control/title/native custody; no producergeometry/numericalacceptance"]
+#[ignore = "UNRUN:authentic mixedsource→paid larger syntheticCURRENT/native, genericSession bypass and directMovezero closures, remaining unsupported mutations refused; US2 admitted hints corrected, retained pagedquery/control/title/native custody; no producergeometry/numericalacceptance"]
 fn filtered_flat_publication_is_typed_and_mutations_are_closed() {
     for index in 0..2 {
         let source = Arc::new(fixture::import(index));
@@ -52,18 +52,13 @@ fn filtered_flat_publication_is_typed_and_mutations_are_closed() {
         assert!(s.translate_accounted_imported_layer(layer, 0, 0, None, &fixture::ctl()).is_err());
         assert!(s.translate_accounted_imported_selection(0, 0, None, &fixture::ctl()).is_err());
         assert!(
-            s.edit_accounted(
-                "denied",
-                photocraft_doc::accounted_document::AccountedEdit::LayerMetadata { layer, name: Some("denied"), visible: Some(true), opacity: Some(1.0) },
-                &fixture::ctl()
-            )
-            .is_err()
+            s.edit_accounted("denied", photocraft_doc::accounted_document::AccountedEdit::LayerVisibility { layer, visible: true }, &fixture::ctl()).is_err()
         );
         for (id, p) in [
-            ("xcf.filter.enable", serde_json::json!({"filterId":filter,"enabled":false})),
-            ("xcf.filter.set", serde_json::json!({"filterId":filter,"enabled":true})),
+            ("xcf.filter.enable", serde_json::json!({"filterId":filter,"enabled":false,"unsupported":true})),
+            ("xcf.filter.set", serde_json::json!({"filterId":filter,"enabled":true,"unsupported":true})),
             ("layer.select", serde_json::json!({"index":0})),
-            ("layer.setProps", serde_json::json!({"name":"denied"})),
+            ("layer.setProps", serde_json::json!({"blend":"denied"})),
             ("layer.translate", serde_json::json!({"dx":0,"dy":0})),
             ("xcf.filter.move", serde_json::json!({"filterId":filter,"index":0})),
             ("xcf.filter.remove", serde_json::json!({"filterId":filter})),
@@ -80,7 +75,7 @@ fn filtered_flat_publication_is_typed_and_mutations_are_closed() {
             let id = stack.nodes[0].id.0.to_string();
             let reply = crate::accounted_filter_inspect::prepare(&s, &serde_json::json!({"filterId":id}), &fixture::ctl()).unwrap();
             assert_eq!(reply.value()["filterId"], id);
-            assert_eq!(reply.value()["scalarEditCandidate"], false);
+            assert_eq!(reply.value()["scalarEditCandidate"], true);
             drop(reply);
         }
         let calls = AtomicU64::new(0);

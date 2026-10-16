@@ -11,6 +11,7 @@ mod alpha_clip_finite;
 mod assigned_box;
 mod observed_box;
 mod semi_flatten;
+mod filtered_flat_point;
 mod hue_chroma;
 mod vibrance;
 mod channel_mixer;
@@ -305,7 +306,7 @@ fn text_color_patch(document: &photocraft_doc::Document, layer: LayerId, color: 
 
 pub(crate) fn filter_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: LayerId) {
     if app.session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage()) {
-        ui.label(tl!("Filter editing is unavailable"));
+        filtered_flat_point::properties(app, ui, layer);
         return;
     }
     filter_mask::properties(app, ui, layer);

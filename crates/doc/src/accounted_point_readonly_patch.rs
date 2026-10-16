@@ -41,7 +41,7 @@ pub(in crate::accounted_document) struct Plan {
     replacements: [Option<(usize, PointArgumentValue)>; 10],
     enabled: Option<bool>,
 }
-fn original(value: &FilterValue, requested: PointArgumentValue, control: &ReadControl<'_>) -> Result<PointArgumentValue, BackingError> {
+pub(in crate::accounted_document) fn original(value: &FilterValue, requested: PointArgumentValue, control: &ReadControl<'_>) -> Result<PointArgumentValue, BackingError> {
     if let PointArgumentValue::LiteralColor4F32 { components: replacement, encoding: requested_encoding } = requested {
         if !matches!(requested_encoding, crate::SampleEncoding::Linear | crate::SampleEncoding::NonlinearProfile)
             || replacement.iter().any(|bits| {
@@ -220,38 +220,45 @@ pub(super) fn apply(document: &mut Document, plan: Plan, control: &ReadControl<'
     for (index, replacement) in plan.replacements.into_iter().flatten() {
         control.check(1)?;
         let argument = node.arguments.get_mut(index).ok_or(BackingError::Integrity)?;
-        match (&mut argument.value, replacement) {
-            (FilterValue::Number(ExactNumber::Float32Bits(bits)), PointArgumentValue::Float32Bits(value)) => *bits = value,
-            (FilterValue::Number(ExactNumber::Signed { width: 32, value: before }), PointArgumentValue::Signed32(value)) => *before = i64::from(value),
-            (FilterValue::Bool(before), PointArgumentValue::Bool(value)) => *before = value,
-            (FilterValue::Enum { value: before, .. }, PointArgumentValue::Enum(value)) => *before = value,
-            (FilterValue::Color { components, encoding, profile: None }, PointArgumentValue::LiteralColor4F32 { components: words, encoding: requested })
-                if components.len() == 4
-                    && matches!(encoding, crate::SampleEncoding::Linear | crate::SampleEncoding::NonlinearProfile)
-                    && matches!(requested, crate::SampleEncoding::Linear | crate::SampleEncoding::NonlinearProfile) =>
-            {
-                for (component, word) in components.iter_mut().zip(words) {
-                    control.check(1)?;
-                    let ExactNumber::Float32Bits(bits) = component else { return Err(BackingError::Integrity) };
-                    *bits = word;
-                }
-                *encoding = requested;
-            }
-            (FilterValue::Color { components, encoding: crate::SampleEncoding::NonlinearProfile, profile: None }, PointArgumentValue::Color4F32(words))
-                if components.len() == 4 =>
-            {
-                for (component, word) in components.iter_mut().zip(words) {
-                    control.check(1)?;
-                    let ExactNumber::Float32Bits(bits) = component else { return Err(BackingError::Integrity) };
-                    *bits = word;
-                }
-            }
-            _ => return Err(BackingError::Integrity),
-        }
+        apply_value(&mut argument.value, replacement, control)?;
     }
     if let Some(enabled) = plan.enabled {
         node.enabled = enabled;
     }
     stack.revision = plan.revision;
     control.check(1)
+}
+
+/// Raw representation mutation only. Caller validated the captured target and
+/// owns the paid private copy; this helper grants no operation/owner authority.
+pub(in crate::accounted_document) fn apply_value(value: &mut FilterValue, replacement: PointArgumentValue, control: &ReadControl<'_>) -> Result<(), BackingError> {
+    match (value, replacement) {
+        (FilterValue::Number(ExactNumber::Float32Bits(bits)), PointArgumentValue::Float32Bits(value)) => *bits = value,
+        (FilterValue::Number(ExactNumber::Signed { width: 32, value: before }), PointArgumentValue::Signed32(value)) => *before = i64::from(value),
+        (FilterValue::Bool(before), PointArgumentValue::Bool(value)) => *before = value,
+        (FilterValue::Enum { value: before, .. }, PointArgumentValue::Enum(value)) => *before = value,
+        (FilterValue::Color { components, encoding, profile: None }, PointArgumentValue::LiteralColor4F32 { components: words, encoding: requested })
+            if components.len() == 4
+                && matches!(encoding, crate::SampleEncoding::Linear | crate::SampleEncoding::NonlinearProfile)
+                && matches!(requested, crate::SampleEncoding::Linear | crate::SampleEncoding::NonlinearProfile) =>
+        {
+            for (component, word) in components.iter_mut().zip(words) {
+                control.check(1)?;
+                let ExactNumber::Float32Bits(bits) = component else { return Err(BackingError::Integrity) };
+                *bits = word;
+            }
+            *encoding = requested;
+        }
+        (FilterValue::Color { components, encoding: crate::SampleEncoding::NonlinearProfile, profile: None }, PointArgumentValue::Color4F32(words))
+            if components.len() == 4 =>
+        {
+            for (component, word) in components.iter_mut().zip(words) {
+                control.check(1)?;
+                let ExactNumber::Float32Bits(bits) = component else { return Err(BackingError::Integrity) };
+                *bits = word;
+            }
+        }
+        _ => return Err(BackingError::Integrity),
+    }
+    Ok(())
 }

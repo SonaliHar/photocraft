@@ -22,6 +22,8 @@ mod assigned_translate;
 mod imported_metadata;
 mod imported_translate;
 mod point;
+mod filtered_flat;
+pub use filtered_flat::candidate as filtered_flat_filter_edit_candidate;
 mod gaussian_group;
 mod flat_composition;
 mod readonly_layer_name;
@@ -83,9 +85,13 @@ fn bad(id: &str, message: &str) -> EngineError {
     EngineError::BadParams { cmd: id.into(), msg: message.into() }
 }
 
+/// Preserve the old global command set; rename is admitted only on this actual class.
+pub(crate) fn supports_for_session(session:&Session,id:&str)->bool{
+ supports(id) || id=="layer.renameLayer" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage())
+}
 /// No editing or selection route is granted by readonly mixed-root storage.
 pub(crate) fn filtered_flat_mutation_refused(session:&Session,id:&str)->bool{
-    supports(id) && !matches!(id,"edit.undo"|"edit.redo"|"history.selectState")
+    supports_for_session(session,id) && !matches!(id,"edit.undo"|"edit.redo"|"history.selectState"|"xcf.filter.set"|"xcf.filter.enable"|"layer.setProps"|"layer.renameLayer")
         && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage())
 }
 
@@ -104,6 +110,8 @@ enum Request<'a> {
     PreparedReadonlyLayerName(readonly_layer_name::Prepared<'a>),
     GaussianGroup(gaussian_group::Request<'a>),
     PreparedGaussianGroup(gaussian_group::Prepared<'a>),
+    FilteredFlat(filtered_flat::Request<'a>),
+    PreparedFilteredFlat(filtered_flat::Prepared<'a>),
     Point(point::Request<'a>),
     PreparedPoint(point::Prepared<'a>),
     Threshold(threshold::Request<'a>),
@@ -154,6 +162,9 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
         crate::accounted_clear::validate_request(session, params)?;
         return Ok(Request::Clear(params));
     }
+    if matches!(id,"xcf.filter.set"|"xcf.filter.enable") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage()) {
+        return Ok(Request::FilteredFlat(filtered_flat::Request::parse(session,id,params,control)?));
+    }
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove") {
         if session.active().and_then(|state| state.doc.accounted()).is_some_and(point::observed_box_readonly) {
             return Ok(Request::Point(point::Request::parse_observed_box(session,id,params,control)?));
@@ -181,6 +192,9 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
         // admits their actual retained payload before any journal copies.
         params.as_object().ok_or_else(|| bad(id, "parameters must be an object"))?;
         return Ok(Request::HistorySelect(crate::history_select_cmds::validate_request(session, params, control)?));
+    }
+    if id=="layer.renameLayer" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage()) {
+        return Ok(Request::ImportedMetadata(imported_metadata::parse_rename(session,params,control)?));
     }
     if id == "layer.setProps" && readonly_layer_name::applies(session) {
         return Ok(Request::ReadonlyLayerName(readonly_layer_name::Request::parse(params, control)?));
@@ -296,7 +310,7 @@ fn global_refusal(session: &Session) -> Option<&'static str> {
 }
 
 pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Option<&'static str>> {
-    if !supports(id) {
+    if !supports_for_session(session,id) {
         return Ok(Some("this command has no qualified accounted dispatch"));
     }
     let state = session.active().ok_or(EngineError::NoDocument)?;
@@ -325,7 +339,7 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
         && !state
             .doc
             .accounted()
-            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_gaussian_group_storage() || point::assigned_enabled_candidate(owner))
+            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_gaussian_group_storage() || owner.is_readonly_filtered_flat_point_storage() || point::assigned_enabled_candidate(owner))
     {
         return Ok(Some("this accounted filter storage has no qualified editing recipe"));
     }
@@ -642,6 +656,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::ImportedMetadata(request) => Request::PreparedMetadata(request.prepare(session, control)?),
             Request::ThresholdAlpha(request) => Request::PreparedThresholdAlpha(request.prepare(session, control)?),
             Request::Threshold(request) => Request::PreparedThreshold(request.prepare(session, control)?),
+            Request::FilteredFlat(request) => Request::PreparedFilteredFlat(request.prepare(session,control)?),
             Request::Point(request) => Request::PreparedPoint(request.prepare(session, control)?),
             Request::GaussianGroup(request) => Request::PreparedGaussianGroup(request.prepare(session, control)?),
             Request::ReadonlyLayerName(request) => Request::PreparedReadonlyLayerName(request.prepare(session, control)?),
@@ -721,6 +736,9 @@ impl<'a> PreparedAccountedCommand<'a> {
         if matches!(&request, Request::PreparedGaussianGroup(_)) {
             census.add(0,usize::try_from(gaussian_group::REPLY_ENVELOPE).map_err(|_|BackingError::Length)?)?;
         }
+        if matches!(&request, Request::PreparedFilteredFlat(_)) {
+            census.add(0,usize::try_from(filtered_flat::REPLY_ENVELOPE).map_err(|_|BackingError::Length)?)?;
+        }
         if matches!(&request, Request::PreparedPoint(_)) {
             census.add(0, usize::try_from(point::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
         }
@@ -774,6 +792,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             &request,
             Request::HistorySelect(_)
                 | Request::PreparedImportedTranslate(_)
+                | Request::PreparedFilteredFlat(_)
                 | Request::PreparedPoint(_)
                 | Request::PreparedGaussianGroup(_)
                 | Request::PreparedFlatComposition(_)
@@ -832,6 +851,7 @@ impl<'a> PreparedAccountedCommand<'a> {
                 | Request::PreparedThresholdAlpha(_)
                 | Request::PreparedReadonlyLayerName(_)
                 | Request::PreparedThreshold(_)
+                | Request::PreparedFilteredFlat(_)
                 | Request::PreparedPoint(_)
                 | Request::PreparedGaussianGroup(_)
                 | Request::PreparedFlatComposition(_)
@@ -876,6 +896,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::PreparedMetadata(prepared) => prepared.execute(session, control)?,
             Request::PreparedThresholdAlpha(prepared) => prepared.execute(session, control)?,
             Request::PreparedThreshold(prepared) => prepared.execute(session, control)?,
+            Request::PreparedFilteredFlat(prepared) => prepared.execute(session,control)?,
             Request::PreparedPoint(prepared) => prepared.execute(session, control)?,
             Request::PreparedGaussianGroup(prepared) => prepared.execute(session, control)?,
             Request::PreparedReadonlyLayerName(prepared) => prepared.execute(session, control)?,
@@ -885,6 +906,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::Fill(_) => return Err(BackingError::Integrity.into()),
             Request::ThresholdAlpha(_) => return Err(BackingError::Integrity.into()),
             Request::Threshold(_) => return Err(BackingError::Integrity.into()),
+            Request::FilteredFlat(_) => return Err(BackingError::Integrity.into()),
             Request::Point(_) => return Err(BackingError::Integrity.into()),
             Request::GaussianGroup(_) => return Err(BackingError::Integrity.into()),
             Request::ReadonlyLayerName(_) => return Err(BackingError::Integrity.into()),

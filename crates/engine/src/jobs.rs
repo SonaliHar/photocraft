@@ -1019,7 +1019,10 @@ impl Session {
         }
         crate::xcf_item_set_manage_cmds::dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         crate::xcf_vector_guard::pre_dispatch(self, id, &params)?;
-        if id == "layer.renameLayer" {
+        if id=="layer.renameLayer" && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage()) && (background||self.jobs.spawn) {
+            return Err(EngineError::BadParams{cmd:id.into(),msg:"mixed rename requires synchronous dispatch".into()});
+        }
+        if id == "layer.renameLayer" && !self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage()) {
             crate::layer_multi_cmds::rename_dispatch_preflight(self, &params, background || self.jobs.spawn)?;
         }
         // These family-specific validators deliberately refuse unrelated ids.
@@ -1112,7 +1115,7 @@ impl Session {
         if id == "layer.layerMask.enabled" {
             crate::xcf_mask_cmds::legacy_enabled_preflight(self, &params, background || self.jobs.spawn)?;
         }
-        let accounted_dispatch = self.active().is_some_and(|state| state.doc.accounted().is_some()) && crate::accounted_commands::supports(id);
+        let accounted_dispatch = self.active().is_some_and(|state| state.doc.accounted().is_some()) && crate::accounted_commands::supports_for_session(self,id);
         // Validate immutable document identities once, before any enabled
         // predicate, implicit floating drop or history damage calculation.
         for state in self.documents() {
@@ -1167,7 +1170,8 @@ impl Session {
             }
             // Bounded native pixel, filter and assigned-geometry property preparation share one
             // immutable registered work ledger; no per-cell allowance reset.
-            let bounded_work = matches!(id, "edit.clear" | "edit.fill" | "layer.translate")
+            let bounded_work = id=="layer.renameLayer" && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage())
+                || matches!(id, "edit.clear" | "edit.fill" | "layer.translate")
                 || id=="xcf.composition.set" && self.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_flat_composite_storage())
                 || id == "xcf.mask.enabled.set"
                     && self.active().and_then(|state| state.doc.accounted()).is_some_and(crate::assigned_geometry_metadata_candidate)
@@ -1180,7 +1184,7 @@ impl Session {
                     && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
                         owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage()
                             || matches!(id, "xcf.filter.set" | "xcf.filter.enable")
-                                && (owner.is_readonly_gaussian_group_storage() || owner.is_readonly_assigned_point_storage())
+                                && (owner.is_readonly_gaussian_group_storage() || owner.is_readonly_assigned_point_storage() || owner.is_readonly_filtered_flat_point_storage())
                     });
             let registered_work = photocraft_io::accounted_operation_work::OperationWork::legacy(crate::accounted_clear::REGISTERED_WORK_LIMIT);
             // This synchronous boundary has no external Interrupt. The same
@@ -1197,6 +1201,7 @@ impl Session {
                 && if let Some(owner)=self.active().and_then(|state|state.doc.accounted()) {
                     crate::accounted_native_open::is_current_pure_point_work_candidate(owner,&probe)?
                 } else { false };
+            let mixed_rename_standard=id=="layer.renameLayer" && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage());
             // Preserve the original Box command selection exactly.
             let box_standard = (matches!(id, "xcf.filter.set" | "xcf.filter.enable")
                 || id == "layer.translate" && self.active().and_then(|s|s.doc.accounted()).is_some_and(crate::observed_box_translation_candidate)
@@ -1205,7 +1210,7 @@ impl Session {
                     (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
                         && crate::accounted_native_open::is_current_box_work_candidate(owner.document(),&probe)?
                 } else {false};
-            if pure_point_standard || box_standard {
+            if pure_point_standard || box_standard || mixed_rename_standard {
                 let limits=photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|error|EngineError::Other(error.to_string()))?;
                 registered_work.select_standard(&limits)?;
             }

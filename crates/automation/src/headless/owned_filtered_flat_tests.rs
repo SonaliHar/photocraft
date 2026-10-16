@@ -53,7 +53,7 @@ fn filtered_flat_headless_sources_and_native_services_are_readonly() {
         let history = h.session.active().unwrap().history.clone();
         let filter = before.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id.0.to_string();
         assert!(h.command_start("xcf.filter.enable", json!({"filterId":filter,"enabled":false}), false).is_err());
-        assert!(h.command_start("xcf.filter.enable", json!({"filterId":filter,"enabled":false}), true).is_err());
+        assert!(h.command_start("xcf.filter.enable", json!({"filterId":filter,"enabled":false,"unsupported":true}), true).is_err());
         h.session.authorize = Some(|_, _| Err(photocraft_engine::EngineError::Other("filtered query denied".into())));
         assert!(
             h.inspect_owned_command_with_read_control("xcf.inspect", &json!({}), false, &fixture::ctl())
@@ -74,7 +74,7 @@ fn filtered_flat_headless_sources_and_native_services_are_readonly() {
             let id = stack.nodes[0].id.0.to_string();
             let reply = h.inspect_owned_command_with_read_control("xcf.filter.inspect", &json!({"filterId":id}), false, &fixture::ctl()).unwrap();
             assert_eq!(reply.value()["filterId"], id);
-            assert_eq!(reply.value()["scalarEditCandidate"], false);
+            assert_eq!(reply.value()["scalarEditCandidate"], true);
             drop(reply);
         }
         let calls = AtomicU64::new(0);
@@ -86,7 +86,7 @@ fn filtered_flat_headless_sources_and_native_services_are_readonly() {
         assert!(h.inspect_owned_command_with_read_control("xcf.inspect", &json!({}), false, &c).is_err());
         assert!(calls.load(Ordering::Relaxed) > 0);
         for (id, p) in [
-            ("layer.setProps", json!({"name":"denied","visible":true,"opacity":1.0})),
+            ("layer.setProps", json!({"blend":"denied"})),
             ("layer.translate", json!({"dx":0})),
             ("layer.select", json!({"index":0})),
             ("xcf.filter.move", json!({"filterId":filter,"index":0})),

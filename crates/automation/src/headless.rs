@@ -1085,3 +1085,7 @@ mod owned_residual_point_geometry_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_filtered_flat_tests.rs"]
 mod owned_filtered_flat_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="headless/owned_filtered_flat_edit_tests.rs"]
+mod owned_filtered_flat_edit_tests;

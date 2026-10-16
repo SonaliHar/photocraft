@@ -7,7 +7,7 @@ const EPOCH: &str = "xcf22-gimp-semi-flatten-literal-v1";
 pub(super) fn scope(document: &DocumentSnapshot, node: &FilterNode) -> bool {
     document.accounted().is_some_and(|owner| owner.is_readonly_point_storage()) && node.operation.name == "gimp:semi-flatten"
 }
-fn bits(value: &FilterValue) -> Option<([u32; 4], SampleEncoding)> {
+pub(super) fn bits(value: &FilterValue) -> Option<([u32; 4], SampleEncoding)> {
     let FilterValue::Color { components, encoding, profile: None } = value else { return None };
     if !matches!(encoding, SampleEncoding::Linear | SampleEncoding::NonlinearProfile) || components.len() != 4 {
         return None;

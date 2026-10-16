@@ -2300,8 +2300,28 @@ owners, and strict mixed classification precedes the singleton Point route.
 Failure is final. Existing preview, native save/reopen, title and paid paginated
 project/filter inspection are connected through this actual class and the same
 cumulative controls. Selected/active root metadata is preserved; pixel-selection
-editing is unavailable. Generic owner adoption, filter/layer/selection mutations
-and Move zero shortcuts cannot publish or modify this class. The panel presents
-readonly controls instead of falling through to editable registry widgets.
-This initial handoff adds no new command or write authority. Behavioral/native/
-visual/performance acceptance and complete stock/multilayer editing remain open.
+editing is unavailable. Existing `xcf.filter.set` and `xcf.filter.enable` now
+address an exact existing Semi-Flatten, Hue-Chroma or Vibrance filter on its
+actual root. The dedicated controls capture document/revision, root, stack
+owner/revision and filter; final association, idle and lock fences still apply.
+No generic editable registry fallback is used for this class.
+
+Existing `layer.setProps` supports compound name/visibility/opacity metadata;
+the existing captured `layer.renameLayer` wire uses the same paid transaction
+with its original selectors, trimmed nonempty name, Rename Layer label, null
+reply and original command journal. Rename preserves native all/pixels plus
+imported-content locks; compound metadata keeps its existing field-specific
+locks and coalescing semantics. No new command id is introduced.
+
+All admitted edits repeat complete OLD/history/STAGED current proof, including
+no-op and shared-owner cases, on the same cumulative ledger and deadline.
+Actual whole-document copies and reply/journal overlap retain paid native,
+source, profile, raw and mask custody. Only a changed target filter stack
+revision increments; metadata leaves filter values intact. Final stale-target,
+history/channel/view/source/preferences and publication fences remain binding.
+Native continuation saves `.pcraft`; this does not add XCF export.
+
+Generic owner adoption, Move zero shortcuts, insertion/removal/reorder, masks,
+pixel/selection edits and unrelated mutations remain unavailable. Behavioral,
+native, numerical, visual and performance acceptance, complete stock support
+and the remaining multilayer implementation remain open.

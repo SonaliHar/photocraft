@@ -1,4 +1,5 @@
-//! Actual readonly control consumer; producer math/profile variation stays HOLD.
+//! Foundation lifecycle consumer; US2 targeted edits supersede its former readonly UI expectations.
+//! Producer math/profile variation stays HOLD.
 use super::*;
 #[path = "../filtered_flat_fixture.rs"]
 #[allow(dead_code)]
@@ -20,7 +21,7 @@ fn preview(app: &PhotocraftApp, doc: &photocraft_engine::DocumentSnapshot) -> eg
     external
 }
 #[test]
-#[ignore = "UNRUN:twoactualauthoredmixedsource files pluspaidlargersyntheticCURRENT/readonlyUIlabel/publictypedsourceandnative/query/title/displaypersistence andmutationrefusal; display continuity only, no producerprojection/profile/numericoracle; visualtestingdeferred"]
+#[ignore = "UNRUN:twoactualauthoredmixedsource files pluspaidlargersyntheticCURRENT/exacttargetedUI/publictypedsourceandnative/query/title/displaypersistence andclosedoperationrefusal; display continuity only, no producerprojection/profile/numericoracle; visualtestingdeferred"]
 fn filtered_flat_readonly_ui_keeps_every_root() {
     for index in 0..2 {
         let imported = Arc::new(fixture::import(index));
@@ -39,15 +40,19 @@ fn filtered_flat_readonly_ui_keeps_every_root() {
         crate::owned_native_open::adopt_bytes(&mut app, "current.pcraft", fixture::archive(&current), &fixture::ctl()).unwrap();
         let before = app.session.active().unwrap().doc.clone();
         let layer = before.layers[1].id;
+        // Historical readonly-label assertion is superseded only for the exact
+        // root-scoped US2 candidate; closed operation refusals remain below.
+        let stack = before.xcf_state.as_ref().unwrap().filter_stacks.iter().find(|stack| stack.owner == ItemRef::Layer(layer)).unwrap();
+        assert!(photocraft_engine::filtered_flat_filter_edit_candidate(before.accounted().unwrap(), layer, &stack.nodes[0]));
         let filter = before.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id.0.to_string();
         app.background_jobs = true;
         let mut h = Harness::builder().with_size(egui::vec2(600., 400.)).build_ui_state(move |ui, app| super::filter_properties(app, ui, layer), app);
         h.run_steps(2);
-        assert!(h.query_all_by_label("Filter editing is unavailable").next().is_some());
+        assert!(h.query_all_by_label("Filter editing is unavailable").next().is_none());
         let app = h.state_mut();
         for (id, p) in [
-            ("xcf.filter.enable", json!({"filterId":filter,"enabled":false})),
-            ("layer.setProps", json!({"name":"denied"})),
+            ("xcf.filter.remove", json!({"filterId":filter})),
+            ("layer.setProps", json!({"blend":"multiply"})),
             ("layer.translate", json!({"dx":0})),
             ("layer.select", json!({"index":0})),
         ] {

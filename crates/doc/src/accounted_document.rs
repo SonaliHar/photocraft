@@ -213,6 +213,8 @@ impl AccountedHistory {
         let domain = imported_edits::validate_owner(self.current()?, edit, control)?;
         let unchanged = if domain == imported_edits::EditDomain::GaussianGroup {
             gaussian_group_readonly::metadata::noop(self.current()?, edit, control)?
+        } else if domain == imported_edits::EditDomain::FilteredFlatMetadata {
+            filtered_flat_readonly::metadata::noop(self.current()?, edit, control)?
         } else { is_noop(self.current()?.document(), edit, control)? };
         if unchanged {
             control.check(1)?;
@@ -403,6 +405,9 @@ impl AccountedDocument {
     /// Borrowed preflight for the closed imported current-metadata transaction.
     /// No allocation or mutation authority; final try_edit repeats these gates.
     pub fn validate_imported_metadata_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<(), BackingError> {
+        if self.is_readonly_filtered_flat_point_storage() {
+            return filtered_flat_readonly::metadata::validate(self, edit, control);
+        }
         if self.is_readonly_point_storage() || self.is_readonly_assigned_point_storage() {
             return point_readonly::metadata::validate(self, edit, control);
         }
@@ -453,6 +458,9 @@ impl AccountedDocument {
     /// Unknown collections refuse before clone. Native COW allocation uses the
     /// same source ledger and never replaces immutable source/default samples.
     pub fn try_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<Self, BackingError> {
+        if self.is_readonly_filtered_flat_point_storage() {
+            return filtered_flat_readonly::metadata::edited(self, edit, control);
+        }
         if self.is_readonly_point_storage() || self.is_readonly_assigned_point_storage() {
             return point_readonly::metadata::edited(self, edit, control);
         }

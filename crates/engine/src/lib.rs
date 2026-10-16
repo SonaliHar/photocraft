@@ -8,6 +8,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod accounted_commands;
+pub use accounted_commands::filtered_flat_filter_edit_candidate;
 pub mod accounted_filter_inspect;
 pub mod accounted_xcf_inspect;
 pub mod accounted_plain_xcf_inspect;
@@ -1016,7 +1017,7 @@ impl Session {
     /// [`Self::disabled_reason`] for a call with `params`.
     pub fn disabled_reason_with(&self, id: &str, params: &Value) -> Option<String> {
         let Some(s) = commands::find(id) else { return Some(format!("unknown command `{id}`")) };
-        if self.active().is_some_and(|state| state.doc.accounted().is_some()) && accounted_commands::supports(id) {
+        if self.active().is_some_and(|state| state.doc.accounted().is_some()) && accounted_commands::supports_for_session(self,id) {
             return match accounted_commands::disabled_reason(self, id, params) {
                 Ok(reason) => reason.map(str::to_string).or_else(|| self.job_conflict(id, s.journal)),
                 Err(error) => Some(error.to_string()),

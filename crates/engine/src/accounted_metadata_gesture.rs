@@ -9,7 +9,7 @@ use photocraft_raster::backing::quota::{BackingQuota, QuotaLease};
 /// Layer-properties routing only; unlike the assigned helper this may include
 /// readonly flat composites and must never be used for mask or Move admission.
 pub fn owned_layer_metadata_candidate(owner:&AccountedDocument)->bool {
-    observed_box_layer_metadata_candidate(owner) || owner.is_readonly_flat_composite_storage() || assigned_geometry_metadata_candidate(owner)
+    owner.is_readonly_filtered_flat_point_storage() || observed_box_layer_metadata_candidate(owner) || owner.is_readonly_flat_composite_storage() || assigned_geometry_metadata_candidate(owner)
 }
 /// CURRENT Move routing only. Actual storage, target and Box proofs remain mandatory.
 pub fn observed_box_translation_candidate(owner: &AccountedDocument) -> bool {
@@ -48,13 +48,14 @@ pub(crate) enum MetadataPolicy {
     Plain,
     ObservedBox,
     FlatComposite,
+    FilteredFlat,
     AssignedGeometry,
     IsolatedNormalGroup,
     GaussianGroup,
 }
 impl MetadataPolicy {
     pub(crate) fn for_owner(owner: &AccountedDocument) -> Self {
-        if observed_box_layer_metadata_candidate(owner) {
+        if owner.is_readonly_filtered_flat_point_storage() { Self::FilteredFlat } else if observed_box_layer_metadata_candidate(owner) {
             Self::ObservedBox
         } else if owner.is_readonly_flat_composite_storage() {
             Self::FlatComposite
@@ -75,6 +76,7 @@ impl MetadataPolicy {
         match self {
             Self::Plain => Err(BackingError::Unsupported.into()),
             Self::ObservedBox => if owner.is_readonly_assigned_point_storage() { Ok(owner.validate_readonly_assigned_point_storage(c)?) } else { Ok(owner.validate_readonly_point_storage(c)?) },
+            Self::FilteredFlat => Ok(owner.validate_readonly_filtered_flat_point_storage(c)?),
             Self::FlatComposite => Ok(owner.validate_readonly_flat_composite_storage(c)?),
             Self::AssignedGeometry => Ok(owner.validate_assigned_analytic_geometry_storage(c)?),
             Self::IsolatedNormalGroup => Ok(owner.validate_assigned_isolated_normal_group_storage(c)?),
@@ -85,6 +87,7 @@ impl MetadataPolicy {
         match self {
             Self::Plain => if point_metadata_class(owner) { Err(BackingError::Unsupported.into()) } else { Ok(()) },
             Self::ObservedBox => crate::accounted_native_open::validate_current_observed_box_storage(owner,c),
+            Self::FilteredFlat => crate::accounted_xcf_open::filtered_flat::validate_current_filtered_flat_storage(owner,c),
             Self::FlatComposite => crate::accounted_xcf_open::separable_blend::validate_current_separable_blend_storage(owner,c),
             Self::AssignedGeometry => crate::accounted_xcf_open::analytic_geometry::validate_current_analytic_geometry_storage(owner, c),
             Self::IsolatedNormalGroup => crate::accounted_xcf_open::isolated_normal_group::validate_current_isolated_normal_group_storage(owner, c),
@@ -150,6 +153,7 @@ impl Session {
         }
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
         let policy = MetadataPolicy::for_owner(owner);
+        if matches!(policy,MetadataPolicy::FilteredFlat) && state.revision==u64::MAX {return Err(BackingError::Length.into());}
         if point_metadata_class(owner) && !matches!(policy, MetadataPolicy::ObservedBox) { return Err(BackingError::Unsupported.into()); }
         owner.validate_imported_metadata_edit(edit, c)?;
         if policy.needs_assigned_fence() && !state.history.current()?.shares_state(&state.doc) {
@@ -184,12 +188,15 @@ impl Session {
         } else {
             history.try_commit_accounted(edit, label, view.target(), c)?
         };
+        if matches!(policy,MetadataPolicy::FilteredFlat) {
+            policy.validate_current(snapshot.accounted().ok_or(BackingError::Integrity)?,c)?;
+        }
         if snapshot.shares_state(&state.doc) {
             c.check(1)?;
             return Ok(());
         }
         let current = snapshot.accounted().ok_or(BackingError::Integrity)?;
-        policy.validate_current(current, c)?;
+        if !matches!(policy,MetadataPolicy::FilteredFlat) {policy.validate_current(current, c)?;}
         let next_view = view.try_replace(current, state.active_layer, view.selected(), state.layer_anchor, c)?;
         let gesture = match key {
             None => None,

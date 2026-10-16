@@ -177,7 +177,7 @@ pub struct JobsUi {
 /// it), else synchronously like [`photocraft_engine::Session::execute`].
 pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, String> {
     let owned_metadata = id == "layer.setProps"
-        && app.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_gaussian_group_storage() || owner.is_readonly_flat_composite_storage()
+        && app.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_gaussian_group_storage() || owner.is_readonly_flat_composite_storage() || owner.is_readonly_filtered_flat_point_storage()
             || (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage()) && photocraft_engine::owned_layer_metadata_candidate(owner));
     let owned_composition = id == "xcf.composition.set"
         && app.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_flat_composite_storage());

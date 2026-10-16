@@ -11,13 +11,15 @@ pub(super) enum EditDomain {
     GaussianGroup,
     FlatComposite,
     PointMetadata,
+    FilteredFlatMetadata,
 }
 
 pub(super) fn validate_owner(owner: &AccountedDocument, edit: AccountedEdit<'_>, c: &ReadControl<'_>) -> Result<EditDomain, BackingError> {
     // Actual Point classes admit only the structural compound metadata plan.
     // This runs before generic no-op/history admission and grants no recipe.
     if owner.is_readonly_filtered_flat_point_storage() {
-        return Err(BackingError::Unsupported);
+        filtered_flat_readonly::metadata::validate(owner, edit, c)?;
+        return Ok(EditDomain::FilteredFlatMetadata);
     }
     if owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage() {
         point_readonly::metadata::validate(owner, edit, c)?;

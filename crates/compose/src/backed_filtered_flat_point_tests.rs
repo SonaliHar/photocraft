@@ -443,3 +443,6 @@ fn source_activity_and_old_singleton_classes_are_not_aliases() {
     assert_eq!(c.current_profile().encoded_bytes(), owner.document().icc_profile.as_ref().map(|v| v.as_slice()));
     assert_eq!(c.sample_encoding(), SampleEncoding::NonlinearProfile);
 }
+
+#[path = "backed_filtered_flat_point_mutation_tests.rs"]
+mod mutation;

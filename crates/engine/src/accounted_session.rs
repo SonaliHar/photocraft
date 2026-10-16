@@ -121,7 +121,7 @@ fn initial_view(document: &AccountedDocument, control: &ReadControl<'_>) -> Resu
 fn edit_locks(document: &AccountedDocument, edit: AccountedEdit<'_>, alpha: Option<&VerifiedNativeAlpha<'_>>, control: &ReadControl<'_>) -> Result<()> {
     let id = edit.layer_id();
     let doc = document.document();
-    let access = accounted_layer_access(doc, id, control)?.ok_or(BackingError::Bounds)?;
+    let access = if document.is_readonly_filtered_flat_point_storage() {document.accounted_layer_access(id,control)?} else {accounted_layer_access(doc, id, control)?}.ok_or(BackingError::Bounds)?;
     let layer = access.layer;
     let imported = access.imported_locks;
     match edit {

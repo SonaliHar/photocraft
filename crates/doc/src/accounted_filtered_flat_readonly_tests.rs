@@ -302,7 +302,7 @@ fn generic_and_singleton_mutations_remain_closed_even_noop() {
     let q = quota();
     let owner = owned(&q, SampleType::F32);
     let id = owner.document().layers[0].id;
-    let edit = AccountedEdit::LayerMetadata { layer: id, name: None, visible: None, opacity: None };
+    let edit = AccountedEdit::LayerVisibility { layer: id, visible: owner.document().layers[0].visible };
     assert!(owner.validate_imported_metadata_edit(edit, &ctl()).is_err());
     assert!(owner.try_edit(edit, &ctl()).is_err());
     assert!(owner.try_with_readonly_layer_name(ReadonlyLayerNamePatch { layer: id, name: &owner.document().layers[0].name }, &ctl()).is_err());
@@ -356,3 +356,6 @@ fn noop_and_copy_failures_refund_without_publishing() {
     assert!(owner.validate_readonly_filtered_flat_point_storage(&ReadControl { interrupt: &interrupt, work: &|_| Ok(()) }).is_err());
     assert_eq!(q.usage().unwrap(), before);
 }
+
+#[path = "accounted_filtered_flat_readonly_edit_tests.rs"]
+mod edit_tests;
