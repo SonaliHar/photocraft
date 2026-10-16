@@ -4309,3 +4309,15 @@ shape	Appearance	Izgled
 	Prepare Collage for Publication…	Припреми колаж за објављивање…
 	Snap to panels	Поравнај са панелима
 	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Слика је спремна. Даље: додајте стрелице (алатка Стрелица) или ознаке, затим Датотека › Извоз › Извоз за објављивање…
+	New Screenshot	Нови снимак екрана
+	Screenshot Library…	Библиотека снимака…
+	Screenshot Library	Библиотека снимака
+	Show in Finder	Прикажи у Finder-у
+	Change Folder…	Промени фасциклу…
+	No screenshots yet. Use New Screenshot to take one.	Још нема снимака. Користите Нови снимак екрана.
+	Open for editing	Отвори за уређивање
+	Screenshots are available on macOS for now	Снимци екрана су за сада доступни на macOS-у
+	A screenshot is already being taken	Снимак екрана је већ у току
+	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	Снимање екрана није успело. Дозволите PhotoCraft Dev у Подешавањима система › Приватност и безбедност › Снимање екрана
+	Screenshot {name} saved to the library	Снимак {name} сачуван у библиотеку
+	Saved, but the library PNG could not be updated: {error}	Сачувано, али PNG у библиотеци није ажуриран: {error}

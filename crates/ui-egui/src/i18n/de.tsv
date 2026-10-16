@@ -3238,3 +3238,15 @@ curves	Smooth	Glätten
 	Prepare Collage for Publication…	Collage für Publikation vorbereiten…
 	Snap to panels	An Feldern ausrichten
 	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Abbildung fertig. Weiter: Pfeile (Pfeilwerkzeug) oder Markierungen hinzufügen, dann Datei › Exportieren › Für Publikation exportieren…
+	New Screenshot	Neues Bildschirmfoto
+	Screenshot Library…	Bildschirmfoto-Bibliothek…
+	Screenshot Library	Bildschirmfoto-Bibliothek
+	Show in Finder	Im Finder zeigen
+	Change Folder…	Ordner ändern…
+	No screenshots yet. Use New Screenshot to take one.	Noch keine Bildschirmfotos. Nehmen Sie eines mit „Neues Bildschirmfoto“ auf.
+	Open for editing	Zum Bearbeiten öffnen
+	Screenshots are available on macOS for now	Bildschirmfotos gibt es vorerst nur unter macOS
+	A screenshot is already being taken	Es wird bereits ein Bildschirmfoto aufgenommen
+	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	Die Bildschirmaufnahme ist fehlgeschlagen. Erlauben Sie PhotoCraft Dev unter Systemeinstellungen › Datenschutz & Sicherheit › Bildschirmaufnahme
+	Screenshot {name} saved to the library	Bildschirmfoto {name} in der Bibliothek gespeichert
+	Saved, but the library PNG could not be updated: {error}	Gespeichert, aber das Bibliotheks-PNG konnte nicht aktualisiert werden: {error}

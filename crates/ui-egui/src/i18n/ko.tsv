@@ -3414,3 +3414,15 @@ curves	Smooth	매끄럽게
 	Prepare Collage for Publication…	출판용 콜라주 준비…
 	Snap to panels	패널에 맞추기
 	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	그림이 준비되었습니다. 다음: 화살표(화살표 도구)나 마커를 추가한 뒤 파일 › 내보내기 › 출판용으로 내보내기…
+	New Screenshot	새 스크린샷
+	Screenshot Library…	스크린샷 라이브러리…
+	Screenshot Library	스크린샷 라이브러리
+	Show in Finder	Finder에서 보기
+	Change Folder…	폴더 변경…
+	No screenshots yet. Use New Screenshot to take one.	아직 스크린샷이 없습니다. 새 스크린샷으로 찍어 보세요.
+	Open for editing	편집하려고 열기
+	Screenshots are available on macOS for now	스크린샷은 현재 macOS에서만 사용할 수 있습니다
+	A screenshot is already being taken	이미 스크린샷을 찍는 중입니다
+	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	화면 캡처에 실패했습니다. 시스템 설정 › 개인정보 보호 및 보안 › 화면 기록에서 PhotoCraft Dev를 허용하세요
+	Screenshot {name} saved to the library	스크린샷 {name}을(를) 라이브러리에 저장했습니다
+	Saved, but the library PNG could not be updated: {error}	저장했지만 라이브러리 PNG를 업데이트하지 못했습니다: {error}

@@ -22,14 +22,20 @@ pub struct MarkerOptions {
     pub shape: String,
     /// Size across, in points.
     pub size_pt: f32,
-    /// Straight RGBA.
+    /// Straight RGBA. White by default, outlined in black, so a marker reads on dark and bright
+    /// tissue alike and prints in black and white. (Stored as `tone`: an earlier build kept a
+    /// yellow default as `color`, which is ignored now.)
+    #[serde(rename = "tone")]
     pub color: [f32; 4],
     pub outline: bool,
 }
 
+const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+const BLACK: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
+
 impl Default for MarkerOptions {
     fn default() -> Self {
-        MarkerOptions { shape: "star".into(), size_pt: 12.0, color: [1.0, 0.8, 0.0, 1.0], outline: true }
+        MarkerOptions { shape: "star".into(), size_pt: 12.0, color: WHITE, outline: true }
     }
 }
 
@@ -124,6 +130,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     lbl(ui, tl!("Size:"));
     crate::widgets::value_field(ui, &mut o.size_pt, 2.0..=144.0, "pt", 58.0);
     lbl(ui, tl!("Color:"));
+    // One click for the usual black-and-white markers (each gets the opposite outline).
+    for (c, name) in [(WHITE, "White"), (BLACK, "Black")] {
+        if ui.selectable_label(o.color == c, tl!(name)).clicked() {
+            o.color = c;
+        }
+    }
     let color = o.color;
     let paint = photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(color[0], color[1], color[2], color[3]));
     if let Some(crate::vector_ui::PaintChange::Color(c)) = crate::vector_ui::swatch(ui, Some(&paint), color, tl!("Marker color")) {
@@ -140,6 +152,22 @@ mod tests {
     use photocraft_doc::{Effect, LayerContent};
 
     use super::*;
+
+    #[test]
+    fn markers_default_to_white_with_a_black_outline() {
+        let o = MarkerOptions::default();
+        assert_eq!((o.color, o.outline), (WHITE, true));
+        // A saved yellow from an earlier build (stored as `color`) no longer applies.
+        let old: MarkerOptions = serde_json::from_str(r#"{"shape":"star","color":[1.0,0.8,0.0,1.0]}"#).unwrap();
+        assert_eq!(old.color, WHITE);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 200, "height": 200, "background": "black", "resolution": 300})).unwrap();
+        place(&mut app, [100.0, 100.0]);
+        let st = app.session.active().unwrap();
+        let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        let Some(Effect::Stroke(fx)) = l.effects.items.iter().find(|e| matches!(e, Effect::Stroke(_))) else { panic!("outlined") };
+        assert!(format!("{:?}", fx.paint).contains("c: [0.0, 0.0, 0.0"), "black outline on a white marker: {:?}", fx.paint);
+    }
 
     #[test]
     fn each_marker_is_one_outlined_shape_layer_at_print_size() {

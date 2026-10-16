@@ -3966,3 +3966,15 @@ cameraData	Lens	Lens
 	Prepare Collage for Publication…	Kolajı yayına hazırla…
 	Snap to panels	Panellere yasla
 	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Şekil hazır. Sonraki: ok (Ok aracı) veya işaret ekleyin, ardından Dosya › Dışa Aktar › Yayın için dışa aktar…
+	New Screenshot	Yeni ekran görüntüsü
+	Screenshot Library…	Ekran görüntüsü kitaplığı…
+	Screenshot Library	Ekran görüntüsü kitaplığı
+	Show in Finder	Finder'da göster
+	Change Folder…	Klasörü değiştir…
+	No screenshots yet. Use New Screenshot to take one.	Henüz ekran görüntüsü yok. Yeni ekran görüntüsü ile alın.
+	Open for editing	Düzenlemek için aç
+	Screenshots are available on macOS for now	Ekran görüntüleri şimdilik macOS'ta kullanılabilir
+	A screenshot is already being taken	Zaten bir ekran görüntüsü alınıyor
+	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	Ekran yakalama başarısız oldu. Sistem Ayarları › Gizlilik ve Güvenlik › Ekran Kaydı'nda PhotoCraft Dev'e izin verin
+	Screenshot {name} saved to the library	{name} ekran görüntüsü kitaplığa kaydedildi
+	Saved, but the library PNG could not be updated: {error}	Kaydedildi, ancak kitaplıktaki PNG güncellenemedi: {error}

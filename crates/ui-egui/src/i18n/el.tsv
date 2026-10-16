@@ -3936,3 +3936,15 @@ curves	Smooth	Εξομάλυνση
 	Prepare Collage for Publication…	Προετοιμασία κολάζ για δημοσίευση…
 	Snap to panels	Προσκόλληση στα πλαίσια
 	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Η εικόνα είναι έτοιμη. Επόμενο: προσθέστε βέλη (εργαλείο Βέλος) ή δείκτες, μετά Αρχείο › Εξαγωγή › Εξαγωγή για δημοσίευση…
+	New Screenshot	Νέο στιγμιότυπο οθόνης
+	Screenshot Library…	Βιβλιοθήκη στιγμιοτύπων…
+	Screenshot Library	Βιβλιοθήκη στιγμιοτύπων
+	Show in Finder	Εμφάνιση στο Finder
+	Change Folder…	Αλλαγή φακέλου…
+	No screenshots yet. Use New Screenshot to take one.	Δεν υπάρχουν ακόμη στιγμιότυπα. Χρησιμοποιήστε «Νέο στιγμιότυπο οθόνης».
+	Open for editing	Άνοιγμα για επεξεργασία
+	Screenshots are available on macOS for now	Τα στιγμιότυπα είναι προς το παρόν διαθέσιμα σε macOS
+	A screenshot is already being taken	Λαμβάνεται ήδη στιγμιότυπο
+	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	Η λήψη οθόνης απέτυχε. Επιτρέψτε το PhotoCraft Dev στις Ρυθμίσεις συστήματος › Απόρρητο και ασφάλεια › Εγγραφή οθόνης
+	Screenshot {name} saved to the library	Το στιγμιότυπο {name} αποθηκεύτηκε στη βιβλιοθήκη
+	Saved, but the library PNG could not be updated: {error}	Αποθηκεύτηκε, αλλά το PNG της βιβλιοθήκης δεν ενημερώθηκε: {error}

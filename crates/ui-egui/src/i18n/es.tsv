@@ -4198,3 +4198,15 @@ navigator	Zoom	Zoom
 	Prepare Collage for Publication…	Preparar collage para publicación…
 	Snap to panels	Ajustar a paneles
 	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Figura lista. Siguiente: añada flechas (herramienta Flecha) o marcadores y luego Archivo › Exportar › Exportar para publicación…
+	New Screenshot	Nueva captura de pantalla
+	Screenshot Library…	Biblioteca de capturas…
+	Screenshot Library	Biblioteca de capturas
+	Show in Finder	Mostrar en el Finder
+	Change Folder…	Cambiar carpeta…
+	No screenshots yet. Use New Screenshot to take one.	Aún no hay capturas. Use Nueva captura de pantalla para tomar una.
+	Open for editing	Abrir para editar
+	Screenshots are available on macOS for now	Las capturas están disponibles en macOS por ahora
+	A screenshot is already being taken	Ya se está tomando una captura
+	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	La captura falló. Permita PhotoCraft Dev en Ajustes del Sistema › Privacidad y seguridad › Grabación de pantalla
+	Screenshot {name} saved to the library	Captura {name} guardada en la biblioteca
+	Saved, but the library PNG could not be updated: {error}	Guardado, pero no se pudo actualizar el PNG de la biblioteca: {error}

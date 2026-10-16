@@ -4155,3 +4155,15 @@ cameraRaw	Yellow	Sárga
 	Prepare Collage for Publication…	Kollázs előkészítése publikációhoz…
 	Snap to panels	Illesztés a panelekhez
 	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Az ábra kész. Következő: adjon hozzá nyilakat (Nyíl eszköz) vagy jelölőket, majd Fájl › Exportálás › Exportálás publikációhoz…
+	New Screenshot	Új képernyőkép
+	Screenshot Library…	Képernyőkép-könyvtár…
+	Screenshot Library	Képernyőkép-könyvtár
+	Show in Finder	Megjelenítés a Finderben
+	Change Folder…	Mappa módosítása…
+	No screenshots yet. Use New Screenshot to take one.	Még nincs képernyőkép. Használja az Új képernyőkép parancsot.
+	Open for editing	Megnyitás szerkesztésre
+	Screenshots are available on macOS for now	A képernyőképek egyelőre macOS-en érhetők el
+	A screenshot is already being taken	Már készül egy képernyőkép
+	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	A képernyőfelvétel nem sikerült. Engedélyezze a PhotoCraft Dev alkalmazást: Rendszerbeállítások › Adatvédelem és biztonság › Képernyőfelvétel
+	Screenshot {name} saved to the library	A(z) {name} képernyőkép a könyvtárba mentve
+	Saved, but the library PNG could not be updated: {error}	Mentve, de a könyvtár PNG-je nem frissült: {error}

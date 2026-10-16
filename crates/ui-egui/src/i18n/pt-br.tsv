@@ -4026,3 +4026,15 @@ layerLabel	No Color	Sem cor
 	Prepare Collage for Publication…	Preparar colagem para publicação…
 	Snap to panels	Ajustar aos painéis
 	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Figura pronta. Próximo: adicione setas (ferramenta Seta) ou marcadores e depois Arquivo › Exportar › Exportar para publicação…
+	New Screenshot	Nova captura de tela
+	Screenshot Library…	Biblioteca de capturas…
+	Screenshot Library	Biblioteca de capturas
+	Show in Finder	Mostrar no Finder
+	Change Folder…	Alterar pasta…
+	No screenshots yet. Use New Screenshot to take one.	Ainda não há capturas. Use Nova captura de tela.
+	Open for editing	Abrir para editar
+	Screenshots are available on macOS for now	As capturas de tela estão disponíveis no macOS por enquanto
+	A screenshot is already being taken	Uma captura de tela já está em andamento
+	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	A captura falhou. Permita o PhotoCraft Dev em Ajustes do Sistema › Privacidade e Segurança › Gravação de Tela
+	Screenshot {name} saved to the library	Captura {name} salva na biblioteca
+	Saved, but the library PNG could not be updated: {error}	Salvo, mas o PNG da biblioteca não pôde ser atualizado: {error}

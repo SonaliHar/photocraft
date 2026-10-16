@@ -3206,3 +3206,15 @@ curves	Smooth	Сгладить
 	Prepare Collage for Publication…	Подготовить коллаж к публикации…
 	Snap to panels	Привязка к панелям
 	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Рисунок готов. Далее: добавьте стрелки (инструмент «Стрелка») или маркеры, затем Файл › Экспорт › Экспорт для публикации…
+	New Screenshot	Новый снимок экрана
+	Screenshot Library…	Библиотека снимков…
+	Screenshot Library	Библиотека снимков
+	Show in Finder	Показать в Finder
+	Change Folder…	Сменить папку…
+	No screenshots yet. Use New Screenshot to take one.	Снимков пока нет. Используйте «Новый снимок экрана».
+	Open for editing	Открыть для правки
+	Screenshots are available on macOS for now	Снимки экрана пока доступны только в macOS
+	A screenshot is already being taken	Снимок экрана уже делается
+	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	Не удалось снять экран. Разрешите PhotoCraft Dev в Системных настройках › Конфиденциальность и безопасность › Запись экрана
+	Screenshot {name} saved to the library	Снимок {name} сохранён в библиотеку
+	Saved, but the library PNG could not be updated: {error}	Сохранено, но PNG в библиотеке не обновлён: {error}

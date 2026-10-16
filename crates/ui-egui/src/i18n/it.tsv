@@ -4357,3 +4357,15 @@ shape	Appearance	Aspetto
 	Prepare Collage for Publication…	Prepara collage per pubblicazione…
 	Snap to panels	Aggancia ai pannelli
 	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Figura pronta. Ora: aggiungi frecce (strumento Freccia) o indicatori, poi File › Esporta › Esporta per pubblicazione…
+	New Screenshot	Nuova istantanea dello schermo
+	Screenshot Library…	Libreria istantanee…
+	Screenshot Library	Libreria istantanee
+	Show in Finder	Mostra nel Finder
+	Change Folder…	Cambia cartella…
+	No screenshots yet. Use New Screenshot to take one.	Nessuna istantanea. Usa Nuova istantanea dello schermo.
+	Open for editing	Apri per modificare
+	Screenshots are available on macOS for now	Le istantanee sono per ora disponibili su macOS
+	A screenshot is already being taken	È già in corso un'istantanea
+	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	Acquisizione non riuscita. Consenti PhotoCraft Dev in Impostazioni di Sistema › Privacy e sicurezza › Registrazione schermo
+	Screenshot {name} saved to the library	Istantanea {name} salvata nella libreria
+	Saved, but the library PNG could not be updated: {error}	Salvato, ma il PNG della libreria non è stato aggiornato: {error}

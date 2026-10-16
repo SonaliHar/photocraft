@@ -2837,3 +2837,15 @@ curves	Smooth	平滑
 	Prepare Collage for Publication…	準備拼圖用於出版…
 	Snap to panels	對齊到面板
 	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	圖片已就緒。下一步：加入箭頭（箭頭工具）或標記，然後選擇 檔案 › 匯出 › 匯出用於出版…
+	New Screenshot	新增截圖
+	Screenshot Library…	截圖資料庫…
+	Screenshot Library	截圖資料庫
+	Show in Finder	在 Finder 中顯示
+	Change Folder…	更改檔案夾…
+	No screenshots yet. Use New Screenshot to take one.	尚無截圖。使用「新增截圖」來擷取。
+	Open for editing	開啟以編輯
+	Screenshots are available on macOS for now	截圖目前僅適用於 macOS
+	A screenshot is already being taken	正在擷取截圖
+	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	螢幕擷取失敗。請在 系統設定 › 隱私權與安全性 › 螢幕錄製 中允許 PhotoCraft Dev
+	Screenshot {name} saved to the library	截圖 {name} 已儲存到資料庫
+	Saved, but the library PNG could not be updated: {error}	已儲存，但無法更新資料庫中的 PNG：{error}

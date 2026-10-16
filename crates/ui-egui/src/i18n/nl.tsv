@@ -3996,3 +3996,15 @@ curves	Smooth	Vloeiend maken
 	Prepare Collage for Publication…	Collage voorbereiden voor publicatie…
 	Snap to panels	Uitlijnen op panelen
 	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Figuur klaar. Volgende: voeg pijlen (Pijlgereedschap) of markeringen toe, dan Bestand › Exporteren › Exporteren voor publicatie…
+	New Screenshot	Nieuwe schermafbeelding
+	Screenshot Library…	Schermafbeeldingenbibliotheek…
+	Screenshot Library	Schermafbeeldingenbibliotheek
+	Show in Finder	Toon in Finder
+	Change Folder…	Map wijzigen…
+	No screenshots yet. Use New Screenshot to take one.	Nog geen schermafbeeldingen. Gebruik Nieuwe schermafbeelding.
+	Open for editing	Openen om te bewerken
+	Screenshots are available on macOS for now	Schermafbeeldingen zijn voorlopig alleen beschikbaar op macOS
+	A screenshot is already being taken	Er wordt al een schermafbeelding gemaakt
+	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	Schermopname mislukt. Sta PhotoCraft Dev toe in Systeeminstellingen › Privacy en beveiliging › Schermopname
+	Screenshot {name} saved to the library	Schermafbeelding {name} opgeslagen in de bibliotheek
+	Saved, but the library PNG could not be updated: {error}	Opgeslagen, maar de PNG in de bibliotheek kon niet worden bijgewerkt: {error}

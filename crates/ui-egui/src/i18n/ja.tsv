@@ -3912,3 +3912,15 @@ curves	Smooth	スムーズ
 	Prepare Collage for Publication…	コラージュを出版用に準備…
 	Snap to panels	パネルにスナップ
 	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	図の準備ができました。次に矢印 (矢印ツール) やマーカーを追加し、ファイル › 書き出し › 出版用に書き出し…
+	New Screenshot	新規スクリーンショット
+	Screenshot Library…	スクリーンショットライブラリ…
+	Screenshot Library	スクリーンショットライブラリ
+	Show in Finder	Finderで表示
+	Change Folder…	フォルダを変更…
+	No screenshots yet. Use New Screenshot to take one.	スクリーンショットはまだありません。「新規スクリーンショット」で撮影してください。
+	Open for editing	編集用に開く
+	Screenshots are available on macOS for now	スクリーンショットは現在 macOS でのみ使えます
+	A screenshot is already being taken	スクリーンショットを撮影中です
+	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	画面の取り込みに失敗しました。システム設定 › プライバシーとセキュリティ › 画面収録で PhotoCraft Dev を許可してください
+	Screenshot {name} saved to the library	スクリーンショット {name} をライブラリに保存しました
+	Saved, but the library PNG could not be updated: {error}	保存しましたが、ライブラリの PNG を更新できませんでした: {error}

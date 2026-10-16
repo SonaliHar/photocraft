@@ -3844,3 +3844,15 @@ navigator	Zoom	Zvětšení
 	Prepare Collage for Publication…	Připravit koláž k publikaci…
 	Snap to panels	Přichytit k panelům
 	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Obrázek je hotov. Dále: přidejte šipky (nástroj Šipka) nebo značky, pak Soubor › Export › Exportovat pro publikaci…
+	New Screenshot	Nový snímek obrazovky
+	Screenshot Library…	Knihovna snímků…
+	Screenshot Library	Knihovna snímků
+	Show in Finder	Zobrazit ve Finderu
+	Change Folder…	Změnit složku…
+	No screenshots yet. Use New Screenshot to take one.	Zatím žádné snímky. Pořiďte je příkazem Nový snímek obrazovky.
+	Open for editing	Otevřít k úpravám
+	Screenshots are available on macOS for now	Snímky obrazovky jsou zatím dostupné jen v macOS
+	A screenshot is already being taken	Snímek obrazovky se již pořizuje
+	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	Snímání obrazovky selhalo. Povolte PhotoCraft Dev v Nastavení systému › Soukromí a zabezpečení › Nahrávání obrazovky
+	Screenshot {name} saved to the library	Snímek {name} uložen do knihovny
+	Saved, but the library PNG could not be updated: {error}	Uloženo, ale PNG v knihovně se nepodařilo aktualizovat: {error}
