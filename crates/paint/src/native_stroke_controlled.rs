@@ -102,3 +102,7 @@ impl PreparedNativeStroke<'_>{
 #[cfg(test)]
 #[path="native_stroke_tests.rs"]
 mod tests;
+
+#[path="native_stroke_wide_controlled.rs"]
+mod wide_native;
+pub use wide_native::{NativeWideColor, PreparedNativeWideStroke, prepare_clipped_native_wide_stroke};

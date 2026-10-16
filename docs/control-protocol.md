@@ -3185,3 +3185,27 @@ and uncompiled; production compile evidence is separate. Runtime, numerical,
 native/UI/performance and parent/final acceptance remain deferred. Additional
 models/profiles/depths, filter-bearing integer hierarchies and full stock XCF
 support remain unfinished.
+
+
+The bounded Legacy/plain native Round route also admits RGB/Gray U32/F64.
+Existing paint.stroke/paint.pencil parameters and captured UI gestures select
+this route from the actual native sample format. JSON RGB/RGBA numeric color
+components retain F64 through current-profile conversion; UI swatches begin as
+F32 and promote exactly. Geometry, flow and brush.opacity keep their existing
+F32 schedule. A separate inert geometry color prevents valid F64 paint values
+from being narrowed during brush preparation. Clear/erase preserve hidden color
+words; alpha-lock erasing is a no-op, while locked painting verifies raw alpha.
+The same original gesture work/deadline, actual quota, native COW/history,
+source/destination protection and final publication fences remain authoritative.
+Initial fixed-extent patches retain the16MiB cap. Selection, symmetry, advanced
+assets/modes, sparse patch batches, live preview and readonly filtered/hierarchy
+pixel editing remain open. Saving/reopening here means native .pcraft, with no
+new marker or version floor. All behavioral tests and test compilation remain
+deferred; generated-source contracts are not external numerical oracles.
+
+The wide brush profile conversion uses an additive controlled F64 evaluator.
+Its requirements separately price planning and actual evaluation, including long
+inverse-curve plateaus and CLUT corner visits. The original gesture cancellation
+and deadline remain observable during those scans. Fixed scratch overlaps the
+existing profile/transform fee; old evaluator APIs retain their behavior. New
+contracts for low-bit arithmetic, cancellation and atomic output are deferred.

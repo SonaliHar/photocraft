@@ -3,6 +3,80 @@ use photocraft_color::{try_read_sample_f64, try_write_sample_f64};
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, RasterInputError, Surface};
 
+/// One private atomic native pixel using the existing wide source-over schedule.
+pub(crate) fn try_normal_native_pixel(out: &mut [u8], format: photocraft_color::PixelFormat, src: &[f64], weight: f64, lock_transparency: bool) -> Result<bool, RasterInputError> {
+    let bpp = format.bytes_per_pixel();
+    if out.len() != bpp || bpp > 40 || format.channels() > 5 || src.len() < format.channels() { return Err(RasterInputError::LengthMismatch); }
+    if !weight.is_finite() || !(0.0..=1.0).contains(&weight) { return Err(RasterInputError::InvalidSample); }
+    if weight == 0.0 { return Ok(false); }
+    let mut staged = [0u8; 40];
+    let pixel = staged.get_mut(..bpp).ok_or(RasterInputError::LengthMismatch)?;
+    pixel.copy_from_slice(out);
+    let mut dst = [0.0_f64; 5];
+            if src.iter().take(format.channels()).any(|v| !v.is_finite()) {
+                return Err(RasterInputError::InvalidSample);
+            }
+            if format.alpha && src.get(format.mode.color_channels()).copied() == Some(0.0) {
+                return Ok(false);
+            }
+            if lock_transparency && format.alpha {
+                let alpha = try_read_sample_f64(pixel, format.sample, format.mode.color_channels()).map_err(|_| RasterInputError::InvalidSample)?;
+                if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+                    return Err(RasterInputError::InvalidSample);
+                }
+                if alpha == 0.0 {
+                    return Ok(false);
+                }
+            }
+            for (channel, value) in dst.iter_mut().enumerate().take(format.channels()) {
+                *value = try_read_sample_f64(pixel, format.sample, channel).map_err(|_| RasterInputError::InvalidSample)?;
+                if !value.is_finite() {
+                    return Err(RasterInputError::InvalidSample);
+                }
+            }
+            let alpha = format.mode.color_channels();
+            if lock_transparency && format.alpha && dst.get(alpha).copied().ok_or(RasterInputError::LengthMismatch)? == 0.0 {
+                return Ok(false);
+            }
+            if format.alpha {
+                let da = dst.get(alpha).copied().ok_or(RasterInputError::LengthMismatch)?;
+                let sa = src.get(alpha).copied().ok_or(RasterInputError::LengthMismatch)?;
+                if !(0.0..=1.0).contains(&da) || !(0.0..=1.0).contains(&sa) {
+                    return Err(RasterInputError::InvalidSample);
+                }
+                let sa = sa * weight;
+                if sa == 0.0 {
+                    return Ok(false);
+                }
+                let oa = sa + da * (1.0 - sa);
+                for channel in 0..alpha {
+                    let d = dst.get(channel).copied().ok_or(RasterInputError::LengthMismatch)?;
+                    let s = src.get(channel).copied().ok_or(RasterInputError::LengthMismatch)?;
+                    let value = if sa == 1.0 || da == 0.0 { s } else { (s * sa + d * da * (1.0 - sa)) / oa };
+                    if !value.is_finite() {
+                        return Err(RasterInputError::InvalidSample);
+                    }
+                    try_write_sample_f64(pixel, format.sample, channel, value).map_err(|_| RasterInputError::InvalidSample)?;
+                }
+                if !lock_transparency {
+                    try_write_sample_f64(pixel, format.sample, alpha, oa).map_err(|_| RasterInputError::InvalidSample)?;
+                }
+            } else {
+                for channel in 0..alpha {
+                    let d = dst.get(channel).copied().ok_or(RasterInputError::LengthMismatch)?;
+                    let s = src.get(channel).copied().ok_or(RasterInputError::LengthMismatch)?;
+                    let value = if weight == 1.0 { s } else { d * (1.0 - weight) + s * weight };
+                    if !value.is_finite() {
+                        return Err(RasterInputError::InvalidSample);
+                    }
+                    try_write_sample_f64(pixel, format.sample, channel, value).map_err(|_| RasterInputError::InvalidSample)?;
+                }
+            }
+    let changed = pixel != out;
+    out.copy_from_slice(pixel);
+    Ok(changed)
+}
+
 /// Source-over in the caller's native working encoding. Color/profile conversion
 /// and non-normal blend modes must be resolved separately; mismatched color models or alpha layouts fail. Sample depths may differ;
 /// the paint source can retain f64 precision until the final destination quantization.
@@ -72,8 +146,6 @@ pub fn try_apply_normal_coverage(
             if index.is_multiple_of(256) && control.cancelled() {
                 return Err(RasterInputError::Cancelled);
             }
-            let mut original = [0_u8; 40];
-            original.get_mut(..bpp).ok_or(RasterInputError::LengthMismatch)?.copy_from_slice(pixel);
             let x = part.x0 + (index % part_width) as i32;
             let y = part.y0 + (index / part_width) as i32;
             let coverage_index =
@@ -82,7 +154,6 @@ pub fn try_apply_normal_coverage(
             if weight == 0.0 {
                 continue;
             }
-            let mut dst = [0.0_f64; 5];
             let mut src = [0.0_f64; 5];
             if let Some(mask) = selection {
                 let mut values = [0.0; 5];
@@ -97,66 +168,7 @@ pub fn try_apply_normal_coverage(
                 continue;
             }
             paint.try_read_pixel_f64(x, y, src.get_mut(..format.channels()).ok_or(RasterInputError::LengthMismatch)?)?;
-            if src.iter().take(format.channels()).any(|v| !v.is_finite()) {
-                return Err(RasterInputError::InvalidSample);
-            }
-            if format.alpha && src.get(format.mode.color_channels()).copied() == Some(0.0) {
-                continue;
-            }
-            if lock_transparency && format.alpha {
-                let alpha = try_read_sample_f64(pixel, format.sample, format.mode.color_channels()).map_err(|_| RasterInputError::InvalidSample)?;
-                if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
-                    return Err(RasterInputError::InvalidSample);
-                }
-                if alpha == 0.0 {
-                    continue;
-                }
-            }
-            for (channel, value) in dst.iter_mut().enumerate().take(format.channels()) {
-                *value = try_read_sample_f64(pixel, format.sample, channel).map_err(|_| RasterInputError::InvalidSample)?;
-                if !value.is_finite() {
-                    return Err(RasterInputError::InvalidSample);
-                }
-            }
-            let alpha = format.mode.color_channels();
-            if lock_transparency && format.alpha && dst.get(alpha).copied().ok_or(RasterInputError::LengthMismatch)? == 0.0 {
-                continue;
-            }
-            if format.alpha {
-                let da = dst.get(alpha).copied().ok_or(RasterInputError::LengthMismatch)?;
-                let sa = src.get(alpha).copied().ok_or(RasterInputError::LengthMismatch)?;
-                if !(0.0..=1.0).contains(&da) || !(0.0..=1.0).contains(&sa) {
-                    return Err(RasterInputError::InvalidSample);
-                }
-                let sa = sa * weight;
-                if sa == 0.0 {
-                    continue;
-                }
-                let oa = sa + da * (1.0 - sa);
-                for channel in 0..alpha {
-                    let d = dst.get(channel).copied().ok_or(RasterInputError::LengthMismatch)?;
-                    let s = src.get(channel).copied().ok_or(RasterInputError::LengthMismatch)?;
-                    let value = if sa == 1.0 || da == 0.0 { s } else { (s * sa + d * da * (1.0 - sa)) / oa };
-                    if !value.is_finite() {
-                        return Err(RasterInputError::InvalidSample);
-                    }
-                    try_write_sample_f64(pixel, format.sample, channel, value).map_err(|_| RasterInputError::InvalidSample)?;
-                }
-                if !lock_transparency {
-                    try_write_sample_f64(pixel, format.sample, alpha, oa).map_err(|_| RasterInputError::InvalidSample)?;
-                }
-            } else {
-                for channel in 0..alpha {
-                    let d = dst.get(channel).copied().ok_or(RasterInputError::LengthMismatch)?;
-                    let s = src.get(channel).copied().ok_or(RasterInputError::LengthMismatch)?;
-                    let value = if weight == 1.0 { s } else { d * (1.0 - weight) + s * weight };
-                    if !value.is_finite() {
-                        return Err(RasterInputError::InvalidSample);
-                    }
-                    try_write_sample_f64(pixel, format.sample, channel, value).map_err(|_| RasterInputError::InvalidSample)?;
-                }
-            }
-            changed |= pixel != original.get(..bpp).ok_or(RasterInputError::LengthMismatch)?;
+            changed |= try_normal_native_pixel(pixel, format, &src, weight, lock_transparency)?;
         }
         if changed {
             staged.try_write_interleaved_with(part, &raw, control)?;

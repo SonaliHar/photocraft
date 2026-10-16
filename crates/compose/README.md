@@ -2098,3 +2098,16 @@ and uncompiled; production compile evidence is separate. Runtime, numerical,
 native/UI/performance and parent/final acceptance remain deferred. Additional
 models/profiles/depths, filter-bearing integer hierarchies and full stock XCF
 support remain unfinished.
+
+
+Native plain Legacy Round editing additionally preserves U32/F64 RGB/Gray
+samples through a separate borrowed binary64 pixel producer. Coverage and brush
+opacity retain the existing F32 geometry schedule; the final weight promotes
+once. Incoming RGBA and current-profile conversion stay F64 until native sample
+encoding. Existing wide source-over and Preserve erasing share checked private
+pixel helpers with their Surface APIs; locked erasing is a raw no-op and locked
+painting retains exact original alpha bytes. Source/native/profile proof and
+COW/history remain with the actual document transaction. Old U8/U16/F32 brush
+paths keep their arithmetic. This does not grant hierarchy/filter pixel edits.
+Production compilation and static review remain distinct from the deferred
+numerical, native workflow, UI and performance acceptance.

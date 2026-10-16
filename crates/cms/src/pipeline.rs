@@ -7,6 +7,8 @@ use crate::curve::Curve;
 use crate::math;
 
 pub(crate) mod exact_f32;
+mod controlled_f64;
+pub use controlled_f64::F64EvaluationRequirements;
 
 /// Largest channel count flowing through a pipeline.
 pub const MAX: usize = 16;

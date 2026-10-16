@@ -471,7 +471,7 @@ mod wide_one_shot_controlled;
 pub use wide_one_shot_controlled::live_begin_recipe_controlled::{CapturedLiveBegin,PreparedLiveBegin,LiveBeginFence};
 mod native_wide_color_controlled;
 mod brush_recipe_controlled;
-pub(crate) use brush_recipe_controlled::{AccountedRoundRecipe,accounted_round_recipe};
+pub(crate) use brush_recipe_controlled::{AccountedRoundRecipe,accounted_round_recipe,accounted_wide_round_recipe};
 mod advanced_native_admission;
 mod native_replace_controlled;
 mod native_mixer_controlled;

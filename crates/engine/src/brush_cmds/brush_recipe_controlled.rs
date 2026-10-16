@@ -189,3 +189,32 @@ pub(crate) fn accounted_round_recipe(s:&Session,cmd:&str,p:&Value,q:&photocraft_
  if points.is_empty(){return Err(fail("points is empty"))}check_coords(&points,cmd)?;c.check(1)?;
  Ok(AccountedRoundRecipe{brush:base,points,original,foreground:s.tools.foreground.map(f32::to_bits),background:s.tools.background.map(f32::to_bits),_fee:fee})
 }
+
+// Wide fixed paint stays separate from inert finite geometry; preserve the
+// existing narrow resolver above literally, including its color semantics.
+pub(crate) fn accounted_wide_round_recipe(s:&Session,cmd:&str,p:&Value,q:&photocraft_raster::backing::quota::BackingQuota,c:&photocraft_raster::backing::ReadControl<'_>)->Result<(AccountedRoundRecipe,[f64;4])>{
+ use photocraft_raster::backing::{BackingError,quota::QuotaKind};
+ c.check(128)?;let rgba=crate::paint_cmds::wide_color(p.get("color"),s.tools.foreground)?;
+ c.check(1)?;if p.get("preset").is_some()||p.get("autoErase").is_some_and(|v|v.as_bool()!=Some(false))||p.get("block").is_some_and(|v|v.as_bool()!=Some(false)){return Err(fail("native Round stroke does not yet support presets, Auto Erase or block mode"))}
+ let original=photocraft_paint::native_stroke_controlled::checked_round_brush(&s.tools.brush).map_err(|e|fail(e.to_string()))?;
+ let array=p.get("points").and_then(Value::as_array).filter(|a|!a.is_empty()&&a.len()<=100_000).ok_or_else(||fail("bounded points required"))?;
+ let patch=p.get("brush").filter(|v|v.is_object());let shape=if let Some(v)=patch{accounted_shape(v,0,&mut 0,c)?}else{0};
+ if let Some(v)=patch{if v.as_object().is_some_and(|o|o.keys().any(|k|matches!(k.as_str(),"tip"|"texture"|"dualBrush"|"scattering"|"colorDynamics"|"mixer"))){return Err(fail("native Round stroke asset/advanced patch is unsupported"))}}
+ // Pay and bound every point value before streamed seed serialization or any
+ // recursive serde use; direct Prepared callers also take this path.
+ for v in array{match v{Value::Array(a) if a.len()<=8=>{for v in a{accounted_shape(v,0,&mut 0,c)?;}},Value::Object(_)=>{accounted_shape(v,0,&mut 0,c)?;},Value::Array(_)=>return Err(fail("native point field limit")),_=>{accounted_shape(v,0,&mut 0,c)?;}}}
+ let bytes=add(add(mul(array.len()as u64,std::mem::size_of::<StrokePoint>()as u64*2)?,mul(shape,16)?)?,1<<20)?;
+ let fee=q.reserve(QuotaKind::Index,bytes).map_err(|_|BackingError::Quota)?;c.check(add(mul(array.len()as u64,256)?,mul(shape,128)?)?)?;
+ let mut base=photocraft_paint::native_stroke_controlled::checked_round_brush(&s.tools.brush).map_err(|e|fail(e.to_string()))?;
+ if let Some(patch)=patch{let mut value=serde_json::to_value(&base).map_err(|e|fail(e.to_string()))?;merge_json(&mut value,patch,c.interrupt)?;base=serde_json::from_value(value).map_err(|e|fail(e.to_string()))?;}
+ if let Some(v)=num(p,"size"){base.size=v.max(0.5)}if let Some(v)=num(p,"hardness"){base.hardness=v.clamp(0.0,1.0)}if let Some(v)=num(p,"opacity"){base.opacity=v.clamp(0.0,1.0)}if let Some(v)=num(p,"flow"){base.flow=v.clamp(0.0,1.0)}if let Some(v)=num(p,"spacing"){base.spacing=v.clamp(0.01,10.0)}if let Some(v)=num(p,"smoothing"){base.smoothing.enabled=true;base.smoothing.amount=v.clamp(0.0,1.0)}
+ base.color=[0.0,0.0,0.0,1.0];base.background=s.tools.background;base.color_cmyk=None;base.erase=flag(p,"erase",false);
+ struct PaidSeed<'a,'b>{hash:u64,c:&'a photocraft_raster::backing::ReadControl<'b>,failure:Option<BackingError>}
+ impl Write for PaidSeed<'_,'_>{fn write(&mut self,b:&[u8])->std::io::Result<usize>{for chunk in b.chunks(4096){if let Err(e)=self.c.check(chunk.len()as u64){self.failure=Some(e);return Err(std::io::Error::other("controlled seed"))}for byte in chunk{self.hash^=u64::from(*byte);self.hash=self.hash.wrapping_mul(0x00000100000001B3)}}Ok(b.len())}fn flush(&mut self)->std::io::Result<()>{Ok(())}}
+ base.seed=if let Some(seed)=p.get("seed").and_then(Value::as_u64){seed}else{let mut writer=PaidSeed{hash:0xCBF29CE484222325,c,failure:None};if let Some(points)=p.get("points"){if let Err(e)=serde_json::to_writer(&mut writer,points){return Err(writer.failure.map_or_else(||fail(e.to_string()),EngineError::from))}}photocraft_paint::rng::mix64(writer.hash)};
+ validate_brush(&base,cmd)?;base=with_blend_mode(base,p);if cmd=="paint.pencil"{base=pencil_settings(base,p)?}base=photocraft_paint::native_stroke_controlled::checked_round_brush(&base).map_err(|e|fail(e.to_string()))?;
+ let mut points=Vec::new();points.try_reserve_exact(array.len()).map_err(|_|BackingError::Allocation)?;if points.capacity()>array.len().checked_mul(2).ok_or(BackingError::Length)?{return Err(BackingError::Allocation.into())}
+ for value in array{c.check(1)?;let point=match value{Value::Array(a)=>{if a.len()>8{return Err(fail("native point field limit"))}let g=|i|a.get(i).and_then(Value::as_f64);match(g(0),g(1)){(Some(x),Some(y))=>{let mut v=StrokePoint::new(x,y,g(2).unwrap_or(1.0)as f32);v.tilt_x=g(3).unwrap_or(0.0)as f32;v.tilt_y=g(4).unwrap_or(0.0)as f32;v.rotation=g(5).unwrap_or(0.0)as f32;v.time=g(6).unwrap_or(0.0);v.wheel=g(7).unwrap_or(1.0)as f32;Some(v)},_=>None}},Value::Object(_)=>{let shape=accounted_shape(value,0,&mut 0,c)?;c.check(mul(shape,32)?)?;serde_json::from_value(clone_json(value,c.interrupt)?).ok()},_=>None};if let Some(point)=point{points.push(point)}}
+ if points.is_empty(){return Err(fail("points is empty"))}check_coords(&points,cmd)?;c.check(1)?;
+ Ok((AccountedRoundRecipe{brush:base,points,original,foreground:s.tools.foreground.map(f32::to_bits),background:s.tools.background.map(f32::to_bits),_fee:fee},rgba))
+}

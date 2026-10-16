@@ -1545,3 +1545,11 @@ mod plain_integer_hierarchy_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="accounted_plain_quantized_normal_hierarchy_native_tests.rs"]
 mod plain_quantized_normal_hierarchy_native_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_wide_plain_xcf_source_tests.rs"]
+mod wide_plain_xcf_source_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_native_wide_stroke_native_tests.rs"]
+mod native_wide_stroke_native_tests;

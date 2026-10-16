@@ -248,3 +248,6 @@ fn real_control_and_quota_failures_keep_owner_history_and_private_fees_atomic() 
     assert!(before.shares_state(&s.active().unwrap().doc));
     assert_eq!(q.usage().unwrap(), baseline);
 }
+
+#[path="accounted_native_alpha_wide_tests.rs"]
+mod wide_contracts;

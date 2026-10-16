@@ -253,6 +253,12 @@ impl Transform {
         self.pipeline.try_eval_f64(input, out)
     }
 
+    /// Prospective inventory ceiling for the additive controlled F64 evaluator.
+    pub const fn eval_f64_planning_work_ceiling()->u64{Pipeline::eval_f64_planning_work_ceiling()}
+    pub fn eval_f64_requirements_with_control(&self,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<crate::pipeline::F64EvaluationRequirements>{self.pipeline.eval_f64_requirements_with_control(limits,cancelled)}
+    /// Cooperative exact wide pipeline. No implicit F32 conversion or fast LUT.
+    pub fn try_eval_f64_with_control(&self,input:&[f64],out:&mut[f64],limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<()>{self.pipeline.try_eval_f64_with_control(input,out,limits,cancelled)}
+
     /// Exact identity provenance, including identical-profile construction.
     pub fn is_identity(&self) -> bool {
         self.inputs == self.outputs && self.pipeline.stages.is_empty()

@@ -136,3 +136,6 @@ fn source_free_legacy_native_equality_does_not_gain_new_noop_behavior() {
     let changed = owner.try_edit(AccountedEdit::NativePixels { layer: id, rect: Rect::new(0, 0, 1, 1), bytes: &[0; 16] }, &control()).unwrap();
     assert!(!changed.shares_model(&owner));
 }
+
+#[path="accounted_imported_native_wide_tests.rs"]
+mod wide_contracts;

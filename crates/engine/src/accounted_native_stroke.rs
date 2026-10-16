@@ -3,7 +3,7 @@
 use crate::{DocumentSnapshot,EngineError,Result,Session,accounted_view::AccountedView,channel_cmds::ChannelView,document_history::DocumentHistory,source_policy::SourceIdentity};
 use photocraft_doc::{LayerId,LayerContent,accounted_document::{AccountedDocument,AccountedEdit,accounted_layer_access}};
 use photocraft_raster::backing::{BackingError,ReadControl,quota::{QuotaKind,QuotaLease}};
-use photocraft_paint::native_stroke_controlled::{NativeStrokeError,NativeStrokeLimits,NativeStrokePatch,prepare_clipped_native_stroke};
+use photocraft_paint::native_stroke_controlled::{NativeStrokeError,NativeStrokeLimits,NativeStrokePatch,NativeWideColor,prepare_clipped_native_stroke,prepare_clipped_native_wide_stroke};
 use serde_json::Value;
 const REPLY_ENVELOPE:u64=8192;
 fn fail(id:&str,m:&str)->EngineError{EngineError::BadParams{cmd:id.into(),msg:m.into()}}
@@ -26,6 +26,32 @@ fn recipe_color(doc:&photocraft_doc::Document,brush:&mut photocraft_paint::Brush
  let mut out=[0.0f64;3];let count=doc.mode.color_channels();c.check(128)?;transform.try_eval_f64(&rgba[..3],out.get_mut(..count).ok_or(BackingError::Length)?).map_err(|e|EngineError::Other(e.to_string()))?;c.check(1)?;
  let rgb=if count==1{[out[0];3]}else{out};let rgb=rgb.map(|v|v as f32);if rgb.iter().any(|v|!v.is_finite()){return Err(fail("paint.stroke","converted brush color is not finite F32"))}brush.color=[rgb[0],rgb[1],rgb[2],brush.color[3]];Ok(())
 }
+fn recipe_wide_color(doc:&photocraft_doc::Document,format:photocraft_color::PixelFormat,rgba:[f64;4],q:&photocraft_raster::backing::quota::BackingQuota,c:&ReadControl<'_>)->Result<NativeWideColor>{
+ use photocraft_cms::{Builtin,Intent,Transform,control::Limits};
+ c.check(1)?;if format.mode!=doc.mode{return Err(BackingError::Unsupported.into())}
+ if rgba.iter().any(|v|!v.is_finite())||!(0.0..=1.0).contains(&rgba[3]){return Err(fail("paint.stroke","finite color and unit alpha required"))}
+ let limits=Limits::default();let req=crate::color_cmds::document_profile_requirements_with_limits(doc,limits,c.interrupt)?;
+ let source=Builtin::Srgb.profile();let cancelled=||c.interrupt.cancelled();let src=source.clone_requirements_with_control(limits,&cancelled).map_err(|e|EngineError::Other(e.to_string()))?;
+ let reserve=req.result_retained_bytes_upper_bound.checked_mul(16).and_then(|n|n.checked_add(src.retained_bytes.checked_mul(16)?)).and_then(|n|n.checked_add(8<<20)).ok_or(BackingError::Length)?;
+ let peak=req.peak_resident_bytes.checked_add(reserve).ok_or(BackingError::Length)?;if peak>limits.resident_bytes{return Err(BackingError::Quota.into())}
+ let work=(reserve as u64).checked_mul(32).and_then(|n|n.checked_add(16<<20)).ok_or(BackingError::Length)?;c.check(req.work_units.checked_mul(3).and_then(|n|n.checked_add(work)).ok_or(BackingError::Length)?)?;
+ let _fee=q.reserve(QuotaKind::Resident,peak as u64).map_err(|_|BackingError::Quota)?;
+ let profile=crate::color_cmds::try_document_profile_with_limits(doc,limits,c.interrupt)?;
+ if profile.color_space!=crate::color_cmds::mode_space(doc.mode){return Err(fail("paint.stroke","current brush profile/model mismatch"))}
+ let exact=Transform::requirements_with_control(source,&profile,photocraft_cms::transform::TransformOptions{intent:Intent::RelativeColorimetric,bpc:true,..Default::default()},Limits{resident_bytes:reserve,work_units:work/3},&cancelled).map_err(|e|if c.interrupt.cancelled(){EngineError::Cancelled}else{EngineError::Other(e.to_string())})?;
+ if exact.peak_resident_bytes>reserve||exact.work_units.checked_mul(3).is_none_or(|n|n>work){return Err(BackingError::Quota.into())}
+ let transform=Transform::new_with_control(source,&profile,Intent::RelativeColorimetric,true,Limits{resident_bytes:reserve,work_units:work/3},&cancelled).map_err(|e|if c.interrupt.cancelled(){EngineError::Cancelled}else{EngineError::Other(e.to_string())})?;
+ // Evaluation has a separate prospective original-work budget and scratch
+ // envelope; construction work is never later evaluation credit.
+ let _eval_fee=q.reserve(QuotaKind::Resident,4096).map_err(|_|BackingError::Quota)?;
+ c.check(Transform::eval_f64_planning_work_ceiling())?;
+ let evaluation=transform.eval_f64_requirements_with_control(Limits{resident_bytes:4096,work_units:limits.work_units},&cancelled).map_err(|e|match e{photocraft_cms::control::Error::Cancelled=>EngineError::Cancelled,e=>EngineError::Other(e.to_string())})?;
+ if evaluation.peak_resident_bytes>4096{return Err(BackingError::Quota.into())}
+ c.check(evaluation.work_units)?;
+ let mut out=[0.0f64;3];let count=doc.mode.color_channels();transform.try_eval_f64_with_control(&rgba[..3],out.get_mut(..count).ok_or(BackingError::Length)?,Limits{resident_bytes:4096,work_units:evaluation.work_units},&cancelled).map_err(|e|match e{photocraft_cms::control::Error::Cancelled=>EngineError::Cancelled,e=>EngineError::Other(e.to_string())})?;c.check(1)?;
+ let mut values=[0.0;5];values.get_mut(..count).ok_or(BackingError::Length)?.copy_from_slice(out.get(..count).ok_or(BackingError::Length)?);if format.alpha{*values.get_mut(count).ok_or(BackingError::Length)?=rgba[3];}
+ NativeWideColor::new(format,values.get(..format.channels()).ok_or(BackingError::Length)?).map_err(native)
+}
 fn idle(s:&Session,id:&str)->Result<()>{let st=s.active().ok_or(EngineError::NoDocument)?;if s.has_jobs()||s.command_has_pending_job()||s.command_is_background()||s.coalesce_request.is_some()||s.color_restrict.is_some()||st.floating.is_some()||st.coalesce.is_some()||st.symmetry.is_some(){return Err(fail(id,"native stroke requires an idle synchronous pixel context"))}if st.channel_view.target!=crate::channel_cmds::ChannelTarget::Composite||st.channel_view.layer_mask.is_some()||st.channel_view.editing_mask.is_some()||st.channel_view.color_hidden.iter().any(|v|*v)||st.channel_view.alpha_visible.iter().any(|v|*v)||st.channel_view.color_hidden.len()>32||st.channel_view.alpha_visible.len()>4096{return Err(fail(id,"native stroke requires all ordinary color channels"))}Ok(())}
 fn copy(v:&str)->Result<String>{let mut s=String::new();s.try_reserve_exact(v.len()).map_err(|_|BackingError::Allocation)?;if s.capacity()>v.len().checked_mul(2).ok_or(BackingError::Length)?{return Err(BackingError::Allocation.into())}s.push_str(v);Ok(s)}
 fn flags(v:&[bool],c:&ReadControl<'_>)->Result<Vec<bool>>{let mut x=Vec::new();x.try_reserve_exact(v.len()).map_err(|_|BackingError::Allocation)?;if x.capacity()>v.len().checked_mul(2).ok_or(BackingError::Length)?{return Err(BackingError::Allocation.into())}for b in v{c.check(1)?;x.push(*b)}Ok(x)}
@@ -41,7 +67,10 @@ impl<'a> Request<'a>{
   let layer=match self.params.get("layer"){Some(v)=>LayerId(v.as_u64().filter(|v|*v!=0).ok_or_else(||fail(self.id,"nonzero layer identity required"))?),None=>state.active_layer.ok_or(EngineError::NoDocument)?};
   if self.params.get("target").is_some_and(|v|v.as_str()!=Some("pixels")){return Err(fail(self.id,"native brush requires pixel target"))}
   let access=accounted_layer_access(owner.document(),layer,c)?.ok_or(EngineError::NoLayer(layer))?;let LayerContent::BackedRaster(backed)=&access.layer.content else{return Err(BackingError::Unsupported.into())};
-  let mut recipe=crate::brush_cmds::accounted_round_recipe(s,self.id,self.params,owner.quota(),c)?;let alpha_locked=locks(owner,layer,recipe.brush.erase,c)?;recipe_color(owner.document(),&mut recipe.brush,owner.quota(),c)?;
+  let wide=matches!(backed.format().sample,photocraft_color::SampleType::U32|photocraft_color::SampleType::F64);
+  let(mut recipe,wide_rgba)=if wide{let(recipe,rgba)=crate::brush_cmds::accounted_wide_round_recipe(s,self.id,self.params,owner.quota(),c)?;(recipe,Some(rgba))}else{(crate::brush_cmds::accounted_round_recipe(s,self.id,self.params,owner.quota(),c)?,None)};
+  let alpha_locked=locks(owner,layer,recipe.brush.erase,c)?;
+  let wide_color=if let Some(rgba)=wide_rgba{Some(if recipe.brush.erase{NativeWideColor::new(backed.format(),[0.0;5].get(..backed.format().channels()).ok_or(BackingError::Length)?).map_err(native)?}else{recipe_wide_color(owner.document(),backed.format(),rgba,owner.quota(),c)?})}else{recipe_color(owner.document(),&mut recipe.brush,owner.quota(),c)?;None};
   let view=state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;if state.active_layer!=view.target().active||state.layer_anchor!=view.anchor()||!state.selected_layers.is_empty(){return Err(BackingError::Integrity.into())}
   let strings=state.path.as_ref().map_or(0,String::len).checked_add(state.source.as_ref().map_or(0,|x|x.label.len()+x.path.as_ref().map_or(0,String::len))).ok_or(BackingError::Length)?;if strings>12288{return Err(BackingError::Length.into())}
   let count=state.channel_view.color_hidden.len().checked_add(state.channel_view.alpha_visible.len()).ok_or(BackingError::Length)?;let bytes=strings.checked_add(count).and_then(|n|n.checked_mul(2)).and_then(|n|n.checked_add(std::mem::size_of::<Prepared<'_>>()+1024)).ok_or(BackingError::Length)?;
@@ -50,7 +79,9 @@ impl<'a> Request<'a>{
   let channel=ChannelView{target:state.channel_view.target,color_hidden:flags(&state.channel_view.color_hidden,c)?,alpha_visible:flags(&state.channel_view.alpha_visible,c)?,quick_mask_hidden:state.channel_view.quick_mask_hidden,layer_mask:None,editing_mask:None};
   let actual=path.as_ref().map_or(0,String::capacity).checked_add(source.as_ref().map_or(0,|v|v.label.capacity()+v.path.as_ref().map_or(0,String::capacity))).and_then(|n|n.checked_add(channel.color_hidden.capacity()+channel.alpha_visible.capacity())).and_then(|n|n.checked_add(std::mem::size_of::<Prepared<'_>>()+1024)).ok_or(BackingError::Length)?;lease.reconcile_capacity(actual as u64).map_err(|_|BackingError::Allocation)?;
   let zoom=self.params.get("zoom").and_then(Value::as_f64).unwrap_or(1.0)as f32;
-  let plan=prepare_clipped_native_stroke(backed.checked_view(),backed.operative_bounds(),&recipe.brush,&recipe.points,None,alpha_locked,zoom,NativeStrokeLimits::STANDARD,owner.quota(),c).map_err(native)?;let patch=plan.render(c).map_err(native)?;
+  let patch=if let Some(color)=wide_color{prepare_clipped_native_wide_stroke(backed.checked_view(),backed.operative_bounds(),&recipe.brush,&recipe.points,color,alpha_locked,zoom,NativeStrokeLimits::STANDARD,owner.quota(),c).map_err(native)?.render(c).map_err(native)?}else{
+   let plan=prepare_clipped_native_stroke(backed.checked_view(),backed.operative_bounds(),&recipe.brush,&recipe.points,None,alpha_locked,zoom,NativeStrokeLimits::STANDARD,owner.quota(),c).map_err(native)?;plan.render(c).map_err(native)?
+  };
   let reply_lease=owner.quota().reserve(QuotaKind::Index,REPLY_ENVELOPE).map_err(|_|BackingError::Quota)?;c.check(REPLY_ENVELOPE)?;
   let changed=patch.changed();let mut history=state.history.clone();let snapshot=if changed{
    owner.validate_imported_native_edit(AccountedEdit::NativePixels{layer,rect:patch.bounds(),bytes:patch.bytes()},c)?;
@@ -100,7 +131,7 @@ pub fn capture_accounted_native_stroke_target(s:&Session)->Result<Option<std::sy
   if !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
   let layer=state.active_layer.ok_or(EngineError::NoDocument)?;let access=accounted_layer_access(owner.document(),layer,c)?.ok_or(EngineError::NoLayer(layer))?;
   let LayerContent::BackedRaster(backed)=&access.layer.content else{return Err(BackingError::Unsupported.into())};
-  if !matches!(backed.format().mode,photocraft_color::ColorMode::Rgb|photocraft_color::ColorMode::Grayscale)||!matches!(backed.format().sample,photocraft_color::SampleType::U8|photocraft_color::SampleType::U16|photocraft_color::SampleType::F32){return Err(fail("paint.stroke","native Round brush format is not yet supported"))}
+  if !matches!(backed.format().mode,photocraft_color::ColorMode::Rgb|photocraft_color::ColorMode::Grayscale)||!matches!(backed.format().sample,photocraft_color::SampleType::U8|photocraft_color::SampleType::U16|photocraft_color::SampleType::F32|photocraft_color::SampleType::U32|photocraft_color::SampleType::F64){return Err(fail("paint.stroke","native Round brush format is not yet supported"))}
   let brush=photocraft_paint::native_stroke_controlled::checked_round_brush(&s.tools.brush).map_err(native)?;
   let view=state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;if state.active_layer!=view.target().active||state.layer_anchor!=view.anchor()||!state.selected_layers.is_empty(){return Err(BackingError::Integrity.into())}
   let strings=state.path.as_ref().map_or(0,String::len).checked_add(state.source.as_ref().map_or(0,|v|v.label.len()+v.path.as_ref().map_or(0,String::len))).ok_or(BackingError::Length)?;if strings>12288{return Err(BackingError::Length.into())}
@@ -146,3 +177,7 @@ impl std::fmt::Debug for AccountedNativeStrokeTarget{fn fmt(&self,f:&mut std::fm
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="accounted_native_stroke_tests.rs"]
 mod tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_native_wide_stroke_tests.rs"]
+mod wide_tests;

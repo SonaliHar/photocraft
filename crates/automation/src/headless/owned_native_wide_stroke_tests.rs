@@ -1,0 +1,13 @@
+//! Deferred actual generated source file and registered wide stroke/native save.
+use super::*;
+#[path="../../../engine/src/accounted_wide_plain_xcf_test_support.rs"]mod f;
+use std::sync::atomic::{AtomicU64,Ordering};
+struct Directory(std::path::PathBuf);
+impl Directory{fn new()->Self{static NEXT:AtomicU64=AtomicU64::new(0);let p=std::env::temp_dir().join(format!("photocraft-wide-stroke-{}-{}",std::process::id(),NEXT.fetch_add(1,Ordering::Relaxed)));std::fs::create_dir(&p).unwrap();Self(p)}}
+impl Drop for Directory{fn drop(&mut self){let _=std::fs::remove_dir_all(&self.0);}}
+#[test]
+#[ignore="UNRUN/uncompiled generated U32/F64 RGB/Gray source file open, registered F64-color stroke, trusted native SaveAs/title/reopen/undo and source exclusions. No GUI/producer/performance acceptance."]
+fn wide_headless_stroke_preserves_native_source_and_continuation(){
+ for gray in [false,true]{for sample in [photocraft_color::SampleType::U32,photocraft_color::SampleType::F64]{let dir=Directory::new();let source=dir.0.join("wide.xcf");std::fs::write(&source,f::encoded(gray,sample,false)).unwrap();let mut h=Headless::trusted_local();drop(h.open_owned_xcf_keep_current_bounded(&source).unwrap());let before=h.session.active().unwrap().doc.clone();assert!(before.accounted().unwrap().is_legacy_storage());assert_eq!(f::payload(&before),f::expected(gray,sample));let old_source=h.session.active().unwrap().source.clone();assert!(old_source.as_ref().unwrap().check_destination(source.to_str().unwrap()).is_err());h.session.tools.brush.pressure_size=false;let mut p=f::patch();p["color"]=serde_json::json!([0.25+2f64.powi(-42),0.625+2f64.powi(-43),0.875-2f64.powi(-44),0.75+2f64.powi(-44)]);h.command_run("paint.stroke",p).unwrap();let changed=h.session.active().unwrap().doc.clone();assert_ne!(f::payload(&changed),f::payload(&before));assert_eq!(changed.depth,sample);let output=dir.0.join("wide.pcraft");h.save_owned_native_active(Some(&output),Some("pcraft"),&f::ctl()).unwrap();let saved=h.session.active().unwrap().doc.clone();assert_eq!(saved.name,"wide.pcraft");assert_eq!(h.session.active().unwrap().source,old_source);let mut reopen=Headless::trusted_local();drop(reopen.open_owned_native_keep_current_bounded(&output).unwrap());let now=reopen.session.active().unwrap().doc.clone();assert!(now.accounted().unwrap().is_legacy_storage());assert_eq!(now.name,saved.name);assert_eq!(now.depth,sample);assert_eq!(f::payload(&now),f::payload(&saved));assert_eq!(now.source_color_context,saved.source_color_context);assert_eq!(now.xcf_state,saved.xcf_state);h.command_run("edit.undo",serde_json::json!({})).unwrap();assert_eq!(f::payload(&h.session.active().unwrap().doc),f::payload(&before));assert_eq!(h.session.active().unwrap().source,old_source);
+ }}
+}

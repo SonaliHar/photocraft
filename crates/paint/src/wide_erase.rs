@@ -21,6 +21,32 @@ pub enum EraseColorPolicy {
     ClearAtZero,
 }
 
+/// One atomic alpha-only pixel. Preserve never decodes color words; locked
+/// erasing returns before any sample decode, after shape and weight validation.
+pub(crate) fn try_erase_native_pixel(out: &mut [u8], format: photocraft_color::PixelFormat, weight: f64, lock_transparency: bool, policy: EraseColorPolicy) -> Result<bool, RasterInputError> {
+    let bpp = format.bytes_per_pixel();
+    if out.len() != bpp || bpp > 40 { return Err(RasterInputError::LengthMismatch); }
+    if !format.alpha { return Err(RasterInputError::UnsupportedConversion); }
+    if !weight.is_finite() || !(0.0..=1.0).contains(&weight) { return Err(RasterInputError::InvalidSample); }
+    if lock_transparency || weight == 0.0 { return Ok(false); }
+    let alpha = format.mode.color_channels();
+    let value = try_read_sample_f64(out, format.sample, alpha).map_err(|_| RasterInputError::InvalidSample)?;
+    if !value.is_finite() || !(0.0..=1.0).contains(&value) { return Err(RasterInputError::InvalidSample); }
+    let mut staged = [0u8; 40];
+    let pixel = staged.get_mut(..bpp).ok_or(RasterInputError::LengthMismatch)?;
+    pixel.copy_from_slice(out);
+    if value == 0.0 {
+        if policy == EraseColorPolicy::ClearAtZero { pixel.fill(0); }
+    } else {
+        let result = value * (1.0 - weight);
+        if policy == EraseColorPolicy::ClearAtZero && result == 0.0 { pixel.fill(0); }
+        else { try_write_sample_f64(pixel, format.sample, alpha, result).map_err(|_| RasterInputError::InvalidSample)?; }
+    }
+    let changed = pixel != out;
+    out.copy_from_slice(pixel);
+    Ok(changed)
+}
+
 /// Coverage/opacity/selection are bounded unit weights. Commits once after all checks.
 /// No-alpha background erasing needs a separate background-color operation.
 #[allow(clippy::too_many_arguments)]
@@ -81,7 +107,6 @@ pub fn try_erase_coverage(
     if lock_transparency || opacity == 0.0 || !any_coverage {
         return Ok(());
     }
-    let alpha = format.mode.color_channels();
     let width = area.width() as usize;
     let mut staged = target.clone();
     for tile in area.tiles() {
@@ -122,27 +147,7 @@ pub fn try_erase_coverage(
             if weight == 0.0 {
                 continue;
             }
-            let value = try_read_sample_f64(pixel, format.sample, alpha).map_err(|_| RasterInputError::InvalidSample)?;
-            if !value.is_finite() || !(0.0..=1.0).contains(&value) {
-                return Err(RasterInputError::InvalidSample);
-            }
-            if value == 0.0 {
-                if policy == EraseColorPolicy::ClearAtZero {
-                    changed |= pixel.iter().any(|v| *v != 0);
-                    pixel.fill(0);
-                }
-                continue;
-            }
-            let result = value * (1.0 - weight);
-            let mut before = [0u8; 40];
-            let before = before.get_mut(..bpp).ok_or(RasterInputError::LengthMismatch)?;
-            before.copy_from_slice(pixel);
-            if policy == EraseColorPolicy::ClearAtZero && result == 0.0 {
-                pixel.fill(0);
-            } else {
-                try_write_sample_f64(pixel, format.sample, alpha, result).map_err(|_| RasterInputError::InvalidSample)?;
-            }
-            changed |= pixel != before;
+            changed |= try_erase_native_pixel(pixel, format, weight, false, policy)?;
         }
         if changed {
             staged.try_write_interleaved_with(part, &raw, control)?;
