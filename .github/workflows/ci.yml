@@ -146,6 +146,18 @@ jobs:
       - name: Doctests
         run: cargo test --doc --workspace --locked --features heif
 
+      - name: Plugin API schema contracts
+        run: cargo test -p photocraft-plugin-api --locked --features schema
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Independent plugin integration
+        run: |
+          rustup target add wasm32-unknown-unknown
+          python scripts/plugins/test-platform-examples.py
+
       # The same codecs without the optional decoder: HEIC must stay a clear "not in this build"
       # error for distributors who leave it out.
       - name: Test without heif
