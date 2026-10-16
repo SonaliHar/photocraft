@@ -410,6 +410,7 @@ struct OriginalRetention {
 }
 #[derive(Clone, Copy)]
 enum CopyKind<'n> {
+    ProgrammeNative(programme_native::Plan<'n>),
     Rename(&'n str),
     LayerName(ReadonlyLayerNamePatch<'n>),
     LayerProperties(readonly_layer_properties::Plan<'n>),
@@ -449,6 +450,7 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadContr
 // keeps its old slack; LayerName separately admits both replacement strings.
 fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     let replacement_name_bytes = match kind {
+        CopyKind::ProgrammeNative(_) => 0,
         CopyKind::Rename(name) => name.len() as u64,
         // Two replacement Strings may each reserve up to twice their length.
         CopyKind::LayerName(patch) => (patch.name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
@@ -466,6 +468,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     let mut index = owner.quota().reserve(QuotaKind::Index, envelope).map_err(|_| BackingError::Quota)?;
     let payload = owner.quota().reserve(QuotaKind::Resident, 0).map_err(|_| BackingError::Quota)?;
     control.check(logical.total()?)?;
+    if let CopyKind::ProgrammeNative(plan) = kind { control.check(plan.copy_work())?; }
     let mut document = imported_selection::copy_document(owner.document(), control)?;
     let source = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     let destination = document.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
@@ -487,6 +490,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         destination.filter_masks.push(FilterMask { id: mask.id, owner: mask.owner, bounds: mask.bounds, surface: plan.copy(&mask.surface, control)? });
     }
     match kind {
+        CopyKind::ProgrammeNative(plan) => programme_native::apply(&mut document, plan, control)?,
         CopyKind::Rename(name) => document.name = imported_edits::copy_name(name, control)?,
         CopyKind::LayerName(patch) => readonly_layer_name::apply(&mut document, patch, control)?,
         CopyKind::LayerProperties(plan) => readonly_layer_properties::apply(&mut document, plan, control)?,
@@ -531,6 +535,15 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         }),
     })
 }
+// Private additive programme-native bridge. Existing entrypoints and copier
+// schedules retain their own class-specific custody and final census.
+pub(super) fn programme_measured(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+    measured(owner.document(), owner.quota(), c)
+}
+pub(super) fn programme_copy(owner: &AccountedDocument, logical: ModelCensus, plan: programme_native::Plan<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
+    current_copy(owner, logical, CopyKind::ProgrammeNative(plan), c)
+}
+
 #[cfg(test)]
 #[path = "accounted_filter_readonly_tests.rs"]
 mod tests;

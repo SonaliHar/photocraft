@@ -302,3 +302,8 @@ pub(crate) fn verify_native_stroke_alpha(owner:&AccountedDocument,layer:photocra
 pub(crate) fn verify_hierarchy_native_stroke_alpha(owner:&AccountedDocument,layer:photocraft_doc::LayerId,rect:photocraft_geom::Rect,bytes:&[u8],control:&ReadControl<'_>)->Result<()>{
  let _proof=VerifiedNativeAlpha::verify_normal_hierarchy(owner,AccountedEdit::NativePixels{layer,rect,bytes},control)?;control.check(1)?;Ok(())
 }
+
+/// Exact raw-alpha proof after named programme-native actual-owner validation.
+pub(crate) fn verify_programme_native_stroke_alpha(owner:&AccountedDocument,layer:photocraft_doc::LayerId,rect:photocraft_geom::Rect,bytes:&[u8],control:&ReadControl<'_>)->Result<()>{
+ let _proof=VerifiedNativeAlpha::verify_stored_programme(owner,AccountedEdit::NativePixels{layer,rect,bytes},control)?;control.check(1)?;Ok(())
+}

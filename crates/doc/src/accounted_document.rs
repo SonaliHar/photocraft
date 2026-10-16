@@ -37,6 +37,9 @@ mod filtered_flat_readonly;
 mod masked_filtered_flat_readonly;
 #[path="accounted_normal_hierarchy_readonly.rs"]
 mod normal_hierarchy_readonly;
+#[path = "accounted_programme_native.rs"]
+mod programme_native;
+pub use programme_native::{CheckedProgrammeNativeTarget, ProgrammeNativeStorageKind};
 pub use flat_composite_readonly::FlatCompositeCompositionPatch;
 pub use gaussian_group_readonly::{GaussianGroupEnabledPatch, GaussianGroupPatch};
 pub use point_readonly::{AssignedPointEnabledPatch, PointArgumentPatch, PointArgumentValue, PointFilterMovePatch, PointFilterPatch, PointFilterRemovePatch};

@@ -176,7 +176,7 @@ pub struct JobsUi {
 /// (the result is then `{"job": id, "pending": true}` and the edit lands when [`tick`] applies
 /// it), else synchronously like [`photocraft_engine::Session::execute`].
 pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, String> {
-    let owned_native_stroke=matches!(id,"paint.stroke"|"paint.pencil") && app.session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_legacy_storage()||o.is_readonly_normal_hierarchy_storage());
+    let owned_native_stroke=matches!(id,"paint.stroke"|"paint.pencil") && app.session.active().and_then(|s|s.doc.accounted()).is_some_and(photocraft_engine::accounted_native_stroke_candidate);
     let owned_disclosure = id=="layer.setExpanded" && app.session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage());
     let owned_metadata = id == "layer.setProps"
         && app.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_gaussian_group_storage() || owner.is_readonly_flat_composite_storage() || (owner.is_readonly_filtered_flat_point_storage() || (owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage()))

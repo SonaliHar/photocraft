@@ -102,7 +102,7 @@ fn hierarchy_stroke_targets_only_the_actual_nested_native_leaf() {
     assert_eq!(s.active().unwrap().doc.xcf_state.as_ref().unwrap().filter_stacks.iter().find(|st| st.owner == ItemRef::Layer(leaf)).unwrap().revision, 7);
 }
 #[test]
-#[ignore = "UNRUN/uncompiled actual nested target/ancestor alpha and pixel locks, group/global-filter closure, hidden invalid OLD and finite-HDR STAGED atomic refusal even no-op, captured original clock/source/view and early Work/cancel. No late cancellation measurement."]
+#[ignore = "UNRUN/uncompiled actual nested target/ancestor alpha and pixel locks, group/generic programme NativePixels closure, hidden invalid OLD and finite-HDR STAGED atomic refusal even no-op, captured original clock/source/view and early Work/cancel. No late cancellation measurement."]
 fn hierarchy_stroke_requires_complete_plain_current_and_captured_target() {
     for depth in 0..5 {
         let mut s = session(depth);
@@ -196,7 +196,23 @@ fn hierarchy_stroke_requires_complete_plain_current_and_captured_target() {
     let raster = filtered.active().unwrap().doc.layers[0].id;
     filtered.execute("layer.select", json!({"layer":raster.0})).unwrap();
     let unchanged = filtered.active().unwrap().doc.clone();
-    assert!(filtered.execute("paint.stroke", patch()).is_err());
+    let owner = unchanged.accounted().unwrap();
+    let access = owner.accounted_layer_access(raster, &f::ctl()).unwrap().unwrap();
+    let LayerContent::BackedRaster(backed) = &access.layer.content else { panic!("actual raster") };
+    let r = backed.operative_bounds();
+    let bpp = backed.format().bytes_per_pixel();
+    let mut native = vec![0; bpp];
+    backed.checked_view().pin_tile(r.tiles().next().unwrap(), &f::ctl()).unwrap().read_pixel_native_into(r.x0, r.y0, &mut native, &f::ctl()).unwrap();
+    // Programme-specific named editing is admitted now; generic NativePixels
+    // remains closed for this actual filtered hierarchy owner.
+    assert!(
+        owner
+            .try_edit(
+                AccountedEdit::NativePixels { layer: raster, rect: photocraft_geom::Rect::new(r.x0, r.y0, r.x0 + 1, r.y0 + 1), bytes: &native[..bpp] },
+                &f::ctl()
+            )
+            .is_err()
+    );
     assert!(unchanged.shares_state(&filtered.active().unwrap().doc));
     let deny = |_| Err(BackingError::Work);
     let c = ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &deny };

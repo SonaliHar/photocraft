@@ -1536,7 +1536,8 @@ mod normal_hierarchy_native_tests;
 mod accounted_masked_normal_hierarchy_tests;
 
 mod accounted_native_stroke;
-pub use accounted_native_stroke::{AccountedNativeStrokeTarget,capture_accounted_native_stroke_target};
+mod accounted_programme_current;
+pub use accounted_native_stroke::{AccountedNativeStrokeTarget,capture_accounted_native_stroke_target,candidate as accounted_native_stroke_candidate};
 
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="accounted_plain_integer_hierarchy_tests.rs"]
@@ -1569,3 +1570,11 @@ mod plain_hierarchy_paint_source_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="accounted_hierarchy_native_stroke_native_tests.rs"]
 mod hierarchy_native_stroke_native_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_programme_paint_source_tests.rs"]
+mod programme_paint_source_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_programme_stroke_native_tests.rs"]
+mod programme_stroke_native_tests;

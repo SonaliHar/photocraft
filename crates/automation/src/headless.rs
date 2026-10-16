@@ -1161,3 +1161,7 @@ mod owned_u32_plain_hierarchy_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="headless/owned_normal_hierarchy_stroke_tests.rs"]
 mod owned_normal_hierarchy_stroke_tests;
+
+#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
+#[path="headless/owned_programme_stroke_tests.rs"]
+mod owned_programme_stroke_tests;

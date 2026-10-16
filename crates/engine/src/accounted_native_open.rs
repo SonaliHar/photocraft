@@ -408,6 +408,45 @@ pub(crate) fn validate_current_threshold_storage(owner: &photocraft_doc::account
     Ok(())
 }
 
+/// Complete CURRENT Threshold Alpha proof on the actual retained owner.
+/// Preserves the native handoff basis, cumulative work and typed error mapping.
+pub(crate) fn validate_current_threshold_alpha_storage(
+    document: &photocraft_doc::accounted_document::AccountedDocument,
+    control: &ReadControl<'_>,
+) -> Result<()> {
+    // Builtin initialization is the existing outer-polled provider
+    // boundary. No current Profile parsing, cloning, or encoding is
+    // requested here: the context requires already-retained encoding
+    // and compares it exactly with actual saved current ICC bytes.
+    control.check(1)?;
+    let profile = match document.document().mode {
+        photocraft_doc::ColorMode::Rgb => photocraft_cms::Builtin::Srgb.profile(),
+        photocraft_doc::ColorMode::Grayscale => photocraft_cms::Builtin::SGray.profile(),
+        _ => return Err(BackingError::Unsupported.into()),
+    };
+    control.check(1)?;
+    let prepared =
+        photocraft_compose::backed_threshold_alpha_context::PreparedBackedThresholdAlphaContext::new(document, profile, Default::default(), control)
+            .map_err(|error| match error {
+            photocraft_compose::backed_normal::BackedNormalError::Backing(error) => EngineError::from(error),
+            _ if control.interrupt.cancelled() => EngineError::Cancelled,
+            other => EngineError::Other(format!("owned native current Threshold Alpha: {other}")),
+        })?;
+    // Validate the complete supported canvas in bounded operative bands on
+    // the same quota/control before publishing a tab; physical backing
+    // padding and original-source correspondence remain separate.
+    prepared.validate_operative(control).map_err(|error| match error {
+        photocraft_compose::backed_point_filter::BackedPointError::Backing(error) => EngineError::from(error),
+        _ if control.interrupt.cancelled() => EngineError::Cancelled,
+        other => EngineError::Other(format!("owned native current Threshold Alpha band: {other}")),
+    })?;
+    // This borrowed preparation is not a persistent rendering grant.
+    // A future render job must prepare/pay against its own held snapshot.
+    drop(prepared);
+    control.check(1)?;
+    Ok(())
+}
+
 fn text(value: &str, c: &ReadControl<'_>) -> Result<String> {
     let mut owned = String::new();
     owned.try_reserve_exact(value.len()).map_err(|_| BackingError::Allocation)?;
@@ -614,36 +653,7 @@ impl Session {
             crate::accounted_xcf_open::isolated_normal_group::validate_current_isolated_normal_group_storage(&document, control)?;
         }
         if let NativeHandoff::CurrentThresholdAlpha = handoff {
-            // Builtin initialization is the existing outer-polled provider
-            // boundary. No current Profile parsing, cloning, or encoding is
-            // requested here: the context requires already-retained encoding
-            // and compares it exactly with actual saved current ICC bytes.
-            control.check(1)?;
-            let profile = match document.document().mode {
-                photocraft_doc::ColorMode::Rgb => photocraft_cms::Builtin::Srgb.profile(),
-                photocraft_doc::ColorMode::Grayscale => photocraft_cms::Builtin::SGray.profile(),
-                _ => return Err(BackingError::Unsupported.into()),
-            };
-            control.check(1)?;
-            let prepared =
-                photocraft_compose::backed_threshold_alpha_context::PreparedBackedThresholdAlphaContext::new(&document, profile, Default::default(), control)
-                    .map_err(|error| match error {
-                    photocraft_compose::backed_normal::BackedNormalError::Backing(error) => EngineError::from(error),
-                    _ if control.interrupt.cancelled() => EngineError::Cancelled,
-                    other => EngineError::Other(format!("owned native current Threshold Alpha: {other}")),
-                })?;
-            // Validate the complete supported canvas in bounded operative bands on
-            // the same quota/control before publishing a tab; physical backing
-            // padding and original-source correspondence remain separate.
-            prepared.validate_operative(control).map_err(|error| match error {
-                photocraft_compose::backed_point_filter::BackedPointError::Backing(error) => EngineError::from(error),
-                _ if control.interrupt.cancelled() => EngineError::Cancelled,
-                other => EngineError::Other(format!("owned native current Threshold Alpha band: {other}")),
-            })?;
-            // This borrowed preparation is not a persistent rendering grant.
-            // A future render job must prepare/pay against its own held snapshot.
-            drop(prepared);
-            control.check(1)?;
+            validate_current_threshold_alpha_storage(&document, control)?;
         }
         if let NativeHandoff::CurrentHistogramThreshold = handoff {
             validate_current_threshold_storage(&document, control)?;

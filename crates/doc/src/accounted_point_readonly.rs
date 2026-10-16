@@ -514,6 +514,7 @@ struct OriginalRetention {
 }
 #[derive(Clone, Copy)]
 pub(super) enum CopyKind<'a> {
+    ProgrammeNative(programme_native::Plan<'a>),
     Rename(&'a str),
     AssignedEnabled(assigned::enabled::Plan),
     AssignedFilter(patch::Plan),
@@ -551,6 +552,7 @@ pub(super) fn current_copy(
         && !matches!(
             kind,
             CopyKind::Rename(_)
+                | CopyKind::ProgrammeNative(_)
                 | CopyKind::AssignedEnabled(_)
                 | CopyKind::AssignedFilter(_)
                 | CopyKind::AssignedLayerProperties(_)
@@ -568,7 +570,8 @@ pub(super) fn current_copy(
         CopyKind::Rename(name) => name.len() as u64,
         CopyKind::LayerName(patch) => (patch.name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
         CopyKind::LayerProperties(plan) | CopyKind::AssignedLayerProperties(plan) => plan.replacement_name_bytes()?,
-        CopyKind::AssignedEnabled(_)
+        CopyKind::ProgrammeNative(_)
+        | CopyKind::AssignedEnabled(_)
         | CopyKind::AssignedFilter(_)
         | CopyKind::Filter(_)
         | CopyKind::Structured(_)
@@ -583,6 +586,7 @@ pub(super) fn current_copy(
         _ => 0,
     };
     let additional_copy_work = match kind {
+        CopyKind::ProgrammeNative(plan) => plan.copy_work(),
         CopyKind::Structured(_) => replacement_value_bytes,
         CopyKind::Remove(plan) => plan.copy_work(),
         _ => 0,
@@ -627,6 +631,7 @@ pub(super) fn current_copy(
         destination.filter_masks.push(FilterMask { id: mask.id, owner: mask.owner, bounds: mask.bounds, surface: plan.copy(&mask.surface, control)? });
     }
     match kind {
+        CopyKind::ProgrammeNative(plan) => programme_native::apply(&mut document, plan, control)?,
         CopyKind::Rename(name) => document.name = imported_edits::copy_name(name, control)?,
         CopyKind::AssignedEnabled(plan) => assigned::enabled::apply(&mut document, plan, control)?,
         CopyKind::LayerName(patch) => readonly_layer_name::apply(&mut document, patch, control)?,
@@ -658,6 +663,15 @@ pub(super) fn current_copy(
         }),
     })
 }
+// Private additive programme-native bridge. Existing entrypoints and copier
+// schedules retain their own class-specific custody and final census.
+pub(super) fn programme_measured(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+    measured_owner(owner, owner.document(), c)
+}
+pub(super) fn programme_copy(owner: &AccountedDocument, logical: ModelCensus, plan: programme_native::Plan<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
+    current_copy(owner, logical, CopyKind::ProgrammeNative(plan), c)
+}
+
 #[cfg(test)]
 #[path = "accounted_point_readonly_tests.rs"]
 mod tests;

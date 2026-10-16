@@ -783,6 +783,7 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, c: &ReadControl<'_>
 }
 #[derive(Clone, Copy)]
 enum CopyKind<'a> {
+    ProgrammeNative(programme_native::Plan<'a>),
     Title(&'a str),
     Filter(filter::Plan),
     Move(filter_move::Plan),
@@ -793,7 +794,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     if owner.is_readonly_masked_filtered_flat_point_storage(){owner.document().checked_f32_filter_mask_coverage_set_requirements(crate::xcf_filter_masks::MaskCoverageSetLimits::STANDARD,c)?;}
     let name_bytes = match kind {
         CopyKind::Title(name) => (name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
-        CopyKind::Filter(_) | CopyKind::Move(_) | CopyKind::Remove(_) => 0,
+        CopyKind::ProgrammeNative(_) | CopyKind::Filter(_) | CopyKind::Move(_) | CopyKind::Remove(_) => 0,
         CopyKind::Metadata(plan) => plan.replacement_name_bytes()?,
     };
     let archive_bytes = match kind {
@@ -801,6 +802,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         _ => 0,
     };
     let extra_work = match kind {
+        CopyKind::ProgrammeNative(plan) => plan.copy_work(),
         CopyKind::Remove(plan) => plan.copy_work()?,
         _ => 0,
     };
@@ -839,6 +841,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         destination.filter_masks.push(FilterMask { id: mask.id, owner: mask.owner, bounds: mask.bounds, surface: plan.copy(&mask.surface, c)? });
     }
     match kind {
+        CopyKind::ProgrammeNative(plan) => programme_native::apply(&mut staged.document, plan, c)?,
         CopyKind::Title(name) => staged.document.name = imported_edits::copy_name(name, c)?,
         CopyKind::Filter(plan) => filter::apply(&mut staged.document, plan, c)?,
         CopyKind::Move(plan) => filter_move::apply(&mut staged.document, plan, c)?,
@@ -865,6 +868,15 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
             _allocation: Arc::new(allocation),
         }),
     })
+}
+
+// Private additive programme-native bridge. Existing entrypoints and copier
+// schedules retain their own class-specific custody and final census.
+pub(super) fn programme_measured(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+    measured_owner(owner, c)
+}
+pub(super) fn programme_copy(owner: &AccountedDocument, logical: ModelCensus, plan: programme_native::Plan<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
+    current_copy(owner, logical, CopyKind::ProgrammeNative(plan), c)
 }
 
 #[cfg(test)]

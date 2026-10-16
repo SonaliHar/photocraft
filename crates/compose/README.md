@@ -2132,3 +2132,25 @@ HDR paint accepted by the wide brush kernel can still be refused atomically by
 that complete hierarchy check. Logical operative validation is distinct from
 arbitrary physical-padding scans. No Normal math or band implementation changes.
 Stored filters/masks remain outside this plain-tree painting permission.
+
+
+Programme-preserving native painting now also connects the nine existing actual
+storage classes: Threshold Alpha, Histogram Threshold, Point, Assigned Point,
+Gaussian Group, Flat Composite, Filtered Flat Point, Masked Filtered Flat Point
+and Normal Hierarchy. The named structural patch delegates to seven existing
+whole-owner copiers and retains complete filter nodes/arguments/raw bits/order,
+mask storage/defaults, source/profile metadata, native defaults and siblings.
+The engine checks each class's full existing Current domain on OLD and STAGED,
+including hidden/inactive content and raw no-ops, and repeats proof at publication.
+Those domains remain recipe-specific; this introduces no universal unit clamp or
+new HDR permission. Exact target/provider/parent/canonical witnesses, ancestor
+locks, independent raw-alpha proof, actual quota/COW fees and the original gesture
+work/deadline remain. Existing narrow/wide Round brush math is reused. Generic
+NativePixels and the older plain-hierarchy API keep their original admission.
+Native .pcraft continuation uses existing markers and fields; XCF stays protected.
+Existing RGB/Gray/native-sample brush gates and16MiB contained patches remain.
+Layer-row focus for the two mixed storage classes is a separate routing gap;
+explicit numeric raster targets use the shared command route. Advanced brushes,
+selection/symmetry, growth, live preview and full stock support remain unfinished.
+All new behavioral/native/host contracts are ignored UNRUN/uncompiled. Production
+compilation and static review do not establish numerical/native/UI acceptance.
