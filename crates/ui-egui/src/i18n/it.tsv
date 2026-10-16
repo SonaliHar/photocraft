@@ -4369,3 +4369,4 @@ shape	Appearance	Aspetto
 	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	Acquisizione non riuscita. Consenti PhotoCraft Dev in Impostazioni di Sistema › Privacy e sicurezza › Registrazione schermo
 	Screenshot {name} saved to the library	Istantanea {name} salvata nella libreria
 	Saved, but the library PNG could not be updated: {error}	Salvato, ma il PNG della libreria non è stato aggiornato: {error}
+	Could not open the screenshot	Impossibile aprire l'istantanea

@@ -3947,3 +3947,4 @@ curves	Smooth	Згладити
 	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	Не вдалося зняти екран. Дозвольте PhotoCraft Dev у Системних параметрах › Приватність і безпека › Запис екрана
 	Screenshot {name} saved to the library	Знімок {name} збережено до бібліотеки
 	Saved, but the library PNG could not be updated: {error}	Збережено, але PNG у бібліотеці не оновлено: {error}
+	Could not open the screenshot	Не вдалося відкрити знімок

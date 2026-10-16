@@ -4008,3 +4008,4 @@ curves	Smooth	Vloeiend maken
 	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	Schermopname mislukt. Sta PhotoCraft Dev toe in Systeeminstellingen › Privacy en beveiliging › Schermopname
 	Screenshot {name} saved to the library	Schermafbeelding {name} opgeslagen in de bibliotheek
 	Saved, but the library PNG could not be updated: {error}	Opgeslagen, maar de PNG in de bibliotheek kon niet worden bijgewerkt: {error}
+	Could not open the screenshot	Kan de schermafbeelding niet openen

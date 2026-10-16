@@ -2864,3 +2864,4 @@ curves	Smooth	平滑
 	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	屏幕截取失败。请在 系统设置 › 隐私与安全性 › 录屏 中允许 PhotoCraft Dev
 	Screenshot {name} saved to the library	截图 {name} 已保存到截图库
 	Saved, but the library PNG could not be updated: {error}	已保存，但无法更新截图库中的 PNG：{error}
+	Could not open the screenshot	无法打开截图

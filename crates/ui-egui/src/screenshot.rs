@@ -147,10 +147,29 @@ pub fn store(app: &mut PhotocraftApp, png: &Path) -> Result<PathBuf, String> {
     Ok(pcraft)
 }
 
+/// The file to open for `path`: a PNG in the library opens as its editable `.pcraft` (made the
+/// first time), however it arrives (PhotoCraft Capture, Finder, Open With, File › Open).
+pub fn editable(app: &mut PhotocraftApp, path: &str) -> String {
+    let p = Path::new(path);
+    let in_library = p.parent().is_some_and(|d| same_dir(d, &library_dir(app)));
+    if !in_library || !p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("png")) {
+        return path.to_string();
+    }
+    let pcraft = p.with_extension("pcraft");
+    if pcraft.exists() {
+        return pcraft.to_string_lossy().into_owned();
+    }
+    store(app, p).map_or_else(|_| path.to_string(), |pc| pc.to_string_lossy().into_owned())
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(x), Ok(y)) if x == y)
+}
+
 /// After a save of the active document to `path`: a library `.pcraft` also rewrites its `.png`.
 pub fn after_save(app: &mut PhotocraftApp, path: &str) {
     let p = Path::new(path);
-    if p.extension().and_then(|e| e.to_str()) != Some("pcraft") || p.parent() != Some(library_dir(app).as_path()) {
+    if p.extension().and_then(|e| e.to_str()) != Some("pcraft") || !p.parent().is_some_and(|d| same_dir(d, &library_dir(app))) {
         return;
     }
     let png = p.with_extension("png").to_string_lossy().into_owned();
@@ -322,10 +341,9 @@ fn handle_request(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let result = match r {
         Request::Open(path) => {
             close(app);
-            // A PNG put in the library from outside (the system's ⌘⇧4, Finder) gets its
-            // editable copy the first time it is opened, as a capture made here does.
-            let editable = if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("png")) { store(app, &path) } else { Ok(path) };
-            editable.and_then(|p| app.open_path(&p.to_string_lossy()).map(|_| ()))
+            // open_paths turns a library PNG into its editable copy (`editable`).
+            let opened = app.open_paths(&[path.to_string_lossy().into_owned()]);
+            if opened == 1 { Ok(()) } else { Err(tl!("Could not open the screenshot").to_string()) }
         }
         Request::New => {
             close(app);
@@ -432,6 +450,12 @@ mod tests {
         app.ui.dialogs.clear();
         app.ui.open_dialog(crate::state::DialogKind::Command, serde_json::Map::from_iter([(MARK.to_string(), json!(true))]));
         let ctx = egui::Context::default();
+        // Opening a PNG from outside (Finder, PhotoCraft Capture) also gives the editable copy.
+        let other = d.join("Screenshot 2026-10-15 at 19.05.00.png");
+        std::fs::copy(&png, &other).unwrap();
+        assert_eq!(app.open_paths(&[other.to_string_lossy().into_owned()]), 1);
+        assert!(other.with_extension("pcraft").exists());
+        assert_eq!(app.session.active().and_then(|st| st.path.clone()), Some(other.with_extension("pcraft").to_string_lossy().into_owned()));
         ctx.data_mut(|data| data.insert_temp(request_id(), Request::Open(system.clone())));
         handle_request(&mut app, &ctx);
         assert!(system.with_extension("pcraft").exists(), "editable copy made");

@@ -3948,3 +3948,4 @@ curves	Smooth	Εξομάλυνση
 	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	Η λήψη οθόνης απέτυχε. Επιτρέψτε το PhotoCraft Dev στις Ρυθμίσεις συστήματος › Απόρρητο και ασφάλεια › Εγγραφή οθόνης
 	Screenshot {name} saved to the library	Το στιγμιότυπο {name} αποθηκεύτηκε στη βιβλιοθήκη
 	Saved, but the library PNG could not be updated: {error}	Αποθηκεύτηκε, αλλά το PNG της βιβλιοθήκης δεν ενημερώθηκε: {error}
+	Could not open the screenshot	Δεν ήταν δυνατό το άνοιγμα του στιγμιότυπου

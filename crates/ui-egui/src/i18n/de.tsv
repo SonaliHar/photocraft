@@ -3250,3 +3250,4 @@ curves	Smooth	Glätten
 	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	Die Bildschirmaufnahme ist fehlgeschlagen. Erlauben Sie PhotoCraft Dev unter Systemeinstellungen › Datenschutz & Sicherheit › Bildschirmaufnahme
 	Screenshot {name} saved to the library	Bildschirmfoto {name} in der Bibliothek gespeichert
 	Saved, but the library PNG could not be updated: {error}	Gespeichert, aber das Bibliotheks-PNG konnte nicht aktualisiert werden: {error}
+	Could not open the screenshot	Das Bildschirmfoto konnte nicht geöffnet werden

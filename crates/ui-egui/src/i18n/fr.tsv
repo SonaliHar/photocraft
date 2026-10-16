@@ -3253,3 +3253,4 @@ curves	Smooth	Lisser
 	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	La capture a échoué. Autorisez PhotoCraft Dev dans Réglages Système › Confidentialité et sécurité › Enregistrement de l'écran
 	Screenshot {name} saved to the library	Capture {name} enregistrée dans la bibliothèque
 	Saved, but the library PNG could not be updated: {error}	Enregistré, mais le PNG de la bibliothèque n'a pas pu être mis à jour : {error}
+	Could not open the screenshot	Impossible d'ouvrir la capture

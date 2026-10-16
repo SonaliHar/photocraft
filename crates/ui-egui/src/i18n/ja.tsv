@@ -3924,3 +3924,4 @@ curves	Smooth	スムーズ
 	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	画面の取り込みに失敗しました。システム設定 › プライバシーとセキュリティ › 画面収録で PhotoCraft Dev を許可してください
 	Screenshot {name} saved to the library	スクリーンショット {name} をライブラリに保存しました
 	Saved, but the library PNG could not be updated: {error}	保存しましたが、ライブラリの PNG を更新できませんでした: {error}
+	Could not open the screenshot	スクリーンショットを開けませんでした

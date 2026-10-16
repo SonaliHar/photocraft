@@ -4210,3 +4210,4 @@ navigator	Zoom	Zoom
 	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	La captura falló. Permita PhotoCraft Dev en Ajustes del Sistema › Privacidad y seguridad › Grabación de pantalla
 	Screenshot {name} saved to the library	Captura {name} guardada en la biblioteca
 	Saved, but the library PNG could not be updated: {error}	Guardado, pero no se pudo actualizar el PNG de la biblioteca: {error}
+	Could not open the screenshot	No se pudo abrir la captura

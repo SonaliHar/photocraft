@@ -4038,3 +4038,4 @@ layerLabel	No Color	Sem cor
 	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	A captura falhou. Permita o PhotoCraft Dev em Ajustes do Sistema › Privacidade e Segurança › Gravação de Tela
 	Screenshot {name} saved to the library	Captura {name} salva na biblioteca
 	Saved, but the library PNG could not be updated: {error}	Salvo, mas o PNG da biblioteca não pôde ser atualizado: {error}
+	Could not open the screenshot	Não foi possível abrir a captura

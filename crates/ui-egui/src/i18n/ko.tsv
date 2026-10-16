@@ -3426,3 +3426,4 @@ curves	Smooth	매끄럽게
 	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	화면 캡처에 실패했습니다. 시스템 설정 › 개인정보 보호 및 보안 › 화면 기록에서 PhotoCraft Dev를 허용하세요
 	Screenshot {name} saved to the library	스크린샷 {name}을(를) 라이브러리에 저장했습니다
 	Saved, but the library PNG could not be updated: {error}	저장했지만 라이브러리 PNG를 업데이트하지 못했습니다: {error}
+	Could not open the screenshot	스크린샷을 열 수 없습니다

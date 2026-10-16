@@ -3978,3 +3978,4 @@ cameraData	Lens	Lens
 	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	Ekran yakalama başarısız oldu. Sistem Ayarları › Gizlilik ve Güvenlik › Ekran Kaydı'nda PhotoCraft Dev'e izin verin
 	Screenshot {name} saved to the library	{name} ekran görüntüsü kitaplığa kaydedildi
 	Saved, but the library PNG could not be updated: {error}	Kaydedildi, ancak kitaplıktaki PNG güncellenemedi: {error}
+	Could not open the screenshot	Ekran görüntüsü açılamadı

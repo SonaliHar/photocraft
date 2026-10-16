@@ -71,3 +71,15 @@ Writes the flattened image as TIFF (LZW, lossless) and/or PNG in one step, with 
 stored in the files. It can also resample to a journal column width at 300 or 600 dpi, and warns
 when that enlarges the image more than 1.5×. The document itself is not changed. Files go next to
 the document by default, named `<document>_<dpi>dpi.tif` / `.png`.
+
+## Screenshots
+
+- **File › New Screenshot** (⌘⇧9) inside PhotoCraft: hides PhotoCraft, shows the macOS
+  crosshair (drag a region, Space for a window, Esc cancels) and opens the capture.
+- **PhotoCraft Capture** (`packaging/macos/capture`, built into /Applications by `make-app.sh`)
+  does the same without PhotoCraft open; bind it to a key with the Shortcuts app (a shortcut with
+  one *Open App › PhotoCraft Capture* action and a keyboard shortcut).
+- Captures go to the library folder (Pictures › PhotoCraft Screenshots unless changed in File ›
+  Screenshot Library…) as `YYYY-MM-DD HH-MM-SS.png`. Any PNG in that folder, however it is
+  opened, opens as an editable `.pcraft` beside it (made the first time); every save of the
+  `.pcraft` rewrites the PNG. File › Screenshot Library… lists them newest first.

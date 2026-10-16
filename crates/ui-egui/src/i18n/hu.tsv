@@ -4167,3 +4167,4 @@ cameraRaw	Yellow	Sárga
 	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	A képernyőfelvétel nem sikerült. Engedélyezze a PhotoCraft Dev alkalmazást: Rendszerbeállítások › Adatvédelem és biztonság › Képernyőfelvétel
 	Screenshot {name} saved to the library	A(z) {name} képernyőkép a könyvtárba mentve
 	Saved, but the library PNG could not be updated: {error}	Mentve, de a könyvtár PNG-je nem frissült: {error}
+	Could not open the screenshot	A képernyőkép nem nyitható meg

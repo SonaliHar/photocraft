@@ -3846,3 +3846,4 @@ curves	Smooth	Wygładź
 	The screen capture failed. Allow PhotoCraft Dev in System Settings › Privacy & Security › Screen Recording	Przechwytywanie ekranu nie powiodło się. Zezwól PhotoCraft Dev w Ustawieniach systemowych › Prywatność i ochrona › Nagrywanie ekranu
 	Screenshot {name} saved to the library	Zrzut {name} zapisano w bibliotece
 	Saved, but the library PNG could not be updated: {error}	Zapisano, ale nie udało się zaktualizować PNG w bibliotece: {error}
+	Could not open the screenshot	Nie można otworzyć zrzutu
