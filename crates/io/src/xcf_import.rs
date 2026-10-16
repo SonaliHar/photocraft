@@ -2213,7 +2213,9 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
             } else {
                 crate::xcf_filters::NeighborhoodDomain::Unqualified
             };
-            let stack = if let Some(domain) = owned_neighborhood_domain {
+            let stack = if filtered_flat_domain {
+                crate::xcf_filters::qualified_filtered_flat_source_stack(&d.effects,&masks,owner,next_filter_id,file.version,neighborhood_domain)?
+            } else if let Some(domain) = owned_neighborhood_domain {
                 if domain != neighborhood_domain {
                     return Err(unsupported(d, "owned neighborhood source domain mismatch"));
                 }

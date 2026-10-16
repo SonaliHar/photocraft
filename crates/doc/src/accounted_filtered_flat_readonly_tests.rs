@@ -359,3 +359,6 @@ fn noop_and_copy_failures_refund_without_publishing() {
 
 #[path = "accounted_filtered_flat_readonly_edit_tests.rs"]
 mod edit_tests;
+
+#[path = "accounted_filtered_flat_readonly_source_activity_tests.rs"]
+mod source_activity_tests;

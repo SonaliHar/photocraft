@@ -446,3 +446,6 @@ fn source_activity_and_old_singleton_classes_are_not_aliases() {
 
 #[path = "backed_filtered_flat_point_mutation_tests.rs"]
 mod mutation;
+
+#[path = "backed_filtered_flat_point_source_activity_tests.rs"]
+mod source_activity;

@@ -2291,9 +2291,14 @@ continuation remains `.pcraft`; behavior and performance gates are deferred.
 Mixed filtered ordinary roots use a separate readonly `FilteredFlat` handoff.
 The current scope is2..4096 full-canvas origin implicit nonlinear RGB F32/F64
 layers, each plain or carrying one existing Semi-Flatten, Hue-Chroma or Vibrance
-filter, with at least one filter. Source layers are visible/full-opacity and
-filters enabled/unit-opacity; CURRENT activity still receives complete proof.
-Stored sample encoding is separate from root Linear/Linear/Normal Union policy.
+filter, with at least one stored filter, including when all are disabled. Mixed
+sources preserve independent visibility, finite unit effective F32 layer opacity
+and explicitly present filter activation. Float-opacity tag33 takes precedence
+over legacy byte tag6; both raw records remain exact. Filter opacity stays +1.
+This mixed-only source policy leaves strict singleton gates unchanged; hidden,
+zero-opacity and disabled roots retain complete native/default/profile/mask and
+CURRENT proof. Stored encoding stays separate from root Linear/Linear/Normal
+Union policy. No activity-specific resource or publication shortcut is added.
 
 Source intake and native reopen retain actual whole-document native/profile/raw
 owners, and strict mixed classification precedes the singleton Point route.

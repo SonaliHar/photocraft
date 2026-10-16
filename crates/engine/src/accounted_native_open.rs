@@ -690,3 +690,7 @@ mod assigned_gaussian_workflow_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "accounted_filtered_flat_workflow_tests.rs"]
 mod filtered_flat_workflow_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_filtered_flat_source_activity_tests.rs"]
+mod filtered_flat_source_activity_tests;

@@ -185,13 +185,13 @@ fn mixed_three_filters_plus_plain_keep_exact_root_local_domains() {
     }
 }
 #[test]
-#[ignore = "UNRUN: strict source activity/roles/header and later-root refusal; CURRENT grants separate"]
+#[ignore = "UNRUN: source roles/header and invalid activity with later-root refusal; CURRENT grants separate"]
 fn malformed_later_root_never_falls_back_to_plain_or_singleton() {
     let base = fixture(Sample::F32, (65, 1));
     for change in [
-        (|f: &mut XcfFile| f.layers[3].visible = false) as fn(&mut XcfFile),
-        |f| f.layers[3].opacity = 0.375,
-        |f| f.layers[3].effects[0].state.enabled = Some(false),
+        (|f: &mut XcfFile| f.layers[3].opacity = f32::NAN) as fn(&mut XcfFile),
+        |f| f.layers[3].opacity = 1.001,
+        |f| f.layers[3].effects[0].state.enabled = None,
         |f| f.layers[3].effects[0].state.composite_space = None,
         |f| f.layers[3].effects[0].state.opacity_bits = Some(0.5f32.to_bits()),
         |f| f.layers[3].effects[0].version = Some("1:0".into()),
@@ -308,7 +308,7 @@ fn authored_four_root_sources_keep_native_filter_mask_and_profile_custody() {
         assert!(d.source_color_context.as_ref().unwrap().original_icc.is_none());
         let x = d.xcf_state.as_ref().unwrap();
         assert_eq!((x.filter_stacks.len(), x.filter_masks.len(), x.items.len()), (3, 3, 7));
-        for (parsed, current) in f.layers.iter().zip(&d.layers) {
+        for (parsed, current) in f.layers.iter().rev().zip(&d.layers) {
             let LayerContent::BackedRaster(native) = &current.content else { panic!("real native backing") };
             let mut captured = Vec::new();
             let pin = native.checked_view().pin_tile(photocraft_geom::TileCoord::new(0, 0), &c).unwrap();

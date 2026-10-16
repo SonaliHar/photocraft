@@ -31,11 +31,11 @@ pub(super) fn root_domain<P>(d: &Drawable<P>, i: &Interrupt<'_>, b: &photocraft_
     }
     let e = d.effects.first().ok_or_else(|| IoError::Unsupported("filtered flat effect".into()))?;
     work(i, b, e.operation.len() as u64 + 128)?;
-    use crate::xcf_point_replace_source::{hue_chroma_source as h, semi_flatten_source as s, vibrance_source as v};
+    if !crate::xcf_filters::filtered_flat_source_envelope(e) {return Err(IoError::Unsupported("filtered flat leaf envelope".into()));}
     let family = match e.operation.as_str() {
-        "gimp:semi-flatten" if s::envelope(e) => PointReplaceFamily::SemiFlatten,
-        "gegl:hue-chroma" if h::envelope(e) => PointReplaceFamily::HueChroma,
-        "gegl:vibrance" if v::envelope(e) => PointReplaceFamily::Vibrance,
+        "gimp:semi-flatten" => PointReplaceFamily::SemiFlatten,
+        "gegl:hue-chroma" => PointReplaceFamily::HueChroma,
+        "gegl:vibrance" => PointReplaceFamily::Vibrance,
         _ => return Err(IoError::Unsupported("filtered flat leaf envelope".into())),
     };
     Ok(Some(NeighborhoodDomain::PointReplace(family)))
@@ -66,8 +66,8 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
         if d.group
             || d.model != Model::Rgb
             || !d.alpha
-            || !d.visible
-            || d.opacity.to_bits() != 1f32.to_bits()
+            || !d.opacity.is_finite()
+            || !(0.0..=1.0).contains(&d.opacity)
             || (d.width, d.height, d.offset) != (f.width, f.height, (0, 0))
             || d.mode != 28
             || (d.blend_space, d.composite_space, d.composite_mode) != (0, -1, -1)
@@ -199,3 +199,7 @@ fn native<P: ExactParsedPlane>(
 #[cfg(test)]
 #[path = "staged_filtered_flat_tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "staged_filtered_flat_activity_tests.rs"]
+mod activity_tests;

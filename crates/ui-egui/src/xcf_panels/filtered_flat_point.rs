@@ -138,3 +138,7 @@ pub(super) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, root: Layer
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "filtered_flat_point_mutation_tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "filtered_flat_point_source_activity_tests.rs"]
+mod source_activity;

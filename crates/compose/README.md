@@ -1189,9 +1189,18 @@ Its consuming requirements report additional owner headers; incoming genuine
 model/native/profile/mask receipts remain mandatory on the same ledger.
 
 Whole-document source mapping selects each actual root's leaf policy without
-manufacturing singleton documents. SOURCE retains visible/full-opacity layers
-and enabled/unit-opacity filters. Inert bounded selected/active root records
-remain exact; pixel/path/mask editing selection is closed. Root linked and
+manufacturing singleton documents. Mixed SOURCE admits independent visibility,
+finite unit effective F32 layer opacity and explicitly present filter activation.
+FLOAT_OPACITY tag33 is authoritative over legacy tag6 in either property order;
+both raw records and exact effective bits are retained, without byte quantization.
+Filter opacity remains exactly +1, independently of layer opacity; Replace/raw
+fields, typed arguments, native/profile/mask and geometry rules remain exact.
+At least one stored filter is required even when every filter is disabled.
+This is an explicit mixed-only compatibility policy informed by twelve genuine
+F32/F64 activity controls, not exhaustive numerical or activity-combination proof.
+The three singleton original-source gates retain their strict policies.
+Inert bounded selected/active root records remain exact; pixel/path/mask editing
+selection is closed. Root linked and
 selection flags that this path cannot preserve operatively are refused. CURRENT
 finite-unit activity is independently qualified, including full native/default/
 profile/mask proof for every root and operative output validation under its
