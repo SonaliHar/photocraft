@@ -1179,6 +1179,86 @@ mod tests {
     }
 
     #[test]
+    fn smart_selection_preview_follows_existing_mask_and_stack_enablement_5989() {
+        for mode in 0..4 {
+            let ctx = egui::Context::default();
+            let mut app = app_with_layer();
+            app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+            app.session.edit("mask setup", |doc, active| {
+                let mut left = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+                left.fill_rect(Rect::new(0, 0, 30, 80), &[1.0]);
+                let mut right = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+                right.fill_rect(Rect::new(60, 0, 120, 80), &[1.0]);
+                doc.selection = Some(if mode == 1 || mode == 2 { right } else { left.clone() });
+                if let LayerContent::Smart(sm) = &mut doc.layer_mut(active.unwrap()).unwrap().content {
+                    if mode == 1 || mode == 3 {
+                        sm.filter_mask = Some(LayerMask {
+                            surface: left, enabled: mode != 3, linked: true, density: 1.0, feather: 0.0,
+                        });
+                    }
+                    sm.filters_enabled = mode != 2;
+                }
+                Ok(())
+            }).unwrap();
+            let (_, before, _) = crate::distort_ui::active_pixels(&app).unwrap();
+            open(&mut app, &ctx).unwrap();
+            let preview_before = app.distort.liquify.as_ref().unwrap().out.clone();
+            control(&mut app, &json!({"tool": "forwardWarp", "size": 24})).unwrap();
+            for ev in [ToolEvent::Down { x: 80.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 90.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 90.0, y: 40.0 }]
+            {
+                pointer(&mut app, ev, egui::Modifiers::NONE);
+            }
+            let preview_after = app.distort.liquify.as_ref().unwrap().out.clone();
+            assert_eq!(preview_after != preview_before, mode == 3, "preview mode {mode}");
+            control(&mut app, &json!({"undo": true})).unwrap();
+            assert_eq!(app.distort.liquify.as_ref().unwrap().out, preview_before, "undo mode {mode}");
+            control(&mut app, &json!({"redo": true})).unwrap();
+            assert_eq!(app.distort.liquify.as_ref().unwrap().out, preview_after, "redo mode {mode}");
+            commit(&mut app);
+            let (_, after, _) = crate::distort_ui::active_pixels(&app).unwrap();
+            let canvas = app.session.active().unwrap().doc.bounds();
+            assert_eq!(before.read_region(canvas) != after.read_region(canvas), mode == 3, "commit mode {mode}");
+        }
+    }
+
+    #[test]
+    fn feathered_translucent_selection_preview_matches_commit_5989() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_layer();
+        app.session.edit("smooth translucent pixels", |doc, active| {
+            let s = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            for y in 0..80 {
+                for x in 0..120 {
+                    s.write_pixel(x, y, &[x as f32 / 120.0, y as f32 / 80.0, 0.3, 0.5]);
+                }
+            }
+            let mut selection = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+            selection.fill_rect(Rect::new(0, 0, 120, 80), &[0.5]);
+            doc.selection = Some(selection);
+            Ok(())
+        }).unwrap();
+        open(&mut app, &ctx).unwrap();
+        let before = app.distort.liquify.as_ref().unwrap().out.clone();
+        control(&mut app, &json!({"tool": "forwardWarp", "size": 24})).unwrap();
+        for ev in [ToolEvent::Down { x: 60.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 70.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 70.0, y: 40.0 }]
+        {
+            pointer(&mut app, ev, egui::Modifiers::NONE);
+        }
+        let preview = app.distort.liquify.as_ref().unwrap().out.clone();
+        assert_ne!(before, preview, "fractional selection must still show the warp");
+        commit(&mut app);
+        let (_, committed, _) = crate::distort_ui::active_pixels(&app).unwrap();
+        let expected = ProxyImage::new(&committed, Rect::new(0, 0, 120, 80), PROXY_SIDE);
+        for (p, expected) in preview.iter().zip(expected.px) {
+            for c in 0..4 {
+                let expected = (expected[c].clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                // Commit uses bicubic sampling and quantizes the U8 layer; the preview is bilinear.
+                assert!(p[c].abs_diff(expected) <= 2, "preview {p:?}, committed channel {c}: {expected}");
+            }
+        }
+    }
+
+    #[test]
     fn alt_right_drag_resizes_the_liquify_brush_and_does_not_paint() {
         assert!(brush_resize_gesture(egui::Modifiers::ALT, true));
         assert!(brush_resize_gesture(egui::Modifiers::CTRL | egui::Modifiers::ALT, false));
