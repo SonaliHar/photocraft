@@ -26,7 +26,6 @@ mod appearance;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod caps_lock;
-mod numpad_enter;
 mod caption_style;
 mod control_server;
 mod crash_guard;
@@ -39,6 +38,7 @@ mod icon_theme;
 mod mac_menu;
 #[cfg(target_os = "macos")]
 mod mac_window;
+mod numpad_enter;
 // Pure logic is tested on every platform; only Linux runs the check.
 #[cfg(any(target_os = "linux", test))]
 mod linux_libs;

@@ -7,8 +7,9 @@
 //!
 //! - **macOS**: `CGEventSource::key_state` for keypad Enter (`0x4C`) and Return (`0x24`).
 //! - **X11 (and XWayland)**: `XQueryKeymap` for `XK_KP_Enter` and `XK_Return`.
-//! - **Windows**: both keys share `VK_RETURN` in `GetAsyncKeyState`; distinguish with scan codes
-//!   via `MapVirtualKey` (`0xE01C` numpad vs `0x001C` main) and `GetKeyState` on each mapping.
+//! - **Windows**: both keys share `VK_RETURN` in `GetAsyncKeyState`; scan codes (`0xE01C` numpad vs
+//!   `0x001C` main) are checked with `MapVirtualKey` against `VK::RETURN` only, then
+//!   `GetAsyncKeyState(VK::RETURN)` (no `VK::from_raw` — workspace forbids `unsafe`).
 //! - **Native Wayland / web**: no global keyboard query; the service is `None`.
 
 pub use platform::service;
@@ -25,10 +26,7 @@ mod platform {
     pub fn service(_cc: &eframe::CreationContext<'_>) -> Option<EnterKeysFn> {
         Some(Box::new(|| {
             let st = CGEventSourceStateID::CombinedSessionState;
-            (
-                CGEventSource::key_state(st, KEYPAD_ENTER),
-                CGEventSource::key_state(st, RETURN),
-            )
+            (CGEventSource::key_state(st, KEYPAD_ENTER), CGEventSource::key_state(st, RETURN))
         }))
     }
 }
@@ -38,27 +36,26 @@ mod platform {
     use photocraft_ui_egui::EnterKeysFn;
     use winsafe::co::{MAPVK, VK};
 
-    fn scancode_down(sc: u32) -> bool {
-        let vk = winsafe::MapVirtualKey(sc, MAPVK::VSC_TO_VK_EX);
-        if vk == 0 {
-            return false;
-        }
-        let vk = unsafe { VK::from_raw(vk as u16) };
-        winsafe::GetAsyncKeyState(vk)
+    const RETURN_RAW: u32 = VK::RETURN.raw() as u32;
+
+    fn sc_maps_return(sc: u32, map: MAPVK) -> bool {
+        winsafe::MapVirtualKey(sc, map) == RETURN_RAW
     }
 
     pub fn service(_cc: &eframe::CreationContext<'_>) -> Option<EnterKeysFn> {
         Some(Box::new(|| {
-            let numpad = scancode_down(0x00e0_001c);
-            let main = {
-                let vk = winsafe::MapVirtualKey(0x001c, MAPVK::VSC_TO_VK);
-                if vk == 0 {
-                    false
-                } else {
-                    winsafe::GetAsyncKeyState(unsafe { VK::from_raw(vk as u16) })
-                }
-            };
-            (numpad, main)
+            let down = winsafe::GetAsyncKeyState(VK::RETURN);
+            if !down {
+                return (false, false);
+            }
+            let numpad = sc_maps_return(0x00e0_001c, MAPVK::VSC_TO_VK_EX);
+            let main = sc_maps_return(0x001c, MAPVK::VSC_TO_VK);
+            if numpad && main {
+                // `GetAsyncKeyState` is keyed by VK only; both scan codes map to Return.
+                (false, true)
+            } else {
+                (numpad, main)
+            }
         }))
     }
 }
