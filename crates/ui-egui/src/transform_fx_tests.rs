@@ -36,7 +36,11 @@ fn composite(app: &PhotocraftApp, zoom: f32) -> Option<(Buffer, Plan)> {
         Some(under) => Some(under_box(under, &plan)?),
         None => None,
     };
-    Some((frame.compose(&plan, &work, level, backdrop.as_ref())?, plan))
+    let rest = match frame.rest {
+        Some(_) => Some(frame.rest_at(&plan)?),
+        None => None,
+    };
+    Some((frame.compose_over(&plan, &work, level, backdrop.as_ref(), rest.as_ref())?, plan))
 }
 
 /// The document under the box at the plan's scale, rendered as the preview renders it (from a
@@ -208,12 +212,16 @@ fn layers_without_a_style_and_other_boxes_keep_the_plain_preview() {
     assert!(composite(&plain, 1.0).is_none());
     plain.run("layer.layerStyle.stroke", json!({"size": 4, "color": "#ff0000"})).unwrap();
     assert!(composite(&plain, 1.0).is_some());
-    // The selected part of a styled layer: its style belongs to that part and the rest together.
+    // A selected part of a layer without a style or mode: the bare moving pixels, the rest left
+    // in the document under the box.
     let mut part = app("rgb", 8);
+    edit_layer(&mut part, |l| l.effects.items.clear());
     part.run("select.rect", json!({"x": 60, "y": 60, "width": 20, "height": 20})).unwrap();
     begin(&mut part);
     assert_eq!(part.ui.transform.as_ref().unwrap().rect, [60.0, 60.0, 80.0, 80.0]);
     assert!(composite(&part, 1.0).is_none());
+    let pv = part.transform_preview.as_ref().unwrap();
+    assert!(pv.doc.layer(active(&part)).unwrap().visible, "the rest stays in the document under the box");
     // Transform Selection moves an outline, not the layer.
     let mut outline = app("rgb", 8);
     outline.run("select.rect", json!({"x": 60, "y": 60, "width": 20, "height": 20})).unwrap();
@@ -533,10 +541,10 @@ fn a_blend_mode_previews_only_against_what_it_blends_with() {
     let mut clipped = blended("rgb", 8, BlendMode::Multiply);
     edit_layer(&mut clipped, |l| l.clipped = true);
     assert!(!blends(&mut clipped));
-    // The selected part of a layer blends as one with the rest of it.
+    // The selected part of a layer blends as one with the rest of it, composited over it (#6635).
     let mut part = blended("rgb", 8, BlendMode::Multiply);
     part.run("select.rect", json!({"x": 60, "y": 60, "width": 20, "height": 20})).unwrap();
-    assert!(!blends(&mut part));
+    assert!(blends(&mut part));
 }
 
 #[test]
@@ -591,3 +599,88 @@ fn the_canvas_renders_the_layers_under_a_blending_layer_once() {
     assert!(h.state().ui.transform.is_none());
     assert_eq!(st.doc.layer(id).unwrap().blend, BlendMode::Multiply);
 }
+
+/// The box moved 30 px right.
+fn moved(r: [f64; 4]) -> [[f64; 2]; 4] {
+    [[r[0] + 30.0, r[1]], [r[2] + 30.0, r[1]], [r[2] + 30.0, r[3]], [r[0] + 30.0, r[3]]]
+}
+
+/// The selected part of a styled layer moves with the style drawn round it and the rest of the
+/// layer together, as the commit draws it (#6635): the stroke closes round the rest's new edge and
+/// round the moved part, and the rest isn't drawn twice (the layer leaves the canvas under the box).
+#[test]
+fn the_selected_part_of_a_styled_layer_previews_with_the_style_round_both() {
+    for (mode, depth) in [("rgb", 8), ("rgb", 16), ("rgb", 32), ("gray", 8), ("cmyk", 8), ("lab", 8)] {
+        let mut app = app(mode, depth);
+        // The left half of the blue block, 60..80 × 60..80.
+        app.run("select.rect", json!({"x": 60, "y": 60, "width": 20, "height": 20})).unwrap();
+        begin(&mut app);
+        let rect = app.ui.transform.as_ref().unwrap().rect;
+        let pv = app.transform_preview.as_ref().unwrap();
+        assert!(!pv.doc.layer(active(&app)).unwrap().visible, "{mode}/{depth}: the whole layer leaves the canvas under the box");
+        set_quad(&mut app, moved(rect));
+        app.ui.transform.as_mut().unwrap().interpolation = "bilinear".into();
+        let (shown, plan) = composite(&app, 1.0).unwrap_or_else(|| panic!("{mode}/{depth}: composited"));
+        // The stroke now runs down the rest's cut edge (x 80..84) and round the moved part.
+        assert!(at(&(shown.clone(), plan), 82.0, 70.0)[3] > 0.9, "{mode}/{depth}: stroke along the cut");
+        assert!(at(&(shown.clone(), plan), 92.0, 70.0)[3] > 0.9, "{mode}/{depth}: the moved part");
+        crate::transform_tool::commit(&mut app);
+        assert!(app.ui.transform.is_none(), "{mode}/{depth}");
+        let st = app.session.active().unwrap();
+        let mut solo = (*st.doc).clone();
+        let id = st.active_layer.unwrap();
+        for l in solo.layers.iter_mut() {
+            l.visible = l.id == id;
+        }
+        let after = photocraft_compose::render(&solo, plan.shown);
+        let (mean, off) = difference(&shown, &after);
+        assert!(mean <= 0.006 && off * 500 <= shown.px.len(), "{mode}/{depth}: mean {mean}, {off} of {} pixels differ", shown.px.len());
+    }
+}
+
+/// The selected part of a Multiply layer blends with the layers under it, together with the rest
+/// of the layer, as the commit draws it.
+#[test]
+fn the_selected_part_of_a_blending_layer_previews_its_mode() {
+    for (mode, depth) in [("rgb", 8), ("rgb", 16), ("gray", 8), ("cmyk", 8)] {
+        let mut app = blended(mode, depth, BlendMode::Multiply);
+        app.run("select.rect", json!({"x": 60, "y": 60, "width": 20, "height": 20})).unwrap();
+        begin(&mut app);
+        let rect = app.ui.transform.as_ref().unwrap().rect;
+        set_quad(&mut app, moved(rect));
+        app.ui.transform.as_mut().unwrap().interpolation = "bilinear".into();
+        let (shown, plan) = on_canvas(&app);
+        let after = committed(&mut app, plan.shown);
+        let (mean, off) = difference(&shown, &after);
+        assert!(mean <= 0.006 && off * 500 <= shown.px.len(), "{mode}/{depth}: mean {mean}, {off} of {} pixels differ", shown.px.len());
+    }
+}
+
+/// Through the real canvas: the rest of the layer is rendered once for a scale and reused while
+/// the part is dragged; the commit keeps the style.
+#[test]
+fn the_rest_of_a_moving_part_is_rendered_once_per_scale() {
+    let mut h = crate::transform_undo_tests::harness();
+    h.state_mut().run("layer.layerStyle.stroke", json!({"size": 4, "color": "#00ff00", "position": "outside"})).unwrap();
+    h.state_mut().run("select.rect", json!({"x": 100, "y": 100, "width": 50, "height": 60})).unwrap();
+    h.run_steps(2);
+    crate::transform_undo_tests::begin(&mut h);
+    let builds = |h: &egui_kittest::Harness<'static, PhotocraftApp>| crate::transform_tool::styled_frame(h.state(), 1.0, false).unwrap().0.builds();
+    assert_eq!(builds(&h), 1);
+    let rect = h.state().ui.transform.as_ref().unwrap().rect;
+    // The bottom-right corner out: the part grows, the rest stays.
+    crate::transform_undo_tests::drag(&mut h, [rect[2], rect[3]], [rect[2] + 40.0, rect[3] + 30.0]);
+    assert!(h.state().ui.transform.as_ref().unwrap().quad[2][0] > rect[2] + 30.0);
+    let after_drag = builds(&h);
+    assert!(after_drag > 1, "{after_drag}");
+    let rests = |h: &egui_kittest::Harness<'static, PhotocraftApp>| crate::transform_tool::styled_frame(h.state(), 1.0, false).unwrap().0.rests();
+    assert_eq!(rests(&h), 1, "the rest is rendered once while the part moves");
+    h.run_steps(5);
+    assert_eq!(builds(&h), after_drag, "at rest again");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let st = h.state().session.active().unwrap();
+    assert!(h.state().ui.transform.is_none());
+    assert!(photocraft_compose::effects::has_effects(st.doc.layer(st.active_layer.unwrap()).unwrap()));
+}
+

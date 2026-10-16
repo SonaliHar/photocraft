@@ -22,6 +22,11 @@
 //! the layer changed are drawn. Without a blend mode (or where the layers under it aren't all the
 //! layer blends with, see `transform_tool::blends_with_canvas`) the composite is drawn over
 //! transparency with Normal blending, like the mesh it replaces.
+//!
+//! The selected part of such a layer moves apart from the rest of it, but the style is drawn round
+//! both together and they blend as one layer. So the rest leaves the canvas under the box too, is
+//! rendered once at the work scale ([`Frame::rest_at`]), and the moving texels are laid over it
+//! before the style and mode apply ([`compose_over`], #6635).
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -120,10 +125,20 @@ pub fn work_layer(layer: &Layer, scale: f64) -> Layer {
 /// a document of `canvas` pixels, shown at `zoom` screen pixels per document pixel, within
 /// `budget` work pixels. `None` when nothing of it is on the canvas or the box isn't finite.
 pub fn plan(layer: &Layer, canvas: [u32; 2], quad: [[f64; 2]; 4], zoom: f32, budget: f64) -> Option<(Plan, Layer)> {
+    plan_with(layer, canvas, quad, None, zoom, budget)
+}
+
+/// [`plan`] for a moving part of a layer whose rest stays where it is, over `rest` (document
+/// pixels): the layer's bounds are both together.
+pub fn plan_with(layer: &Layer, canvas: [u32; 2], quad: [[f64; 2]; 4], rest: Option<Rect>, zoom: f32, budget: f64) -> Option<(Plan, Layer)> {
     if quad.iter().flatten().any(|v| !v.is_finite()) {
         return None;
     }
-    let (min, max) = quad.iter().fold(([f64::MAX; 2], [f64::MIN; 2]), |(lo, hi), q| ([lo[0].min(q[0]), lo[1].min(q[1])], [hi[0].max(q[0]), hi[1].max(q[1])]));
+    let (mut min, mut max) =
+        quad.iter().fold(([f64::MAX; 2], [f64::MIN; 2]), |(lo, hi), q| ([lo[0].min(q[0]), lo[1].min(q[1])], [hi[0].max(q[0]), hi[1].max(q[1])]));
+    if let Some(r) = rest.filter(|r| !r.is_empty()) {
+        (min, max) = ([min[0].min(f64::from(r.x0)), min[1].min(f64::from(r.y0))], [max[0].max(f64::from(r.x1)), max[1].max(f64::from(r.y1))]);
+    }
     let budget = if budget.is_finite() { budget.clamp(1.0, MAX_PIXELS) } else { MIN_PIXELS };
     let mut scale = if zoom.is_finite() && zoom > 0.0 { f64::from(zoom).min(1.0) } else { 1.0 };
     // The reach of the style is in work pixels too, so the area isn't simply the scale squared:
@@ -245,11 +260,24 @@ pub struct Source<'a> {
 /// transparent, as the canvas shows them already. `work` and `plan` come from [`plan`]; `doc`
 /// gives the global light and the patterns.
 pub fn compose(doc: &Document, work: &Layer, plan: &Plan, source: &Source, backdrop: Option<&Buffer>) -> Option<Buffer> {
+    compose_over(doc, work, plan, source, backdrop, None)
+}
+
+/// [`compose`] of a moving part over `rest`, the rest of its layer at the plan's scale (from
+/// [`render_scaled`] over `plan.content`): the moving texels lie over it, and the style and mode
+/// apply to both together, as they do once the part is put down.
+pub fn compose_over(doc: &Document, work: &Layer, plan: &Plan, source: &Source, backdrop: Option<&Buffer>, rest: Option<&Buffer>) -> Option<Buffer> {
     let s = plan.scale;
     let to_quad = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], source.quad.map(|q| [q[0] * s, q[1] * s]))?;
     let to_unit = to_quad.inverse()?;
     let inside = source.quad.iter().fold([0.0; 2], |c, q| [c[0] + q[0] * s / 4.0, c[1] + q[1] * s / 4.0]);
-    let content = resample(source.image, source.uv, &to_unit, inside, plan.content, source.nearest);
+    let mut content = resample(source.image, source.uv, &to_unit, inside, plan.content, source.nearest);
+    if let Some(rest) = rest {
+        let under = crop(rest, plan.content);
+        for (c, u) in content.px.iter_mut().zip(&under.px) {
+            *c = over(*c, *u);
+        }
+    }
     let shape: Vec<f32> = content.px.iter().map(|p| p[3]).collect();
     let anchor = work.effects.reference.unwrap_or((f64::from(plan.bounds.x0), f64::from(plan.bounds.y0)));
     let maps = effects::build_maps(work, shape, plan.content, &doc.global_light, &TextureCtx { rect: plan.content, patterns: &doc.patterns, anchor });
@@ -275,6 +303,16 @@ pub fn compose(doc: &Document, work: &Layer, plan: &Plan, source: &Source, backd
         }
     });
     Some(out)
+}
+
+/// Straight-alpha `top` over `under`.
+fn over(top: [f32; 4], under: [f32; 4]) -> [f32; 4] {
+    let a = top[3] + under[3] * (1.0 - top[3]);
+    if a <= 0.0 {
+        return [0.0; 4];
+    }
+    let c = |k: usize| (top[k] * top[3] + under[k] * under[3] * (1.0 - top[3])) / a;
+    [c(0), c(1), c(2), a]
 }
 
 /// Two composite pixels that look the same at 8 bits.
@@ -310,6 +348,16 @@ pub fn backdrop(doc: &Document, k: u32, plan: &Plan) -> Option<Buffer> {
     let area = |r: Rect| f64::from(r.width()) * f64::from(r.height());
     let grown = want.inflate((want.width().max(want.height()) / 2) as i32).intersect(&canvas);
     let rect = if area(grown) <= MAX_PIXELS { grown } else { want };
+    render_scaled(doc, k, s, rect)
+}
+
+/// `doc` (or its proxy at factor `k`) at `s` work pixels per document pixel over `rect` (work
+/// pixels, which may lie past the canvas: layer pixels there still shape a style). `None` when
+/// it can't be rendered or is larger than [`MAX_PIXELS`] allows.
+pub fn render_scaled(doc: &Document, k: f64, s: f64, rect: Rect) -> Option<Buffer> {
+    if rect.is_empty() || f64::from(rect.width()) * f64::from(rect.height()) > 4.0 * MAX_PIXELS || !(s.is_finite() && s > 0.0 && k >= 1.0) {
+        return None;
+    }
     // The source pixels each work pixel covers (at scale 1, the same rectangle).
     let per = 1.0 / (s * k);
     let edge = |v: i32, up: bool| {
@@ -392,12 +440,16 @@ pub struct Frame<'a> {
     pub dragging: bool,
     /// The document under the box, when the layer blends with it in its own mode.
     pub under: Option<&'a Document>,
+    /// A moving part's rest of the layer (alone, unstyled) and where it has pixels.
+    pub rest: Option<(&'a Document, Rect)>,
 }
 
 impl Frame<'_> {
     /// The plan for this frame, the layer it composites and the texel level it reads.
     pub fn plan(&self) -> Option<(Plan, Layer, u32)> {
-        let (plan, mut work) = plan(self.layer, [self.doc.size.width, self.doc.size.height], self.quad, self.zoom, budget(self.layer, self.dragging))?;
+        let rest = self.rest.map(|r| r.1);
+        let (plan, mut work) =
+            plan_with(self.layer, [self.doc.size.width, self.doc.size.height], self.quad, rest, self.zoom, budget(self.layer, self.dragging))?;
         if self.under.is_some() {
             work.blend = self.layer.blend;
         }
@@ -408,8 +460,33 @@ impl Frame<'_> {
     /// The composite a [`Frame::plan`] describes, onto `backdrop` (from [`backdrop`] of
     /// `under`) when the layer blends with what is under it.
     pub fn compose(&self, plan: &Plan, work: &Layer, level: u32, backdrop: Option<&Buffer>) -> Option<Buffer> {
+        self.compose_over(plan, work, level, backdrop, None)
+    }
+
+    /// [`Frame::compose`] over a moving part's `rest` (from [`Frame::rest_at`]).
+    pub fn compose_over(&self, plan: &Plan, work: &Layer, level: u32, backdrop: Option<&Buffer>, rest: Option<&Buffer>) -> Option<Buffer> {
         let (texels, uv): (Arc<ColorImage>, [f32; 2]) = self.texels.level_image(level)?;
-        compose(self.doc, work, plan, &Source { image: &texels, uv, quad: self.quad, nearest: self.nearest }, backdrop)
+        compose_over(self.doc, work, plan, &Source { image: &texels, uv, quad: self.quad, nearest: self.nearest }, backdrop, rest)
+    }
+
+    /// The rest of a moving part's layer at the plan's scale, over where it has pixels (it doesn't
+    /// move, so this serves every position of the box), rendered from a proxy where the scale
+    /// allows one.
+    pub fn rest_at(&self, plan: &Plan) -> Option<Buffer> {
+        let (doc, bounds) = self.rest?;
+        let s = plan.scale;
+        let edge = |v: i32, up: bool| {
+            let v = (f64::from(v) * s).clamp(-COORD_LIMIT, COORD_LIMIT);
+            (if up { v.ceil() } else { v.floor() }) as i32
+        };
+        let rect = Rect::new(edge(bounds.x0, false), edge(bounds.y0, false), edge(bounds.x1, true), edge(bounds.y1, true));
+        if rect.is_empty() {
+            return Some(Buffer::transparent(plan.content));
+        }
+        match proxy_factor(doc, s) {
+            1 => render_scaled(doc, 1.0, s, rect),
+            k => render_scaled(&photocraft_compose::proxy::proxy_document(doc, k), f64::from(k), s, rect),
+        }
     }
 }
 
@@ -444,10 +521,14 @@ struct State {
     under: Option<Under>,
     /// The proxy of that document it was last rendered from: revision, factor, proxy.
     proxy: Option<(u64, u32, Arc<Document>)>,
+    /// A moving part's rest of the layer at the plan's scale.
+    rest: Option<Under>,
     /// Composites made so far.
     builds: u64,
     /// Backdrops rendered so far.
     backdrops: u64,
+    /// Rests of a moving part's layer rendered so far.
+    rests: u64,
 }
 
 /// The styled composite of a Free Transform session's moving layer, kept until the box, the
@@ -466,6 +547,11 @@ impl StyledPreview {
     /// How many times the composite was made: once per change of the box, the zoom or the layer.
     pub fn builds(&self) -> u64 {
         self.state.lock().unwrap_or_else(PoisonError::into_inner).builds
+    }
+
+    /// How many times the rest of a moving part's layer was rendered.
+    pub fn rests(&self) -> u64 {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner).rests
     }
 
     /// How many times the document under the box was rendered for a blending layer.
@@ -507,11 +593,20 @@ impl StyledPreview {
                 state.backdrops += 1;
             }
         }
+        if frame.rest.is_some() {
+            let scale = plan.scale.to_bits();
+            let fits = |u: &Under| u.revision == frame.revision && u.scale == scale;
+            if !state.rest.as_ref().is_some_and(fits) {
+                state.rest = frame.rest_at(&plan).map(|buf| Under { revision: frame.revision, scale, buf });
+                state.rests += 1;
+            }
+        }
         let backdrop = frame.under.and(state.under.as_ref()).map(|u| &u.buf);
-        if frame.under.is_some() && backdrop.is_none() {
+        let rest = frame.rest.and(state.rest.as_ref()).map(|u| &u.buf);
+        if (frame.under.is_some() && backdrop.is_none()) || (frame.rest.is_some() && rest.is_none()) {
             return None;
         }
-        let out = frame.compose(&plan, &work, level, backdrop)?;
+        let out = frame.compose_over(&plan, &work, level, backdrop, rest)?;
         let options = if crisp { TextureOptions::NEAREST } else { TextureOptions::LINEAR };
         let tex = ctx.load_texture(self.name.clone(), image(&out), options);
         let (id, rect) = (tex.id(), plan.doc_rect());
