@@ -141,16 +141,14 @@ fn wire_with_literal<'a>(id: &str, params: &'a Value, literal: bool) -> Option<F
 }
 
 fn family(node: &photocraft_doc::xcf_filters::FilterNode) -> Option<u8> {
-    if node.operation.stored_version != "0:0" {
-        return None;
-    }
-    let (kind, epoch) = match node.operation.name.as_str() {
-        "gimp:semi-flatten" => (0, photocraft_compose::SEMI_FLATTEN_EPOCH),
-        "gegl:hue-chroma" => (1, photocraft_compose::HUE_CHROMA_EPOCH),
-        "gegl:vibrance" => (2, photocraft_compose::VIBRANCE_EPOCH),
+    let (kind, version, epoch) = match node.operation.name.as_str() {
+        "gimp:semi-flatten" => (0, "0:0", photocraft_compose::SEMI_FLATTEN_EPOCH),
+        "gegl:hue-chroma" => (1, "0:0", photocraft_compose::HUE_CHROMA_EPOCH),
+        "gegl:vibrance" => (2, "0:0", photocraft_compose::VIBRANCE_EPOCH),
+        "gegl:exposure" => (3, "1:0", photocraft_compose::EXPOSURE_MIXED_EPOCH),
         _ => return None,
     };
-    (node.operation.schema_epoch == epoch && node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == epoch)).then_some(kind)
+    (node.operation.stored_version == version && node.operation.schema_epoch == epoch && node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == epoch)).then_some(kind)
 }
 fn range(kind: u8, name: &str) -> Option<(f32, f32)> {
     match (kind, name) {
@@ -159,6 +157,20 @@ fn range(kind: u8, name: &str) -> Option<(f32, f32)> {
         (2, "saturation") => Some((0., 10.)),
         _ => None,
     }
+}
+fn number_in_domain(kind:u8,name:&str,bits:u32)->bool {
+    let value=f32::from_bits(bits);
+    if !value.is_finite(){return false}
+    if kind==3 {
+        return match name {
+            "exposure"=>true,
+            // Preserve the existing promoted-f64 kernel domain. The f32 .1
+            // word lies outside it and must not be silently normalized.
+            "black-level"=>(-0.1f64..=0.1f64).contains(&f64::from(value)),
+            _=>false,
+        };
+    }
+    range(kind,name).is_some_and(|(lo,hi)|(lo..=hi).contains(&value))
 }
 fn valid_node(node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
     use photocraft_doc::xcf_filters::{ExactNumber, FilterValue};
@@ -170,9 +182,8 @@ fn valid_node(node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
         return false;
     }
     for (i, a) in node.arguments.iter().enumerate() {
-        let Some((lo, hi)) = range(kind, &a.name) else { return false };
         if node.arguments.iter().take(i).any(|old| old.name == a.name)
-            || !matches!(&a.value,FilterValue::Number(ExactNumber::Float32Bits(b)) if f32::from_bits(*b).is_finite()&&(lo..=hi).contains(&f32::from_bits(*b)))
+            || !matches!(&a.value,FilterValue::Number(ExactNumber::Float32Bits(b)) if number_in_domain(kind,&a.name,*b))
         {
             return false;
         }
@@ -361,8 +372,7 @@ impl<'a> Request<'a> {
                     return Err(BackingError::Unsupported.into());
                 }
             } else {
-                let (lo, hi) = range(kind, argument.name).ok_or(BackingError::Unsupported)?;
-                if !matches!(argument.value,PointArgumentValue::Float32Bits(b) if f32::from_bits(b).is_finite()&&(lo..=hi).contains(&f32::from_bits(b))) {
+                if !matches!(argument.value,PointArgumentValue::Float32Bits(b) if number_in_domain(kind,argument.name,b)) {
                     return Err(BackingError::Unsupported.into());
                 }
             }
@@ -571,3 +581,7 @@ mod remove_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_current_tests.rs"]
 mod current_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="filtered_flat_exposure_tests.rs"]
+mod exposure_tests;

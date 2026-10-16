@@ -5,6 +5,7 @@ use super::*;
 use photocraft_doc::xcf_filters::FilterStack;
 
 enum StageKind {
+    Exposure(crate::gimp_exposure::PreparedExposure),
     Semi(crate::gimp_semi_flatten::PreparedSemiFlatten),
     Hue(crate::gimp_hue_chroma::OwnedHueChroma),
     Vibrance(crate::gimp_vibrance::OwnedVibrance),
@@ -33,11 +34,17 @@ fn nl_float_bridge(pixel: [f64; 4], control: &ReadControl<'_>) -> Result<[f64; 4
 }
 impl<L> PreparedRootStage<L> {
     fn evaluate(&self, pixel: [f64; 4], derived: bool, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<[f64; 4], BackedNormalError> {
+        // Exposure owns its complete typed validation/application pricing and
+        // same-q scratch. Dispatch before the legacy wrapper to avoid doubling it.
+        if let StageKind::Exposure(candidate)=&self.kind {
+            return candidate.evaluate(pixel,self.enabled,derived,quota,control);
+        }
         control.check(128).map_err(BackedNormalError::Backing)?;
         if pixel.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&pixel[3]) {
             return Err(scope());
         }
         let (scratch, validation, evaluation) = match &self.kind {
+            StageKind::Exposure(_) => return Err(scope()), // handled above
             StageKind::Semi(_) => (SEMI_PIXEL_SCRATCH_BYTES, 3 * 128 + 4, if self.enabled { 9 * 128 + 128 } else { 3 * 128 + 4 }),
             StageKind::Hue(candidate) => (crate::gimp_hue_chroma::PIXEL_SCRATCH_BYTES, candidate.validation_work(), candidate.evaluation_work(self.enabled)),
             StageKind::Vibrance(candidate) => (crate::gimp_vibrance::PIXEL_SCRATCH_BYTES, candidate.validation_work(), candidate.evaluation_work(self.enabled)),
@@ -62,6 +69,7 @@ impl<L> PreparedRootStage<L> {
         };
         let evaluated = (|| {
             match &self.kind {
+                StageKind::Exposure(_) => return Err(scope()), // handled above
                 StageKind::Semi(candidate) => {
                     if derived {
                         candidate.validate_derived_input(pixel)
@@ -87,6 +95,7 @@ impl<L> PreparedRootStage<L> {
             .map_err(BackedNormalError::Color)?;
             control.check(evaluation).map_err(BackedNormalError::Backing)?;
             match &self.kind {
+                StageKind::Exposure(_) => return Err(scope()), // handled above
                 StageKind::Semi(candidate) => {
                     if derived {
                         candidate.apply_derived(pixel, self.enabled)
@@ -138,10 +147,11 @@ impl<L> RootPointPlan<L> {
         interrupt: &Interrupt<'_>,
         budget: &mut B,
     ) -> Result<(Self, L), BackedNormalError> {
-        if stack.nodes.len() == 1 {
+        let sole_exposure=stack.nodes.len()==1 && stack.nodes.first().is_some_and(crate::gimp_exposure::claims);
+        if stack.nodes.len() == 1 && !sole_exposure {
             return Self::prepare_singleton(stack, format, extent, interrupt, budget);
         }
-        if stack.nodes.len() < 2 || stack.nodes.len() > 1024 {
+        if stack.nodes.is_empty() || stack.nodes.len() > 1024 {
             return Err(scope());
         }
         let count = stack.nodes.len();
@@ -162,7 +172,12 @@ impl<L> RootPointPlan<L> {
             let header = (std::mem::size_of::<PreparedRootStage<L>>() as u64).checked_add(65536).ok_or_else(length)?;
             // Each independently owned Parts peak stays leased while all earlier
             // stage payloads remain live. Field order protects failed unwinds.
-            let prepared = if crate::gimp_hue_chroma::claims(node) {
+            let prepared = if crate::gimp_exposure::claims(node) {
+                work(budget,interrupt,512)?;
+                let parameters=crate::gimp_exposure::canonical(node,SampleEncoding::NonlinearProfile,22,extent).map_err(BackedNormalError::Color)?;
+                let (candidate,fee)=crate::gimp_exposure::PreparedExposure::prepare(parameters,std::mem::size_of::<PreparedRootStage<L>>()as u64,interrupt,budget)?;
+                PreparedRootStage{kind:StageKind::Exposure(candidate),enabled:node.enabled,_lease:fee}
+            } else if crate::gimp_hue_chroma::claims(node) {
                 let parameters = crate::gimp_hue_chroma::canonical(node, SampleEncoding::NonlinearProfile, 22, extent).map_err(BackedNormalError::Color)?;
                 let preparation = crate::gimp_hue_chroma::Preparation::plan(basis, interrupt, budget)?;
                 let bytes = header

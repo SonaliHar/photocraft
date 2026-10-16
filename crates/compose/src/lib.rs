@@ -108,6 +108,8 @@ mod gimp_hue_chroma;
 pub use gimp_hue_chroma::EPOCH as HUE_CHROMA_EPOCH;
 mod gimp_vibrance;
 pub use gimp_vibrance::EPOCH as VIBRANCE_EPOCH;
+mod gimp_exposure;
+pub use gimp_exposure::{EPOCH as EXPOSURE_MIXED_EPOCH, Parameters as ExposureParameters, PreparedExposure, parameters as exposure_mixed_parameters};
 mod gimp_levels;
 pub mod gimp_link_items;
 pub mod gimp_link_cubic;

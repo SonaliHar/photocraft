@@ -1366,3 +1366,45 @@ the optional10-field step. Both preserve absent hints and original data without
 inventing an edit. Native storage and compatibility regression drafts are
 ignored, uncompiled and unrun. Production compilation and static reviews do
 not establish runtime round-trip, visual, numerical or performance acceptance.
+
+
+Mixed filtered-flat stacks also accept the distinct Exposure compatibility
+epoch `xcf22-gegl-exposure-mixed-wide-v1`, with stored operation `gegl:exposure`
+version `1:0`. Each node retains exactly two unique stored F32 arguments,
+`exposure` and `black-level`, in source order with their original bits. Existing
+Semi-Flatten, Hue-Chroma and Vibrance version/epoch rules remain separate.
+The mixed Source adapter and each actual renderer node select their own domain;
+the old single-root/single-effect Exposure source route retains its policy.
+
+The adapter promotes exact F32 words to the existing Exposure scalar, converts
+known implicit nonlinear sRGB to linear RGB and back, and preserves wide alpha.
+Exposure stops must be finite and pass checked scale/denominator construction.
+Promoted black level must lie in the existing f64 interval [-0.1, 0.1]. The
+stored F32 word for 0.1 lies outside that interval; it is refused without
+normalization. The UI uses the inward F32 bound 0x3dcccccc. GIMP endpoint
+serialization and interpretation remain an implementation gap; probes at
+0.0625 do not resolve it. Neutral/disabled nodes still receive full proof and
+preserve wide values. The declared enabled-kernel NL Float handoff stays in
+place, including before a later Exposure node. No unique GEGL format or
+producer numerical equivalence is claimed.
+
+Typed set/enable, reorder, removal, empty CURRENT continuation, captured UI
+targets and reader10 native continuation use the same whole actual owner,
+OLD/history/STAGED proof, exact masks/raw source/native/profile custody,
+cumulative quota/work, locks and publication fences. Unmarked native routing
+recognizes the new epoch, including a sole remaining Exposure; an operation
+name alone does not redirect the older Exposure class. This compatibility
+epoch is declared PhotoCraft policy, not recovered GIMP provenance.
+
+Independent GIMP author/fresh/repeat probes cover 8x6 and tile-crossing 130x65
+F32/F64 files. Original native words, signed-zero alpha, source settings and
+logical zero masks remain exact; all 60 F64 low-bit geometry markers survive.
+Rendered RGB varies across independent runs (geometry maxima approximately
+0.000168 F32 and 0.000226 F64), while alpha bits remain exact. Effective ICC
+date bytes and Babl profile bytes retain distinct roles. These observations
+do not establish physical mask padding/default producer behavior or numerical
+acceptance. Original source pixels remain unit-range implicit RGB, full-origin
+with existing aggregate bounds; assigned profiles, source HDR and arbitrary
+offsets are outside this increment. PhotoCraft regression drafts remain
+ignored, uncompiled and unrun; all behavioral, native, visual and performance
+acceptance remains deferred.

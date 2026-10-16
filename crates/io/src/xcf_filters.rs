@@ -6,12 +6,15 @@ use photocraft_doc::{
     xcf_filters::{ExactNumber, FilterArgument, FilterNode, FilterStack, FilterValue, OperationIdentity},
 };
 use photocraft_xcf::{ArgumentValue, Effect};
+#[path = "xcf_exposure_mixed_source.rs"]
+pub(crate) mod mixed_exposure_source;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PointReplaceFamily {
     Brightness,
     Levels,
     Exposure,
+    MixedExposure,
     Temperature,
     Sepia,
     AlienRgb,
@@ -43,6 +46,7 @@ impl PointReplaceFamily {
             Self::Brightness => NeighborhoodDomain::BrightnessContrastPrecision,
             Self::Levels => NeighborhoodDomain::GeglLevelsPrecision,
             Self::Exposure => NeighborhoodDomain::ExposureBlackPrecision,
+            Self::MixedExposure => NeighborhoodDomain::MixedExposure,
             Self::Temperature => NeighborhoodDomain::ColorTemperaturePrecision,
             Self::Sepia => NeighborhoodDomain::SepiaPrecision,
             Self::AlienRgb => NeighborhoodDomain::AlienMapPrecision,
@@ -82,6 +86,7 @@ pub(crate) enum NeighborhoodDomain {
     SemiFlatten,
     HueChroma,
     Vibrance,
+    MixedExposure,
     ChannelMixerPrecision,
     MonoMixerSignedPrecision,
     RedEyePrecision,
@@ -573,6 +578,7 @@ pub(crate) fn filtered_flat_source_envelope<P>(effect:&Effect<P>)->bool {
         "gimp:semi-flatten"=>crate::xcf_point_replace_source::semi_flatten_source::parameters(effect).is_some(),
         "gegl:hue-chroma"=>crate::xcf_point_replace_source::hue_chroma_source::parameters(effect).is_some(),
         "gegl:vibrance"=>crate::xcf_point_replace_source::vibrance_source::parameters(effect).is_some(),
+        "gegl:exposure"=>mixed_exposure_source::parameters(effect).is_some(),
         _=>false,
     };
     let state=&effect.state;
@@ -589,6 +595,7 @@ pub(crate) fn filtered_flat_source_family<P>(effect:&Effect<P>)->Option<PointRep
         "gimp:semi-flatten"=>Some(PointReplaceFamily::SemiFlatten),
         "gegl:hue-chroma"=>Some(PointReplaceFamily::HueChroma),
         "gegl:vibrance"=>Some(PointReplaceFamily::Vibrance),
+        "gegl:exposure"=>Some(PointReplaceFamily::MixedExposure),
         _=>None,
     }
 }
@@ -607,6 +614,7 @@ pub(crate) fn qualified_filtered_flat_source_stack<P>(
         NeighborhoodDomain::PointReplace(PointReplaceFamily::SemiFlatten)=>"gimp:semi-flatten",
         NeighborhoodDomain::PointReplace(PointReplaceFamily::HueChroma)=>"gegl:hue-chroma",
         NeighborhoodDomain::PointReplace(PointReplaceFamily::Vibrance)=>"gegl:vibrance",
+        NeighborhoodDomain::PointReplace(PointReplaceFamily::MixedExposure)=>"gegl:exposure",
         _=>return Err(IoError::Unsupported("mixed source filter domain".into())),
     };
     if effects.len()!=1 || effects.first().is_none_or(|e|e.operation!=operation||!filtered_flat_source_envelope(e)){
@@ -665,6 +673,12 @@ fn qualified_stack_with_activation<P>(
         let semi_flatten=domain==NeighborhoodDomain::SemiFlatten;
         let hue_chroma=domain==NeighborhoodDomain::HueChroma;
         let vibrance=domain==NeighborhoodDomain::Vibrance;
+        let mixed_exposure=domain==NeighborhoodDomain::MixedExposure;
+        if mixed_exposure && (!generic_replace
+            || !matches!(activation,StackActivation::FilteredFlatSource|StackActivation::OrderedFilteredFlatSource)
+            || !filtered_flat_source_envelope(effect)) {
+            return Err(unsupported(effect,"unqualified mixed Exposure envelope"));
+        }
         if effect.operation=="gegl:vibrance" && (!vibrance || !generic_replace || (effects.len()!=1 && activation!=StackActivation::OrderedFilteredFlatSource) || !(if matches!(activation,StackActivation::FilteredFlatSource|StackActivation::OrderedFilteredFlatSource) {filtered_flat_source_envelope(effect)}else{crate::xcf_point_replace_source::vibrance_source::envelope(effect)})){return Err(unsupported(effect,"unqualified Vibrance envelope"));}
         if effect.operation=="gegl:hue-chroma" && (!hue_chroma || !generic_replace || (effects.len()!=1 && activation!=StackActivation::OrderedFilteredFlatSource) || !(if matches!(activation,StackActivation::FilteredFlatSource|StackActivation::OrderedFilteredFlatSource) {filtered_flat_source_envelope(effect)}else{crate::xcf_point_replace_source::hue_chroma_source::envelope(effect)})){return Err(unsupported(effect,"unqualified Hue-Chroma envelope"));}
         if effect.operation=="gimp:semi-flatten" && (!semi_flatten || !generic_replace || (effects.len()!=1 && activation!=StackActivation::OrderedFilteredFlatSource) || !(if matches!(activation,StackActivation::FilteredFlatSource|StackActivation::OrderedFilteredFlatSource) {filtered_flat_source_envelope(effect)}else{crate::xcf_point_replace_source::semi_flatten_source::envelope(effect)})) { return Err(unsupported(effect,"unqualified Semi-Flatten envelope")); }
@@ -1034,7 +1048,14 @@ fn qualified_stack_with_activation<P>(
         if color_to_alpha {
             arguments = color_to_alpha_arguments(effect)?;
         }
-        if vibrance {
+        if mixed_exposure {
+            mixed_exposure_source::parameters(effect).ok_or_else(||unsupported(effect,"mixed Exposure parameters"))?;
+            if arguments.capacity()>4 {return Err(unsupported(effect,"mixed Exposure argument capacity"));}
+            for argument in &effect.arguments {
+                let ArgumentValue::Float32Bits(bits)=&argument.value else{return Err(unsupported(effect,"mixed Exposure F32 storage"))};
+                arguments.push(FilterArgument{name:argument.name.clone(),value:FilterValue::Number(ExactNumber::Float32Bits(*bits))});
+            }
+        } else if vibrance {
             crate::xcf_point_replace_source::vibrance_source::parameters(effect).ok_or_else(||unsupported(effect,"Vibrance parameters"))?;
             if arguments.capacity()>4 {return Err(unsupported(effect,"Vibrance argument capacity"));}
             for argument in &effect.arguments {
@@ -1066,7 +1087,7 @@ fn qualified_stack_with_activation<P>(
         for argument in effect
             .arguments
             .iter()
-            .filter(|_| !levels && !color_balance && !hue_chroma && !vibrance && !semi_flatten && !color_exchange && !color_overlay && !color_to_alpha && !component_extract && !alpha_clip)
+            .filter(|_| !levels && !color_balance && !mixed_exposure && !hue_chroma && !vibrance && !semi_flatten && !color_exchange && !color_overlay && !color_to_alpha && !component_extract && !alpha_clip)
         {
             if alien_map {
                 let (value, scalar) = match (&*argument.name, &argument.value) {
@@ -1410,7 +1431,7 @@ fn qualified_stack_with_activation<P>(
             .map_err(|_| unsupported(effect, "Red Eye typed parameters"))?;
         } else if video {
             photocraft_compose::gimp_video_degradation::typed_arguments(&arguments).map_err(|_| unsupported(effect, "Video Degradation typed schema"))?;
-        } else if hue_chroma || vibrance || semi_flatten || color_rotate || channel_mixer || mono_signed || color_exchange || color_overlay || color_to_alpha || component_extract || alpha_clip {
+        } else if mixed_exposure || hue_chroma || vibrance || semi_flatten || color_rotate || channel_mixer || mono_signed || color_exchange || color_overlay || color_to_alpha || component_extract || alpha_clip {
             // The dedicated typed constructor already validated every name.
         } else if pixelize {
             if arguments.len() != 8 {
@@ -1502,6 +1523,8 @@ fn qualified_stack_with_activation<P>(
                     "xcf-22-stock-color-to-alpha-precision-v1"
                 } else if color_exchange {
                     "xcf-22-stock-color-exchange-precision-v1"
+                } else if mixed_exposure {
+                    photocraft_compose::EXPOSURE_MIXED_EPOCH
                 } else if vibrance {
                     photocraft_compose::VIBRANCE_EPOCH
                 } else if hue_chroma {
@@ -1601,6 +1624,8 @@ fn qualified_stack_with_activation<P>(
                     photocraft_compose::gimp_video_degradation::VIDEO_DEGRADATION_OPTIONS_EPOCH
                 } else if red_eye_epoch == Some(photocraft_compose::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH) {
                     photocraft_compose::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH
+                } else if mixed_exposure {
+                    photocraft_compose::EXPOSURE_MIXED_EPOCH
                 } else if vibrance {
                     photocraft_compose::VIBRANCE_EPOCH
                 } else if hue_chroma {

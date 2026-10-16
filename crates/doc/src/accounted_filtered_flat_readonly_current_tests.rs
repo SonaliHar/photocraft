@@ -174,3 +174,7 @@ fn current_intake_and_copy_failures_preserve_custody() {
     assert!(owner.try_with_document_name("new-empty-current", &ReadControl { interrupt: &interrupt, work: &|_| Ok(()) }).is_err());
     assert_eq!(q.usage().unwrap(), before);
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "xcf/filtered_flat_exposure_tests.rs"]
+mod exposure_tests;

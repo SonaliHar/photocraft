@@ -376,3 +376,6 @@ mod filter_remove;
 
 #[path = "backed_filtered_flat_point_derived_current_tests.rs"]
 mod derived_current;
+
+#[path = "backed_filtered_flat_point_exposure_tests.rs"]
+mod exposure;

@@ -18,7 +18,7 @@ pub(super) fn hint<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &p
         if count>4096 {return Err(IoError::Unsupported("filtered flat node count".into()));}
         for e in &d.effects {
             work(i,b,e.operation.len() as u64+1)?;
-            known |= matches!(e.operation.as_str(),"gimp:semi-flatten"|"gegl:hue-chroma"|"gegl:vibrance");
+            known |= matches!(e.operation.as_str(),"gimp:semi-flatten"|"gegl:hue-chroma"|"gegl:vibrance"|"gegl:exposure");
         }
     }
     Ok(known)
@@ -33,6 +33,10 @@ pub(super) fn root_domain<P>(d: &Drawable<P>, i: &Interrupt<'_>, b: &photocraft_
     for e in &d.effects {
         work(i,b,e.operation.len() as u64+128)?;
         let family=crate::xcf_filters::filtered_flat_source_family(e).ok_or_else(||IoError::Unsupported("filtered flat leaf envelope".into()))?;
+        if family==crate::xcf_filters::PointReplaceFamily::MixedExposure
+            && !crate::xcf_filters::mixed_exposure_source::source_geometry(d.width,d.height) {
+            return Err(IoError::Unsupported("mixed Exposure source geometry".into()));
+        }
         if first.is_none(){first=Some(NeighborhoodDomain::PointReplace(family));}
     }
     Ok(first)
@@ -215,3 +219,7 @@ use crate::xcf_filters::PointReplaceFamily;
 #[cfg(all(test, not(target_arch="wasm32")))]
 #[path="staged_filtered_flat_ordered_tests.rs"]
 mod ordered_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "staged_filtered_flat_exposure_tests.rs"]
+mod exposure_tests;

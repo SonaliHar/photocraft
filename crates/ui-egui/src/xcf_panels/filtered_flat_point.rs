@@ -92,6 +92,31 @@ fn controls(ui: &mut egui::Ui, node: &FilterNode, enabled_ui: bool) -> Option<(&
     let mut enabled = node.enabled;
     let caption: String = node.source_display_name.as_deref().filter(|name| !name.is_empty()).unwrap_or(&node.operation.name).chars().take(128).collect();
     match node.operation.name.as_str() {
+        "gegl:exposure" => {
+            let word=|name:&str|match &node.arguments.iter().find(|a|a.name==name)?.value {
+                photocraft_doc::xcf_filters::FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Float32Bits(bits))=>Some(*bits),
+                _=>None,
+            };
+            let old=[word("exposure")?,word("black-level")?];
+            let mut values=old.map(f32::from_bits);
+            let black_max=f32::from_bits(0x3dcc_cccc);
+            ui.add_enabled_ui(enabled_ui,|ui|{
+                ui.checkbox(&mut enabled,caption);
+                ui.horizontal(|ui|{let label=ui.label(tl!("Exposure"));ui.add(egui::DragValue::new(&mut values[0]).speed(0.1).update_while_editing(false)).labelled_by(label.id);});
+                ui.horizontal(|ui|{let label=ui.label(tl!("Black level"));ui.add(egui::DragValue::new(&mut values[1]).range(-black_max..=black_max).speed(0.001).update_while_editing(false)).labelled_by(label.id);});
+            });
+            if !values.iter().all(|v|v.is_finite()) || !(-0.1f64..=0.1f64).contains(&f64::from(values[1])) {return None}
+            let mut arguments=Vec::new();
+            // Emit changed words in retained source argument order; preserve
+            // unedited signed zero and do not normalize stored endpoint words.
+            for argument in &node.arguments {
+                let index=match argument.name.as_str(){"exposure"=>0,"black-level"=>1,_=>return None};
+                let bits=values[index].to_bits();
+                if bits!=old[index]{arguments.push(json!({"name":argument.name,"value":{"Number":{"Float32Bits":bits}}}));}
+            }
+            if !arguments.is_empty(){let mut params=json!({"filterId":node.id.0.to_string(),"arguments":arguments});if enabled!=node.enabled{params.as_object_mut()?.insert("enabled".into(),json!(enabled));}Some(("xcf.filter.set",params))}
+            else if enabled!=node.enabled{Some(("xcf.filter.enable",json!({"filterId":node.id.0.to_string(),"enabled":enabled})))}else{None}
+        }
         "gegl:hue-chroma" => {
             let mut values = hue_chroma::words(node)?.map(f32::from_bits);
             ui.add_enabled_ui(enabled_ui, |ui| {
@@ -201,3 +226,7 @@ mod remove_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_point_current_tests.rs"]
 mod current_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="filtered_flat_point_exposure_tests.rs"]
+mod exposure_tests;
