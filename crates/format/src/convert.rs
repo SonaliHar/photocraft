@@ -758,8 +758,12 @@ pub(crate) fn doc_m_with_checked_filter_mask<'doc>(
     doc_m_selected(d,sink,proof,None,false)
 }
 pub(crate) fn doc_m_with_checked_filter_masks<'doc>(d:&'doc Document,sink:&mut dyn Sink<'doc>,proof:&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverageSet<'_>)->Result<DocM>{doc_m_selected(d,sink,None,Some(proof),false)}
+#[allow(dead_code)] // Retained strict BYTEzero serializer; selected Current uses the additive coverage index.
 pub(crate) fn doc_m_with_normal_hierarchy_index<'doc>(d:&'doc Document,sink:&mut dyn Sink<'doc>,index:&photocraft_doc::normal_hierarchy_index::CheckedNormalHierarchyIndex<'_>)->Result<DocM>{
     if !index.matches_document(d){return Err(FormatError::Unsupported("foreign hierarchy index".into()))}doc_m_selected(d,sink,None,None,true)
+}
+pub(crate) fn doc_m_with_normal_hierarchy_mask_index<'doc>(d:&'doc Document,sink:&mut dyn Sink<'doc>,index:&photocraft_doc::normal_hierarchy_mask_index::CheckedNormalHierarchyMaskIndex<'_>)->Result<DocM>{
+ if !index.matches_document(d){return Err(FormatError::Unsupported("foreign hierarchy coverage index".into()))}doc_m_selected(d,sink,None,None,true)
 }
 fn doc_m_selected<'doc>(d:&'doc Document,sink:&mut dyn Sink<'doc>,proof:Option<&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,set:Option<&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverageSet<'_>>,hierarchy_validated:bool)->Result<DocM>{
     sink.poll()?;
@@ -1517,7 +1521,7 @@ impl Loader<'_> {
             text_styles: self.model_clone(&m.text_styles)?,
             slices,
         };
-        if let Some((q,c))=hierarchy{document.checked_normal_hierarchy_index_with(photocraft_doc::normal_hierarchy_index::NormalHierarchyLimits::STANDARD,q,c).map_err(crate::owned_document::error)?;}else if let (Some(q),Some(c))=(set_quota,coverage_control){
+        if let Some((q,c))=hierarchy{document.checked_normal_hierarchy_mask_index_with(photocraft_doc::normal_hierarchy_index::NormalHierarchyLimits::STANDARD,q,c).map_err(crate::owned_document::error)?;}else if let (Some(q),Some(c))=(set_quota,coverage_control){
             let set=document.checked_f32_filter_mask_coverages_with(photocraft_doc::xcf_filter_masks::MaskCoverageSetLimits::STANDARD,q,c).map_err(crate::owned_document::error)?;
             document.validate_xcf_state_with_checked_filter_masks(&set,control).map_err(|e|if e.code=="cancelled"{FormatError::Cancelled}else{FormatError::corrupt(e.to_string())})?;
         }else{

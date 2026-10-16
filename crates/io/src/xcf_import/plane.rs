@@ -12,6 +12,7 @@ pub(crate) struct ParsedPlaneDescriptor {
 pub(crate) trait ExactParsedPlane {
     fn allows_masked_mixed_source_upgrade(&self)->bool{false}
     fn allows_normal_hierarchy_source(&self)->bool{false}
+    fn allows_normal_hierarchy_coverage(&self)->bool{false}
     fn descriptor(&self) -> ParsedPlaneDescriptor;
     /// Exact retained declared native byte count, without visiting samples.
     /// Staged producers have already checked this shape before construction.

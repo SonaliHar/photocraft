@@ -137,6 +137,11 @@ fn prepay(budget: &photocraft_xcf::Budget<'_>, units: u64) -> Result<(), IoError
     }
     Ok(())
 }
+#[derive(Clone, Copy)]
+enum SourcePurpose {
+    ByteZero,
+    Masked,
+}
 /// Only the sealed actual hierarchy Source completion reaches this handoff.
 pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
     source: S,
@@ -145,6 +150,26 @@ pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
     control: &ReadControl<'_>,
     preparation: &mut Option<PreparationHold>,
 ) -> Result<OwnedNormalHierarchyXcfImport, IoError> {
+    promote_with_purpose(source, budget, quota, control, preparation, SourcePurpose::ByteZero)
+}
+pub(in crate::xcf_import) fn promote_masked_source<'b, 'a, S: PromotionSource<'b, 'a>>(
+    source: S,
+    budget: &'b photocraft_xcf::Budget<'a>,
+    quota: BackingQuota,
+    control: &ReadControl<'_>,
+    preparation: &mut Option<PreparationHold>,
+) -> Result<OwnedNormalHierarchyXcfImport, IoError> {
+    promote_with_purpose(source, budget, quota, control, preparation, SourcePurpose::Masked)
+}
+fn promote_with_purpose<'b, 'a, S: PromotionSource<'b, 'a>>(
+    source: S,
+    budget: &'b photocraft_xcf::Budget<'a>,
+    quota: BackingQuota,
+    control: &ReadControl<'_>,
+    preparation: &mut Option<PreparationHold>,
+    purpose: SourcePurpose,
+) -> Result<OwnedNormalHierarchyXcfImport, IoError> {
+    let masked = matches!(purpose, SourcePurpose::Masked);
     struct Incoming<'b, 'a, S> {
         source: S,
         model: Option<photocraft_xcf::Reservation<'b, 'a>>,
@@ -177,13 +202,48 @@ pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
             .consume_work(n.max(1), "hierarchy promotion requirements")
             .map_err(|e| if e.kind == ErrorKind::Cancelled { BackingError::Cancelled } else { BackingError::Work })
     };
-    let req = doc
-        .checked_normal_hierarchy_index_requirements(photocraft_doc::normal_hierarchy_index::NormalHierarchyLimits::STANDARD, control.interrupt, &planning)
-        .map_err(backing)?;
+    let coverage_requirements = if masked {
+        Some(
+            doc.checked_normal_hierarchy_mask_index_requirements(
+                photocraft_doc::normal_hierarchy_index::NormalHierarchyLimits::STANDARD,
+                control.interrupt,
+                &planning,
+            )
+            .map_err(backing)?,
+        )
+    } else {
+        None
+    };
+    let req = if let Some(ref combined) = coverage_requirements {
+        combined.tree
+    } else {
+        doc.checked_normal_hierarchy_index_requirements(photocraft_doc::normal_hierarchy_index::NormalHierarchyLimits::STANDARD, control.interrupt, &planning)
+            .map_err(backing)?
+    };
     let n = add(add(req.layer_count as u64, req.node_count as u64)?, add(req.mask_count as u64, req.stack_count as u64)?)?;
     let joins = n.checked_mul(n).and_then(|v| v.checked_mul(256)).ok_or_else(|| invalid("hierarchy promotion joins"))?;
     phase = add(phase, add(joins, add(req.validation_work_units, add(req.index_bytes, req.validation_index_bytes)?)?)?)?;
     phase = add(phase, req.aggregate_mask_physical_bytes.checked_mul(4).ok_or_else(|| invalid("hierarchy mask work"))?)?;
+    if let Some(ref combined) = coverage_requirements {
+        // This final SOURCE factory constructs and scans its OWN combined token.
+        // Earlier mapper/preparation scans are consumed work, never credits.
+        let masks = req.mask_count as u64;
+        let stacks = req.stack_count as u64;
+        let layers = req.layer_count as u64;
+        let nodes = req.node_count as u64;
+        let associations = masks
+            .checked_mul(stacks)
+            .and_then(|n| n.checked_mul(layers))
+            .and_then(|n| n.checked_add(masks.checked_mul(nodes)?))
+            .and_then(|n| n.checked_add(masks.checked_mul(masks)?))
+            .and_then(|n| n.checked_add(nodes.checked_mul(layers)?))
+            .and_then(|n| n.checked_mul(512))
+            .ok_or_else(|| invalid("hierarchy coverage associations"))?;
+        // Exact repeated physical scan: 96/sample plus actual bytes/defaults,
+        // tile polls and proof headers, obtained from this immutable Doc.
+        let scans = combined.coverage_work_units;
+        phase = add(phase, add(scans, add(associations, add(combined.validation_work_units, combined.proof_index_bytes)?)?)?)?;
+    }
     prepay(&budget, phase)?;
     let remaining = AtomicU64::new(phase);
     let work = |units| {
@@ -259,8 +319,12 @@ pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
         poll()?;
         work(units)
     };
-    let document =
-        AccountedDocument::new_readonly_normal_hierarchy_storage_with_local_work(document, retention.clone(), quota, &read, &local_work).map_err(backing)?;
+    let document = if masked {
+        AccountedDocument::new_readonly_masked_normal_hierarchy_storage_with_local_work(document, retention.clone(), quota, &read, &local_work)
+    } else {
+        AccountedDocument::new_readonly_normal_hierarchy_storage_with_local_work(document, retention.clone(), quota, &read, &local_work)
+    }
+    .map_err(backing)?;
     poll().map_err(backing)?;
     control.interrupt.check().map_err(|_| IoError::Cancelled)?;
     let output = OwnedNormalHierarchyXcfImport { document, warnings, origin, assessment, source_read_only, preview_only, _retention: retention };

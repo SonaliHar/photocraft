@@ -137,7 +137,7 @@ fn walk<'a>(
     }
     Ok(())
 }
-fn requirements<L: NormalHierarchyIndexLease>(
+pub(crate) fn requirements<L: NormalHierarchyIndexLease>(
     d: &Document,
     lim: NormalHierarchyLimits,
     check: &dyn Fn(u64) -> Result<(), E>,
@@ -334,7 +334,7 @@ fn requirements<L: NormalHierarchyIndexLease>(
         validation_work_units: work,
     })
 }
-fn pay(mut n: u64, check: &dyn Fn(u64) -> Result<(), E>) -> Result<(), E> {
+pub(crate) fn pay(mut n: u64, check: &dyn Fn(u64) -> Result<(), E>) -> Result<(), E> {
     while n != 0 {
         let part = n.min(1 << 20);
         check(part)?;
@@ -403,167 +403,8 @@ impl Document {
             return Err(E::Allocation);
         }
         lease.reconcile_capacity(actual)?;
+        fill_rows(self, lim, &check, &mut rows)?;
         let state = self.xcf_state.as_ref().ok_or(E::Integrity)?;
-        walk(self, lim, &check, |layer, parent_id, depth| {
-            if layer.id.0 == 0 {
-                return Err(E::Integrity);
-            }
-            let mut parent = None;
-            for old in &rows {
-                check(1)?;
-                if old.id == layer.id {
-                    return Err(E::Integrity);
-                }
-                if Some(old.id) == parent_id {
-                    parent = Some(old.ordinal);
-                }
-            }
-            if parent_id.is_some() != parent.is_some() {
-                return Err(E::Integrity);
-            }
-            let mut canonical = None;
-            for (i, item) in state.items.iter().enumerate() {
-                check(1)?;
-                if item.item == ItemRef::Layer(layer.id) {
-                    if canonical.is_some() {
-                        return Err(E::Integrity);
-                    }
-                    canonical = Some(i);
-                    check((item.name.len() as u64).checked_add(layer.name.len() as u64).ok_or(E::Length)?)?;
-                    if item.parent != parent_id.map(ItemRef::Layer) || item.visible != layer.visible || item.name != layer.name || item.mask.is_some() {
-                        return Err(E::Integrity);
-                    }
-                    let expected = if layer.is_group() { None } else { Some(self.bounds()) };
-                    if item.raster_bounds != expected {
-                        return Err(E::Integrity);
-                    }
-                }
-            }
-            let mut stack_index = None;
-            for (i, stack) in state.filter_stacks.iter().enumerate() {
-                check(1)?;
-                if stack.owner == ItemRef::Layer(layer.id) {
-                    if stack_index.is_some() || layer.is_group() {
-                        return Err(E::Integrity);
-                    }
-                    stack_index = Some(i);
-                }
-            }
-            let ordinal = rows.len();
-            if let Some(p) = parent {
-                let p = rows.get_mut(p).ok_or(E::Integrity)?;
-                if p.first_child.is_none() {
-                    p.first_child = Some(ordinal)
-                }
-            }
-            for old in rows.iter_mut().rev() {
-                check(1)?;
-                if old.parent == parent {
-                    old.next_sibling = Some(ordinal);
-                    break;
-                }
-            }
-            rows.push(NormalHierarchyRow {
-                layer,
-                id: layer.id,
-                ordinal,
-                parent,
-                first_child: None,
-                next_sibling: None,
-                subtree_end: ordinal.checked_add(1).ok_or(E::Length)?,
-                depth,
-                canonical_item_index: canonical.ok_or(E::Integrity)?,
-                operative_bounds: if layer.is_group() { Rect::new(0, 0, 0, 0) } else { self.bounds() },
-                stack_index,
-            });
-            Ok(())
-        })?;
-        for i in (0..rows.len()).rev() {
-            check(1)?;
-            let row = rows.get(i).ok_or(E::Integrity)?;
-            let parent = row.parent;
-            let end = row.subtree_end;
-            let bounds = row.operative_bounds;
-            if let Some(p) = parent {
-                let p = rows.get_mut(p).ok_or(E::Integrity)?;
-                p.subtree_end = p.subtree_end.max(end);
-                if !bounds.is_empty() {
-                    p.operative_bounds = if p.operative_bounds.is_empty() { bounds } else { p.operative_bounds.union(&bounds) };
-                }
-            }
-        }
-        for (i, _) in state.filter_stacks.iter().enumerate() {
-            let mut found = false;
-            for row in &rows {
-                check(1)?;
-                found |= row.stack_index == Some(i);
-            }
-            if !found {
-                return Err(E::Integrity);
-            }
-        }
-        // Complete actual node -> mask -> canonical policy ownership, including
-        // unused/aliased-mask refusal. This is structural, never an operation grant.
-        for (si, stack) in state.filter_stacks.iter().enumerate() {
-            for (ni, node) in stack.nodes.iter().enumerate() {
-                check(1)?;
-                let Some(ItemRef::Mask(id)) = node.mask else { return Err(E::Integrity) };
-                for (old_si, old_stack) in state.filter_stacks.iter().enumerate() {
-                    if old_si > si {
-                        break;
-                    }
-                    check(1)?;
-                    for (old_ni, old) in old_stack.nodes.iter().enumerate() {
-                        if old_si == si && old_ni >= ni {
-                            break;
-                        }
-                        check(1)?;
-                        if old.id == node.id || old.mask == node.mask {
-                            return Err(E::Integrity);
-                        }
-                    }
-                }
-                let mut found = None;
-                for mask in &state.filter_masks {
-                    check(1)?;
-                    if mask.id == id {
-                        if found.is_some() || mask.owner != node.id {
-                            return Err(E::Integrity);
-                        }
-                        found = Some(mask);
-                    }
-                }
-                let mask = found.ok_or(E::Integrity)?;
-                let mut item = None;
-                for row in &state.items {
-                    check(1)?;
-                    if row.item == ItemRef::Mask(id) {
-                        if item.is_some() {
-                            return Err(E::Integrity);
-                        }
-                        item = Some(row);
-                    }
-                }
-                let item = item.ok_or(E::Integrity)?;
-                let policy = item.mask.as_ref().ok_or(E::Integrity)?;
-                if item.parent.is_some()
-                    || item.composition.is_some()
-                    || item.raster_bounds != Some(self.bounds())
-                    || !item.visible
-                    || item.source_flags != 0
-                    || policy.owner != stack.owner
-                    || policy.bounds != mask.bounds
-                    || policy.offset != [0, 0]
-                    || policy.outside_f64_bits != 0
-                    || !policy.enabled
-                    || policy.shown
-                    || policy.editing
-                    || policy.linked
-                {
-                    return Err(E::Integrity);
-                }
-            }
-        }
         for mask in &state.filter_masks {
             check(1)?;
             if mask.bounds != self.bounds() || mask.surface.format().sample != self.depth {
@@ -583,4 +424,174 @@ impl Document {
         check(1)?;
         Ok(CheckedNormalHierarchyIndex { rows, document: self, requirements: req, _allocation: lease })
     }
+}
+
+pub(crate) fn fill_rows<'a>(
+    doc: &'a Document,
+    lim: NormalHierarchyLimits,
+    check: &dyn Fn(u64) -> Result<(), E>,
+    rows: &mut Vec<NormalHierarchyRow<'a>>,
+) -> Result<(), E> {
+    let state = doc.xcf_state.as_ref().ok_or(E::Integrity)?;
+    walk(doc, lim, &check, |layer, parent_id, depth| {
+        if layer.id.0 == 0 {
+            return Err(E::Integrity);
+        }
+        let mut parent = None;
+        for old in rows.iter() {
+            check(1)?;
+            if old.id == layer.id {
+                return Err(E::Integrity);
+            }
+            if Some(old.id) == parent_id {
+                parent = Some(old.ordinal);
+            }
+        }
+        if parent_id.is_some() != parent.is_some() {
+            return Err(E::Integrity);
+        }
+        let mut canonical = None;
+        for (i, item) in state.items.iter().enumerate() {
+            check(1)?;
+            if item.item == ItemRef::Layer(layer.id) {
+                if canonical.is_some() {
+                    return Err(E::Integrity);
+                }
+                canonical = Some(i);
+                check((item.name.len() as u64).checked_add(layer.name.len() as u64).ok_or(E::Length)?)?;
+                if item.parent != parent_id.map(ItemRef::Layer) || item.visible != layer.visible || item.name != layer.name || item.mask.is_some() {
+                    return Err(E::Integrity);
+                }
+                let expected = if layer.is_group() { None } else { Some(doc.bounds()) };
+                if item.raster_bounds != expected {
+                    return Err(E::Integrity);
+                }
+            }
+        }
+        let mut stack_index = None;
+        for (i, stack) in state.filter_stacks.iter().enumerate() {
+            check(1)?;
+            if stack.owner == ItemRef::Layer(layer.id) {
+                if stack_index.is_some() || layer.is_group() {
+                    return Err(E::Integrity);
+                }
+                stack_index = Some(i);
+            }
+        }
+        let ordinal = rows.len();
+        if let Some(p) = parent {
+            let p = rows.get_mut(p).ok_or(E::Integrity)?;
+            if p.first_child.is_none() {
+                p.first_child = Some(ordinal)
+            }
+        }
+        for old in rows.iter_mut().rev() {
+            check(1)?;
+            if old.parent == parent {
+                old.next_sibling = Some(ordinal);
+                break;
+            }
+        }
+        rows.push(NormalHierarchyRow {
+            layer,
+            id: layer.id,
+            ordinal,
+            parent,
+            first_child: None,
+            next_sibling: None,
+            subtree_end: ordinal.checked_add(1).ok_or(E::Length)?,
+            depth,
+            canonical_item_index: canonical.ok_or(E::Integrity)?,
+            operative_bounds: if layer.is_group() { Rect::new(0, 0, 0, 0) } else { doc.bounds() },
+            stack_index,
+        });
+        Ok(())
+    })?;
+    for i in (0..rows.len()).rev() {
+        check(1)?;
+        let row = rows.get(i).ok_or(E::Integrity)?;
+        let parent = row.parent;
+        let end = row.subtree_end;
+        let bounds = row.operative_bounds;
+        if let Some(p) = parent {
+            let p = rows.get_mut(p).ok_or(E::Integrity)?;
+            p.subtree_end = p.subtree_end.max(end);
+            if !bounds.is_empty() {
+                p.operative_bounds = if p.operative_bounds.is_empty() { bounds } else { p.operative_bounds.union(&bounds) };
+            }
+        }
+    }
+    for (i, _) in state.filter_stacks.iter().enumerate() {
+        let mut found = false;
+        for row in rows.iter() {
+            check(1)?;
+            found |= row.stack_index == Some(i);
+        }
+        if !found {
+            return Err(E::Integrity);
+        }
+    }
+    // Complete actual node -> mask -> canonical policy ownership, including
+    // unused/aliased-mask refusal. This is structural, never an operation grant.
+    for (si, stack) in state.filter_stacks.iter().enumerate() {
+        for (ni, node) in stack.nodes.iter().enumerate() {
+            check(1)?;
+            let Some(ItemRef::Mask(id)) = node.mask else { return Err(E::Integrity) };
+            for (old_si, old_stack) in state.filter_stacks.iter().enumerate() {
+                if old_si > si {
+                    break;
+                }
+                check(1)?;
+                for (old_ni, old) in old_stack.nodes.iter().enumerate() {
+                    if old_si == si && old_ni >= ni {
+                        break;
+                    }
+                    check(1)?;
+                    if old.id == node.id || old.mask == node.mask {
+                        return Err(E::Integrity);
+                    }
+                }
+            }
+            let mut found = None;
+            for mask in &state.filter_masks {
+                check(1)?;
+                if mask.id == id {
+                    if found.is_some() || mask.owner != node.id {
+                        return Err(E::Integrity);
+                    }
+                    found = Some(mask);
+                }
+            }
+            let mask = found.ok_or(E::Integrity)?;
+            let mut item = None;
+            for row in &state.items {
+                check(1)?;
+                if row.item == ItemRef::Mask(id) {
+                    if item.is_some() {
+                        return Err(E::Integrity);
+                    }
+                    item = Some(row);
+                }
+            }
+            let item = item.ok_or(E::Integrity)?;
+            let policy = item.mask.as_ref().ok_or(E::Integrity)?;
+            if item.parent.is_some()
+                || item.composition.is_some()
+                || item.raster_bounds != Some(doc.bounds())
+                || !item.visible
+                || item.source_flags != 0
+                || policy.owner != stack.owner
+                || policy.bounds != mask.bounds
+                || policy.offset != [0, 0]
+                || policy.outside_f64_bits != 0
+                || !policy.enabled
+                || policy.shown
+                || policy.editing
+                || policy.linked
+            {
+                return Err(E::Integrity);
+            }
+        }
+    }
+    Ok(())
 }

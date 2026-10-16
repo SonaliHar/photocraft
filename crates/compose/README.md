@@ -2023,8 +2023,9 @@ controls use full OLD/STAGED/source/lock/view/reply/journal/publication guards.
 Layer selection reuses upstream revision/view semantics. Group disclosure
 copies the actual tree under quota, preserves undo/redo and raw source flags,
 and follows upstream setExpanded reply/revision/history semantics. UI, native,
-web and Headless consumers use the same actual storage owner. General pixel
-painting, nonempty hierarchy masks, group filters, pass-through, layer masks,
+web and Headless consumers use the same actual storage owner. The bounded
+masked-leaf extension is described below; Legacy/plain native brush COW is
+documented in the control protocol. Group filters, pass-through, layer masks,
 offsets, additional profiles/models and remaining stock operations remain open.
 
 Twelve independently saved GIMP research sources establish raw/public order,
@@ -2035,3 +2036,26 @@ integration contracts remain UNRUN and uncompiled. Production compilation is
 recorded separately in execution notes; PhotoCraft tests/runtime/UI/corpus,
 performance and final acceptance remain deferred. Save/reopen is .pcraft;
 this increment does not implement XCF export or complete full stock support.
+
+
+Normal hierarchy CURRENT rendering now uses an additive complete tree-and-mask
+index. Old zero-only tree, single-mask and flat proof APIs retain their scope.
+The new index binds every actual leaf, stack, node and mask ordinal once, with
+16MiB per-mask and64MiB aggregate preflight before allocation or sample scans.
+Raw nonempty masks select the existing five masked-MIXED kernels; zero siblings
+retain the existing leaf recipe. Signed-zero-only numeric-empty masks refuse.
+Each enabled masked stage executes the full scalar leaf and mask mix even at
+local0/1 or identity. Complete inactive-subtree proof and separate runtime fees
+remain mandatory. Source admission is explicitly XCF22, all filter opacity+1,
+and at least one raw-nonempty mask. CURRENT nonempty-associated filters keep
+opacity+1 even when disabled; zero siblings retain their old finite-unit rule.
+
+This extends the same NormalHierarchy class and native13 marker through explicit
+combined-proof factories and selected native loading/writing. Last-filter
+removal preserves that purpose. Source callbacks, true Index reservations and
+all repeated validation work retain the original control; earlier preparation
+is not credit for later scans. The isolated tree fold and existing masked
+arithmetic are reused. Nested hierarchy plus masked leaves is a declared bounded
+compatibility extension of separate storage observations, not a producer-authored
+masked-tree output or numerical acceptance claim. Integration contracts remain
+UNRUN and uncompiled; full stock support and final acceptance are unfinished.

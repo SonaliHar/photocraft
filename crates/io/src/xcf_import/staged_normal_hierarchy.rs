@@ -212,7 +212,14 @@ pub(super) fn descriptors<'b, 'a>(
         work(i, b, 32)?;
         out.push(d.plane.as_ref().ok_or_else(|| IoError::Unsupported("hierarchy descriptor raster".into()))?.clone());
     }
-    Ok(Some(super::staged_masked_filtered_flat::DescriptorPlan::hierarchy(out, fee)))
+    let mut coverage=false;
+    if f.version==22 {
+        for d in &f.layers {for e in &d.effects {
+            work(i,b,512)?;
+            coverage |= crate::xcf_filters::masked_mixed_source::parameters(e).is_some();
+        }}
+    }
+    Ok(Some(super::staged_masked_filtered_flat::DescriptorPlan::hierarchy(out, fee, coverage)))
 }
 pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &photocraft_xcf::Budget<'_>) -> Result<(), IoError> {
     // The publication guard is separate from metadata/decoder permissions. No Source
@@ -220,10 +227,11 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
     if !SOURCE_RELEASED {
         return Err(IoError::Unsupported("normal hierarchy Source packet policy not released".into()));
     }
-    validate_source_body(f, i, b)
+    validate_source_body(f, i, b, false)
 }
-fn validate_source_body<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &photocraft_xcf::Budget<'_>) -> Result<(), IoError> {
+pub(super) fn validate_source_body<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &photocraft_xcf::Budget<'_>, masked:bool) -> Result<(), IoError> {
     work(i, b, 128)?;
+    if masked && f.version!=22{return Err(IoError::Unsupported("masked hierarchy Source version".into()));}
     if !matches!(f.version, 12 | 13 | 22)
         || f.model != Model::Rgb
         || f.encoding != Encoding::NonlinearProfile
@@ -316,6 +324,7 @@ fn validate_source_body<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, 
         if !p.allows_normal_hierarchy_source() || !staged_filtered_flat::native(p, f.sample, f.width, f.height, 4, false, i, Some(b))? {
             return Err(IoError::Unsupported("hierarchy Source nativeunit/plan".into()));
         }
+        if masked { super::staged_normal_hierarchy_masked::validate_leaf(d,f,i,b)?; continue; }
         staged_filtered_flat::root_domain(d, i, b)?;
         for e in &d.effects {
             let m = e.mask.as_ref().ok_or_else(|| IoError::Unsupported("hierarchy Source mask".into()))?;

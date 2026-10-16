@@ -176,6 +176,7 @@ pub struct JobsUi {
 /// (the result is then `{"job": id, "pending": true}` and the edit lands when [`tick`] applies
 /// it), else synchronously like [`photocraft_engine::Session::execute`].
 pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, String> {
+    let owned_native_stroke=matches!(id,"paint.stroke"|"paint.pencil") && app.session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_legacy_storage());
     let owned_disclosure = id=="layer.setExpanded" && app.session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage());
     let owned_metadata = id == "layer.setProps"
         && app.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_gaussian_group_storage() || owner.is_readonly_flat_composite_storage() || (owner.is_readonly_filtered_flat_point_storage() || (owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage()))
@@ -186,7 +187,7 @@ pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, St
         && app.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_flat_composite_storage() || photocraft_engine::observed_box_translation_candidate(owner));
     // This registered operation prepares and publishes one synchronous transaction.
     // The engine deliberately refuses background/start callers.
-    if !app.background_jobs || owned_disclosure || owned_metadata || owned_composition || owned_move || matches!(id,
+    if !app.background_jobs || owned_native_stroke || owned_disclosure || owned_metadata || owned_composition || owned_move || matches!(id,
         "xcf.link.substitute" | "xcf.link.recover" | "xcf.item.locks.set" |
         "xcf.items.select" | "xcf.items.visibility.set" | "xcf.channel.overlay.set" |
         "xcf.mask.enabled.set" | "xcf.mask.geometry.set" | "layer.layerMask.enabled" | "xcf.layer.affine.apply" | "xcf.filter.move" | "xcf.filter.remove" | "xcf.filter.insert" | "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.mask.enabled.set" | "xcf.indexed.pixel.set" | "xcf.indexed.palette.set" | "xcf.text.name.set" | "xcf.channel.name.set" | "xcf.channel.locks.set" | "xcf.channel.indicates.set" | "xcf.path.name.set" | "xcf.vector.fill.color.set" | "xcf.vector.stroke.color.set" |

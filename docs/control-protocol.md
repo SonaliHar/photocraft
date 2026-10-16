@@ -3095,9 +3095,10 @@ controls use full OLD/STAGED/source/lock/view/reply/journal/publication guards.
 Layer selection reuses upstream revision/view semantics. Group disclosure
 copies the actual tree under quota, preserves undo/redo and raw source flags,
 and follows upstream setExpanded reply/revision/history semantics. UI, native,
-web and Headless consumers use the same actual storage owner. General pixel
-painting, nonempty hierarchy masks, group filters, pass-through, layer masks,
-offsets, additional profiles/models and remaining stock operations remain open.
+web and Headless consumers use the same actual storage owner. The bounded
+masked-leaf and Legacy/plain native brush COW extensions are described below.
+Group filters, pass-through, layer masks, offsets, additional profiles/models
+and remaining stock operations remain open.
 
 Twelve independently saved GIMP research sources establish raw/public order,
 48 exact seed planes,28 zero masks, activity and empty-group storage facts.
@@ -3107,3 +3108,41 @@ integration contracts remain UNRUN and uncompiled. Production compilation is
 recorded separately in execution notes; PhotoCraft tests/runtime/UI/corpus,
 performance and final acceptance remain deferred. Save/reopen is .pcraft;
 this increment does not implement XCF export or complete full stock support.
+
+
+The accounted Normal hierarchy route now supports the existing five masked-MIXED
+leaf identities through complete actual-tree coverage proof. Nested targets use
+existing filter set/enable/move/remove and layer metadata commands. Nonempty-mask
+filter opacity stays100%; the UI uses the existing fixed-opacity scalar controls.
+All OLD/history/STAGED, lock, source, target, view, reply, journal and publication
+checks remain. Native13 continuation keeps raw mask/native/profile/provenance
+words and uses explicit marker-only handoff, including derived empty programs.
+This is .pcraft save/reopen, not XCF export.
+
+Existing paint.stroke and paint.pencil now have a bounded native COW route for
+actual Legacy/plain accounted RGB/Gray U8/U16/F32 targets. An exact storage-class
+hint only selects the route; existing full plain/native-edit proofs still grant
+permission. The initial producer supports ordinary Round Normal paint, erase and
+Clear (upstream Normal+erase representation), and Pencil. Selection, symmetry,
+block/Auto Erase, sampled tips, texture, scattering, dual/color dynamics, wet
+edges, noise/build-up and other unsupported settings return errors. Readonly
+Point, assigned, mixed, masked and hierarchy classes remain closed to pixels.
+
+The producer borrows checked native storage, generates absolute-coordinate
+coverage once and clips allocation before native rendering. Its initial native
+patch is at most16MiB within the existing extent. Actual physical coverage tiles,
+including skinny regions, native input/output, generation, COW, history and reply
+have overlapping ownership fees. Existing brush math, U8 dither and raw-alpha
+lock verification are retained; nonfinite results refuse atomically. Unchanged
+strokes preserve revision and redo. Current ICC interpretation converts brush
+color, and original source/protected paths remain unchanged.
+
+The UI captures document/revision/layer/source/view/brush and command/zoom/tool
+options at pointer-down. Stale release refuses without retargeting or resident
+fallback. One owned work/deadline meter and its fee survive point collection,
+reposition, parameter transport, existing registered dispatch and final commit;
+its transient Session handoff is consumed once even on failure. There is no live
+pixel-preview claim in this initial route. Headless uses the same existing command
+transaction. Tests, test compilation, runtime/UI/offscreen, corpus, performance
+and numerical/native workflow acceptance remain deferred until implementation
+is complete. These additions do not complete full stock XCF support.

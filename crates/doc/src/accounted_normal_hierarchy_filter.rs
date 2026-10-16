@@ -77,6 +77,16 @@ fn prepare(
     let node_index = node_index.ok_or(BackingError::Bounds)?;
     let node = stack.nodes.get(node_index).ok_or(BackingError::Integrity)?;
     let mut replacements = [None; 10];
+    if opacity_f64_bits.is_some_and(|bits| bits != 1.0f64.to_bits()) {
+        let index = owner.checked_readonly_normal_hierarchy_current_index(c)?;
+        let binding = index.bindings_for_stack(stack_index).and_then(|b| b.get(node_index)).ok_or(BackingError::Integrity)?;
+        if binding.filter_id != node.id {
+            return Err(BackingError::Integrity);
+        }
+        if binding.classification == crate::xcf_filter_masks::FilterMaskCoverageClass::RawNonemptyCoverage {
+            return refused();
+        }
+    }
     let opacity = opacity_f64_bits.map(|after| (node.opacity_f64_bits, after));
     let mut changed = patch.enabled.is_some_and(|v| v != node.enabled) || opacity.is_some_and(|(before, after)| before != after);
     for (slot, replacement) in patch.arguments.iter().enumerate() {

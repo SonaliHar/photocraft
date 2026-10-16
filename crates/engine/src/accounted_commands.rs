@@ -90,7 +90,7 @@ fn bad(id: &str, message: &str) -> EngineError {
 
 /// Preserve the old global command set; rename is admitted only on this actual class.
 pub(crate) fn supports_for_session(session:&Session,id:&str)->bool{
- supports(id) || id=="layer.setExpanded" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()) || id=="layer.renameLayer" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()))
+ supports(id) || matches!(id,"paint.stroke"|"paint.pencil") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_legacy_storage()) || id=="layer.setExpanded" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()) || id=="layer.renameLayer" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()))
 }
 /// No editing or selection route is granted by readonly mixed-root storage.
 pub(crate) fn filtered_flat_mutation_refused(session:&Session,id:&str)->bool{
@@ -100,6 +100,8 @@ pub(crate) fn filtered_flat_mutation_refused(session:&Session,id:&str)->bool{
 }
 
 enum Request<'a> {
+    NativeStroke(crate::accounted_native_stroke::Request<'a>),
+    PreparedNativeStroke(crate::accounted_native_stroke::Prepared<'a>),
     HierarchyExpanded(hierarchy_expanded::Request<'a>),
     PreparedHierarchyExpanded(hierarchy_expanded::Prepared<'a>),
     FlatComposition(flat_composition::Request<'a>),
@@ -168,6 +170,9 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
     if id == "edit.clear" {
         crate::accounted_clear::validate_request(session, params)?;
         return Ok(Request::Clear(params));
+    }
+    if matches!(id,"paint.stroke"|"paint.pencil") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_legacy_storage()) {
+        return Ok(Request::NativeStroke(crate::accounted_native_stroke::Request::parse(session,id,params,control)?));
     }
     if id=="layer.setExpanded" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()) {
         return Ok(Request::HierarchyExpanded(hierarchy_expanded::Request::parse(session,params,control)?));
@@ -663,6 +668,7 @@ impl<'a> PreparedAccountedCommand<'a> {
             return Err(EngineError::Other(reason.into()));
         }
         let request = match request {
+            Request::NativeStroke(request)=>Request::PreparedNativeStroke(request.prepare(session,control)?),
             Request::HierarchyExpanded(request)=>Request::PreparedHierarchyExpanded(request.prepare(session,control)?),
             Request::FlatComposition(request)=>Request::PreparedFlatComposition(request.prepare(session,control)?),
             Request::ImportedTranslate(request) => Request::PreparedImportedTranslate(request.prepare(session, control)?),
@@ -747,6 +753,7 @@ impl<'a> PreparedAccountedCommand<'a> {
         if matches!(&request, Request::PreparedFlatComposition(_)) {
             census.add(0,usize::try_from(flat_composition::REPLY_ENVELOPE).map_err(|_|BackingError::Length)?)?;
         }
+        if matches!(&request,Request::PreparedNativeStroke(_)){census.add(0,usize::try_from(crate::accounted_native_stroke::reply_envelope()).map_err(|_|BackingError::Length)?)?;}
         if matches!(&request, Request::PreparedHierarchyExpanded(_)) {
             census.add(0,usize::try_from(hierarchy_expanded::REPLY_ENVELOPE).map_err(|_|BackingError::Length)?)?;
         }
@@ -808,6 +815,7 @@ impl<'a> PreparedAccountedCommand<'a> {
         let history = if matches!(
             &request,
             Request::HistorySelect(_)
+                | Request::PreparedNativeStroke(_)
                 | Request::HierarchySelect(_,_)
                 | Request::PreparedImportedTranslate(_)
                 | Request::PreparedFilteredFlat(_)
@@ -861,6 +869,7 @@ impl<'a> PreparedAccountedCommand<'a> {
         if matches!(
             &self.request,
             Request::ClearSelection
+                | Request::PreparedNativeStroke(_)
                 | Request::HierarchySelect(_,_)
                 | Request::PreparedHierarchyExpanded(_)
                 | Request::PreparedImportedTranslate(_)
@@ -908,6 +917,8 @@ impl<'a> PreparedAccountedCommand<'a> {
             return Err(BackingError::Integrity.into());
         }
         let result = match self.request {
+            Request::PreparedNativeStroke(prepared)=>prepared.execute(session,control)?,
+            Request::NativeStroke(_)=>return Err(BackingError::Integrity.into()),
             Request::PreparedHierarchyExpanded(prepared)=>prepared.execute(session,control)?,
             Request::HierarchyExpanded(_)=>return Err(BackingError::Integrity.into()),
             Request::PreparedFlatComposition(prepared)=>prepared.execute(session,control)?,

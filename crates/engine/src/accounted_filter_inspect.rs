@@ -278,7 +278,7 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     let active = session.active().ok_or(EngineError::NoDocument)?;
     let owner = active.doc.accounted().ok_or(BackingError::Unsupported)?;
     if owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage(){
-        if owner.is_readonly_normal_hierarchy_storage(){owner.validate_readonly_normal_hierarchy_storage(control)?;}else if owner.is_readonly_masked_filtered_flat_point_storage(){owner.validate_readonly_masked_filtered_flat_point_storage(control)?;}else{owner.validate_readonly_filtered_flat_point_storage(control)?;}
+        if owner.is_readonly_normal_hierarchy_storage(){owner.validate_readonly_normal_hierarchy_current_storage(control)?;}else if owner.is_readonly_masked_filtered_flat_point_storage(){owner.validate_readonly_masked_filtered_flat_point_storage(control)?;}else{owner.validate_readonly_filtered_flat_point_storage(control)?;}
         let state=owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
         if state.filter_stacks.len()>4096{return Err(BackingError::Length.into())}
         let mut found=None;

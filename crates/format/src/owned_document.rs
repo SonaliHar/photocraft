@@ -185,7 +185,7 @@ impl OwnedDocumentArchive {
         let Self { document, current_storage_hint, _archive, _model } = self;
         let retention = Arc::new(NativeRetention { _archive, _model, _owner: lease });
         match handoff {
-            AccountedHandoff::ReadonlyNormalHierarchyStorage=>photocraft_doc::accounted_document::AccountedDocument::new_readonly_normal_hierarchy_current_storage(document,retention,quota,control),
+            AccountedHandoff::ReadonlyNormalHierarchyStorage=>photocraft_doc::accounted_document::AccountedDocument::new_readonly_masked_normal_hierarchy_current_storage(document,retention,quota,control),
             AccountedHandoff::Document => {
                 photocraft_doc::accounted_document::AccountedDocument::from_owned_rehydrating_selection(document, retention, quota, control)
             }

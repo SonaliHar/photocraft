@@ -73,7 +73,7 @@ impl FilterMask {
             interrupt.check().map_err(|_| photocraft_raster::backing::BackingError::Cancelled)
         })
     }
-    pub(super) fn scan_checked_f32_coverage(
+    pub(crate) fn scan_checked_f32_coverage(
         &self,
         check: &dyn Fn(u64) -> Result<(), photocraft_raster::backing::BackingError>,
     ) -> Result<CheckedFilterMaskCoverage<'_>, photocraft_raster::backing::BackingError> {

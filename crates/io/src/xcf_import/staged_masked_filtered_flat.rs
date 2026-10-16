@@ -9,10 +9,12 @@ pub(super) struct DescriptorPlan<'b, 'a> {
     next: usize,
     mixed_upgrade: bool,
     hierarchy_upgrade:bool,
+    hierarchy_coverage:bool,
     _fee: Reservation<'b, 'a>,
 }
 impl<'b,'a> DescriptorPlan<'b, 'a> {
-    pub(super) fn hierarchy(descriptors:Vec<PlaneDescriptor>,fee:Reservation<'b,'a>)->Self{Self{descriptors,next:0,mixed_upgrade:false,hierarchy_upgrade:true,_fee:fee}}
+    pub(super) fn hierarchy(descriptors:Vec<PlaneDescriptor>,fee:Reservation<'b,'a>,coverage:bool)->Self{Self{descriptors,next:0,mixed_upgrade:false,hierarchy_upgrade:true,hierarchy_coverage:coverage,_fee:fee}}
+    pub(super) fn hierarchy_coverage(&self)->bool{self.hierarchy_coverage}
     pub(super) fn hierarchy_upgrade(&self)->bool{self.hierarchy_upgrade}
     pub(super) fn mixed_upgrade(&self) -> bool {
         self.mixed_upgrade
@@ -137,7 +139,7 @@ pub(super) fn preplan<'b, 'a>(
         staged_filtered_flat::work(i, b, 32)?;
         descriptors.push(d.plane.as_ref().ok_or_else(|| IoError::Unsupported("masked mixed planned root".into()))?.clone());
     }
-    Ok(Some(DescriptorPlan { descriptors, next: 0, mixed_upgrade: !ordinary,hierarchy_upgrade:false, _fee: fee }))
+    Ok(Some(DescriptorPlan { descriptors, next: 0, mixed_upgrade: !ordinary,hierarchy_upgrade:false,hierarchy_coverage:false, _fee: fee }))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

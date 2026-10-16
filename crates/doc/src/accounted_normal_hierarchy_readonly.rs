@@ -66,7 +66,15 @@ pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &dyn ModelControl, purp
     let index = doc.checked_normal_hierarchy_index_with_reservation(NormalHierarchyLimits::STANDARD, c.sync_control().interrupt, &|n| c.check(n), |n| {
         q.reserve(QuotaKind::Index, n).map_err(|_| BackingError::Quota)
     })?;
-    let layers = index.rows();
+    shape_rows(doc, q, c, purpose, index.rows())
+}
+fn shape_rows(
+    doc: &Document,
+    q: &BackingQuota,
+    c: &dyn ModelControl,
+    purpose: TopologyPurpose,
+    layers: &[crate::normal_hierarchy_index::NormalHierarchyRow<'_>],
+) -> Result<(), BackingError> {
     c.check(1)?;
     if !(1..=4096).contains(&layers.len())
         || doc.mode != crate::ColorMode::Rgb
@@ -232,7 +240,7 @@ pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &dyn ModelControl, purp
             }
         }
         let item = item.ok_or(BackingError::Integrity)?;
-        if item.parent != row.parent.map(|p| index.row(p).map(|r| ItemRef::Layer(r.id))).flatten()
+        if item.parent != row.parent.map(|p| layers.get(p).map(|r| ItemRef::Layer(r.id))).flatten()
             || item.mask.is_some()
             || item.raster_bounds != if layer.is_group() { None } else { Some(canvas) }
             || item.visible != layer.visible
@@ -453,6 +461,17 @@ pub(super) fn measured(doc: &Document, q: &BackingQuota, c: &dyn ModelControl, p
     shape(doc, q, c, purpose)?;
     census_with_mask_policy(doc, true, true, None, q, c, ReadonlyMaskPolicy::FilteredFlat)
 }
+fn measured_current(doc: &Document, q: &BackingQuota, c: &dyn ModelControl, purpose: TopologyPurpose) -> Result<ModelCensus, BackingError> {
+    let index =
+        doc.checked_normal_hierarchy_mask_index_with_reservation(NormalHierarchyLimits::STANDARD, c.sync_control().interrupt, &|n| c.check(n), |n| {
+            q.reserve(QuotaKind::Index, n).map_err(|_| BackingError::Quota)
+        })?;
+    if purpose == TopologyPurpose::Source && (doc.xcf_state.as_ref().is_none_or(|s| s.provenance.format_version != 22) || index.raw_nonempty_count() == 0) {
+        return refused();
+    }
+    shape_rows(doc, q, c, purpose, index.rows())?;
+    census_with_mask_policy(doc, true, true, None, q, c, ReadonlyMaskPolicy::FilteredFlat)
+}
 impl AccountedDocument {
     pub fn readonly_normal_hierarchy_storage_requirements(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<u64, BackingError> {
         measured(doc, q, c, TopologyPurpose::Source)?;
@@ -524,6 +543,100 @@ impl AccountedDocument {
     }
 }
 
+impl AccountedDocument {
+    pub fn validate_readonly_normal_hierarchy_current_storage(&self, c: &ReadControl<'_>) -> Result<(), BackingError> {
+        if !self.is_readonly_normal_hierarchy_storage() {
+            return refused();
+        }
+        measured_current(self.document(), self.quota(), c, TopologyPurpose::Current)?;
+        Ok(())
+    }
+    pub fn checked_readonly_normal_hierarchy_current_index(
+        &self,
+        c: &ReadControl<'_>,
+    ) -> Result<crate::normal_hierarchy_mask_index::CheckedNormalHierarchyMaskIndex<'_>, BackingError> {
+        if !self.is_readonly_normal_hierarchy_storage() {
+            return refused();
+        }
+        self.document().checked_normal_hierarchy_mask_index_with(NormalHierarchyLimits::STANDARD, self.quota(), c)
+    }
+    pub fn readonly_masked_normal_hierarchy_storage_requirements(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<u64, BackingError> {
+        measured_current(doc, q, c, TopologyPurpose::Source)?;
+        Ok(Self::owned_model_reservation_bytes())
+    }
+    pub fn readonly_masked_normal_hierarchy_current_storage_requirements(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<u64, BackingError> {
+        measured_current(doc, q, c, TopologyPurpose::Current)?;
+        Ok(Self::owned_model_reservation_bytes())
+    }
+    pub fn new_readonly_masked_normal_hierarchy_storage(
+        document: Document,
+        retention: Arc<dyn Any + Send + Sync>,
+        quota: BackingQuota,
+        c: &ReadControl<'_>,
+    ) -> Result<Self, BackingError> {
+        Self::new_masked_normal_hierarchy(document, retention, quota, c, TopologyPurpose::Source)
+    }
+    pub fn new_readonly_masked_normal_hierarchy_current_storage(
+        document: Document,
+        retention: Arc<dyn Any + Send + Sync>,
+        quota: BackingQuota,
+        c: &ReadControl<'_>,
+    ) -> Result<Self, BackingError> {
+        Self::new_masked_normal_hierarchy(document, retention, quota, c, TopologyPurpose::Current)
+    }
+    fn new_masked_normal_hierarchy(
+        document: Document,
+        retention: Arc<dyn Any + Send + Sync>,
+        quota: BackingQuota,
+        c: &dyn ModelControl,
+        purpose: TopologyPurpose,
+    ) -> Result<Self, BackingError> {
+        struct Incoming {
+            document: Document,
+            retention: Arc<dyn Any + Send + Sync>,
+        }
+        let incoming = Incoming { document, retention };
+        measured_current(&incoming.document, &quota, c, purpose)?;
+        let lease = quota.reserve(QuotaKind::Index, Self::owned_model_reservation_bytes()).map_err(|_| BackingError::Quota)?;
+        c.check(1)?;
+        Ok(Self {
+            owner: Arc::new(ModelOwner {
+                _storage_class: StorageClass::ReadonlyNormalHierarchy,
+                document: incoming.document,
+                _selection: None,
+                _selection_view: None,
+                retention: incoming.retention,
+                quota,
+                _model: None,
+                _allocation: Arc::new(lease),
+            }),
+        })
+    }
+    pub fn new_readonly_masked_normal_hierarchy_storage_with_local_work(
+        document: Document,
+        retention: Arc<dyn Any + Send + Sync>,
+        quota: BackingQuota,
+        c: &ReadControl<'_>,
+        work: &dyn Fn(u64) -> Result<(), BackingError>,
+    ) -> Result<Self, BackingError> {
+        struct Local<'a, 'b> {
+            base: &'a ReadControl<'b>,
+            work: &'a dyn Fn(u64) -> Result<(), BackingError>,
+        }
+        impl ModelControl for Local<'_, '_> {
+            fn check(&self, n: u64) -> Result<(), BackingError> {
+                self.base.interrupt.check().map_err(|_| BackingError::Cancelled)?;
+                (self.work)(n)?;
+                self.base.interrupt.check().map_err(|_| BackingError::Cancelled)
+            }
+            fn sync_control(&self) -> &ReadControl<'_> {
+                self.base
+            }
+        }
+        Self::new_masked_normal_hierarchy(document, retention, quota, &Local { base: c, work }, TopologyPurpose::Source)
+    }
+}
+
 fn accepts(owner: &AccountedDocument) -> bool {
     owner.is_readonly_normal_hierarchy_storage()
 }
@@ -531,7 +644,7 @@ fn measured_owner(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<Mode
     if !accepts(owner) {
         return refused();
     }
-    measured(owner.document(), owner.quota(), c, TopologyPurpose::Current)
+    measured_current(owner.document(), owner.quota(), c, TopologyPurpose::Current)
 }
 fn layer_at<'a>(doc: &'a Document, ordinal: usize, c: &ReadControl<'_>) -> Result<&'a crate::Layer, BackingError> {
     fn find<'a>(
@@ -624,7 +737,7 @@ enum CopyKind<'a> {
     Expanded { target: Option<(usize, LayerId, bool)>, value: bool },
 }
 fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
-    owner.document().checked_normal_hierarchy_index_requirements(NormalHierarchyLimits::STANDARD, c.interrupt, &|n| c.check(n))?;
+    owner.document().checked_normal_hierarchy_mask_index_requirements(NormalHierarchyLimits::STANDARD, c.interrupt, &|n| c.check(n))?;
     let name_bytes = match kind {
         CopyKind::Title(name) => (name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
         CopyKind::Filter(_) | CopyKind::Move(_) | CopyKind::Remove(_) | CopyKind::Expanded { .. } => 0,
@@ -708,7 +821,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
             }
         }
     }
-    let actual = measured(&staged.document, owner.quota(), c, TopologyPurpose::Current)?;
+    let actual = measured_current(&staged.document, owner.quota(), c, TopologyPurpose::Current)?;
     let actual_index = actual.index.checked_sub(header).ok_or(BackingError::Integrity)?;
     if actual_index > envelope || actual.payload > payload {
         return Err(BackingError::Allocation);
@@ -750,7 +863,7 @@ impl AccountedDocument {
     ) -> Result<(ModelCensus, Option<CopyKind<'static>>), BackingError> {
         let logical = measured_owner(self, c)?;
         if all {
-            let index = self.checked_readonly_normal_hierarchy_index(c)?;
+            let index = self.checked_readonly_normal_hierarchy_current_index(c)?;
             let mut changed = false;
             for row in index.rows() {
                 c.check(1)?;

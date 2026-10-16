@@ -1143,6 +1143,12 @@ impl Document {
         if let Some(error)=local.failure.get(){return Err(error)}
         result.map_err(|_|photocraft_raster::backing::BackingError::Integrity)
     }
+    pub(crate) fn validate_xcf_state_with_local_hierarchy_coverage_work(&self,interrupt:&photocraft_raster::Interrupt<'_>,work:&dyn Fn(u64)->Result<(),photocraft_raster::backing::BackingError>,proof:&dyn xcf_filter_masks::CoverageSetProof)->Result<(),photocraft_raster::backing::BackingError>{
+        let local=xcf_local_validation::LocalValidation{interrupt,work,failure:std::cell::Cell::new(None)};
+        let result=self.validate_xcf_state_selection(&local,None,Some(proof));
+        if let Some(error)=local.failure.get(){return Err(error)}
+        result.map_err(|_|photocraft_raster::backing::BackingError::Integrity)
+    }
     fn validate_xcf_state_selection(
         &self, control: &dyn xcf_local_validation::ValidationControl,
         selected: Option<&xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,
@@ -1753,5 +1759,6 @@ mod id_tests {
 
 /// Paid actual-tree structural index for explicit isolated Normal hierarchy custody.
 pub mod normal_hierarchy_index;
+pub mod normal_hierarchy_mask_index;
 
 mod xcf_local_validation;

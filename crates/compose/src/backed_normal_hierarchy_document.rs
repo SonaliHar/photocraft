@@ -20,6 +20,15 @@ impl<'a> PreparedBackedNormalHierarchyDocument<'a> {
         control.check(1).map_err(BackedNormalError::Backing)?;
         let header = u64::try_from(std::mem::size_of::<Self>()).map_err(|_| BackedNormalError::Invalid("normal hierarchy facade header"))?;
         let lease = owner.quota().reserve(QuotaKind::Index, header).map_err(BackedNormalError::Quota)?;
+        let context = Context::new_current(owner, limits, control)?;
+        control.check(0).map_err(BackedNormalError::Backing)?;
+        Ok(Self { context, _lease: lease })
+    }
+    /// Explicit original complete BYTEzero proof endpoint.
+    pub fn new_byte_zero(owner: &'a AccountedDocument, limits: NormalBandLimits, control: &ReadControl<'_>) -> Result<Self, BackedNormalError> {
+        control.check(1).map_err(BackedNormalError::Backing)?;
+        let header = u64::try_from(std::mem::size_of::<Self>()).map_err(|_| BackedNormalError::Invalid("normal hierarchy facade header"))?;
+        let lease = owner.quota().reserve(QuotaKind::Index, header).map_err(BackedNormalError::Quota)?;
         let context = Context::new(owner, limits, control)?;
         control.check(0).map_err(BackedNormalError::Backing)?;
         Ok(Self { context, _lease: lease })

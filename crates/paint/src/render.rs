@@ -1296,3 +1296,5 @@ fn rasterize_round(d: &Dab, rect: Rect, out: &mut [f32], hardness: f32, aliased:
 #[cfg(test)]
 #[path = "render_reference.rs"]
 mod reference;
+
+pub use controlled::native as native_stroke_controlled;

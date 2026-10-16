@@ -196,7 +196,7 @@ fn opacity_request(node:&FilterNode,request:Option<(&'static str,serde_json::Val
     Some(("xcf.filter.set",params))
 }
 fn controls(ui:&mut egui::Ui,node:&FilterNode,enabled_ui:bool,route:Route)->Option<(&'static str,serde_json::Value)>{
-    if route==Route::Masked && masked::scope(node){return masked::edit(ui,node,enabled_ui)}
+    if matches!(route,Route::Masked|Route::Hierarchy) && masked::scope(node){return masked::edit(ui,node,enabled_ui)}
     let request=family_controls(ui,node,enabled_ui);
     let mut percent=f64::from_bits(node.opacity_f64_bits)*100.0;
     let intent=ui.add_enabled_ui(enabled_ui,|ui|ui.horizontal(|ui|{

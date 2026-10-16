@@ -13,7 +13,8 @@ use photocraft_doc::{
     accounted_document::AccountedDocument,
     import_compositing::{GimpOperator, GimpSpace},
     item_identity::ItemRef,
-    normal_hierarchy_index::{CheckedNormalHierarchyIndex, NormalHierarchyIndexLease, NormalHierarchyLimits},
+    normal_hierarchy_index::{CheckedNormalHierarchyIndex, NormalHierarchyIndexLease, NormalHierarchyLimits, NormalHierarchyRow},
+    normal_hierarchy_mask_index::{CheckedNormalHierarchyMaskIndex, NormalHierarchyMaskBinding},
 };
 use photocraft_geom::Rect;
 use photocraft_raster::{
@@ -88,6 +89,66 @@ impl<L> NormalHierarchyIndexLease for SourceIndexLease<L> {
         self.bytes
     }
 }
+// Private common view shares the compiler, never converts a coverage token to a BYTEzero token.
+trait TreeIndex<'doc> {
+    fn rows(&self) -> &[NormalHierarchyRow<'doc>];
+    fn max_depth(&self) -> usize;
+    fn leaf_count(&self) -> usize;
+    fn group_count(&self) -> usize;
+    fn matches_document(&self, d: &Document) -> bool;
+    fn bindings_for_stack(&self, _stack: usize) -> Option<&[NormalHierarchyMaskBinding<'doc>]> {
+        None
+    }
+}
+impl<'doc, L: NormalHierarchyIndexLease> TreeIndex<'doc> for CheckedNormalHierarchyIndex<'doc, L> {
+    fn rows(&self) -> &[NormalHierarchyRow<'doc>] {
+        self.rows()
+    }
+    fn max_depth(&self) -> usize {
+        self.max_depth()
+    }
+    fn leaf_count(&self) -> usize {
+        self.leaf_count()
+    }
+    fn group_count(&self) -> usize {
+        self.group_count()
+    }
+    fn matches_document(&self, d: &Document) -> bool {
+        self.matches_document(d)
+    }
+}
+impl<'doc, L: NormalHierarchyIndexLease> TreeIndex<'doc> for CheckedNormalHierarchyMaskIndex<'doc, L> {
+    fn rows(&self) -> &[NormalHierarchyRow<'doc>] {
+        self.rows()
+    }
+    fn max_depth(&self) -> usize {
+        self.max_depth()
+    }
+    fn leaf_count(&self) -> usize {
+        self.leaf_count()
+    }
+    fn group_count(&self) -> usize {
+        self.group_count()
+    }
+    fn matches_document(&self, d: &Document) -> bool {
+        self.matches_document(d)
+    }
+    fn bindings_for_stack(&self, stack: usize) -> Option<&[NormalHierarchyMaskBinding<'doc>]> {
+        self.bindings_for_stack(stack)
+    }
+}
+enum CurrentIndex<'doc> {
+    Zero(CheckedNormalHierarchyIndex<'doc>),
+    Coverage(CheckedNormalHierarchyMaskIndex<'doc>),
+}
+impl<'doc> CurrentIndex<'doc> {
+    fn row(&self, ordinal: usize) -> Option<&NormalHierarchyRow<'doc>> {
+        match self {
+            Self::Zero(v) => v.row(ordinal),
+            Self::Coverage(v) => v.row(ordinal),
+        }
+    }
+}
 /// Bounded original Source preparation under the caller's original Index/work ledger.
 pub struct LeasedNormalHierarchyPipeline<S, L> {
     _plan: Plan<L>,
@@ -124,18 +185,63 @@ impl<S, L> LeasedNormalHierarchyPipeline<S, L> {
             compile(doc, &index, Purpose::Source, std::mem::size_of::<Self>() as u64, i, &mut SharedBudget(original)).map_err(preparation_error)?;
         Ok(Self { _plan: plan, _source: source, _lease: lease })
     }
+    /// Distinct original Source role; only the complete actual-tree coverage token admits masks.
+    pub fn new_masked_source_budgeted<B: HierarchyPreparationBudget<Lease = L>>(
+        doc: &Document,
+        i: &Interrupt<'_>,
+        b: &mut B,
+        source: S,
+    ) -> Result<Self, CompositionError> {
+        if !SOURCE_RELEASED {
+            return Err(CompositionError::Unsupported("normal hierarchy Source enrollment disabled"));
+        }
+        header(doc).map_err(preparation_error)?;
+        if doc.xcf_state.as_ref().map(|s| s.provenance.format_version) != Some(22) {
+            return Err(CompositionError::Unsupported("masked hierarchy Source requires actual XCF22"));
+        }
+        let cell = std::cell::RefCell::new(b);
+        let failed = std::cell::RefCell::new(None);
+        let record = |e: CompositionError| {
+            let cancelled = i.check().is_err();
+            if failed.borrow().is_none() {
+                *failed.borrow_mut() = Some(e);
+            }
+            if cancelled { BackingError::Cancelled } else { BackingError::Work }
+        };
+        let index = doc.checked_normal_hierarchy_mask_index_with_reservation(
+            NormalHierarchyLimits::STANDARD,
+            i,
+            &|n| cell.borrow_mut().consume_preparation_work(n).map_err(&record),
+            &mut |n| cell.borrow_mut().reserve_hierarchy_index(n).map(|lease| SourceIndexLease { _lease: lease, bytes: n }).map_err(&record),
+        );
+        if let Some(e) = failed.into_inner() {
+            return Err(e);
+        }
+        let index = index.map_err(|e| preparation_error(E::Backing(e)))?;
+        let mut budget = SharedBudget(cell.into_inner());
+        // This completed-token accessor scans all entries; prepay its actual count.
+        let masks = doc.xcf_state.as_ref().ok_or(CompositionError::Unsupported("hierarchy state"))?.filter_masks.len();
+        charge(&mut budget, i, (masks as u64).checked_add(1).ok_or(CompositionError::Unsupported("hierarchy count"))?).map_err(preparation_error)?;
+        if index.raw_nonempty_count() == 0 {
+            return Err(CompositionError::Unsupported("masked hierarchy Source requires a raw nonempty mask"));
+        }
+        let (plan, lease) = compile(doc, &index, Purpose::MaskedSource, std::mem::size_of::<Self>() as u64, i, &mut budget).map_err(preparation_error)?;
+        Ok(Self { _plan: plan, _source: source, _lease: lease })
+    }
 }
 #[derive(Clone, Copy)]
 enum Purpose {
     Source,
     Current,
+    MaskedSource,
+    MaskedCurrent,
 }
 impl Purpose {
     fn source_topology(self) -> bool {
-        matches!(self, Self::Source)
+        matches!(self, Self::Source | Self::MaskedSource)
     }
     fn allows_mixed_opacity(self) -> bool {
-        matches!(self, Self::Current)
+        matches!(self, Self::Current | Self::MaskedCurrent)
     }
 }
 struct Node<L> {
@@ -294,9 +400,9 @@ fn qualify_node(
 
     Ok(())
 }
-fn compile<P: NormalHierarchyIndexLease, B: PlanBudget>(
-    doc: &Document,
-    index: &CheckedNormalHierarchyIndex<'_, P>,
+fn compile<'doc, P: TreeIndex<'doc>, B: PlanBudget>(
+    doc: &'doc Document,
+    index: &P,
     purpose: Purpose,
     outer: u64,
     i: &Interrupt<'_>,
@@ -429,11 +535,52 @@ fn compile<P: NormalHierarchyIndexLease, B: PlanBudget>(
                     if found_nodes > 4096 {
                         return Err(scope());
                     }
-                    for node in &stack.nodes {
-                        qualify_node(node, purpose, bounds, i, b)?;
+                    let bindings = index.bindings_for_stack(si);
+                    if matches!(purpose, Purpose::MaskedSource | Purpose::MaskedCurrent) && bindings.map(|v| v.len()) != Some(stack.nodes.len()) {
+                        return Err(scope());
+                    }
+                    for (ni, node) in stack.nodes.iter().enumerate() {
+                        let raw = if let Some(bindings) = bindings {
+                            charge(b, i, 512)?;
+                            let binding = bindings.get(ni).ok_or_else(length)?;
+                            if binding.leaf_ordinal != row.ordinal || binding.stack_index != si || binding.node_index != ni || binding.filter_id != node.id {
+                                return Err(scope());
+                            }
+                            binding.classification == photocraft_doc::xcf_filter_masks::FilterMaskCoverageClass::RawNonemptyCoverage
+                        } else {
+                            false
+                        };
+                        if raw {
+                            crate::gimp_masked_mixed::canonical(node, bounds).map_err(E::Color)?;
+                        } else {
+                            qualify_node(node, purpose, bounds, i, b)?;
+                        }
                     }
                     if stack.nodes.is_empty() {
                         (None, None)
+                    } else if let Some(bindings) = bindings {
+                        // Private temporary node-order references are prepaid before allocation.
+                        let bytes = bindings
+                            .len()
+                            .checked_mul(2)
+                            .and_then(|n| n.checked_mul(std::mem::size_of::<(&photocraft_doc::FilterMask, bool)>()))
+                            .and_then(|n| n.checked_add(std::mem::size_of::<Vec<(&photocraft_doc::FilterMask, bool)>>() + 128))
+                            .ok_or_else(length)?;
+                        let binding_fee = b.reserve(bytes as u64)?;
+                        let mut pairs = Vec::new();
+                        pairs.try_reserve_exact(bindings.len()).map_err(|_| E::Allocation)?;
+                        if pairs.capacity() > bindings.len().checked_mul(2).ok_or_else(length)? {
+                            return Err(E::Allocation);
+                        }
+                        for binding in bindings {
+                            charge(b, i, 1)?;
+                            pairs
+                                .push((binding.mask, binding.classification == photocraft_doc::xcf_filter_masks::FilterMaskCoverageClass::RawNonemptyCoverage));
+                        }
+                        let result = RootPointPlan::prepare_masked(stack, &pairs, format, bounds, purpose.allows_mixed_opacity(), i, b)?;
+                        drop(pairs);
+                        drop(binding_fee);
+                        (Some(result.0), Some(result.1))
                     } else {
                         let (p, l) = RootPointPlan::prepare(stack, format, bounds, purpose.allows_mixed_opacity(), i, b)?;
                         (Some(p), Some(l))
@@ -506,7 +653,7 @@ fn compile<P: NormalHierarchyIndexLease, B: PlanBudget>(
 pub(crate) struct Context<'a> {
     owner: &'a AccountedDocument,
     plan: Plan<QuotaLease>,
-    index: CheckedNormalHierarchyIndex<'a>,
+    index: CurrentIndex<'a>,
     limits: NormalBandLimits,
     _lease: QuotaLease,
 }
@@ -527,7 +674,25 @@ impl<'a> Context<'a> {
             c.interrupt,
             &mut NativeBudget { quota: owner.quota(), control: c },
         )?;
-        Ok(Self { owner, plan, index, limits, _lease: lease })
+        Ok(Self { owner, plan, index: CurrentIndex::Zero(index), limits, _lease: lease })
+    }
+    pub(crate) fn new_current(owner: &'a AccountedDocument, limits: NormalBandLimits, c: &ReadControl<'_>) -> Result<Self, E> {
+        let max = NormalBandLimits::default();
+        if limits.max_rows == 0 || limits.max_rows > max.max_rows || limits.max_pixels == 0 || limits.max_pixels > max.max_pixels {
+            return Err(scope());
+        }
+        header(owner.document())?;
+        owner.validate_readonly_normal_hierarchy_current_storage(c).map_err(E::Backing)?;
+        let index = owner.checked_readonly_normal_hierarchy_current_index(c).map_err(E::Backing)?;
+        let (plan, lease) = compile(
+            owner.document(),
+            &index,
+            Purpose::MaskedCurrent,
+            std::mem::size_of::<Self>() as u64,
+            c.interrupt,
+            &mut NativeBudget { quota: owner.quota(), control: c },
+        )?;
+        Ok(Self { owner, plan, index: CurrentIndex::Coverage(index), limits, _lease: lease })
     }
     pub(crate) fn bounds(&self) -> Rect {
         self.plan.bounds
@@ -547,5 +712,5 @@ impl<'a> Context<'a> {
 }
 
 #[cfg(test)]
-#[path="backed_normal_hierarchy_tests.rs"]
+#[path = "backed_normal_hierarchy_tests.rs"]
 mod tests;

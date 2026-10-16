@@ -280,6 +280,9 @@ impl AccountedHistory {
     }
 }
 impl AccountedDocument {
+    /// Exact storage identity hint; edit validation remains mandatory.
+    pub fn is_legacy_storage(&self)->bool{self.owner._storage_class==StorageClass::Legacy}
+
     /// Existing `from_owned` owner/Arc index envelope. The codec's physical
     /// document/native storage guard is separate; this value grants no receipt
     /// or authority and performs no allocation or model traversal.

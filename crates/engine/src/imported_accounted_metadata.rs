@@ -149,7 +149,7 @@ impl<'a> Request<'a> {
             Target::Name(name) => {
                 let mut found = None;
                 if owner.is_readonly_normal_hierarchy_storage(){
-                    let index=owner.checked_readonly_normal_hierarchy_index(control)?;
+                    let index=owner.checked_readonly_normal_hierarchy_current_index(control)?;
                     for row in index.rows().iter().rev(){if same_name(&row.layer.name,name,control)?{found=Some(row.layer.id);break;}}
                 } else if matches!(MetadataPolicy::for_owner(owner), MetadataPolicy::IsolatedNormalGroup | MetadataPolicy::GaussianGroup) {
                     if owner.is_readonly_gaussian_group_storage() { owner.validate_gaussian_group_storage(control)?; }

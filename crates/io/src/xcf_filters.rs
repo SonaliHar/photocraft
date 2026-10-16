@@ -639,6 +639,11 @@ pub(crate) fn qualified_ordered_masked_filtered_flat_source_stack<P>(effects:&[E
  let first=*domains.first().ok_or_else(||IoError::Unsupported("masked mixed domain".into()))?;
  qualified_stack_with_activation(effects,masks,owner,first_id,version,first,StackActivation::OrderedMaskedFilteredFlatSource,Some(domains))
 }
+pub(crate) fn qualified_ordered_masked_normal_hierarchy_source_stack<P>(effects:&[Effect<P>],masks:&[Option<ItemRef>],domains:&[NeighborhoodDomain],owner:ItemRef,first_id:u64,version:u32)->Result<FilterStack,IoError>{
+ if effects.is_empty()||effects.len()>1024||effects.len()!=domains.len(){return Err(IoError::Unsupported("masked hierarchy ordered domains".into()));}
+ let first=*domains.first().ok_or_else(||IoError::Unsupported("masked hierarchy domain".into()))?;
+ qualified_stack_with_activation(effects,masks,owner,first_id,version,first,StackActivation::OrderedMaskedNormalHierarchySource,Some(domains))
+}
 /// Existing singleton envelope functions remain enabled-only. No input is
 /// normalized and all typed arguments and complete Replace fields stay exact.
 pub(crate) fn filtered_flat_source_envelope<P>(effect:&Effect<P>)->bool {
@@ -715,7 +720,7 @@ pub(crate) fn qualified_filtered_flat_source_stack<P>(
     qualified_stack_with_activation(effects,masks,owner,first_id,version,domain,StackActivation::FilteredFlatSource,None)
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum StackActivation { Strict, OwnedNeighborhood, FilteredFlatSource, OrderedFilteredFlatSource, OrderedFilteredFlatOpacitySource,OrderedMaskedFilteredFlatSource }
+enum StackActivation { Strict, OwnedNeighborhood, FilteredFlatSource, OrderedFilteredFlatSource, OrderedFilteredFlatOpacitySource,OrderedMaskedFilteredFlatSource,OrderedMaskedNormalHierarchySource }
 /// Private owned-only activation mapping. The original whole-file source gate,
 /// shared preparation and exact current recipe are independent requirements.
 /// Only a successfully admitted sealed owned neighborhood route calls this;
@@ -744,7 +749,7 @@ fn qualified_stack_with_activation<P>(
         return Err(IoError::Unsupported("observational Box source envelope".into()));
     }
     let opacity_source=activation==StackActivation::OrderedFilteredFlatOpacitySource;
-    let ordered_mixed=matches!(activation,StackActivation::OrderedFilteredFlatSource|StackActivation::OrderedFilteredFlatOpacitySource|StackActivation::OrderedMaskedFilteredFlatSource);
+    let ordered_mixed=matches!(activation,StackActivation::OrderedFilteredFlatSource|StackActivation::OrderedFilteredFlatOpacitySource|StackActivation::OrderedMaskedFilteredFlatSource|StackActivation::OrderedMaskedNormalHierarchySource);
     let mixed_source=ordered_mixed || activation==StackActivation::FilteredFlatSource;
     let mixed_envelope=|effect:&Effect<P>| if opacity_source {filtered_flat_opacity_source::envelope(effect)}else{filtered_flat_source_envelope(effect)};
     let generic_replace = matches!(domain, NeighborhoodDomain::PointReplace(_));
@@ -790,7 +795,7 @@ fn qualified_stack_with_activation<P>(
         }
         let masked_mixed_kind=if let NeighborhoodDomain::MaskedMixed(k)=domain{Some(k)}else{None};
         let masked_mixed=masked_mixed_kind.is_some();
-        if masked_mixed&&(!generic_replace||activation!=StackActivation::OrderedMaskedFilteredFlatSource||!filtered_flat_source_envelope(effect)||masked_mixed_source::parameters(effect)!=masked_mixed_kind){return Err(unsupported(effect,"masked mixed exact leaf"));}
+        if masked_mixed&&(!generic_replace||!matches!(activation,StackActivation::OrderedMaskedFilteredFlatSource|StackActivation::OrderedMaskedNormalHierarchySource)||!filtered_flat_source_envelope(effect)||masked_mixed_source::parameters(effect)!=masked_mixed_kind){return Err(unsupported(effect,"masked mixed exact leaf"));}
         let masked_scalar_kind=match domain{
             NeighborhoodDomain::InvertLinearMaskedPoint=>Some(crate::xcf_point_replace_source::masked_stock_source::Kind::InvertLinear),
             NeighborhoodDomain::InvertGammaMaskedPoint=>Some(crate::xcf_point_replace_source::masked_stock_source::Kind::InvertGamma),

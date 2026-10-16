@@ -16,7 +16,7 @@ fn render_error(error: BackedNormalError, control: &ReadControl<'_>) -> EngineEr
     }
 }
 pub(crate) fn validate_current_normal_hierarchy_storage(owner: &AccountedDocument, control: &ReadControl<'_>) -> Result<()> {
-    owner.validate_readonly_normal_hierarchy_storage(control)?;
+    owner.validate_readonly_normal_hierarchy_current_storage(control)?;
     let prepared = photocraft_compose::backed_normal_hierarchy_document::PreparedBackedNormalHierarchyDocument::new(owner, Default::default(), control)
         .map_err(|e| render_error(e, control))?;
     prepared.validate_operative(control).map_err(|e| render_error(e, control))?;

@@ -401,3 +401,6 @@ fn changed_copy_fences_and_shared_noop() {
     assert_eq!(q.usage().unwrap(), before);
     assert_eq!(owner.document().name, "tree");
 }
+
+#[path="accounted_normal_hierarchy_mask_tests.rs"]
+mod masked_current_tests;

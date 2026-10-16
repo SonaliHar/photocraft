@@ -290,3 +290,10 @@ enum NativeAlphaCheck {
     OrdinaryLocks,
     VerifyRawPreservation,
 }
+
+/// Shared internal raw-alpha verification for the closed native Round brush
+/// transaction. It grants no public NativePixels bypass or caller-asserted flag.
+pub(crate) fn verify_native_stroke_alpha(owner:&AccountedDocument,layer:photocraft_doc::LayerId,rect:photocraft_geom::Rect,bytes:&[u8],control:&ReadControl<'_>)->Result<()>{
+    let _proof=VerifiedNativeAlpha::verify(owner,AccountedEdit::NativePixels{layer,rect,bytes},control)?;
+    control.check(1)?;Ok(())
+}

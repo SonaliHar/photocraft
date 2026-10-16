@@ -4,6 +4,7 @@ use super::*;
 #[derive(Default)]
 pub(super) struct AdmissionDomains {
     pub(super) normal_hierarchy_domain:bool,
+    pub(super) masked_normal_hierarchy_domain:bool,
     pub(super) filtered_flat_domain: bool,
     pub(super) masked_filtered_flat_domain: bool,
     pub(super) filtered_flat_opacity_domain: bool,
@@ -83,6 +84,7 @@ pub(super) fn classify(file: &XcfFile, ctl: &Interrupt<'_>, preparation: Option<
     let composition_command_domain = qualified_composition_command(file);
     Ok(AdmissionDomains {
         normal_hierarchy_domain:false,
+        masked_normal_hierarchy_domain:false,
         filtered_flat_domain:false,masked_filtered_flat_domain:false,
         filtered_flat_opacity_domain:false,
         observed_box_geometry_domain:false,

@@ -678,6 +678,7 @@ pub struct Session {
     pub journal: Vec<(String, Value)>,
     /// Coalescing key of the command being executed.
     coalesce_request: Option<String>,
+    native_stroke_work: Option<std::sync::Arc<accounted_native_stroke::NativeStrokeWork>>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
     pub clipboard: Option<edit_cmds::Clip>,
     /// Layer › Layer Style › Copy Layer Style: effects, blend mode, fill opacity and the Advanced
@@ -1529,3 +1530,10 @@ mod normal_hierarchy_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="accounted_normal_hierarchy_native_tests.rs"]
 mod normal_hierarchy_native_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_masked_normal_hierarchy_tests.rs"]
+mod accounted_masked_normal_hierarchy_tests;
+
+mod accounted_native_stroke;
+pub use accounted_native_stroke::{AccountedNativeStrokeTarget,capture_accounted_native_stroke_target};

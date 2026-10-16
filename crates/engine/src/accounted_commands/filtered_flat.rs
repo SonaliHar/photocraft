@@ -12,7 +12,7 @@ use photocraft_doc::{
 enum Route { Original, Masked, Hierarchy }
 impl Route {
  fn owner(o:&AccountedDocument)->Option<Self>{if o.is_readonly_normal_hierarchy_storage(){Some(Self::Hierarchy)}else if o.is_readonly_masked_filtered_flat_point_storage(){Some(Self::Masked)}else if o.is_readonly_filtered_flat_point_storage(){Some(Self::Original)}else{None}}
- fn validate(self,o:&AccountedDocument,c:&ReadControl<'_>)->Result<()>{if Self::owner(o)!=Some(self){return Err(BackingError::Unsupported.into())}match self{Self::Original=>Ok(o.validate_readonly_filtered_flat_point_storage(c)?),Self::Masked=>Ok(o.validate_readonly_masked_filtered_flat_point_storage(c)?),Self::Hierarchy=>Ok(o.validate_readonly_normal_hierarchy_storage(c)?)}}
+ fn validate(self,o:&AccountedDocument,c:&ReadControl<'_>)->Result<()>{if Self::owner(o)!=Some(self){return Err(BackingError::Unsupported.into())}match self{Self::Original=>Ok(o.validate_readonly_filtered_flat_point_storage(c)?),Self::Masked=>Ok(o.validate_readonly_masked_filtered_flat_point_storage(c)?),Self::Hierarchy=>Ok(o.validate_readonly_normal_hierarchy_current_storage(c)?)}}
  fn recipe(self,o:&AccountedDocument,c:&ReadControl<'_>)->Result<()>{if Self::owner(o)!=Some(self){return Err(BackingError::Unsupported.into())}match self{Self::Original=>crate::accounted_xcf_open::filtered_flat::validate_current_filtered_flat_storage(o,c),Self::Masked=>crate::accounted_xcf_open::masked_filtered_flat::validate_current_masked_filtered_flat_storage(o,c),Self::Hierarchy=>crate::accounted_xcf_open::normal_hierarchy::validate_current_normal_hierarchy_storage(o,c)}}
 }
 fn masked_kind(n:&photocraft_doc::xcf_filters::FilterNode)->Option<photocraft_compose::MaskedMixedKind>{
@@ -25,7 +25,7 @@ fn masked_kind(n:&photocraft_doc::xcf_filters::FilterNode)->Option<photocraft_co
  "gegl:levels"=>(K::GeglLevels,"0:0",photocraft_compose::GEGL_LEVELS_MASKED_MIXED_EPOCH),_=>return None};
  (n.operation.stored_version==v&&n.operation.schema_epoch==e&&n.composition.as_ref().is_some_and(|p|p.compatibility_epoch==e)&&photocraft_compose::masked_mixed_parameters(k,&n.arguments).is_ok()).then_some(k)
 }
-fn route_family(r:Route,n:&photocraft_doc::xcf_filters::FilterNode)->Option<u8>{if r==Route::Masked {if let Some(k)=masked_kind(n){use photocraft_compose::MaskedMixedKind as K;return Some(match k{K::Exposure=>3,K::InvertLinear=>4,K::InvertGamma=>5,K::BrightnessContrast=>6,K::GeglLevels=>7})}}family(n)}
+fn route_family(r:Route,n:&photocraft_doc::xcf_filters::FilterNode)->Option<u8>{if matches!(r,Route::Masked|Route::Hierarchy) {if let Some(k)=masked_kind(n){use photocraft_compose::MaskedMixedKind as K;return Some(match k{K::Exposure=>3,K::InvertLinear=>4,K::InvertGamma=>5,K::BrightnessContrast=>6,K::GeglLevels=>7})}}family(n)}
 
 pub(super) const REPLY_ENVELOPE: u64 = 8192;
 #[derive(Clone, Copy)]
@@ -250,7 +250,7 @@ pub fn hierarchy_candidate(owner:&AccountedDocument,layer:LayerId,node:&photocra
  if !owner.is_readonly_normal_hierarchy_storage(){return false} candidate_route(Route::Hierarchy,owner,layer,node)
 }
 fn candidate_route(route:Route,owner:&AccountedDocument,layer:LayerId,node:&photocraft_doc::xcf_filters::FilterNode)->bool{
-    if Route::owner(owner)!=Some(route) || node.id.0==0 || !(valid_node(node)||route==Route::Masked&&masked_kind(node).is_some()&&node.opacity_f64_bits==1.0f64.to_bits()) {
+    if Route::owner(owner)!=Some(route) || node.id.0==0 || !(valid_node(node)||matches!(route,Route::Masked|Route::Hierarchy)&&masked_kind(node).is_some()&&node.opacity_f64_bits==1.0f64.to_bits()) {
         return false;
     }
     let doc = owner.document();
@@ -286,7 +286,7 @@ fn context(session: &Session, id: &str, params: &Value) -> Result<()> {
 struct TreeWitness{ordinal:usize,parent:Option<usize>,canonical:usize}
 fn tree_witness(owner:&AccountedDocument,layer:LayerId,c:&ReadControl<'_>)->Result<Option<TreeWitness>>{
  if !owner.is_readonly_normal_hierarchy_storage(){return Ok(None)}
- let index=owner.checked_readonly_normal_hierarchy_index(c)?;
+ let index=owner.checked_readonly_normal_hierarchy_current_index(c)?;
  let mut found=None;
  for row in index.rows(){c.check(1)?;if row.layer.id==layer{
    if found.is_some()||!matches!(row.layer.content,photocraft_doc::LayerContent::BackedRaster(_)){return Err(BackingError::Integrity.into())}
@@ -426,7 +426,7 @@ impl<'a> Request<'a> {
         self.route.recipe(owner, ctl)?;
         let (stack, node, layer,node_index,tree) = target(owner, self.fields.filter, ctl)?;
         let kind = route_family(self.route,node).ok_or(BackingError::Unsupported)?;
-        if self.route==Route::Masked && masked_kind(node).is_some() && self.fields.opacity.is_some_and(|b|b!=1.0f64.to_bits()){return Err(BackingError::Unsupported.into())}
+        if matches!(self.route,Route::Masked|Route::Hierarchy) && masked_kind(node).is_some() && self.fields.opacity.is_some_and(|b|b!=1.0f64.to_bits()){return Err(BackingError::Unsupported.into())}
         if self.fields.count > patch_limit(kind) {
             return Err(bad(self.id, "argument count exceeds the target family"));
         }

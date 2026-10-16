@@ -18,10 +18,10 @@ pub enum StrokeError{Cancelled,InvalidInput(&'static str),Unsupported(&'static s
 impl std::fmt::Display for StrokeError{fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result{match self{Self::Cancelled=>f.write_str("stroke cancelled"),Self::InvalidInput(s)=>write!(f,"invalid stroke: {s}"),Self::Unsupported(s)=>write!(f,"unsupported stroke: {s}"),Self::Limit=>f.write_str("stroke resource limit"),Self::Allocation=>f.write_str("stroke allocation failed"),Self::Raster=>f.write_str("invalid stroke raster")}}}
 impl std::error::Error for StrokeError{}
 type Result<T>=std::result::Result<T,StrokeError>;
-struct Budget<'a,'b>{control:&'a Interrupt<'b>,limits:StrokeLimits,work:u64}
+struct Budget<'a,'b>{control:&'a Interrupt<'b>,limits:StrokeLimits,work:u64,forward:Option<&'a dyn Fn(u64)->Result<()>>}
 impl Budget<'_,'_>{
-    fn poll(&self)->Result<()>{self.control.check().map_err(|_|StrokeError::Cancelled)}
-    fn tick(&mut self,n:u64)->Result<()>{self.poll()?;self.work=self.work.checked_add(n).filter(|n|*n<=self.limits.work_units).ok_or(StrokeError::Limit)?;Ok(())}
+    fn poll(&self)->Result<()>{self.control.check().map_err(|_|StrokeError::Cancelled)?;if let Some(forward)=self.forward{forward(0)?;}Ok(())}
+    fn tick(&mut self,n:u64)->Result<()>{self.poll()?;if let Some(forward)=self.forward{forward(n)?;}self.work=self.work.checked_add(n).filter(|n|*n<=self.limits.work_units).ok_or(StrokeError::Limit)?;Ok(())}
     fn vector<T>(&self,n:usize)->Result<Vec<T>>{self.poll()?;let bytes=n.checked_mul(size_of::<T>()).ok_or(StrokeError::Limit)?;if bytes as u64>self.limits.resident_bytes{return Err(StrokeError::Limit);}let mut out=Vec::new();out.try_reserve_exact(n).map_err(|_|StrokeError::Allocation)?;if out.capacity().checked_mul(size_of::<T>()).is_none_or(|v|v>bytes){return Err(StrokeError::Limit);}Ok(out)}
     fn raster<T>(&self,value:std::result::Result<T,photocraft_raster::RasterInputError>)->Result<T>{value.map_err(|error|match error{photocraft_raster::RasterInputError::Cancelled=>StrokeError::Cancelled,photocraft_raster::RasterInputError::AllocationFailed=>StrokeError::Allocation,photocraft_raster::RasterInputError::LimitExceeded=>StrokeError::Limit,_=>if self.control.cancelled(){StrokeError::Cancelled}else{StrokeError::Raster}})}
 }
@@ -382,7 +382,7 @@ fn composite_keys(ctx:&BrushContext,cov:&CoverageMap,dual:Option<&CoverageMap>,k
 /// dirty-set publication. Both ordinary one-shot and live routes share math.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn composite_existing_with_interrupt(ctx:&BrushContext,cov:&CoverageMap,dual:Option<&CoverageMap>,keys:&[(i32,i32)],pre:&Surface,target:&Surface,selection:Option<&Surface>,lock_transparency:bool,limits:StrokeLimits,control:&Interrupt<'_>)->Result<Surface>{
-    let mut budget=Budget{control,limits,work:0};budget.poll()?;
+    let mut budget=Budget{control,limits,work:0,forward:None};budget.poll()?;
     let mut output=clone_surface(target,&mut budget)?;
     composite_keys(ctx,cov,dual,keys,pre,&mut output,selection,lock_transparency,&mut budget)?;
     budget.poll()?;Ok(output)
@@ -391,7 +391,7 @@ pub(super) fn composite_existing_with_interrupt(ctx:&BrushContext,cov:&CoverageM
 /// one private native surface. Equations mirror legacy read_region/write_region.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn composite_existing_with_restore_with_interrupt(ctx:&BrushContext,cov:&CoverageMap,dual:Option<&CoverageMap>,keys:&[(i32,i32)],before:Rect,pre:&Surface,target:&Surface,selection:Option<&Surface>,lock_transparency:bool,limits:StrokeLimits,control:&Interrupt<'_>)->Result<Surface>{
-    let mut budget=Budget{control,limits,work:0};budget.poll()?;
+    let mut budget=Budget{control,limits,work:0,forward:None};budget.poll()?;
     let standard=StrokeLimits::default();let format=target.format();
     if limits.resident_bytes>standard.resident_bytes||limits.work_units>standard.work_units{return Err(StrokeError::Limit);}
     if pre.format()!=format||!matches!(format.sample,SampleType::U8|SampleType::U16|SampleType::F32)||format.channels()==0||format.channels()>8{return Err(StrokeError::Unsupported("ordinary union native format"));}
@@ -428,7 +428,7 @@ pub fn apply_stroke_with_interrupt(target:&mut Surface,stroke:&Stroke,selection:
 /// Fixed straight preset reflection, preserving upstream pass order and stylus fields.
 /// Path-based engine symmetry is a separate caller-owned geometry policy.
 pub fn reflected_passes_with_interrupt(symmetry:crate::symmetry::PresetSymmetry,points:&[StrokePoint],limits:StrokeLimits,control:&Interrupt<'_>)->Result<Vec<Vec<StrokePoint>>>{
-    let mut budget=Budget{control,limits,work:0};budget.poll()?;
+    let mut budget=Budget{control,limits,work:0,forward:None};budget.poll()?;
     if limits.resident_bytes>photocraft_raster::MAX_CHECKED_RASTER_BYTES||limits.work_units>MAX_WORK{return Err(StrokeError::Limit);}
     if points.len()>MAX_POINTS || !symmetry.rotation.is_finite() || symmetry.center.iter().any(|v|!v.is_finite()||v.abs()>crate::symmetry::MAX_COORDINATE){return Err(StrokeError::InvalidInput("symmetry geometry"));}
     let count=symmetry.mirror_count();
@@ -453,7 +453,7 @@ pub fn reflected_passes_with_interrupt(symmetry:crate::symmetry::PresetSymmetry,
 /// before opacity/selection/native compositing once; equal coverage keeps the first
 /// pass's color, while wet-edge depth takes its independent upstream maximum.
 pub fn render_stroke_passes_with_interrupt(target:&mut Surface,brush:&BrushSettings,passes:&[&[StrokePoint]],selection:Option<&Surface>,lock_transparency:bool,zoom:f32,limits:StrokeLimits,control:&Interrupt<'_>)->Result<Rect>{
-    let mut budget=Budget{control,limits,work:0};budget.poll()?;
+    let mut budget=Budget{control,limits,work:0,forward:None};budget.poll()?;
     if limits.resident_bytes>photocraft_raster::MAX_CHECKED_RASTER_BYTES||limits.work_units>MAX_WORK||passes.len()>4{return Err(StrokeError::Limit);}
     let count=passes.iter().filter(|p|!p.is_empty()).count();if count==0{return Ok(Rect::EMPTY);}
     let total_points=passes.iter().try_fold(0usize,|n,p|n.checked_add(p.len()).ok_or(StrokeError::Limit))?;
@@ -498,7 +498,7 @@ fn union_max_controlled(to:&mut CoverageMap,other:CoverageMap,merge_limit:u64,bu
 }
 pub fn render_stroke_with_interrupt(target:&mut Surface,brush:&BrushSettings,points:&[StrokePoint],selection:Option<&Surface>,lock_transparency:bool,zoom:f32,limits:StrokeLimits,control:&Interrupt<'_>)->Result<Rect>{
     // Single-pass keeps its previous admitted maximum and exact equations.
-    let mut budget=Budget{control,limits,work:0};budget.poll()?;if limits.resident_bytes>photocraft_raster::MAX_CHECKED_RASTER_BYTES||limits.work_units>MAX_WORK{return Err(StrokeError::Limit);}if points.is_empty(){return Ok(Rect::EMPTY);}
+    let mut budget=Budget{control,limits,work:0,forward:None};budget.poll()?;if limits.resident_bytes>photocraft_raster::MAX_CHECKED_RASTER_BYTES||limits.work_units>MAX_WORK{return Err(StrokeError::Limit);}if points.is_empty(){return Ok(Rect::EMPTY);}
     let(ctx,cov,dual)=prepare_pass(target,brush,points,selection,zoom,&mut budget)?;
     let mut output=clone_surface(target,&mut budget)?;let damage=composite(&ctx,&cov,brush.dual_brush.enabled.then_some(&dual),target,&mut output,selection,lock_transparency,&mut budget)?;budget.poll()?;*target=output;Ok(damage)
 }
@@ -562,7 +562,7 @@ mod tests {
         let mut brush=BrushSettings{size:5.0,pressure_size:false,seed:11,..Default::default()};
         brush.tip=TipShape::Sampled(crate::GrayTile::from_fn(3,2,|x,y|(x+y) as f32/3.0));brush.texture.enabled=true;brush.texture.pattern=Pattern::Tile(crate::GrayTile::from_fn(2,3,|x,y|(x+y) as f32/3.0));brush.smoothing.amount=0.3;
         let points=[StrokePoint::new(2.0,3.0,1.0),StrokePoint{x:9.0,y:8.0,time:32.0,..Default::default()},StrokePoint{x:5.0,y:12.0,time:64.0,..Default::default()}];
-        let stroke=Stroke{brush:brush.clone(),points:points.to_vec()};let mut budget=Budget{control:&Interrupt::NONE,limits:StrokeLimits::default(),work:0};
+        let stroke=Stroke{brush:brush.clone(),points:points.to_vec()};let mut budget=Budget{control:&Interrupt::NONE,limits:StrokeLimits::default(),work:0,forward:None};
         let numeric=numeric_brush(&brush);let(dabs,_)=generate(&numeric,&points,1.0,100_000,100_000,0,&mut budget).unwrap();assert_eq!(dabs,crate::dabs(&stroke));
         let mut expected=Surface::new(PixelFormat::RGBA32F);let mut actual=expected.clone();let damage=super::super::render_stroke(&mut expected,&brush,&points,None,false,1.0);
         assert_eq!(render_stroke_with_interrupt(&mut actual,&brush,&points,None,false,1.0,StrokeLimits::default(),&Interrupt::NONE).unwrap(),damage);assert_eq!(actual,expected);
@@ -621,3 +621,6 @@ mod tests {
         let mut wide=Surface::new(PixelFormat::new(photocraft_color::ColorMode::Rgb,SampleType::F64,true));let before=wide.clone();assert!(matches!(render_stroke_with_interrupt(&mut wide,&brush,&points,None,false,1.0,StrokeLimits::default(),&Interrupt::NONE),Err(StrokeError::Unsupported(_))));assert_eq!(wide,before);
     }
 }
+
+#[path="native_stroke_controlled.rs"]
+pub mod native;

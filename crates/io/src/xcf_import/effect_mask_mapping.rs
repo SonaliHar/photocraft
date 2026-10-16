@@ -51,6 +51,11 @@ pub(super) fn map_masked_filtered_flat_source<P:MappingPlane>(drawable:&mut Draw
  map_inner(drawable,owner,first_filter,next_mask,state,budget,ctl,false,false,false,false,false,Some(canvas),None,Some((source_budget,false)))
 }
 #[allow(clippy::too_many_arguments)]
+pub(super) fn map_masked_normal_hierarchy_source<P:MappingPlane>(drawable:&mut Drawable<P>,owner:photocraft_doc::item_identity::ItemRef,first_filter:u64,next_mask:&mut u64,state:&mut photocraft_doc::XcfState,budget:&mut Budget,ctl:&Interrupt<'_>,canvas:Rect,source_budget:&photocraft_xcf::Budget<'_>)->Result<Vec<Option<photocraft_doc::item_identity::ItemRef>>,IoError>{
+ if drawable.effects.len()>1024{return Err(unsupported(drawable,"masked hierarchy perroot nodes"));}
+ map_inner(drawable,owner,first_filter,next_mask,state,budget,ctl,false,false,false,false,false,Some(canvas),None,Some((source_budget,false)))
+}
+#[allow(clippy::too_many_arguments)]
 fn map_inner<P: MappingPlane>(
     drawable: &mut Drawable<P>,
     owner: photocraft_doc::item_identity::ItemRef,

@@ -80,7 +80,7 @@ impl MetadataPolicy {
             Self::ObservedBox => if owner.is_readonly_assigned_point_storage() { Ok(owner.validate_readonly_assigned_point_storage(c)?) } else { Ok(owner.validate_readonly_point_storage(c)?) },
             Self::FilteredFlat => Ok(owner.validate_readonly_filtered_flat_point_storage(c)?),
             Self::MaskedFilteredFlat=>Ok(owner.validate_readonly_masked_filtered_flat_point_storage(c)?),
-            Self::NormalHierarchy=>Ok(owner.validate_readonly_normal_hierarchy_storage(c)?),
+            Self::NormalHierarchy=>Ok(owner.validate_readonly_normal_hierarchy_current_storage(c)?),
             Self::FlatComposite => Ok(owner.validate_readonly_flat_composite_storage(c)?),
             Self::AssignedGeometry => Ok(owner.validate_assigned_analytic_geometry_storage(c)?),
             Self::IsolatedNormalGroup => Ok(owner.validate_assigned_isolated_normal_group_storage(c)?),

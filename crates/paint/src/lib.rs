@@ -366,3 +366,6 @@ mod tests {
 
 #[cfg(test)]
 mod brush_tests;
+
+/// Closed paid native patch producer over borrowed checked raster storage.
+pub use render::native_stroke_controlled;

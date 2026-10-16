@@ -192,6 +192,7 @@ pub fn import_owned_xcf_bytes_in_quota(
     let family = source.family();
     let context = Context { quota: quota.clone(), control };
     match family {
+        staged_selected_source::SelectedStagedFamily::MaskedNormalHierarchy=>owned_normal_hierarchy_source::promote_masked_source(source,&budget,quota,control,&mut preparation.hold).map(OwnedXcfImport::NormalHierarchy),
         staged_selected_source::SelectedStagedFamily::NormalHierarchy=>owned_normal_hierarchy_source::promote_source(source,&budget,quota,control,&mut preparation.hold).map(OwnedXcfImport::NormalHierarchy),
         staged_selected_source::SelectedStagedFamily::MaskedFilteredFlat => owned_masked_filtered_flat_source::promote_source(source,&budget,quota,control,&mut preparation.hold).map(OwnedXcfImport::MaskedFilteredFlat),
         staged_selected_source::SelectedStagedFamily::FilteredFlat | staged_selected_source::SelectedStagedFamily::FilteredFlatOpacity => owned_filtered_flat_source::promote_source(source,&budget,quota,control,&mut preparation.hold).map(OwnedXcfImport::FilteredFlat),

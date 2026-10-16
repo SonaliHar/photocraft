@@ -704,13 +704,14 @@ impl Session {
 
     /// Run the command `id`: inline, or (with `background`) as a job when it is one.
     pub(crate) fn dispatch(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
+        let captured_native_work=self.native_stroke_work.take();
         if id != "select.loadSelection" {
             self.stored_load_offer = None;
         }
         if id != "paint.colorReplacement" {
             self.clear_native_color_replacement();
         }
-        let result = self.dispatch_inner(id, params, background);
+        let result = self.dispatch_inner(id, params, background,captured_native_work);
         // Offers belong to one dispatch attempt, including a refusal before
         // the command handler runs. Failed authorization cannot retain pixels
         // for a later command to adopt.
@@ -719,7 +720,7 @@ impl Session {
         result
     }
 
-    fn dispatch_inner(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
+    fn dispatch_inner(&mut self, id: &str, params: Value, background: bool,captured_native_work:Option<std::sync::Arc<crate::accounted_native_stroke::NativeStrokeWork>>) -> Result<Started> {
         let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         // Params are named fields: anything but an object (or null, meaning none) is a caller
         // mistake, not "use every default".
@@ -942,7 +943,7 @@ impl Session {
         if id == "layer.new.layer" {
             crate::new_layer::captured_preflight(self, &params)?;
         }
-        if matches!(id, "paint.stroke" | "paint.pencil") {
+        if matches!(id, "paint.stroke" | "paint.pencil") && !self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_legacy_storage()) {
             crate::brush_cmds::stroke_dispatch_preflight(self, id, &params, background || self.jobs.spawn)?;
         }
         if matches!(id, "path.clippingPath.set" | "path.clippingPath.clear") {
@@ -1174,8 +1175,9 @@ impl Session {
             }
             // Bounded native pixel, filter and assigned-geometry property preparation share one
             // immutable registered work ledger; no per-cell allowance reset.
+            let native_brush_standard=matches!(id,"paint.stroke"|"paint.pencil") && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_legacy_storage());
             let hierarchy_expanded_standard=id=="layer.setExpanded" && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage());
-            let bounded_work = hierarchy_expanded_standard || id=="layer.renameLayer" && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()))
+            let bounded_work = native_brush_standard || hierarchy_expanded_standard || id=="layer.renameLayer" && self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()))
                 || matches!(id, "edit.clear" | "edit.fill" | "layer.translate")
                 || id=="xcf.composition.set" && self.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_flat_composite_storage())
                 || id == "xcf.mask.enabled.set"
@@ -1192,11 +1194,15 @@ impl Session {
                                 && (owner.is_readonly_gaussian_group_storage() || owner.is_readonly_assigned_point_storage())
                             || matches!(id,"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move"|"xcf.filter.remove") && (owner.is_readonly_filtered_flat_point_storage() || (owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage()))
                     });
-            let registered_work = photocraft_io::accounted_operation_work::OperationWork::legacy(crate::accounted_clear::REGISTERED_WORK_LIMIT);
+            let inherited_native_work=if native_brush_standard{captured_native_work}else{None};
+            let inherited_native=inherited_native_work.is_some();
+            let fallback_work=photocraft_io::accounted_operation_work::OperationWork::legacy(crate::accounted_clear::REGISTERED_WORK_LIMIT);
+            let registered_work:&photocraft_io::accounted_operation_work::OperationWork=match inherited_native_work.as_deref(){Some(work)=>work,None=>&fallback_work};
             // This synchronous boundary has no external Interrupt. The same
             // meter deadline remains active during interrupt-only CMS/mask loops;
             // externally controlled APIs retain their original caller control.
-            let deadline = || registered_work.deadline_expired();
+            let incoming=self.jobs.inline.clone();
+            let deadline = || registered_work.deadline_expired() || native_brush_standard && incoming.as_ref().is_some_and(|ctx|ctx.cancelled());
             let interrupt = photocraft_raster::Interrupt::cancel_only(&deadline);
             // The route probe itself debits this very ledger, including for
             // history/view commands whose old dispatch debit was a no-op.
@@ -1216,7 +1222,7 @@ impl Session {
                     (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
                         && crate::accounted_native_open::is_current_box_work_candidate(owner.document(),&probe)?
                 } else {false};
-            if pure_point_standard || box_standard || mixed_rename_standard || hierarchy_expanded_standard {
+            if !inherited_native && (pure_point_standard || box_standard || mixed_rename_standard || hierarchy_expanded_standard || native_brush_standard) {
                 let limits=photocraft_xcf::ResourceLimits::for_policy(Default::default()).map_err(|error|EngineError::Other(error.to_string()))?;
                 registered_work.select_standard(&limits)?;
             }

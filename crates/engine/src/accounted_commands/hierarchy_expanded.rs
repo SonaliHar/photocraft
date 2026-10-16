@@ -17,7 +17,7 @@ impl<'a> Request<'a>{
    None|Some(Value::Null)=>Some(state.active_layer.ok_or_else(||bad("layer.setExpanded","no active layer"))?),
    Some(v)=>Some(LayerId(v.as_u64().ok_or_else(||bad("layer.setExpanded","layer must be an integer identity"))?)),
   };
-  let index=owner.checked_readonly_normal_hierarchy_index(c)?;
+  let index=owner.checked_readonly_normal_hierarchy_current_index(c)?;
   let mut any=false;let mut selected=None;let mut found_layer=false;let mut groups=0usize;
   for row in index.rows(){c.check(1)?;found_layer|=Some(row.layer.id)==layer;if let photocraft_doc::LayerContent::Group(g)=&row.layer.content{
     groups=groups.checked_add(1).ok_or(BackingError::Length)?;any|=g.expanded;

@@ -253,7 +253,7 @@ pub fn save_accounted_masked_filtered_flat_document_archive<W:Write+Seek>(owner:
 pub fn save_accounted_normal_hierarchy_document_archive<W:Write+Seek>(owner:&photocraft_doc::accounted_document::AccountedDocument,output:W,limits:OwnedDocumentLimits,quota:&BackingQuota,control:&ReadControl<'_>)->Result<W>{
     control.check(0).map_err(error)?;
     if !owner.is_readonly_normal_hierarchy_storage()||!owner.quota().shares_ledger(quota){return Err(error(BackingError::Unsupported))}
-    owner.validate_readonly_normal_hierarchy_storage(control).map_err(error)?;
+    owner.validate_readonly_normal_hierarchy_current_storage(control).map_err(error)?;
     save_current_document_archive_with_hint(owner.document(),output,limits,quota,control,Some(crate::NativeCurrentStorageHint::NormalHierarchy))
 }
 fn save_current_document_archive_with_hint<W: Write + Seek>(
@@ -294,8 +294,8 @@ fn save_current_document_archive_with_hint<W: Write + Seek>(
         None
     };
     let set=if current_storage_hint==Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint){Some(doc.checked_f32_filter_mask_coverages_with(photocraft_doc::xcf_filter_masks::MaskCoverageSetLimits::STANDARD,quota,control).map_err(error)?)}else{None};
-    let hierarchy=if current_storage_hint==Some(crate::NativeCurrentStorageHint::NormalHierarchy){Some(doc.checked_normal_hierarchy_index_with(photocraft_doc::normal_hierarchy_index::NormalHierarchyLimits::STANDARD,quota,control).map_err(error)?)}else{None};
-    let document = if let Some(index)=hierarchy.as_ref(){crate::convert::doc_m_with_normal_hierarchy_index(doc,&mut sink,index)?}else if let Some(set)=set.as_ref(){crate::convert::doc_m_with_checked_filter_masks(doc,&mut sink,set)?}else if current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
+    let hierarchy=if current_storage_hint==Some(crate::NativeCurrentStorageHint::NormalHierarchy){Some(doc.checked_normal_hierarchy_mask_index_with(photocraft_doc::normal_hierarchy_index::NormalHierarchyLimits::STANDARD,quota,control).map_err(error)?)}else{None};
+    let document = if let Some(index)=hierarchy.as_ref(){crate::convert::doc_m_with_normal_hierarchy_mask_index(doc,&mut sink,index)?}else if let Some(set)=set.as_ref(){crate::convert::doc_m_with_checked_filter_masks(doc,&mut sink,set)?}else if current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
         crate::convert::doc_m_with_checked_filter_mask(doc, &mut sink, coverage.as_ref())?
     } else {
         crate::convert::doc_m(doc, &mut sink)?

@@ -1709,6 +1709,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
 ) -> Result<(ImportResult, usize), IoError> {
     let admission::AdmissionDomains {
         normal_hierarchy_domain,
+        masked_normal_hierarchy_domain,
         filtered_flat_domain,
         masked_filtered_flat_domain,
         filtered_flat_opacity_domain,
@@ -1917,9 +1918,9 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         } else {
             modified_context.as_ref().map(|context| crate::xcf_modified_sources::validate_modified_source_with_storage(d, context, ctl)).transpose()?
         };
-        let masked_domains=if masked_filtered_flat_domain{Some(staged_source::staged_masked_filtered_flat::domains(d,file.sample,file.width,file.height,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"masked mixed domain accounting"))?)?)}else{None};
+        let masked_domains=if masked_filtered_flat_domain||masked_normal_hierarchy_domain && !d.group{Some(staged_source::staged_masked_filtered_flat::domains(d,file.sample,file.width,file.height,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"masked mixed domain accounting"))?)?)}else{None};
         let masked_root_domain=masked_domains.as_ref().and_then(|v|v.values.first().copied());
-        let filtered_root_domain=if filtered_flat_opacity_domain {Some(staged_filtered_flat::opacity::root_domain(d,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered flat opacity accounting"))?)?)} else if filtered_flat_domain || normal_hierarchy_domain && !d.group {Some(staged_filtered_flat::root_domain(d,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered flat accounting"))?)?)} else {None};
+        let filtered_root_domain=if filtered_flat_opacity_domain {Some(staged_filtered_flat::opacity::root_domain(d,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered flat opacity accounting"))?)?)} else if filtered_flat_domain || normal_hierarchy_domain && !masked_normal_hierarchy_domain && !d.group {Some(staged_filtered_flat::root_domain(d,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered flat accounting"))?)?)} else {None};
         let point_replace_domain=masked_root_domain.or(filtered_root_domain.flatten()).or(point_replace_domain);
         let effects_candidate = !d.effects.is_empty()
             && (point_replace_domain.is_some()
@@ -2116,7 +2117,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                         .checked_add(effect.version.as_ref().map_or(0, String::len))?
                         .checked_add(if any_filtered_flat_source {crate::xcf_filters::mixed_stock_source::mapping_bytes(effect)?}else{0})?
                         .checked_add(if masked_scalar_source {crate::xcf_point_replace_source::masked_stock_source::mapping_bytes(effect)?}else{0})?
-                        .checked_add(if masked_filtered_flat_domain && crate::xcf_filters::masked_mixed_source::parameters(effect).is_some(){crate::xcf_point_replace_source::masked_stock_source::mapping_bytes(effect)?}else{0})?
+                        .checked_add(if (masked_filtered_flat_domain||masked_normal_hierarchy_domain) && crate::xcf_filters::masked_mixed_source::parameters(effect).is_some(){crate::xcf_point_replace_source::masked_stock_source::mapping_bytes(effect)?}else{0})?
                         .checked_add(effect.arguments.iter().try_fold(0_usize, |n, a| {
                             n.checked_add(128)?.checked_add(a.name.len())?.checked_add(if let photocraft_xcf::ArgumentValue::Config(text) = &a.value {
                                 text.len().checked_mul(8)?
@@ -2133,7 +2134,10 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 staged_filtered_flat::work(ctl,source_budget,(d.effects.len() as u64).checked_mul(8).ok_or_else(||unsupported(d,"filtered mask count work"))?)?;
                 effect_mask_mapping::preflight_filtered_root(d,ctl)?;
             }
-            let masks = if masked_filtered_flat_domain {
+            let masks = if masked_normal_hierarchy_domain {
+                let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"masked hierarchy mask accounting"))?;
+                effect_mask_mapping::map_masked_normal_hierarchy_source(d,owner,next_filter_id,&mut next_mask_id,&mut state,&mut budget,ctl,doc.bounds(),source_budget)?
+            }else if masked_filtered_flat_domain {
                 let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"masked mixed mask accounting"))?;
                 effect_mask_mapping::map_masked_filtered_flat_source(d,owner,next_filter_id,&mut next_mask_id,&mut state,&mut budget,ctl,doc.bounds(),source_budget)?
             }else if selected_masked_point_source {
@@ -2264,7 +2268,9 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
             } else {
                 crate::xcf_filters::NeighborhoodDomain::Unqualified
             };
-            let stack = if masked_filtered_flat_domain {
+            let stack = if masked_normal_hierarchy_domain {
+                crate::xcf_filters::qualified_ordered_masked_normal_hierarchy_source_stack(&d.effects,&masks,&masked_domains.as_ref().ok_or_else(||unsupported(d,"masked hierarchy domain plan"))?.values,owner,next_filter_id,file.version)?
+            }else if masked_filtered_flat_domain {
                 crate::xcf_filters::qualified_ordered_masked_filtered_flat_source_stack(&d.effects,&masks,&masked_domains.as_ref().ok_or_else(||unsupported(d,"masked mixed domain plan"))?.values,owner,next_filter_id,file.version)?
             }else if filtered_flat_opacity_domain {
                 crate::xcf_filters::qualified_ordered_filtered_flat_opacity_source_stack(&d.effects,&masks,owner,next_filter_id,file.version)?
@@ -2676,7 +2682,8 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
     } else if P::requires_budgeted_normal_hierarchy_preparation(normal_hierarchy_domain) {
         let (shared,source_lease)=preparation.ok_or_else(||IoError::Unsupported("hierarchy Source preparation accounting".into()))?;
         let mut adapter=SharedPreparation{shared,failure:None};
-        if let Err(error)=photocraft_compose::backed_normal_hierarchy_context::LeasedNormalHierarchyPipeline::new_budgeted(&doc,ctl,&mut adapter,source_lease){return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("normal hierarchy Source preparation: {error}"))}));}
+        let prepared=if masked_normal_hierarchy_domain{photocraft_compose::backed_normal_hierarchy_context::LeasedNormalHierarchyPipeline::new_masked_source_budgeted(&doc,ctl,&mut adapter,source_lease)}else{photocraft_compose::backed_normal_hierarchy_context::LeasedNormalHierarchyPipeline::new_budgeted(&doc,ctl,&mut adapter,source_lease)};
+        if let Err(error)=prepared{return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("normal hierarchy Source preparation: {error}"))}));}
     } else if masked_filtered_flat_domain {
         let(shared,source_lease)=preparation.ok_or_else(||IoError::Unsupported("masked mixed Source preparation accounting".into()))?;
         let mut adapter=SharedPreparation{shared,failure:None};

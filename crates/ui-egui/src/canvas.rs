@@ -204,6 +204,8 @@ fn ordinary_preview(
 
 #[path = "marquee_origin.rs"]
 mod marquee_origin;
+#[path="canvas_native_stroke.rs"]
+mod native_stroke;
 
 /// An in-progress pointer gesture on the canvas.
 #[derive(Clone, Debug)]
@@ -236,6 +238,7 @@ pub struct Drag {
     object_origin: Option<crate::selection_object_origin::Origin>,
     /// A native preview refusal must not become an implicit one-shot fallback.
     native_replacement_failed: bool,
+    native_stroke_target:Option<native_stroke::Target>,
     live_begin_failed: bool,
 }
 
@@ -257,6 +260,7 @@ impl Drag {
             selection_origin: None,
             object_origin: None,
             native_replacement_failed: false,
+            native_stroke_target:None,
             live_begin_failed: false,
         }
     }
@@ -5336,6 +5340,7 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
     let zoom = app.point_zoom();
     if let Some(d) = app.drag.as_mut().filter(|d| d.reposition) {
         d.track(mods);
+        if let Err(error)=native_stroke::visit(d){app.ui.status=error;app.ui.status_error=true;return;}
         d.shift_to([x, y]);
     } else if let Some(d) = &mut app.drag {
         d.track(mods);
@@ -5347,6 +5352,7 @@ fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui:
         let held = app.stylus.last_point_ms().is_some_and(|t| app.stylus.clock_ms - t >= HOLD_REPEAT_MS)
             && app.live_stroke.as_ref().is_some_and(|l| l.stroke.wants_time());
         if moved || held {
+            if let Err(error)=native_stroke::admit(d,d.points.len().saturating_add(1)){app.ui.status=error;app.ui.status_error=true;return;}
             d.points.push([x, y, pressure as f64]);
             app.stylus.record_point();
         }
@@ -5717,6 +5723,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 let (sx, sy) = snap_aliased_tip(app, tool, p[0], p[1]);
                 [sx, sy, p[2]]
             });
+            let native_stroke_target=match native_stroke::capture(app,tool){Ok(target)=>target,Err(error)=>{app.ui.status=error;app.ui.status_error=true;return;}};
             let mut points = vec![[x, y, pressure as f64]];
             if let Some(p) = from {
                 points.insert(0, p);
@@ -5734,13 +5741,13 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     Ok(origin)=>Some(origin),Err(error)=>{app.ui.status=error;app.ui.status_error=true;return;},
                 }
             } else {None};
-            app.drag = Some(Drag { clear, selection_origin, object_origin, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) });
+            app.drag = Some(Drag { clear, selection_origin, object_origin,native_stroke_target, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) });
             app.trail = None;
             app.stylus.begin_stroke();
             if from.is_some() {
                 app.stylus.record_point();
             }
-            app.live_stroke = if strokes_live(tool) { begin_live_stroke(app) } else { None };
+            app.live_stroke = if app.drag.as_ref().is_some_and(|d|d.native_stroke_target.is_some()){None}else if strokes_live(tool) { begin_live_stroke(app) } else { None };
         }
         ToolEvent::Move { x, y, pressure } => {
             // Polygonal Lasso: ⌥ held while the button is down draws freehand into the polygon;
@@ -5785,6 +5792,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 return;
             }
             if d.points.last().is_none_or(|p| p[0] != x || p[1] != y) {
+                if let Err(error)=native_stroke::admit(&d,d.points.len().saturating_add(1)){app.ui.status=error;app.ui.status_error=true;return;}
                 d.points.push([x, y, d.points.last().map_or(1.0, |p| p[2])]);
                 app.stylus.record_point();
             }
@@ -5960,6 +5968,7 @@ fn finish_selection_drag(app: &mut PhotocraftApp, floating: bool, start: [f64; 2
 /// offered to the commit (`Session::offer_live_stroke`), so release costs no second render, and
 /// the canvas then refreshes only what it hadn't shown yet (`CommittedStroke`).
 fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
+    if native_stroke::commit(app,d){return;}
     let live = app.live_stroke.take();
     let mut p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
     if let Some(seed) = live.as_ref().and_then(|l| l.stroke.seed()) {
@@ -8739,3 +8748,7 @@ pub(crate) mod isolated_group_test_support {
         super::backed_preview::backed_snapshot_display_image(snapshot, snapshot.size.width, snapshot.size.height, None, &photocraft_raster::Interrupt::NONE)
     }
 }
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="canvas_native_stroke_tests.rs"]
+mod native_stroke_tests;
