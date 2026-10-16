@@ -185,6 +185,39 @@ pub fn save_accounted_native_path(
     control: &ReadControl<'_>,
     before_write: impl Fn(&Path, &ReadControl<'_>) -> Result<(), AccountedNativeError>,
 ) -> Result<(), AccountedNativeError> {
+    save_native_path_with(NativeSaveModel::Document(document), capability, limits, quota, control, before_write)
+}
+
+/// Save an actual lifecycle owner without discarding its native CURRENT storage
+/// intent. Destination authority, source protection and atomic commit are the
+/// same as the raw-document entry; the hint creates no read or render grant.
+pub fn save_accounted_current_native_path(
+    document: &photocraft_doc::accounted_document::AccountedDocument,
+    capability: &ServiceAuthorizedNativeWritePath,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+    before_write: impl Fn(&Path, &ReadControl<'_>) -> Result<(), AccountedNativeError>,
+) -> Result<(), AccountedNativeError> {
+    control.check(1)?;
+    if !document.quota().shares_ledger(quota) {
+        return Err(BackingError::Quota.into());
+    }
+    save_native_path_with(NativeSaveModel::Accounted(document), capability, limits, quota, control, before_write)
+}
+
+enum NativeSaveModel<'a> {
+    Document(&'a Document),
+    Accounted(&'a photocraft_doc::accounted_document::AccountedDocument),
+}
+fn save_native_path_with(
+    document: NativeSaveModel<'_>,
+    capability: &ServiceAuthorizedNativeWritePath,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+    before_write: impl Fn(&Path, &ReadControl<'_>) -> Result<(), AccountedNativeError>,
+) -> Result<(), AccountedNativeError> {
     capability.0.validate(quota)?;
     control.check(0)?;
     // Prepay bounded atomic path/handle staging before target resolution creates
@@ -193,7 +226,10 @@ pub fn save_accounted_native_path(
     photocraft_format::atomic::atomic_write_stream_guarded(
         &capability.0.path,
         |file| {
-            photocraft_format::owned_document::save_current_document_archive(document, file, limits, quota, control)?;
+            match document {
+                NativeSaveModel::Document(document) => { photocraft_format::owned_document::save_current_document_archive(document, file, limits, quota, control)?; }
+                NativeSaveModel::Accounted(document) => { photocraft_format::owned_document::save_accounted_current_document_archive(document, file, limits, quota, control)?; }
+            }
             Ok(())
         },
         |target| {

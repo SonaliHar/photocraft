@@ -89,7 +89,7 @@ fn filtered_flat_headless_sources_and_native_services_are_readonly() {
             ("layer.setProps", json!({"blend":"denied"})),
             ("layer.translate", json!({"dx":0})),
             ("layer.select", json!({"index":0})),
-            ("xcf.filter.remove", json!({"filterId":filter})),
+            ("xcf.filter.remove", json!({"filterId":filter,"index":0})),
         ] {
             assert!(h.command_run(id, p).is_err());
             assert!(h.session.active().unwrap().doc.shares_state(&before));

@@ -51,7 +51,7 @@ fn safe_remove_keeps_exact_custody_and_native() {
         let two = s.active().unwrap().doc.clone();
         fixture::preserved(single.document(), &two, id);
         let other = two.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id;
-        assert!(s.execute("xcf.filter.remove", serde_json::json!({"filterId":other.0.to_string()})).is_err());
+        assert!(s.execute("xcf.filter.remove", serde_json::json!({"filterId":other.0.to_string(),"index":0})).is_err());
         assert!(s.active().unwrap().doc.shares_state(&two));
         let mut native = Session::new();
         native.add_owned_native_filtered_flat_archive(fixture::archive(two.accounted().unwrap()), "two.pcraft", None, &fixture::ctl()).unwrap();
@@ -60,7 +60,7 @@ fn safe_remove_keeps_exact_custody_and_native() {
     }
 }
 #[test]
-#[ignore = "UNRUN remove exactwire/unknownID/unsafe edge/context/MAX/locks/history-view stale/earlyworkcancel and inactive malformed target proof rollback; no late-render cancellation or emptycohort grant."]
+#[ignore = "UNRUN remove exactwire/unknownID/unsupported wire/context/MAX/locks/history-view stale/earlyworkcancel and inactive malformed target proof rollback; no late-render cancellation or emptycohort grant."]
 fn safe_remove_refuses_edges_and_stale_context() {
     let case = &fixture::data::CASES[0];
     let mut s = session(case);

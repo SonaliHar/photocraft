@@ -125,7 +125,7 @@ fn mixed_metadata_and_witnessed_rename_preserve_upstream_semantics() {
     let baseline = s.active().unwrap().doc.clone();
     for (id, p) in [
         ("layer.translate", serde_json::json!({"dx":0})),
-        ("xcf.filter.remove", serde_json::json!({"filterId":node(&s,"gegl:hue-chroma").1.id.0.to_string()})),
+        ("xcf.filter.remove", serde_json::json!({"filterId":node(&s,"gegl:hue-chroma").1.id.0.to_string(),"index":0})),
         ("layer.select", serde_json::json!({"index":0})),
     ] {
         assert!(s.execute(id, p).is_err());

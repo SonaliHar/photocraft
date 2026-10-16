@@ -28,7 +28,7 @@ fn save_reopen(h: &mut Headless, path: &std::path::Path) {
     fixture::same(&saved, &opened.session.active().unwrap().doc);
 }
 #[test]
-#[ignore = "UNRUN bothgenuine sources publicremove3→2→1+closedlast, auth/waitfalse/refusalatomic/failurepreservedredo, source/native/mask/inertarchive custody and actualwriter-nativequery/title; paid single-root3→2→closed1, no producer removed projection oracle."]
+#[ignore = "UNRUN bothgenuine sources publicremove3→2→1+unsupportedwire, auth/waitfalse/refusalatomic/failurepreservedredo, source/native/mask/inertarchive custody and actualwriter-nativequery/title; paid single-root3→2→unsupportedwire, no producer removed projection oracle."]
 fn safe_remove_headless_keeps_topology_and_source() {
     for case in &fixture::data::CASES {
         let dir = Directory::new();
@@ -62,7 +62,7 @@ fn safe_remove_headless_keeps_topology_and_source() {
         assert_eq!(h.command_run("xcf.filter.remove", serde_json::json!({"filterId":ids[0].0.to_string()})).unwrap()["updated"], true);
         let one = h.session.active().unwrap().doc.clone();
         fixture::preserved(&before, &one, ids[0]);
-        assert!(h.command_run("xcf.filter.remove", serde_json::json!({"filterId":ids[2].0.to_string()})).is_err());
+        assert!(h.command_run("xcf.filter.remove", serde_json::json!({"filterId":ids[2].0.to_string(),"index":0})).is_err());
         assert!(h.session.active().unwrap().doc.shares_state(&one));
         save_reopen(&mut h, &dir.0.join("one-on-root.pcraft"));
         let query = h.inspect_owned_command_with_read_control("xcf.inspect", &serde_json::json!({"limit":128}), false, &fixture::ctl()).unwrap();
@@ -78,7 +78,7 @@ fn safe_remove_headless_keeps_topology_and_source() {
         let two = h.session.active().unwrap().doc.clone();
         fixture::preserved(single.document(), &two, id);
         let id = two.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id;
-        assert!(h.command_run("xcf.filter.remove", serde_json::json!({"filterId":id.0.to_string()})).is_err());
+        assert!(h.command_run("xcf.filter.remove", serde_json::json!({"filterId":id.0.to_string(),"index":0})).is_err());
         assert!(h.session.active().unwrap().doc.shares_state(&two));
         save_reopen(&mut h, &dir.0.join("single-two.pcraft"));
         assert_eq!(std::fs::read(path).unwrap(), source);

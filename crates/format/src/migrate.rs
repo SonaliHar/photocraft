@@ -10,7 +10,21 @@ pub(crate) type Step = fn(&mut Value) -> Result<()>;
 
 /// `STEPS[i]` upgrades version `i + 1` to `i + 2`.
 pub(crate) const STEPS: &[Step] =
-    &[resolution_axes, source_cache_blobs, current_text_origin, finite_raster_content, current_resource_resolution, current_linked_geometry, brown_layer_label];
+    &[resolution_axes, source_cache_blobs, current_text_origin, finite_raster_content, current_resource_resolution, current_linked_geometry, brown_layer_label, stored_color, current_storage_hint];
+fn stored_color(value: &mut Value) -> Result<()> {
+    if value.get("document").and_then(Value::as_object).is_none() {
+        return Err(FormatError::corrupt("manifest has no document object"));
+    }
+    // StoredColor is already explicit data; invent no literal or encoding.
+    Ok(())
+}
+fn current_storage_hint(value: &mut Value) -> Result<()> {
+    if value.get("document").and_then(Value::as_object).is_none() {
+        return Err(FormatError::corrupt("manifest has no document object"));
+    }
+    // Absence remains absence. Neither topology nor source provenance selects a class.
+    Ok(())
+}
 fn brown_layer_label(value: &mut Value) -> Result<()> {
     if value.get("document").and_then(Value::as_object).is_none() {
         return Err(FormatError::corrupt("manifest has no document object"));

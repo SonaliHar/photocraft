@@ -4,7 +4,7 @@ use super::*;
 mod fixture;
 use egui_kittest::{Harness, kittest::Queryable};
 #[test]
-#[ignore = "UNRUN actual Remove widget genuine2 ordered cases, precise lastnode mask/sourcearchive and sibling order, oneframe stale secondaction, undo/native and single-root2 unsafe refusal; no removed producer numeric oracle."]
+#[ignore = "UNRUN actual Remove widget genuine2 ordered cases, precise lastnode mask/sourcearchive and sibling order, oneframe stale secondaction, undo/native and single-root2 unsupported-wire refusal; no removed producer numeric oracle."]
 fn safe_remove_ui_keeps_frame_and_class() {
     for case in &fixture::data::CASES {
         let input = fixture::import(case);
@@ -47,7 +47,7 @@ fn safe_remove_ui_keeps_frame_and_class() {
         crate::owned_native_open::adopt_bytes(&mut app, "two.pcraft", fixture::archive(&two), &fixture::ctl()).unwrap();
         let original = app.session.active().unwrap().doc.clone();
         let id = original.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id;
-        assert!(app.run("xcf.filter.remove", serde_json::json!({"filterId":id.0.to_string()})).is_err());
+        assert!(app.run("xcf.filter.remove", serde_json::json!({"filterId":id.0.to_string(),"index":0})).is_err());
         assert!(app.session.active().unwrap().doc.shares_state(&original));
     }
 }

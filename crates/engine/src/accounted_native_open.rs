@@ -36,6 +36,14 @@ mod standard_work;
 pub use standard_work::is_current_standard_work_candidate;
 pub use standard_work::is_current_pure_point_work_candidate;
 
+/// Owned archive routing intent only; a marked failure is final. Full typed
+/// storage, native/profile and complete CURRENT recipe proof remain mandatory.
+pub fn is_owned_current_filtered_flat_candidate(archive:&OwnedDocumentArchive, control:&ReadControl<'_>)->std::result::Result<bool,BackingError>{
+    control.check(1)?;
+    if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint){return Ok(true)}
+    is_current_filtered_flat_candidate(archive.document(),control)
+}
+
 /// Multi-root filtered identity hint only. A selected refusal is final and
 /// must precede the older singleton Point hint in explicit owned native routes.
 pub fn is_current_filtered_flat_candidate(document: &photocraft_doc::Document, control: &ReadControl<'_>) -> std::result::Result<bool, BackingError> {
@@ -509,8 +517,10 @@ impl Session {
                 return Err(EngineError::Other("an open document already owns this accounted identity".into()));
             }
         }
+        if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint)
+            && !matches!(handoff,NativeHandoff::CurrentFilteredFlat) {return Err(BackingError::Unsupported.into())}
         if matches!(handoff, NativeHandoff::Document)
-            && (is_current_filtered_flat_candidate(archive.document(),control)? || is_current_point_candidate(archive.document(), control)?
+            && (is_owned_current_filtered_flat_candidate(&archive,control)? || is_current_point_candidate(archive.document(), control)?
                 || is_current_analytic_geometry_candidate(archive.document(), control)?
                 || is_current_isolated_normal_group_candidate(archive.document(), control)?
                 || is_current_isolated_gaussian_group_candidate(archive.document(), control)?

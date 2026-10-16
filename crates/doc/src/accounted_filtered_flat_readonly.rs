@@ -204,7 +204,17 @@ fn present(doc: &Document, id: ItemRef, c: &ReadControl<'_>) -> Result<(), Backi
     }
     Err(BackingError::Integrity)
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TopologyPurpose {
+    Source,
+    Current,
+}
+/// Current structural custody only. Source construction uses its separate
+/// strict topology purpose and cannot infer authority from this wrapper.
 pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<(), BackingError> {
+    shape_with_purpose(doc, q, c, TopologyPurpose::Current)
+}
+fn shape_with_purpose(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>, purpose: TopologyPurpose) -> Result<(), BackingError> {
     c.check(1)?;
     if !(1..=4096).contains(&doc.layers.len())
         || doc.mode != crate::ColorMode::Rgb
@@ -250,12 +260,13 @@ pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Re
     {
         return refused();
     }
-    // Root-local stacks are nonempty; the global node/mask/item envelopes stay
-    // fixed. A single-root owner needs >=2 nodes, preserving old singleton routes.
+    // Original source retains nonempty stacks and its singleton discriminator.
+    // CURRENT may retain empty stacks/revisions after explicit typed removal;
+    // at least one real stack owner is still required by the header above.
     let mut node_count = 0usize;
     for stack in &state.filter_stacks {
         c.check(1)?;
-        if stack.nodes.is_empty() || stack.nodes.len() > 1024 {
+        if purpose == TopologyPurpose::Source && stack.nodes.is_empty() || stack.nodes.len() > 1024 {
             return Err(BackingError::Length);
         }
         node_count = node_count.checked_add(stack.nodes.len()).ok_or(BackingError::Length)?;
@@ -263,7 +274,7 @@ pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Re
             return Err(BackingError::Length);
         }
     }
-    if state.filter_masks.len() != node_count || doc.layers.len() == 1 && node_count < 2 {
+    if state.filter_masks.len() != node_count || purpose == TopologyPurpose::Source && doc.layers.len() == 1 && node_count < 2 {
         return refused();
     }
     // Aggregate retained physical map facts and their work are checked before
@@ -594,7 +605,10 @@ pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Re
     Ok(())
 }
 fn measured(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
-    shape(doc, q, c)?;
+    measured_with_purpose(doc, q, c, TopologyPurpose::Current)
+}
+fn measured_with_purpose(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>, purpose: TopologyPurpose) -> Result<ModelCensus, BackingError> {
+    shape_with_purpose(doc, q, c, purpose)?;
     census_with_mask_policy(doc, true, true, None, q, c, ReadonlyMaskPolicy::FilteredFlat)
 }
 pub(super) fn mask_census(masks: &Vec<FilterMask>, census: &mut CanonicalCensus<'_, '_>) -> Result<(), BackingError> {
@@ -606,9 +620,16 @@ pub(super) fn mask_census(masks: &Vec<FilterMask>, census: &mut CanonicalCensus<
     Ok(())
 }
 impl AccountedDocument {
-    /// Additional owner header only. Existing whole model/source/native/profile
-    /// allocations must already be genuinely retained on the same quota.
+    /// Source-topology additional owner header only. Existing whole
+    /// model/source/native/profile allocations must already be genuinely
+    /// retained on the same quota; empty/derived singleton topology is refused.
     pub fn readonly_filtered_flat_point_storage_requirements(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<u64, BackingError> {
+        measured_with_purpose(doc, q, c, TopologyPurpose::Source)?;
+        Ok(Self::owned_model_reservation_bytes())
+    }
+    /// Current-only additional header requirements. This is structural custody,
+    /// not source qualification or proof that an edit occurred historically.
+    pub fn readonly_filtered_flat_point_current_storage_requirements(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<u64, BackingError> {
         measured(doc, q, c)?;
         Ok(Self::owned_model_reservation_bytes())
     }
@@ -618,12 +639,37 @@ impl AccountedDocument {
         quota: BackingQuota,
         c: &ReadControl<'_>,
     ) -> Result<Self, BackingError> {
+        Self::new_filtered_flat_point_storage_with_purpose(document, retention, quota, c, TopologyPurpose::Source)
+    }
+    /// Explicit CURRENT handoff retaining the same actual runtime class. Empty
+    /// stacks and single-root zero/one-node states are structurally representable;
+    /// caller must independently prove the complete current recipe/publication.
+    /// Incoming model/native/profile/source allocations must already be retained
+    /// on this quota. No source epoch or persisted hint grants authority here.
+    pub fn new_readonly_filtered_flat_point_current_storage(
+        document: Document,
+        retention: Arc<dyn Any + Send + Sync>,
+        quota: BackingQuota,
+        c: &ReadControl<'_>,
+    ) -> Result<Self, BackingError> {
+        Self::new_filtered_flat_point_storage_with_purpose(document, retention, quota, c, TopologyPurpose::Current)
+    }
+    fn new_filtered_flat_point_storage_with_purpose(
+        document: Document,
+        retention: Arc<dyn Any + Send + Sync>,
+        quota: BackingQuota,
+        c: &ReadControl<'_>,
+        purpose: TopologyPurpose,
+    ) -> Result<Self, BackingError> {
         struct Incoming {
             document: Document,
             retention: Arc<dyn Any + Send + Sync>,
         }
         let incoming = Incoming { document, retention };
-        let required = Self::readonly_filtered_flat_point_storage_requirements(&incoming.document, &quota, c)?;
+        let required = match purpose {
+            TopologyPurpose::Source => Self::readonly_filtered_flat_point_storage_requirements(&incoming.document, &quota, c)?,
+            TopologyPurpose::Current => Self::readonly_filtered_flat_point_current_storage_requirements(&incoming.document, &quota, c)?,
+        };
         let allocation = quota.reserve(QuotaKind::Index, required).map_err(|_| BackingError::Quota)?;
         c.check(1)?;
         let Incoming { document, retention } = incoming;

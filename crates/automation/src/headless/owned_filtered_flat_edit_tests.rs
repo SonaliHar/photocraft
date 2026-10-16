@@ -117,7 +117,7 @@ fn mixed_headless_targeted_edits_keep_native_source_and_protocol_fences() {
         let before = h.session.active().unwrap().doc.clone();
         for (id, p) in [
             ("layer.translate", json!({"dx":0})),
-            ("xcf.filter.remove", json!({"filterId":before.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id.0.to_string()})),
+            ("xcf.filter.remove", json!({"filterId":before.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id.0.to_string(),"index":0})),
             ("layer.select", json!({"index":0})),
             ("layer.setProps", json!({"blend":"multiply"})),
         ] {

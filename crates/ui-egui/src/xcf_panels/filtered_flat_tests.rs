@@ -51,7 +51,7 @@ fn filtered_flat_readonly_ui_keeps_every_root() {
         assert!(h.query_all_by_label("Filter editing is unavailable").next().is_none());
         let app = h.state_mut();
         for (id, p) in [
-            ("xcf.filter.remove", json!({"filterId":filter})),
+            ("xcf.filter.remove", json!({"filterId":filter,"index":0})),
             ("layer.setProps", json!({"blend":"multiply"})),
             ("layer.translate", json!({"dx":0})),
             ("layer.select", json!({"index":0})),

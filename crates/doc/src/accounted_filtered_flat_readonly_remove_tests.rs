@@ -87,13 +87,14 @@ fn exact_target_archive_and_surviving_custody() {
     }
 }
 #[test]
-#[ignore = "UNRUN: final target node and single-root2to1 refuse; valid3to2 and multiroot2to1 retain class; wrongroot/filter/revision/MAX refuse"]
+#[ignore = "UNRUN: CURRENT lastnode and single-root2to1 retain class but Source factory stays strict; wrongroot/filter/revision/MAX refuse"]
 fn topology_and_identity_fences() {
     for counts in [&[1, 2][..], &[2][..]] {
         let owner = adopt_remove(SampleType::F32, counts);
-        let before = owner.quota().usage().unwrap();
-        assert!(owner.try_remove_readonly_filtered_flat_point_filter(removal(&owner, 0, 0), &ctl()).is_err());
-        assert_eq!(owner.quota().usage().unwrap(), before);
+        let changed = owner.try_remove_readonly_filtered_flat_point_filter(removal(&owner, 0, 0), &ctl()).unwrap();
+        assert_eq!(changed.document().xcf_state.as_ref().unwrap().filter_stacks[0].nodes.len(), counts[0] - 1);
+        changed.validate_readonly_filtered_flat_point_storage(&ctl()).unwrap();
+        assert!(AccountedDocument::readonly_filtered_flat_point_storage_requirements(changed.document(), changed.quota(), &ctl()).is_err());
     }
     for counts in [&[3][..], &[2, 1][..]] {
         let owner = adopt_remove(SampleType::F64, counts);
@@ -179,3 +180,6 @@ fn paid_archive_copy_failures_refund() {
     assert_eq!(q.usage().unwrap(), before);
     assert_eq!(owner.document().xcf_state.as_ref().unwrap().filter_stacks[1].revision, 17);
 }
+
+#[path = "accounted_filtered_flat_readonly_current_tests.rs"]
+mod current_tests;

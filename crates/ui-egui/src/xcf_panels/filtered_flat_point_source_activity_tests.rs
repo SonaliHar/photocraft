@@ -128,7 +128,7 @@ fn original_activity_survives_targeted_controls_and_native_continuation() {
         // Even an all-hidden/all-zero/all-disabled original retains three actual
         // stacks. It is neither empty storage nor permission for extra actions.
         assert_eq!(snapshot.xcf_state.as_ref().unwrap().filter_stacks.len(), 3);
-        assert!(reopened.run("xcf.filter.remove", json!({"filterId":node(&snapshot,layer).unwrap().0.id.0.to_string()})).is_err());
+        assert!(reopened.run("xcf.filter.remove", json!({"filterId":node(&snapshot,layer).unwrap().0.id.0.to_string(),"index":0})).is_err());
         assert!(reopened.session.active().unwrap().doc.shares_state(&snapshot));
     }
 }

@@ -80,10 +80,14 @@ impl Headless {
                 reply.wrap_rpc(id, bound, control).map_err(ReplyError::into_automation)?;
                 reply.validate_rpc_wire_size(control).map_err(ReplyError::into_automation)?;
             }
-            let threshold = photocraft_engine::accounted_native_open::is_current_threshold_alpha_candidate(archive.document(), control)
-                .map_err(photocraft_engine::EngineError::from)?;
+            let threshold = if archive.current_storage_hint().is_some() { false } else {
+                photocraft_engine::accounted_native_open::is_current_threshold_alpha_candidate(archive.document(), control)
+                    .map_err(photocraft_engine::EngineError::from)?
+            };
             control.check(1).map_err(photocraft_engine::EngineError::from)?;
-            if threshold {
+            if archive.current_storage_hint().is_some() {
+                self.session.add_owned_native_filtered_flat_archive(archive, label, Some(path), control)?;
+            } else if threshold {
                 self.session.add_owned_native_threshold_alpha_archive(archive, label, Some(path), control)?;
             } else if photocraft_engine::accounted_native_open::is_current_threshold_candidate(archive.document(), control)
                 .map_err(photocraft_engine::EngineError::from)?
@@ -105,7 +109,7 @@ impl Headless {
                 .map_err(photocraft_engine::EngineError::from)?
             {
                 self.session.add_owned_native_analytic_geometry_archive(archive, label, Some(path), control)?;
-            } else if photocraft_engine::accounted_native_open::is_current_filtered_flat_candidate(archive.document(), control)
+            } else if photocraft_engine::accounted_native_open::is_owned_current_filtered_flat_candidate(&archive, control)
                 .map_err(photocraft_engine::EngineError::from)?
             {
                 self.session.add_owned_native_filtered_flat_archive(archive, label, Some(path), control)?;

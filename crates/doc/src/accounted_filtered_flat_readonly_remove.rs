@@ -1,5 +1,6 @@
-//! Topology-safe removal of an existing mixed node and its own selection mask.
-//! Original mask source records become paid inert archives; no empty cohort.
+//! CURRENT removal of an existing mixed node and its own selection mask.
+//! Original mask source records become paid inert archives; empty stacks retain
+//! their actual owner and checked revision in the same CURRENT storage class.
 use super::*;
 use crate::{
     accounted_document::PointFilterRemovePatch,
@@ -76,11 +77,8 @@ fn prepare(owner: &AccountedDocument, patch: PointFilterRemovePatch, c: &ReadCon
         }
     }
     let node_index = node_index.ok_or(BackingError::Bounds)?;
-    // Do not turn a filtered root into a plain/empty stack, or a single mixed
-    // root into the separate old singleton cohort. No topology repair is made.
-    if stack.nodes.len() < 2 || doc.layers.len() == 1 && stack.nodes.len() < 3 {
-        return refused();
-    }
+    // The selected node exists. Complete CURRENT removal retains this actual
+    // stack owner/revision even when its node vector becomes empty.
     let node = stack.nodes.get(node_index).ok_or(BackingError::Integrity)?;
     let Some(ItemRef::Mask(mask)) = node.mask else { return Err(BackingError::Integrity) };
     let mut mask_index = None;
@@ -141,7 +139,7 @@ impl AccountedDocument {
     }
     /// Remove one actual stable node/mask/item while retaining this mixed class.
     /// Inert source-mask properties are archived with their exact payload Arcs.
-    /// Final-node and single-root two-to-one removal remain unsupported.
+    /// Last-node removal retains the empty stack owner and checked revision.
     pub fn try_remove_readonly_filtered_flat_point_filter(&self, patch: PointFilterRemovePatch, c: &ReadControl<'_>) -> Result<Self, BackingError> {
         let (logical, plan) = prepare(self, patch, c)?;
         current_copy(self, logical, CopyKind::Remove(plan), c)
@@ -157,8 +155,6 @@ pub(super) fn apply(doc: &mut Document, plan: Plan, c: &ReadControl<'_>) -> Resu
     if stack.owner != ItemRef::Layer(plan.layer)
         || stack.revision != plan.old_revision
         || stack.nodes.len() != plan.nodes
-        || stack.nodes.len() < 2
-        || plan.roots == 1 && stack.nodes.len() < 3
         || stack.nodes.get(plan.node_index).is_none_or(|node| node.id != plan.filter || node.mask != Some(ItemRef::Mask(plan.mask)))
         || state.filter_masks.len() != plan.masks
         || state.items.len() != plan.items

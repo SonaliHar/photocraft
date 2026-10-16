@@ -285,7 +285,7 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
         let mut nodes=0usize;
         for stack in &state.filter_stacks{control.check(1)?;
             nodes=nodes.checked_add(stack.nodes.len()).filter(|n|*n<=4096).ok_or(BackingError::Length)?;
-            if stack.nodes.is_empty(){return Err(BackingError::Integrity.into())}
+            if stack.nodes.len()>1024{return Err(BackingError::Length.into())}
             for node in &stack.nodes {control.check(1)?;if node.id==id{if found.is_some(){return Err(BackingError::Integrity.into())}found=Some((stack,node));}}
         }
         let (stack,node)=found.ok_or_else(||bad("unknown filterId"))?;

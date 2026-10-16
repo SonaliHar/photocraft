@@ -81,7 +81,7 @@ fn custody(a: &AccountedDocument, b: &AccountedDocument, index: usize) {
     }
 }
 #[test]
-#[ignore = "UNRUN typed head/middle/tail survivor order with independent kernels/Normal and exact native/raw/profile/mask/archive custody; closed topology edges"]
+#[ignore = "UNRUN typed head/middle/tail survivor order with independent kernels/Normal and exact native/raw/profile/mask/archive custody; stale/unknown target refusals"]
 fn survivor_order_and_custody() {
     let (nl, linear) = parts();
     let working =
@@ -119,7 +119,8 @@ fn survivor_order_and_custody() {
             assert!(next.try_remove_readonly_filtered_flat_point_filter(request, &ctl()).is_err());
         }
     }
-    // Exact single-root boundary: three becomes two, then further removal closes.
+    // Historical topology refusal is superseded by explicit derived CURRENT;
+    // this group keeps its original mutation references and unknown-ID refusal.
     for sample in [SampleType::F32, SampleType::F64] {
         let (owner, _, _, _) = adopt(ordered(sample, &[&[0, 1, 2]], true));
         Context::new(&owner, Default::default(), &ctl()).unwrap().validate_operative(&ctl()).unwrap();
@@ -128,12 +129,18 @@ fn survivor_order_and_custody() {
         c.validate_operative(&ctl()).unwrap();
         let expected = step(0, bridge(step(2, input(0, 2, 0, sample), false, &nl, &linear)), true, &nl, &linear);
         assert_eq!(root_value(&c, 0, 2, 0).map(f64::to_bits), expected.map(f64::to_bits));
-        assert!(next.try_remove_readonly_filtered_flat_point_filter(patch(&next, 0), &ctl()).is_err());
+        let mut invalid = patch(&next, 0);
+        invalid.filter = FilterId(u64::MAX);
+        assert!(next.try_remove_readonly_filtered_flat_point_filter(invalid, &ctl()).is_err());
     }
     let (owner, _, _, _) = adopt(ordered(SampleType::F64, &[&[0], &[]], true));
-    assert!(owner.try_remove_readonly_filtered_flat_point_filter(patch(&owner, 0), &ctl()).is_err());
+    let mut invalid = patch(&owner, 0);
+    invalid.filter = FilterId(u64::MAX);
+    assert!(owner.try_remove_readonly_filtered_flat_point_filter(invalid, &ctl()).is_err());
     let (owner, _, _, _) = adopt(ordered(SampleType::F64, &[&[0, 1]], true));
-    assert!(owner.try_remove_readonly_filtered_flat_point_filter(patch(&owner, 0), &ctl()).is_err());
+    let mut invalid = patch(&owner, 0);
+    invalid.filter = FilterId(u64::MAX);
+    assert!(owner.try_remove_readonly_filtered_flat_point_filter(invalid, &ctl()).is_err());
 }
 #[test]
 #[ignore = "UNRUN full OLD hidden/zero/disabled physicalmask/profile/native proof remains required before structural removal; late Work/cancel and provider refund"]

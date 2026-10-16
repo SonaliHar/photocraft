@@ -25,12 +25,10 @@ pub(super) fn prepare(
     let mut filters_in_owner = 0usize;
     for stack in &state.filter_stacks {
         control.check(1)?;
-        if stack.nodes.is_empty() {
-            return Err(BackingError::Integrity.into());
-        }
+        if stack.nodes.len()>1024 {return Err(BackingError::Length.into())}
         filters_in_owner = filters_in_owner.checked_add(stack.nodes.len()).filter(|n|*n<=4096).ok_or(BackingError::Length)?;
     }
-    if filters_in_owner == 0 || doc.layers.len()==1 && filters_in_owner<2 || filters_in_owner != state.filter_masks.len() {
+    if filters_in_owner != state.filter_masks.len() {
         return Err(BackingError::Integrity.into());
     }
     // Borrow the actual unit strings; effective_resolution() would clone them.

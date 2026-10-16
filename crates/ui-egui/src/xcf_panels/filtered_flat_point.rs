@@ -27,11 +27,10 @@ fn node_at<'a>(snapshot: &'a DocumentSnapshot, root: LayerId,index:usize) -> Opt
     if !(1..=4096).contains(&snapshot.layers.len()) || state.filter_stacks.len() > 4096 {
         return None;
     }
-    let total=state.filter_stacks.iter().try_fold(0usize,|n,stack|{
-        if stack.nodes.is_empty() || stack.nodes.len()>1024{return None}
+    state.filter_stacks.iter().try_fold(0usize,|n,stack|{
+        if stack.nodes.len()>1024{return None}
         n.checked_add(stack.nodes.len()).filter(|n|*n<=4096)
     })?;
-    if total==0 || snapshot.layers.len()==1 && total<2{return None}
     let mut roots = snapshot.layers.iter().filter(|layer| layer.id == root);
     roots.next()?;
     if roots.next().is_some() {
@@ -139,7 +138,8 @@ pub(super) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, root: Layer
     let count=snapshot.xcf_state.as_ref()
         .and_then(|state|state.filter_stacks.iter().find(|stack|stack.owner==ItemRef::Layer(root)))
         .map_or(0,|stack|stack.nodes.len());
-    if count==0 || count>1024 {
+    if count==0 {ui.label(tl!("No GIMP filters"));return;}
+    if count>1024 {
         ui.label(tl!("Filter editing is unavailable"));return;
     }
     ui.separator();ui.label(tl!("GIMP Filters"));
@@ -163,8 +163,7 @@ pub(super) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, root: Layer
             if let Some(destination)=destination {
                 submit(app,&target,"xcf.filter.move",serde_json::json!({"filterId":target.filter.0.to_string(),"index":destination}));
             }
-            let safe_remove=count>=2 && (snapshot.layers.len()!=1 || count>=3);
-            if ui.add_enabled(safe_remove && validate(app,&target),egui::Button::new(tl!("Remove"))).clicked() {
+            if ui.add_enabled(validate(app,&target),egui::Button::new(tl!("Remove"))).clicked() {
                 submit(app,&target,"xcf.filter.remove",serde_json::json!({"filterId":target.filter.0.to_string()}));
             }
             // Each admitted stack and existing wire destinations are bounded
@@ -198,3 +197,7 @@ mod move_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_point_remove_tests.rs"]
 mod remove_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="filtered_flat_point_current_tests.rs"]
+mod current_tests;

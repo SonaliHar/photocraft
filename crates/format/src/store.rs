@@ -279,6 +279,11 @@ fn read_manifest_with_interrupt(src: &dyn Source, opts: &LoadOptions, interrupt:
             return Err(FormatError::TooNew { found, supported: FORMAT_VERSION });
         }
     }
+    if v.get("current_storage_hint").is_some_and(|hint| !hint.is_null())
+        && v.get("format_version").and_then(serde_json::Value::as_u64).is_some_and(|version| version < 10)
+    {
+        return Err(FormatError::corrupt("current storage hint requires format version 10"));
+    }
     crate::migrate::migrate(&mut v)?;
     let layers = take_array(&mut v, "/document/layers");
     let mut m: Manifest = serde_json::from_value(v)?;
@@ -287,6 +292,9 @@ fn read_manifest_with_interrupt(src: &dyn Source, opts: &LoadOptions, interrupt:
     }
     if m.minimum_reader_version > FORMAT_VERSION {
         return Err(FormatError::TooNew { found: m.minimum_reader_version, supported: FORMAT_VERSION });
+    }
+    if m.current_storage_hint.is_some() && m.minimum_reader_version < 10 {
+        return Err(FormatError::corrupt("current storage hint requires minimum reader version 10"));
     }
     if (m.document.physical_resolution.is_some() || m.document.xcf_state.is_some() || !m.document.xcf_filter_masks.is_empty()) && m.minimum_reader_version < 2 {
         return Err(FormatError::corrupt("imported state requires minimum reader version 2"));
@@ -502,6 +510,9 @@ pub(crate) fn load_with_interrupt(src: &dyn Source, opts: &LoadOptions, control:
         return Err(FormatError::Cancelled);
     }
     let m = read_manifest_with_interrupt(src, opts, control)?;
+    if m.current_storage_hint.is_some() {
+        return Err(FormatError::Unsupported("native current storage hint requires owned handoff".into()));
+    }
     admit_canvas(m.document.size, opts)?;
     let mut fetch = LoadFetch {
         src,
@@ -1250,6 +1261,7 @@ impl PcraftWriter {
         let manifest = Manifest {
             format_version: required_version,
             minimum_reader_version: required_version,
+            current_storage_hint: None,
             generator: format!("photocraft-format {}", env!("CARGO_PKG_VERSION")),
             document,
             thumbnail: opts.thumbnail.as_ref().map(|_| THUMB.to_owned()),

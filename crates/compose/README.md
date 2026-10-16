@@ -1287,9 +1287,8 @@ Actual copies, reply and original journal overlap are paid, and failure drops
 payloads before their fee receipts. Preview and native continuation remain
 `.pcraft`; the source XCF remains protected.
 
-Generic adoption, layer movement, filter insertion, removals outside the
-supported topology, masks, pixel/selection editing and unrelated mutations
-remain closed. A filter edit
+Generic adoption, layer movement, filter insertion, masks, pixel/selection
+editing and unrelated mutations remain closed. A filter edit
 candidate is a routing hint, not semantic qualification. Regression groups are
 ignored, unrun and uncompiled; behavioral and numerical acceptance is deferred.
 
@@ -1321,11 +1320,12 @@ Ten new ignored regression groups are authored but uncompiled and unrun.
 
 The existing `xcf.filter.remove` command accepts a canonical decimal `filterId`
 and removes that actual mixed-stack node through the paid transaction. This
-increment requires at least two nodes in its target stack, or three if the
-document has only one root, so the result retains the current mixed class.
-Deleting the last node of a stack or reducing a single-root document to one
-node refuses atomically. Complete OLD/history/STAGED proof includes inactive
-nodes and masks before removal; deletion cannot hide invalid input.
+now includes the final node of a stack and single-root transitions through
+one and zero nodes. The empty stack retains its actual owner and checked
+revision in the same CURRENT class. Complete OLD/history/STAGED proof includes
+inactive nodes and masks before removal; deletion cannot hide invalid input.
+Original XCF source admission remains strict and does not admit an effectless
+source through this derived CURRENT route.
 
 The copy removes the actual mask and its canonical row, preserves surviving
 node order and IDs, and increments the target stack revision once. Non-rendering
@@ -1334,5 +1334,35 @@ and a distinct inert identity; dependencies, required properties and identity
 collisions refuse before copying. Original source/native/profile custody,
 cumulative controls, locks, undo, journal/reply and final publication fences
 remain. Dedicated Remove controls offer only supported targets. Source XCF
-writing, derived-empty topology and broader removal remain unimplemented.
-Regression drafts are ignored, uncompiled and unrun; acceptance is deferred.
+writing, filter insertion, layer movement and mask/selection editing remain
+outside this increment. Regression drafts are ignored, uncompiled and unrun;
+acceptance is deferred.
+
+
+Explicit CURRENT construction and actual-owner composition permit retained
+empty stacks, global zero filters and a single root with zero or one node.
+At least one real stack owner/revision remains; masks and canonical rows still
+match actual surviving nodes exactly. All native/default/profile/source and
+composition proof remains, including hidden and zero-opacity roots. Empty roots
+use the existing plain native/Normal path. Source construction and raw-document
+source preparation retain their original nonempty topology. An orphan empty
+stack is refused independently of node count. Bounds remain 1024 nodes per
+stack, 4096 globally, 4096 roots and 8192 canonical root/mask items.
+
+Native saves through the actual mixed owner now write the optional manifest
+`current_storage_hint: "filtered_flat_point"` and require reader version10.
+The hint records CURRENT storage intent separately from original provenance.
+It selects a strict owned handoff before older Point hints; full storage,
+native, profile and operative validation still decides whether it is accepted.
+Failure is final. Native reopen, title/history copies and subsequent actual-owner
+saves preserve the class after the final filter is removed. Raw Document saves
+remain unmarked, and legacy unmarked routing remains unchanged. The generic
+raw-Document reader refuses marked files rather than discarding the hint; use
+the owned current-interpretation native route. Marked files with a format or
+required-reader version below10, unknown hints and wrong handoffs are refused.
+
+The native migration table now includes the previously missing8-to9 step and
+the optional10-field step. Both preserve absent hints and original data without
+inventing an edit. Native storage and compatibility regression drafts are
+ignored, uncompiled and unrun. Production compilation and static reviews do
+not establish runtime round-trip, visual, numerical or performance acceptance.

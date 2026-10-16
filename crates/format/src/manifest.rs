@@ -15,10 +15,17 @@ use photocraft_geom::{Affine, Rect, Size};
 use serde::{Deserialize, Serialize};
 
 /// Current manifest version written by this build.
-pub const FORMAT_VERSION: u32 = 9;
+pub const FORMAT_VERSION: u32 = 10;
 
 fn default_reader_version() -> u32 {
     1
+}
+
+/// Persisted CURRENT handoff selector. This grants no storage or render authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeCurrentStorageHint {
+    FilteredFlatPoint,
 }
 
 /// Hex-encoded BLAKE3 hash (64 chars).
@@ -29,6 +36,8 @@ pub struct Manifest {
     pub format_version: u32,
     #[serde(default = "default_reader_version")]
     pub minimum_reader_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_storage_hint: Option<NativeCurrentStorageHint>,
     /// Free-form writer identification, e.g. `photocraft-format 0.1.0`.
     pub generator: String,
     pub document: DocM,

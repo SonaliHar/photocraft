@@ -51,7 +51,7 @@ impl AuthorizedWorkspace {
             control.interrupt,
             fixed,
             |file| {
-                photocraft_format::owned_document::save_current_document_archive(snapshot, file, limits, quota, control).map_err(|error| match error {
+                photocraft_format::owned_document::save_accounted_current_document_archive(owner, file, limits, quota, control).map_err(|error| match error {
                     photocraft_format::FormatError::Cancelled => AutomationError::Engine(photocraft_engine::EngineError::Cancelled),
                     other => AutomationError::BadRequest(other.to_string()),
                 })?;

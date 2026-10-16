@@ -102,7 +102,7 @@ fn ordered_headless_sources_and_single_root_native_keep_actual_ids() {
         let before = one.session.active().unwrap().doc.clone();
         for (id, p) in [
             ("layer.translate", json!({"dx":0})),
-            ("xcf.filter.remove", json!({"filterId":node.id.0.to_string()})),
+            ("xcf.filter.remove", json!({"filterId":node.id.0.to_string(),"index":0})),
             ("layer.select", json!({"index":0})),
         ] {
             assert!(one.command_run(id, p).is_err());

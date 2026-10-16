@@ -39,7 +39,7 @@ pub fn save_accounted_native_selected_path(
     };
     validate(selected, control).map_err(|e| e.to_string())?;
     let capability = ServiceAuthorizedNativeWritePath::from_platform_authorized(selected.to_path_buf(), quota, control).map_err(|e| e.to_string())?;
-    photocraft_io::accounted_native::save_accounted_native_path(snapshot, &capability, Default::default(), quota, control, |resolved, ctl| {
+    photocraft_io::accounted_native::save_accounted_current_native_path(owner, &capability, Default::default(), quota, control, |resolved, ctl| {
         validate(selected, ctl)?;
         if resolved != selected {
             validate(resolved, ctl)?;

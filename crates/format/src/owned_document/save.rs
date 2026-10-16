@@ -180,7 +180,7 @@ impl<'a> Sink<'a> for OwnedSink<'a, '_, '_> {
 impl OwnedDocumentArchive {
     /// Same-ledger save of the retained current model; output storage is external.
     pub fn save_archive<W: Write + Seek>(&self, output: W, limits: OwnedDocumentLimits, control: &ReadControl<'_>) -> Result<W> {
-        save_current_document_archive(&self.document, output, limits, self._model.quota(), control)
+        save_current_document_archive_with_hint(&self.document, output, limits, self._model.quota(), control, self.current_storage_hint)
     }
 }
 /// Additional preparation is accounted here. The borrowed input model and
@@ -194,6 +194,39 @@ pub fn save_current_document_archive<W: Write + Seek>(
     limits: OwnedDocumentLimits,
     quota: &BackingQuota,
     control: &ReadControl<'_>,
+) -> Result<W> {
+    save_current_document_archive_with_hint(doc, output, limits, quota, control, None)
+}
+
+/// Save the actual runtime CURRENT class, retaining its closed handoff selector.
+/// The selector does not replace structural or complete rendering validation.
+pub fn save_accounted_current_document_archive<W: Write + Seek>(
+    owner: &photocraft_doc::accounted_document::AccountedDocument,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<W> {
+    control.check(0).map_err(error)?;
+    if !owner.quota().shares_ledger(quota) {
+        return Err(error(BackingError::Quota));
+    }
+    let hint = if owner.is_readonly_filtered_flat_point_storage() {
+        owner.validate_readonly_filtered_flat_point_storage(control).map_err(error)?;
+        Some(crate::NativeCurrentStorageHint::FilteredFlatPoint)
+    } else {
+        None
+    };
+    save_current_document_archive_with_hint(owner.document(), output, limits, quota, control, hint)
+}
+
+fn save_current_document_archive_with_hint<W: Write + Seek>(
+    doc: &Document,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+    current_storage_hint: Option<crate::NativeCurrentStorageHint>,
 ) -> Result<W> {
     limits.validate()?;
     control.check(0).map_err(error)?;
@@ -220,7 +253,10 @@ pub fn save_current_document_archive<W: Write + Seek>(
     let mut sink = OwnedSink { entries, finite: None, reservations, limits, control };
     crate::convert::check_nesting(&doc.layers, *control.interrupt)?;
     let document = crate::convert::doc_m(doc, &mut sink)?;
-    let version = if super::requires_reader_v9_after_validation(doc,quota,control)? {
+    let requires_v9 = super::requires_reader_v9_after_validation(doc,quota,control)?;
+    let version = if current_storage_hint.is_some() {
+        10
+    } else if requires_v9 {
         9
     } else if crate::convert::requires_reader_v8_state_with(doc, *control.interrupt)? {
         8
@@ -241,6 +277,7 @@ pub fn save_current_document_archive<W: Write + Seek>(
     let manifest = Manifest {
         format_version: version,
         minimum_reader_version: version,
+        current_storage_hint,
         generator: concat!("photocraft-format ", env!("CARGO_PKG_VERSION")).into(),
         document,
         thumbnail: None,

@@ -123,7 +123,7 @@ fn ordered_storage_and_indexed_transactions_continue_without_aliases() {
         assert!(!is_current_filtered_flat_candidate(&one, &fixture::ctl()).unwrap());
         for (id, p) in [
             ("layer.translate", json!({"dx":0})),
-            ("xcf.filter.remove", json!({"filterId":target.id.0.to_string()})),
+            ("xcf.filter.remove", json!({"filterId":target.id.0.to_string(),"index":0})),
             ("layer.select", json!({"index":0})),
         ] {
             assert!(single_session.execute(id, p).is_err());

@@ -51,7 +51,7 @@ pub use atomic::{atomic_write, atomic_write_progress};
 pub use autosave::RecoveryStore;
 pub use autosave::{Autosaver, RecoveryEntry, discard_recovery, list_recovery, recover};
 pub use convert::MAX_GROUP_DEPTH;
-pub use manifest::{FORMAT_VERSION, Manifest};
+pub use manifest::{FORMAT_VERSION, Manifest, NativeCurrentStorageHint};
 pub use read::read_file;
 pub use store::{ByteSource, DEFAULT_REVERIFY_BUDGET, PcraftWriter, PreparationLimits, PreparationObserver, SaveStats, read_entry};
 pub use store::directory_stream::{DIRECTORY_VERIFICATION_FIXED_BYTES, DIRECTORY_STREAM_SCRATCH_BYTES, DirectoryEntry, DirectoryEntryDisposition, DirectoryEntryKind, DirectoryEntrySink, PreparedDirectory, DirectoryVerificationLimits, verify_existing_directory_entry, verify_existing_directory_entry_with_limits, copy_directory_entry_stream};

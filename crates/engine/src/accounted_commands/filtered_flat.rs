@@ -227,7 +227,6 @@ fn target<'a>(
         c.check(1)?;
         nodes=nodes.checked_add(stack.nodes.len()).filter(|n|*n<=4096).ok_or(BackingError::Length)?;
         if stack.nodes.len()>1024{return Err(BackingError::Length.into())}
-        if stack.nodes.is_empty(){return Err(BackingError::Integrity.into())}
         for (index,node) in stack.nodes.iter().enumerate(){c.check(1)?;
             if node.id == id {
                 if found.is_some(){return Err(BackingError::Integrity.into())}
@@ -295,9 +294,6 @@ impl<'a> Request<'a> {
         validate_recipe(owner, ctl)?;
         let (stack, node, layer,node_index) = target(owner, self.fields.filter, ctl)?;
         if (self.move_to.is_some() || self.id=="xcf.filter.remove") && stack.revision==u64::MAX {return Err(BackingError::Length.into())}
-        if self.id=="xcf.filter.remove" && (stack.nodes.len()<2 || owner.document().layers.len()==1 && stack.nodes.len()<3) {
-            return Err(bad(self.id,"removal must retain the current mixed topology"));
-        }
         let visibility_changed = self.fields.enabled.is_some_and(|v| v != node.enabled);
         locks(owner, layer, visibility_changed, ctl)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
@@ -571,3 +567,7 @@ mod move_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_remove_tests.rs"]
 mod remove_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="filtered_flat_current_tests.rs"]
+mod current_tests;

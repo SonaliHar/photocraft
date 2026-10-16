@@ -144,7 +144,7 @@ fn captured_targets_and_literal_words_are_not_retargeted() {
     assert_eq!(next[3], words[3]);
     assert_eq!(encoding, next_encoding);
     for (id, params) in
-        [("xcf.filter.remove", json!({"filterId":changed.id.0.to_string()})), ("layer.translate", json!({"dx":0})), ("layer.select", json!({"index":0}))]
+        [("xcf.filter.remove", json!({"filterId":changed.id.0.to_string(),"index":0})), ("layer.translate", json!({"dx":0})), ("layer.select", json!({"index":0}))]
     {
         assert!(app.run(id, params).is_err());
         assert!(app.session.active().unwrap().doc.shares_state(&after));

@@ -121,7 +121,9 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
         Authority::HeldRoot => json!({"path":path,"name":name,"warnings":[]}),
     };
     control.check(1).map_err(|e| e.to_string())?;
-    if threshold_candidate(archive.document(), &control)? {
+    if archive.current_storage_hint().is_some() {
+        app.session.add_owned_native_filtered_flat_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
+    } else if threshold_candidate(archive.document(), &control)? {
         app.session.add_owned_native_threshold_alpha_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_threshold_candidate(archive.document(), &control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_threshold_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
@@ -133,7 +135,7 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
         app.session.add_owned_native_isolated_normal_group_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_analytic_geometry_candidate(archive.document(), &control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_analytic_geometry_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
-    } else if photocraft_engine::accounted_native_open::is_current_filtered_flat_candidate(archive.document(), &control).map_err(|e| e.to_string())? {
+    } else if photocraft_engine::accounted_native_open::is_owned_current_filtered_flat_candidate(&archive, &control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_filtered_flat_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_point_candidate(archive.document(), &control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_point_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
@@ -171,7 +173,9 @@ pub(crate) fn adopt_bytes(
     let _reply_lease = archive.quota().reserve(QuotaKind::Index, 4096).map_err(|e| e.to_string())?;
     control.check(4096).map_err(|e| e.to_string())?;
     let reply = json!({"warnings":[]});
-    if threshold_candidate(archive.document(), control)? {
+    if archive.current_storage_hint().is_some() {
+        app.session.add_owned_native_filtered_flat_archive(archive, name, None, control).map_err(|e| e.to_string())?;
+    } else if threshold_candidate(archive.document(), control)? {
         app.session.add_owned_native_threshold_alpha_archive(archive, name, None, control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_threshold_candidate(archive.document(), control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_threshold_archive(archive, name, None, control).map_err(|e| e.to_string())?;
@@ -183,7 +187,7 @@ pub(crate) fn adopt_bytes(
         app.session.add_owned_native_isolated_normal_group_archive(archive, name, None, control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_analytic_geometry_candidate(archive.document(), control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_analytic_geometry_archive(archive, name, None, control).map_err(|e| e.to_string())?;
-    } else if photocraft_engine::accounted_native_open::is_current_filtered_flat_candidate(archive.document(), control).map_err(|e| e.to_string())? {
+    } else if photocraft_engine::accounted_native_open::is_owned_current_filtered_flat_candidate(&archive, control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_filtered_flat_archive(archive, name, None, control).map_err(|e| e.to_string())?;
     } else if photocraft_engine::accounted_native_open::is_current_point_candidate(archive.document(), control).map_err(|e| e.to_string())? {
         app.session.add_owned_native_point_archive(archive, name, None, control).map_err(|e| e.to_string())?;

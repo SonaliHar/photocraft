@@ -15,7 +15,7 @@ mod finite_catalog;
 mod save;
 mod source;
 use accounting::RetainedReservations;
-pub use save::save_current_document_archive;
+pub use save::{save_accounted_current_document_archive, save_current_document_archive};
 
 /// Standard owned-codec per-raster logical ceiling. This is a descriptor allowance,
 /// not a resident allocation or encoded archive allowance. Native-large remains
@@ -69,6 +69,7 @@ impl OwnedDocumentLimits {
 #[derive(Debug)]
 pub struct OwnedDocumentArchive {
     document: Document,
+    current_storage_hint: Option<crate::NativeCurrentStorageHint>,
     _archive: Arc<dyn ImmutableCanonicalArchive>,
     _model: RetainedReservations,
 }
@@ -159,6 +160,9 @@ impl OwnedDocumentArchive {
             _model: RetainedReservations,
             _owner: photocraft_raster::backing::quota::QuotaLease,
         }
+        if self.current_storage_hint.is_some() && !matches!(handoff, AccountedHandoff::ReadonlyFilteredFlatStorage) {
+            return Err(FormatError::Unsupported("native current storage hint requires owned filtered-flat handoff".into()));
+        }
         let quota = self._model.quota().clone();
         control.check(0).map_err(error)?;
         let bytes = (std::mem::size_of::<NativeRetention>() as u64).checked_add(64).ok_or_else(|| error(BackingError::Length))?;
@@ -166,7 +170,7 @@ impl OwnedDocumentArchive {
         // All fallible preparation precedes destruction of the original wrapper,
         // whose field order guarantees model payload destruction before refunds.
         control.check(0).map_err(error)?;
-        let Self { document, _archive, _model } = self;
+        let Self { document, current_storage_hint, _archive, _model } = self;
         let retention = Arc::new(NativeRetention { _archive, _model, _owner: lease });
         match handoff {
             AccountedHandoff::Document => photocraft_doc::accounted_document::AccountedDocument::from_owned_rehydrating_selection(document, retention, quota, control),
@@ -175,9 +179,17 @@ impl OwnedDocumentArchive {
             AccountedHandoff::ReadonlyPointStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_point_storage(document, retention, quota, control),
             AccountedHandoff::ReadonlyAssignedPointStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_assigned_point_storage(document, retention, quota, control),
             AccountedHandoff::ReadonlyGaussianGroupStorage => photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_gaussian_group(document, retention, quota, control),
-            AccountedHandoff::ReadonlyFilteredFlatStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_filtered_flat_point_storage(document, retention, quota, control),
+            AccountedHandoff::ReadonlyFilteredFlatStorage => match current_storage_hint {
+                Some(crate::NativeCurrentStorageHint::FilteredFlatPoint) => photocraft_doc::accounted_document::AccountedDocument::new_readonly_filtered_flat_point_current_storage(document, retention, quota, control),
+                None => photocraft_doc::accounted_document::AccountedDocument::new_readonly_filtered_flat_point_storage(document, retention, quota, control),
+            },
             AccountedHandoff::ReadonlyFlatCompositeStorage => photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_flat_composite(document, retention, quota, control),
         }.map_err(error)
+    }
+
+    /// Selector only; the consuming handoff and complete current proof remain mandatory.
+    pub fn current_storage_hint(&self) -> Option<crate::NativeCurrentStorageHint> {
+        self.current_storage_hint
     }
 
     pub fn document(&self) -> &Document {
@@ -248,6 +260,7 @@ pub fn load_document_from_owned_archive(
     control.check(0).map_err(error)?;
     archive.validate_quota(&quota).map_err(error)?;
     let ownership = RefCell::new(RetainedReservations::new(limits.max_reservations, quota.clone(), control).map_err(error)?);
+    ownership.borrow_mut().reserve(std::mem::size_of::<Option<crate::NativeCurrentStorageHint>>() as u64, control).map_err(error)?;
     let source = source::OwnedArchiveSource::new(archive.clone(), quota.clone(), limits.zip, limits.max_object_bytes, control, &ownership)?;
     let options = LoadOptions {
         max_manifest_bytes: options.max_manifest_bytes.min(limits.max_manifest_bytes),
@@ -320,8 +333,9 @@ pub fn load_document_from_owned_archive(
     }
     drop(fetch);
     drop(source);
+    let current_storage_hint = manifest.current_storage_hint;
     drop(manifest);
-    let candidate = OwnedDocumentArchive { document, _archive: archive, _model: ownership.into_inner() };
+    let candidate = OwnedDocumentArchive { document, current_storage_hint, _archive: archive, _model: ownership.into_inner() };
     control.check(0).map_err(error)?;
     Ok(candidate)
 }
@@ -329,3 +343,7 @@ pub fn load_document_from_owned_archive(
 #[cfg(test)]
 #[path="owned_document/stored_color_v9_tests.rs"]
 mod stored_color_v9_tests;
+
+#[cfg(test)]
+#[path = "owned_document/current_storage_hint_tests.rs"]
+mod current_storage_hint_tests;

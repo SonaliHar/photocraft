@@ -112,7 +112,7 @@ impl<S, L> LeasedFilteredFlatPointPipeline<S, L> {
         source_lease: S,
     ) -> Result<Self, CompositionError> {
         let header = u64::try_from(std::mem::size_of::<Self>()).map_err(|_| CompositionError::Invalid("filtered flat source header"))?;
-        let (plan, lease) = compile(doc, header, interrupt, &mut SharedBudget(budget)).map_err(preparation_error)?;
+        let (plan, lease) = compile(doc, Purpose::Source, header, interrupt, &mut SharedBudget(budget)).map_err(preparation_error)?;
         Ok(Self { _plan: plan, _source: source_lease, _lease: lease })
     }
 }
@@ -144,7 +144,9 @@ fn numeric_zero(bytes: &[u8], sample: SampleType, i: &Interrupt<'_>) -> Result<(
     }
     Ok(())
 }
-fn compile<B: PlanBudget>(doc: &Document, header: u64, interrupt: &Interrupt<'_>, budget: &mut B) -> Result<(Plan<B::Lease>, B::Lease), E> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Purpose { Source, Current }
+fn compile<B: PlanBudget>(doc: &Document, purpose: Purpose, header: u64, interrupt: &Interrupt<'_>, budget: &mut B) -> Result<(Plan<B::Lease>, B::Lease), E> {
     charge(budget, interrupt, 1)?;
     let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
     let source = doc.source_color_context.as_ref().ok_or_else(scope)?;
@@ -182,11 +184,11 @@ fn compile<B: PlanBudget>(doc: &Document, header: u64, interrupt: &Interrupt<'_>
     let mut nodes = 0usize;
     for stack in &state.filter_stacks {
         charge(budget, interrupt, 1)?;
-        if stack.nodes.is_empty() || stack.nodes.len() > 1024 { return Err(scope()); }
+        if (purpose == Purpose::Source && stack.nodes.is_empty()) || stack.nodes.len() > 1024 { return Err(scope()); }
         nodes = nodes.checked_add(stack.nodes.len()).ok_or_else(length)?;
         if nodes > 4096 { return Err(scope()); }
     }
-    if nodes == 0 || (count == 1 && nodes < 2) || state.filter_masks.len() != nodes || state.items.len() != count.checked_add(nodes).ok_or_else(length)? { return Err(scope()); }
+    if (purpose == Purpose::Source && (nodes == 0 || (count == 1 && nodes < 2))) || state.filter_masks.len() != nodes || state.items.len() != count.checked_add(nodes).ok_or_else(length)? { return Err(scope()); }
     // All dynamic retained state is admitted before Vec reserve/fill or profile
     // construction; source adapters retain the full conservative bound.
     let metadata = count
@@ -234,6 +236,7 @@ fn compile<B: PlanBudget>(doc: &Document, header: u64, interrupt: &Interrupt<'_>
     let working = WorkingSpace::new_with_interrupt(basis, SampleEncoding::NonlinearProfile, GimpSpace::LinearRgb, interrupt).map_err(E::Color)?;
     let format = doc.pixel_format();
     let mut found_filters = 0usize;
+    let mut found_stacks = 0usize;
     for (index, layer) in doc.layers.iter().enumerate() {
         charge(budget, interrupt, 1)?;
         if layer.id.0 == 0
@@ -329,6 +332,7 @@ fn compile<B: PlanBudget>(doc: &Document, header: u64, interrupt: &Interrupt<'_>
             }
         }
         let (point, root_lease) = if let Some(stack) = root_stack {
+            found_stacks = found_stacks.checked_add(1).ok_or_else(length)?;
             for node in &stack.nodes {
                 if node.id.0 == 0 {
                     return Err(scope());
@@ -402,9 +406,15 @@ fn compile<B: PlanBudget>(doc: &Document, header: u64, interrupt: &Interrupt<'_>
                     numeric_zero(tile.bytes(), doc.depth, interrupt)?;
                 }
             }
-            let (plan, fee) = RootPointPlan::prepare(stack, format, bounds, interrupt, budget)?;
             found_filters = found_filters.checked_add(stack.nodes.len()).ok_or_else(length)?;
-            (Some(plan), Some(fee))
+            if stack.nodes.is_empty() {
+                // Explicit CURRENT empty anchor: native wide samples use the
+                // existing plain Normal path; no lost operation is inferred.
+                (None, None)
+            } else {
+                let (plan, fee) = RootPointPlan::prepare(stack, format, bounds, interrupt, budget)?;
+                (Some(plan), Some(fee))
+            }
         } else {
             (None, None)
         };
@@ -430,7 +440,7 @@ fn compile<B: PlanBudget>(doc: &Document, header: u64, interrupt: &Interrupt<'_>
         }
         entries.push(entry);
     }
-    if found_filters != nodes {
+    if found_filters != nodes || found_stacks != filtered {
         return Err(scope());
     }
     for (index, id) in state.selection.selected.iter().enumerate() {
@@ -488,7 +498,7 @@ impl<'a> Context<'a> {
         }
         owner.validate_readonly_filtered_flat_point_storage(c).map_err(E::Backing)?;
         let header = u64::try_from(std::mem::size_of::<Self>()).map_err(|_| length())?;
-        let (plan, lease) = compile(owner.document(), header, c.interrupt, &mut NativeBudget { quota: owner.quota(), control: c })?;
+        let (plan, lease) = compile(owner.document(), Purpose::Current, header, c.interrupt, &mut NativeBudget { quota: owner.quota(), control: c })?;
         Ok(Self { owner, plan, limits, _lease: lease })
     }
     pub(crate) fn bounds(&self) -> Rect {
