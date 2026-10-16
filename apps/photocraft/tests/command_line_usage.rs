@@ -2,10 +2,12 @@
 //! any argument the loop didn't know was taken as a file, so `--help` or a typo such as
 //! `--safegpu` launched the GUI and logged "Couldn't open --help".
 //!
-//! These run the real binary with no display, so a regression fails (or reaches the display
-//! error) instead of opening a window.
+//! These run the real binary, and every case must exit before the window opens: Windows and
+//! macOS runners have a desktop, so a launch that gets that far hangs until the test times out.
+//! Cases whose arguments are valid add a bad `--control` value, which fails the launch with the
+//! other usage errors, so stderr shows whether those arguments were taken as unknown options.
 
-/// Run `photocraft` with `args` in an isolated config dir, without a display; return the exit
+/// Run `photocraft` with `args` in an isolated config dir; return the exit
 /// status, stdout and stderr.
 fn run_photocraft(args: &[&str]) -> (std::process::ExitStatus, String, String) {
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -67,9 +69,10 @@ fn unknown_option_errors_are_reported_with_control_port_errors() {
 #[test]
 fn arguments_after_double_dash_are_files() {
     // `--` ends the options: `--help` and `-x` after it are file names, so neither prints usage
-    // nor is a usage error; the launch goes on to need a display.
-    let (status, stdout, stderr) = run_photocraft(&["--", "--help", "-x"]);
-    assert_ne!(status.code(), Some(2), "a file after `--` is not an unknown option, stderr: {stderr}");
+    // nor is an unknown option; only the bad port is reported.
+    let (status, stdout, stderr) = run_photocraft(&["--control", "nope", "--", "--help", "-x"]);
+    assert_eq!(status.code(), Some(2), "stderr: {stderr}");
+    assert!(stderr.contains("`nope` is not a valid port"), "stderr: {stderr}");
     assert!(!stdout.contains("Usage:"), "stdout: {stdout}");
     assert!(!stderr.contains("unknown option"), "stderr: {stderr}");
 }
@@ -77,7 +80,8 @@ fn arguments_after_double_dash_are_files() {
 #[test]
 fn macos_process_serial_number_is_still_ignored() {
     // Old macOS passes `-psn_<n>` when launching from Finder; it is neither a file nor an error.
-    let (status, _, stderr) = run_photocraft(&["-psn_0_12345"]);
-    assert_ne!(status.code(), Some(2), "stderr: {stderr}");
+    let (status, _, stderr) = run_photocraft(&["--control", "nope", "-psn_0_12345"]);
+    assert_eq!(status.code(), Some(2), "stderr: {stderr}");
+    assert!(stderr.contains("`nope` is not a valid port"), "stderr: {stderr}");
     assert!(!stderr.contains("unknown option"), "stderr: {stderr}");
 }
