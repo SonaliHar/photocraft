@@ -260,6 +260,10 @@ pub struct ExportSettings {
     pub webp_lossless: bool,
     /// Lossy WebP quality 1–100 (None = codec default).
     pub webp_quality: Option<u8>,
+    /// JPEG 2000 quality 1–100, where 100 is the reversible (exact) wavelet. `Some(100)` by
+    /// default, so a `.jp2` save is lossless like the format is meant to be; Export As moves
+    /// the slider down only when a smaller file is wanted.
+    pub jp2_quality: Option<u8>,
     /// TIFF: keep the layers (Photoshop layer data); `false` is "Discard Layers and Save a Copy".
     pub tiff_layers: bool,
     /// Embed the document's whole XMP packet. `true` by default (Save As keeps the metadata);
@@ -289,6 +293,7 @@ impl Default for ExportSettings {
             jpeg_quality: None,
             webp_lossless: true,
             webp_quality: None,
+            jp2_quality: Some(100),
             tiff_layers: true,
             xmp_all: true,
             tga_bits: None,
@@ -312,6 +317,7 @@ impl ExportSettings {
         if let Some(q) = self.webp_quality {
             opts.encode.webp_quality = q;
         }
+        opts.encode.jp2_quality = self.jp2_quality.map(|q| q.clamp(1, 100));
         opts.encode.embed_icc = self.embed_icc;
         opts.encode.embed_metadata = self.embed_metadata;
         opts.tiff_layers = self.tiff_layers;

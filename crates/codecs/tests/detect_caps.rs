@@ -60,6 +60,11 @@ fn default_build_formats_all_symmetric() {
         Format::Hdr,
         Format::Fits,
         Format::Dpx,
+        Format::Jp2,
+        Format::J2k,
+        Format::Jpx,
+        Format::Jpf,
+        Format::Jpm,
     ];
     for f in expected {
         assert!(caps(f).read && caps(f).write, "{f:?}");
@@ -122,8 +127,34 @@ fn detect_encoded_output_of_every_format() {
     for f in writable_formats() {
         let img = test_image(ChannelLayout::Rgba, SampleType::U8);
         let bytes = encode(&img, f, &EncodeOptions::default()).unwrap();
-        assert_eq!(detect(&bytes), Some(f));
+        // The Part 2 and Part 6 wrappers are written as the Part 1 container, so their bytes
+        // read back as JP2; a raw codestream keeps its own marker.
+        let expected = if matches!(f, Format::Jpx | Format::Jpf | Format::Jpm) { Format::Jp2 } else { f };
+        assert_eq!(detect(&bytes), Some(expected), "{f:?}");
     }
+}
+
+/// JPEG 2000 identifies itself from its own bytes, and its five extensions each resolve back
+/// to the format that writes them.
+#[test]
+fn jpeg2000_extensions_and_magic_agree() {
+    for (ext, expected) in [("jp2", Format::Jp2), ("j2k", Format::J2k), ("jpx", Format::Jpx), ("jpf", Format::Jpf), ("jpm", Format::Jpm)] {
+        assert_eq!(from_extension(ext), Some(expected), ".{ext}");
+        assert_eq!(from_extension(&format!("photo.{ext}")), Some(expected), "photo.{ext}");
+        assert_eq!(from_extension(&ext.to_uppercase()), Some(expected), ".{ext} uppercase");
+    }
+    assert_eq!(from_extension("j2c"), Some(Format::J2k), ".j2c is the codestream alias");
+    // The JP2 signature box, the `ftyp` brand of each wrapper, and the raw codestream marker.
+    assert_eq!(detect(&[0, 0, 0, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A]), Some(Format::Jp2));
+    for brand in [b"jp2 ", b"jpx ", b"jpf ", b"jpm "] {
+        let mut ftyp = 0x14u32.to_be_bytes().to_vec();
+        ftyp.extend_from_slice(b"ftyp");
+        ftyp.extend_from_slice(brand);
+        ftyp.extend_from_slice(&0u32.to_be_bytes());
+        ftyp.extend_from_slice(brand);
+        assert_eq!(detect(&ftyp), Some(Format::Jp2), "{brand:?}");
+    }
+    assert_eq!(detect(&[0xFF, 0x4F, 0xFF, 0x51]), Some(Format::J2k));
 }
 
 #[test]

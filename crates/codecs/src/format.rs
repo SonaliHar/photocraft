@@ -35,6 +35,16 @@ pub enum Format {
     Dpx,
     /// Kodak Cineon (`.cin`, the 10-bit film-scan format DPX grew from): read-only.
     Cineon,
+    /// JPEG 2000 (ISO/IEC 15444-1): JP2 file format, supports lossless and lossy.
+    Jp2,
+    /// JPEG 2000 codestream (J2K/J2C): raw codestream without JP2 wrapper.
+    J2k,
+    /// JPEG 2000 Part 2 (ISO/IEC 15444-2): JPX extended file format.
+    Jpx,
+    /// JPEG 2000 Part 2 (ISO/IEC 15444-2): JPF file format (same as JPX).
+    Jpf,
+    /// JPEG 2000 Part 6 (ISO/IEC 15444-6): JPM compound image file format.
+    Jpm,
 }
 
 /// What a format can hold **and** what this crate reads/writes for it.
@@ -104,7 +114,7 @@ const TIFF_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::
 
 impl Format {
     /// Every format known to the crate (enabled or not).
-    pub const ALL: [Format; 20] = [
+    pub const ALL: [Format; 25] = [
         Format::Png,
         Format::Jpeg,
         Format::Tiff,
@@ -125,6 +135,11 @@ impl Format {
         Format::Fits,
         Format::Dpx,
         Format::Cineon,
+        Format::Jp2,
+        Format::J2k,
+        Format::Jpx,
+        Format::Jpf,
+        Format::Jpm,
     ];
 
     pub fn caps(self) -> FormatCaps {
@@ -159,6 +174,11 @@ impl Format {
             Format::Fits => "FITS",
             Format::Dpx => "DPX",
             Format::Cineon => "Cineon",
+            Format::Jp2 => "JPEG 2000",
+            Format::J2k => "JPEG 2000 Codestream",
+            Format::Jpx => "JPEG 2000 JPX",
+            Format::Jpf => "JPEG 2000 JPF",
+            Format::Jpm => "JPEG 2000 JPM",
         }
     }
 
@@ -186,6 +206,11 @@ impl Format {
             Format::Fits => &["fits", "fit", "fts"],
             Format::Dpx => &["dpx"],
             Format::Cineon => &["cin"],
+            Format::Jp2 => &["jp2"],
+            Format::J2k => &["j2k", "j2c"],
+            Format::Jpx => &["jpx"],
+            Format::Jpf => &["jpf"],
+            Format::Jpm => &["jpm"],
         }
     }
 
@@ -211,6 +236,11 @@ impl Format {
             Format::Fits => "image/fits",
             Format::Dpx => "image/x-dpx",
             Format::Cineon => "image/x-cin",
+            Format::Jp2 => "image/jp2",
+            Format::J2k => "image/j2k",
+            Format::Jpx => "image/jpx",
+            Format::Jpf => "image/jpf",
+            Format::Jpm => "image/jpm",
         }
     }
 
@@ -267,6 +297,18 @@ pub fn caps(format: Format) -> FormatCaps {
         // `text`: the DPX header fields only (see `fidelity_warnings_with`).
         Format::Dpx => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], text: true, ..base },
         Format::Cineon => FormatCaps { read: true, write: false, depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
+        // JPEG 2000: 8- and 16-bit integer samples, gray or RGB with an optional opacity component,
+        // and an ICC profile in the JP2 `colr` box. Part 1's enumerated colour list names only
+        // sRGB, greyscale and sYCC, so CMYK and Lab are converted (and warned about) rather
+        // than written with an unexplained colour declaration. Lossy below quality 100 (see
+        // `fidelity_warnings_with`), so `lossy` stays false and the warning is qualified.
+        Format::Jp2 => FormatCaps { depths: &[S::U8, S::U16], layouts: RGB_GRAY, icc: true, ..base },
+        // A raw codestream has no boxes, so nothing but the samples survives.
+        Format::J2k => FormatCaps { depths: &[S::U8, S::U16], layouts: RGB_GRAY, ..base },
+        Format::Jpx => FormatCaps { depths: &[S::U8, S::U16], layouts: RGB_GRAY, icc: true, ..base },
+        Format::Jpf => FormatCaps { depths: &[S::U8, S::U16], layouts: RGB_GRAY, icc: true, ..base },
+        // JPM is the multi-page compound format; this crate writes and reads one page.
+        Format::Jpm => FormatCaps { depths: &[S::U8, S::U16], layouts: RGB_GRAY, icc: true, ..base },
     }
 }
 
@@ -301,6 +343,11 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     if b.starts_with(b"#?RADIANCE") || b.starts_with(b"#?RGBE") {
         return Some(Format::Hdr);
     }
+    // JPEG 2000 file formats: either the Part 1 signature box that opens every JP2-shaped
+    // file, or an ISO base-media `ftyp` naming a Part 2/6 brand.
+    if b.starts_with(JP2_SIGNATURE_BOX) || (b.len() >= 12 && &b[4..8] == b"ftyp" && is_jp2_ftyp(b)) {
+        return Some(Format::Jp2);
+    }
     if b.len() >= 12 && &b[4..8] == b"ftyp" {
         if is_avif_ftyp(b) {
             return Some(Format::Avif);
@@ -308,6 +355,10 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
         if is_heif_ftyp(b) {
             return Some(Format::Heif);
         }
+    }
+    // JPEG 2000 codestream (J2K/J2C): starts with SOC (0xFF4F) followed by SIZ (0xFF51)
+    if b.len() >= 4 && &b[0..2] == &[0xFF, 0x4F] && &b[2..4] == &[0xFF, 0x51] {
+        return Some(Format::J2k);
     }
     if b.len() >= 14 && b.starts_with(b"BM") {
         return Some(Format::Bmp);
@@ -355,6 +406,17 @@ fn is_avif_ftyp(b: &[u8]) -> bool {
 /// one says what is unsupported instead of "unrecognized format".
 fn is_heif_ftyp(b: &[u8]) -> bool {
     ftyp_brands(b).any(|c| matches!(c, b"heic" | b"heix" | b"heim" | b"heis" | b"hevc" | b"hevx" | b"mif1" | b"msf1" | b"miaf"))
+}
+
+/// The JP2 signature box (ISO/IEC 15444-1 Annex I): a 12-byte box whose type is `jP  ` and
+/// whose payload is the four bytes `0D 0A 87 0A`. It opens every JP2-shaped file, before the
+/// `ftyp` box, so it is the reliable marker.
+const JP2_SIGNATURE_BOX: &[u8] = &[0x00, 0x00, 0x00, 0x0C, b'j', b'P', b' ', b' ', 0x0D, 0x0A, 0x87, 0x0A];
+
+/// JPEG 2000 file formats (JP2, JPX, JPF, JPM) also name themselves in the ISO base media
+/// `ftyp` box, which is what distinguishes the Part 2 and Part 6 wrappers from a plain JP2.
+fn is_jp2_ftyp(b: &[u8]) -> bool {
+    ftyp_brands(b).any(|c| matches!(c, b"jp2 " | b"jpx " | b"jpm " | b"jpf "))
 }
 
 fn looks_like_tga(b: &[u8]) -> bool {

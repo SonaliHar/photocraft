@@ -65,6 +65,11 @@ impl FidelityWarning {
     }
 }
 
+/// The JPEG 2000 family (JP2, J2K, JPX, JPF, JPM): one codec, five containers.
+pub fn is_jpeg2000(format: Format) -> bool {
+    matches!(format, Format::Jp2 | Format::J2k | Format::Jpx | Format::Jpf | Format::Jpm)
+}
+
 fn depth_name(s: SampleType) -> &'static str {
     match s {
         SampleType::U8 => "8-bit",
@@ -227,7 +232,11 @@ pub fn fidelity_warnings_with(image: &Image, format: Format, opts: &EncodeOption
     // Compression
     if format == Format::Gif {
         w.push(W::PaletteQuantized);
-    } else if c.lossy || (format == Format::WebP && !opts.webp_lossless) {
+    } else if c.lossy
+        || (format == Format::WebP && !opts.webp_lossless)
+        // JPEG 2000 is reversible unless a quality below 100 asks for the irreversible wavelet.
+        || (is_jpeg2000(format) && opts.jp2_quality.is_some_and(|q| q < 100))
+    {
         w.push(W::LossyCompression);
     }
 
