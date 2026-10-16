@@ -29,6 +29,7 @@ pub(crate) fn envelope<P>(effect: &Effect<P>) -> bool {
     }
     let parameters = match effect.operation.as_str() {
         "gimp:semi-flatten" => crate::xcf_point_replace_source::semi_flatten_source::parameters(effect).is_some(),
+        "gegl:color-temperature" | "gegl:sepia" | "gegl:alien-map" => mixed_stock_source::kind(effect).is_some(),
         "gegl:brightness-contrast" | "gegl:levels" => mixed_affine_source::parameters(effect).is_some(),
         "gegl:hue-chroma" => crate::xcf_point_replace_source::hue_chroma_source::parameters(effect).is_some(),
         "gegl:vibrance" => crate::xcf_point_replace_source::vibrance_source::parameters(effect).is_some(),
@@ -58,6 +59,9 @@ pub(crate) fn family<P>(effect: &Effect<P>) -> Option<PointReplaceFamily> {
     }
     match effect.operation.as_str() {
         "gimp:semi-flatten" => Some(PointReplaceFamily::SemiFlatten),
+        "gegl:color-temperature" => Some(PointReplaceFamily::MixedTemperature),
+        "gegl:sepia" => Some(PointReplaceFamily::MixedSepia),
+        "gegl:alien-map" => Some(PointReplaceFamily::MixedAlienRgb),
         "gegl:brightness-contrast" => Some(PointReplaceFamily::MixedBrightnessContrast),
         "gegl:levels" => Some(PointReplaceFamily::MixedGeglLevels),
         "gegl:hue-chroma" => Some(PointReplaceFamily::HueChroma),

@@ -2081,6 +2081,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                         .checked_add(effect.icon.len())?
                         .checked_add(effect.operation.len())?
                         .checked_add(effect.version.as_ref().map_or(0, String::len))?
+                        .checked_add(if filtered_flat_source_domain {crate::xcf_filters::mixed_stock_source::mapping_bytes(effect)?}else{0})?
                         .checked_add(effect.arguments.iter().try_fold(0_usize, |n, a| {
                             n.checked_add(128)?.checked_add(a.name.len())?.checked_add(if let photocraft_xcf::ArgumentValue::Config(text) = &a.value {
                                 text.len().checked_mul(8)?

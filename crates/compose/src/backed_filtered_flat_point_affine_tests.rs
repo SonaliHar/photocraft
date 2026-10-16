@@ -197,6 +197,20 @@ fn strict_roles_and_inactive_control_proof() {
             _ => {}
         }
         groups(&mut f);
+        if fault == 3 {
+            // Backed native bytes are proved by mandatory CURRENT promotion,
+            // not the Source metadata/Surface compiler. Warm the actual tile
+            // before the refund baseline; pin drop does not evict its cache.
+            let (owner, rasters, _, _) = current(f);
+            let q = owner.quota().clone();
+            drop(rasters[0].pin_tile(photocraft_geom::TileCoord { tx: 0, ty: 0 }, &ctl()).unwrap());
+            let before = q.usage().unwrap();
+            let context = Context::new(&owner, Default::default(), &ctl()).unwrap();
+            assert!(context.validate_operative(&ctl()).is_err());
+            drop(context);
+            assert_eq!(q.usage().unwrap(), before);
+            continue;
+        }
         let q = f.quota.clone();
         let before = q.usage().unwrap();
         let mut b = Budget { q: q.clone(), used: 0, limit: u64::MAX };

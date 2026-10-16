@@ -26,7 +26,7 @@ pub(super) fn hint<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &p
         if count>4096 {return Err(IoError::Unsupported("filtered flat node count".into()));}
         for e in &d.effects {
             work(i,b,e.operation.len() as u64+1)?;
-            known |= matches!(e.operation.as_str(),"gimp:semi-flatten"|"gegl:hue-chroma"|"gegl:vibrance"|"gegl:exposure"|"gegl:invert-linear"|"gegl:invert-gamma"|"gegl:brightness-contrast"|"gegl:levels");
+            known |= matches!(e.operation.as_str(),"gimp:semi-flatten"|"gegl:hue-chroma"|"gegl:vibrance"|"gegl:exposure"|"gegl:invert-linear"|"gegl:invert-gamma"|"gegl:brightness-contrast"|"gegl:levels"|"gegl:color-temperature"|"gegl:sepia"|"gegl:alien-map");
         }
     }
     Ok(known)
@@ -39,7 +39,7 @@ pub(super) fn root_domain<P>(d: &Drawable<P>, i: &Interrupt<'_>, b: &photocraft_
     if d.effects.len()>1024 {return Err(IoError::Unsupported("filtered flat per-stack node count".into()));}
     let mut first=None;
     for e in &d.effects {
-        work(i,b,e.operation.len() as u64+128)?;
+        work(i,b,e.operation.len() as u64+128+crate::xcf_filters::mixed_stock_source::parsing_work(&e.operation))?;
         let family=crate::xcf_filters::filtered_flat_source_family(e).ok_or_else(||IoError::Unsupported("filtered flat leaf envelope".into()))?;
         if family==crate::xcf_filters::PointReplaceFamily::MixedExposure
             && !crate::xcf_filters::mixed_exposure_source::source_geometry(d.width,d.height) {
@@ -246,3 +246,7 @@ mod opacity_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_filtered_flat_affine_tests.rs"]
 mod affine_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "staged_filtered_flat_stock_rgb_tests.rs"]
+mod stock_rgb_tests;

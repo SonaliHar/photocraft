@@ -43,6 +43,8 @@ mod saturation;
 mod temperature;
 #[path = "point/native_pixel.rs"]
 mod native_pixel;
+#[path = "point/derived_rgb.rs"]
+mod derived_rgb;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum PointOperation {

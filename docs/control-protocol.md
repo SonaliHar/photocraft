@@ -2792,3 +2792,56 @@ workflow boundaries. One historical latest-version assertion changed10 to11.
 Production compilation and static review are recorded separately in execution
 notes. PhotoCraft tests, runtime, native GUI, offscreen rendering, corpus,
 performance and final gates remain deferred. Full stock XCF support is unfinished.
+
+
+Mixed filtered-flat roots add exact version0:0 Temperature, Sepia and Alien Map
+RGB with paired identities `xcf22-gegl-color-temperature-mixed-float-v1`,
+`xcf22-gegl-sepia-mixed-float-v1` and
+`xcf22-gegl-alien-map-rgb-mixed-float-v1`. Temperature retains two F32 Kelvin
+fields in [1000,12000]; Sepia retains F32 scale[0,1] and an actual srgb Bool.
+Alien RGB retains all ten typed fields: exact model Enum domain
+gegl:alien-map/color-model/value0, three frequency F32[0,20], three phaseshift
+F32[0,360] and three keep Bools. Source argument order and raw words remain.
+HSL/model1 uses a separate contract and is refused by these mixed identities.
+Old singleton, PointStack and Gray paths keep their existing priorities/math.
+
+Cheap bounded parameter helpers establish exact shape/domain only and perform
+no temperature interpolation. Actual paid prepared stages validate the complete
+kernel, with32768 extra work before Temperature prepare's two gain calls/four
+white interpolations. Temperature works in Linear; Sepia's Bool selects Profile
+or Linear; Alien RGB works in Profile. First native input is unit and the
+actual transformed input still passes the old strict kernel's range checks.
+Later finite derived RGB uses the additive checked evaluator, preserving the
+old Float arithmetic and original wide unit alpha. Kept Alien channels retain
+their wide words. Equal temperatures, Sepia scale0 and all-kept Alien do not
+introduce native identity shortcuts. Nonfinite output refuses atomically.
+
+Real inline holders, enclosing stages/Vec capacity/profile/header and512 runtime
+scratch are paid; optional1024 opacity scratch stays live independently. Active
+work is1536 Temperature,1920/1152 Sepia Linear/Profile,1920 Alien; disabled256.
+Actual roots, paid sole-stage routes, reverse canonical order, enabled-only
+32-work nonlinear Float bridges and existing full opacity equations remain.
+Source and SourceOpacity are explicit bounded compatibility extensions under
+the old native/profile/default/full-physical-zero-mask/geometry/topology/census
+caps. SourceOpacity still proves original raw33 and grouping. Existing singleton
+files establish schema transport, not a new mixed producer oracle. Geometry,
+activity, bridge and opacity cross-products require deferred numerical/display
+acceptance. No assigned-profile, source HDR/Gray, offset or nonzero-mask grant.
+
+Existing set/enable/move/remove and history paths use actual mixed owners and
+complete OLD/history/STAGED validation. Registered argument caps are selected
+by the retained exact target: Alien RGB10, GEGL Levels4, Temperature/Sepia2 and
+the old ceiling for other families. Actual paid ten-slot patch storage prevents
+truncation; old routes retain their four-slot envelope. Only Alien's exact
+color-model Enum domain/value0 is accepted; no HSL alias or generic parser
+expansion. Captured Kelvin, Sepia scale/Bool, frequency/phase and keep controls
+preserve passive words/source order and reuse opacity and stale-target fences.
+The existing native mixed marker continues these actual owners; unmarked route
+hints add exact paired mixed epochs, with no name-only seizure or format change.
+
+Ignored numeric/backend/source/command/request/native workflow contracts remain
+UNRUN and uncompiled. Native and WebAssembly production checks are recorded in
+execution notes separately. All PhotoCraft tests, runtime, visual/native GUI,
+corpus, performance and final acceptance remain deferred. Matched SC002
+display<=2/255 and exact source/native/ICC/structure criteria still apply.
+Remaining HSL, masked families/topologies and other stock coverage continue.

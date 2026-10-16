@@ -29,7 +29,7 @@ pub(in super::super) fn root_domain<P>(d: &Drawable<P>, i: &Interrupt<'_>, b: &p
     }
     let mut first = None;
     for e in &d.effects {
-        work(i, b, e.operation.len() as u64 + 256)?;
+        work(i, b, e.operation.len() as u64 + 256 + crate::xcf_filters::mixed_stock_source::parsing_work(&e.operation))?;
         let family = crate::xcf_filters::filtered_flat_opacity_source::family(e).ok_or_else(|| IoError::Unsupported("filtered flat leaf envelope".into()))?;
         if family == crate::xcf_filters::PointReplaceFamily::MixedExposure && !crate::xcf_filters::mixed_exposure_source::source_geometry(d.width, d.height) {
             return Err(IoError::Unsupported("mixed Exposure source geometry".into()));

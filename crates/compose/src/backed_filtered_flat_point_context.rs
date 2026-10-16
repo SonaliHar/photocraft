@@ -355,7 +355,10 @@ fn compile<B: PlanBudget>(doc: &Document, purpose: Purpose, header: u64, interru
                     return Err(scope());
                 }
                 // Exact family canonical policies are unchanged, separately selected.
-                if crate::gimp_affine::claims(node) {
+                if crate::gimp_stock_rgb::claims(node) {
+                    charge(budget,interrupt,crate::gimp_stock_rgb::CANONICAL_WORK)?;
+                    (if purpose.allows_mixed_opacity(){crate::gimp_stock_rgb::canonical_mixed_opacity}else{crate::gimp_stock_rgb::canonical})(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?;
+                } else if crate::gimp_affine::claims(node) {
                     charge(budget,interrupt,512)?;
                     (if purpose.allows_mixed_opacity(){crate::gimp_affine::canonical_mixed_opacity}else{crate::gimp_affine::canonical})(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?;
                 } else if crate::gimp_invert::claims(node) {

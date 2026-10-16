@@ -5,6 +5,7 @@ use super::*;
 use photocraft_doc::xcf_filters::FilterStack;
 
 enum StageKind {
+    StockRgb(crate::gimp_stock_rgb::PreparedStockRgb),
     Affine(crate::gimp_affine::PreparedAffine),
     Invert(crate::gimp_invert::PreparedInvert),
     Exposure(crate::gimp_exposure::PreparedExposure),
@@ -50,6 +51,9 @@ impl<L> PreparedRootStage<L> {
     fn evaluate_leaf(&self, pixel: [f64; 4], derived: bool, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<[f64; 4], BackedNormalError> {
         // Exposure owns its complete typed validation/application pricing and
         // same-q scratch. Dispatch before the legacy wrapper to avoid doubling it.
+        if let StageKind::StockRgb(candidate)=&self.kind {
+            return candidate.evaluate(pixel,self.enabled,derived,quota,control);
+        }
         if let StageKind::Affine(candidate)=&self.kind {
             return candidate.evaluate(pixel,self.enabled,derived,quota,control);
         }
@@ -64,7 +68,7 @@ impl<L> PreparedRootStage<L> {
             return Err(scope());
         }
         let (scratch, validation, evaluation) = match &self.kind {
-            StageKind::Affine(_) | StageKind::Exposure(_) | StageKind::Invert(_) => return Err(scope()), // handled above
+            StageKind::StockRgb(_) | StageKind::Affine(_) | StageKind::Exposure(_) | StageKind::Invert(_) => return Err(scope()), // handled above
             StageKind::Semi(_) => (SEMI_PIXEL_SCRATCH_BYTES, 3 * 128 + 4, if self.enabled { 9 * 128 + 128 } else { 3 * 128 + 4 }),
             StageKind::Hue(candidate) => (crate::gimp_hue_chroma::PIXEL_SCRATCH_BYTES, candidate.validation_work(), candidate.evaluation_work(self.enabled)),
             StageKind::Vibrance(candidate) => (crate::gimp_vibrance::PIXEL_SCRATCH_BYTES, candidate.validation_work(), candidate.evaluation_work(self.enabled)),
@@ -89,7 +93,7 @@ impl<L> PreparedRootStage<L> {
         };
         let evaluated = (|| {
             match &self.kind {
-                StageKind::Affine(_) | StageKind::Exposure(_) | StageKind::Invert(_) => return Err(scope()), // handled above
+                StageKind::StockRgb(_) | StageKind::Affine(_) | StageKind::Exposure(_) | StageKind::Invert(_) => return Err(scope()), // handled above
                 StageKind::Semi(candidate) => {
                     if derived {
                         candidate.validate_derived_input(pixel)
@@ -115,7 +119,7 @@ impl<L> PreparedRootStage<L> {
             .map_err(BackedNormalError::Color)?;
             control.check(evaluation).map_err(BackedNormalError::Backing)?;
             match &self.kind {
-                StageKind::Affine(_) | StageKind::Exposure(_) | StageKind::Invert(_) => return Err(scope()), // handled above
+                StageKind::StockRgb(_) | StageKind::Affine(_) | StageKind::Exposure(_) | StageKind::Invert(_) => return Err(scope()), // handled above
                 StageKind::Semi(candidate) => {
                     if derived {
                         candidate.apply_derived(pixel, self.enabled)
@@ -168,7 +172,7 @@ impl<L> RootPointPlan<L> {
         interrupt: &Interrupt<'_>,
         budget: &mut B,
     ) -> Result<(Self, L), BackedNormalError> {
-        let sole_new_family=stack.nodes.len()==1 && stack.nodes.first().is_some_and(|node|crate::gimp_exposure::claims(node)||crate::gimp_invert::claims(node)||crate::gimp_affine::claims(node));
+        let sole_new_family=stack.nodes.len()==1 && stack.nodes.first().is_some_and(|node|crate::gimp_exposure::claims(node)||crate::gimp_invert::claims(node)||crate::gimp_affine::claims(node)||crate::gimp_stock_rgb::claims(node));
         if stack.nodes.len() == 1 && !sole_new_family && !(allow_mixed_opacity && stack.nodes.first().is_some_and(|n| n.opacity_f64_bits != 1f64.to_bits())) {
             return Self::prepare_singleton(stack, format, extent, interrupt, budget);
         }
@@ -199,7 +203,12 @@ impl<L> RootPointPlan<L> {
             let header = (std::mem::size_of::<PreparedRootStage<L>>() as u64).checked_add(65536).ok_or_else(length)?;
             // Each independently owned Parts peak stays leased while all earlier
             // stage payloads remain live. Field order protects failed unwinds.
-            let prepared = if crate::gimp_affine::claims(node) {
+            let prepared = if crate::gimp_stock_rgb::claims(node) {
+                work(budget,interrupt,crate::gimp_stock_rgb::CANONICAL_WORK)?;
+                let parameters=(if allow_mixed_opacity {crate::gimp_stock_rgb::canonical_mixed_opacity}else{crate::gimp_stock_rgb::canonical})(node,SampleEncoding::NonlinearProfile,22,extent).map_err(BackedNormalError::Color)?;
+                let(candidate,fee)=crate::gimp_stock_rgb::PreparedStockRgb::prepare(parameters,std::mem::size_of::<PreparedRootStage<L>>()as u64,interrupt,budget)?;
+                PreparedRootStage{mix,opacity_bits,kind:StageKind::StockRgb(candidate),enabled:node.enabled,_lease:fee}
+            } else if crate::gimp_affine::claims(node) {
                 work(budget,interrupt,512)?;
                 let parameters=(if allow_mixed_opacity {crate::gimp_affine::canonical_mixed_opacity}else{crate::gimp_affine::canonical})(node,SampleEncoding::NonlinearProfile,22,extent).map_err(BackedNormalError::Color)?;
                 let(candidate,fee)=crate::gimp_affine::PreparedAffine::prepare(parameters,std::mem::size_of::<PreparedRootStage<L>>()as u64,interrupt,budget)?;

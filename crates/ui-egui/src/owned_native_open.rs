@@ -209,3 +209,7 @@ mod tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_masked_native_tests.rs"]
 mod masked_native_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "owned_stock_rgb_native_tests.rs"]
+mod stock_rgb_native_tests;

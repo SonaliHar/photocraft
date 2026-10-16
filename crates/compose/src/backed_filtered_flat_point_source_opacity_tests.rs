@@ -257,3 +257,6 @@ fn inactive_source_proof_and_control_are_unconditional() {
 
 #[path="backed_filtered_flat_point_affine_tests.rs"]
 mod affine;
+
+#[path = "backed_filtered_flat_point_stock_rgb_tests.rs"]
+mod stock_rgb;
