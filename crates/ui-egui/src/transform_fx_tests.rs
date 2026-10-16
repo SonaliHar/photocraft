@@ -683,4 +683,3 @@ fn the_rest_of_a_moving_part_is_rendered_once_per_scale() {
     assert!(h.state().ui.transform.is_none());
     assert!(photocraft_compose::effects::has_effects(st.doc.layer(st.active_layer.unwrap()).unwrap()));
 }
-
