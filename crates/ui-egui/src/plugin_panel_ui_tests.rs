@@ -225,3 +225,142 @@ fn a_panel_gets_a_window_row_that_opens_into_the_view_it_sent() {
     h.state_mut().run("plugin.remove", json!({"id": PANEL})).unwrap();
     assert!(photocraft_engine::plugin_panel_cmds::open_ids().is_empty(), "no panel is left open");
 }
+
+/// The lettering page of a real panel, as the ABI lets a plug-in draw it: its page switcher (a
+/// label beside a dropdown), the script box, the line row, the size slider, and the buttons.
+fn lettering_page() -> Value {
+    json!({"type":"column","children":[
+        {"type":"row","children":[{"type":"label","text":"Panel","level":"muted"},
+            {"type":"choice","id":"page","value":"lettering","options":[
+                {"value":"lettering","label":"Lettering"},{"value":"styles","label":"Styles"}]}]},
+        {"type":"separator"},
+        {"type":"text","id":"script","value":"","placeholder":"One line of dialogue per row. Start a line with a style's prefix to set it in that style.","multiline":true,"maxLength":65536},
+        {"type":"label","text":"The script is empty: paste one line of dialogue per row.","level":"muted"},
+        {"type":"row","children":[{"type":"label","text":"Line"},
+            {"type":"number","id":"lineNo","value":1.0,"min":1.0,"max":1.0,"step":1.0,"slider":false},
+            {"type":"button","id":"prev","label":"◀"},{"type":"button","id":"next","label":"▶"},
+            {"type":"button","id":"first","label":"⏮"},{"type":"button","id":"last","label":"⏭"}]},
+        {"type":"column","children":[{"type":"label","text":"Dialogue: (ignored)"},
+            {"type":"label","text":"This line has no text, so the buttons skip it.","level":"muted"}]},
+        {"type":"row","children":[{"type":"label","text":"Text size"},
+            {"type":"number","id":"textScale","value":100.0,"min":1.0,"max":999.0,"step":1.0,"slider":true},
+            {"type":"label","text":"%"}]},
+        {"type":"separator"},
+        {"type":"row","children":[{"type":"button","id":"create","label":"Create","primary":true},
+            {"type":"button","id":"insert","label":"Insert"},{"type":"button","id":"align","label":"Align"}]},
+        {"type":"label","text":"no document open · no type layer selected","level":"muted"}]})
+}
+
+/// The width a real panel window is drawn at, frame by frame.
+///
+/// The window is the one the app draws ([`window`](super::window)), not a copy of it, because this is
+/// where the defect was: an area is sized from its content *every* frame, so a body that sticks out
+/// past the panel by a fixed overhang widens the window by that overhang, and again the frame after —
+/// the width is what the body is given. 400 px leaves room for every widget below; nothing needs to
+/// be wider than the panel, so the width should settle and stay.
+fn window_widths(view: Value, frames: usize) -> Vec<f32> {
+    let panel = PanelDraw {
+        id: "test.widening".into(),
+        title: "TyperTools".into(),
+        min_width: 400,
+        error: None,
+        visible: true,
+        view: Some(serde_json::from_value(view).expect("a view the host accepts")),
+        values: Map::new(),
+        progress: None,
+        notices: Vec::new(),
+    };
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    // The screen a panel is laid out in; only its size matters here.
+    let canvas = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1100.0, 760.0));
+    let mut widths = Vec::new();
+    for _ in 0..frames {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |root| {
+            let ctx = root.ctx().clone();
+            let t = Tokens::get(&ctx);
+            let mut pending = Pending::default();
+            let _ = super::window(&ctx, &t, &panel, 0, canvas, &mut pending);
+        });
+        // The panel is really drawn; its pixels are not what is being measured.
+        out.textures_delta.clear();
+        widths.push(ctx.memory(|m| m.area_rect(egui::Id::new(("plugin-panel", "test.widening")))).map_or(0.0, |rect| rect.width()));
+    }
+    widths
+}
+
+/// How far right the tree is drawn when the panel gives it `width` pixels.
+///
+/// A `row` is a *wrapping* layout, and egui answers `available_width` there with the whole row's
+/// width rather than the room left on the line — so a widget drawn after a label is handed the
+/// label's width over again and ends up past the panel's right edge. That overhang is what the
+/// window, sized from its content every frame, grew by.
+fn body_extent(view: Value, width: f32) -> f32 {
+    let panel = PanelDraw {
+        id: "test.extent".into(),
+        title: "TyperTools".into(),
+        min_width: 400,
+        error: None,
+        visible: true,
+        view: Some(serde_json::from_value(view).expect("a view the host accepts")),
+        values: Map::new(),
+        progress: None,
+        notices: Vec::new(),
+    };
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    let mut extent = 0.0;
+    for _ in 0..3 {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |root| {
+            let ctx = root.ctx().clone();
+            let t = Tokens::get(&ctx);
+            let view = panel.view.as_ref().expect("a view");
+            egui::Frame::NONE.show(root, |ui| {
+                ui.set_min_width(width);
+                ui.set_max_width(width);
+                let mut pending = Pending::default();
+                body(ui, &t, &panel, view, &mut pending);
+                extent = ui.min_rect().width();
+            });
+        });
+        out.textures_delta.clear();
+    }
+    extent
+}
+
+/// Whether the width settled and then never moved again.
+fn settled(widths: &[f32]) -> bool {
+    let last = widths[widths.len() - 1];
+    widths[widths.len() / 2..].iter().all(|w| (w - last).abs() < 0.5)
+}
+
+#[test]
+fn a_panel_window_is_as_wide_as_its_panel_and_no_wider() {
+    // The lettering page a real plug-in opens on. The dropdown in its first row is what widened the
+    // TyperTools panel without end: a `row`'s children are handed the whole row's width (see
+    // `body`), so the dropdown was drawn a label's width past the panel, and the window — sized from
+    // its content every frame — grew by that much again each frame.
+    let widths = window_widths(lettering_page(), 24);
+    assert!(settled(&widths), "the panel widened itself, frame by frame: {widths:?}");
+    assert!(widths[23] < 500.0, "and it stayed the width its manifest asks for: {}", widths[23]);
+
+    // A widget with a label as long as the ABI allows, in a row: a `choice` sizes its own button to
+    // its text, and a plug-in may send one of those. It is drawn, clipped at the panel's edge,
+    // rather than making the panel as wide as the text — the same three hundred pixels, forever.
+    let wide = json!({"type":"column","children":[
+        {"type":"row","children":[{"type":"label","text":"Panel"},{"type":"choice","id":"page","value":"a",
+            "options":[{"value":"a","label":"x".repeat(240)}]}]}]});
+    let widths = window_widths(wide, 24);
+    assert!(settled(&widths), "a plug-in's long dropdown widened the panel: {widths:?}");
+    assert!(widths[23] < 500.0, "the panel is as wide as the panel, not as wide as the widget: {}", widths[23]);
+}
+
+#[test]
+fn a_panels_widgets_are_drawn_inside_the_panel() {
+    // The page switcher's dropdown, after its label, in the panel's 400 pixels: it is given the room
+    // that is left on the line, so the row ends where the panel does. With the whole row's width
+    // instead (what egui reports inside a wrapping `row`) it ended 39 px past the panel — and the
+    // window, sized from its content every frame, followed it, 39 px wider every frame, without end.
+    let extent = body_extent(lettering_page(), 400.0);
+    assert!(extent <= 400.5, "the tree is drawn {extent} px wide in a 400 px panel");
+}

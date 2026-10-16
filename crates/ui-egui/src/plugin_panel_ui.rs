@@ -133,39 +133,16 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if !panel.visible {
             continue;
         }
-        egui::Window::new(&panel.title)
-            .id(egui::Id::new(("plugin-panel", panel.id.as_str())))
-            .title_bar(false)
-            .resizable(true)
-            .default_width(panel.min_width as f32)
-            .min_width(panel.min_width as f32)
-            // Cascade, so two panels do not open one exactly on top of the other.
-            .default_pos(pos2(canvas.left() + 40.0 + 22.0 * i as f32, canvas.top() + 60.0 + 22.0 * i as f32))
-            .frame(float_frame(&t))
-            .show(ctx, |ui| {
-                ui.set_min_width(panel.min_width as f32);
-                if header(ui, panel, &t) {
-                    closed.push(panel.id.clone());
-                }
-                crate::widgets::hairline(ui);
-                ui.add_space(4.0);
-                match &panel.error {
-                    Some(error) => stopped(ui, &t, error, panel, &mut restarted),
-                    None => {
-                        egui::ScrollArea::vertical().id_salt(("plugin-panel-body", panel.id.as_str())).max_height(600.0).auto_shrink([false, true]).show(
-                            ui,
-                            |ui| match &panel.view {
-                                Some(view) => body(ui, &t, panel, view, &mut pending),
-                                // A panel that has not answered `init` yet, or answered with no view.
-                                None => {
-                                    ui.label(RichText::new(tl!("This plug-in has not drawn anything yet.")).color(t.text_faint).size(11.5));
-                                }
-                            },
-                        );
-                        footer(ui, &t, panel, &mut cancelled);
-                    }
-                }
-            });
+        let asked = window(ctx, &t, panel, i, canvas, &mut pending);
+        if asked.close {
+            closed.push(panel.id.clone());
+        }
+        if asked.restart {
+            restarted.push(panel.id.clone());
+        }
+        if asked.cancel {
+            cancelled.push(panel.id.clone());
+        }
     }
     for id in closed {
         let _ = app.run("plugin.panel.close", json!({"id": id}));
@@ -183,6 +160,81 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let kind = if value.is_null() { "ui.click" } else { "ui.change" };
         send_event(app, &panel, kind, Some(&widget), value);
     }
+}
+
+/// What a panel's window asked the host to do. Collected while drawing, because a command cannot be
+/// run from inside the drawing closure: it borrows the app, and a panel's own lock is held by the
+/// snapshot being drawn from.
+#[derive(Default)]
+struct AskedFor {
+    close: bool,
+    restart: bool,
+    cancel: bool,
+}
+
+/// Draws one panel's window, and returns what it asked the caller to run.
+///
+/// Split out of [`windows`] so a test can drive the window a plug-in's view is really drawn in,
+/// rather than a copy of it: the width rule below is easy to break and hard to see (`window_widths`
+/// in the tests).
+fn window(ctx: &egui::Context, t: &Tokens, panel: &PanelDraw, index: usize, canvas: egui::Rect, pending: &mut Pending) -> AskedFor {
+    let mut asked = AskedFor::default();
+    egui::Window::new(&panel.title)
+        .id(egui::Id::new(("plugin-panel", panel.id.as_str())))
+        .title_bar(false)
+        .resizable(true)
+        .default_width(panel.min_width as f32)
+        .min_width(panel.min_width as f32)
+        // Cascade, so two panels do not open one exactly on top of the other.
+        .default_pos(pos2(canvas.left() + 40.0 + 22.0 * index as f32, canvas.top() + 60.0 + 22.0 * index as f32))
+        .frame(float_frame(t))
+        .show(ctx, |ui| {
+            ui.set_min_width(panel.min_width as f32);
+            if header(ui, panel, t) {
+                asked.close = true;
+            }
+            crate::widgets::hairline(ui);
+            ui.add_space(4.0);
+            match &panel.error {
+                Some(error) => stopped(ui, t, error, &mut asked),
+                None => {
+                    egui::ScrollArea::vertical().id_salt(("plugin-panel-body", panel.id.as_str())).max_height(600.0).auto_shrink([false, true]).show(
+                        ui,
+                        |ui| {
+                            match &panel.view {
+                                // Everything the plug-in sent is drawn inside the panel's own width (see
+                                // `at_panel_width`): a window is sized from its content every frame, so a
+                                // body that sticks out makes it wider, and wider again the next frame.
+                                Some(view) => at_panel_width(ui, |ui| body(ui, t, panel, view, pending)),
+                                // A panel that has not answered `init` yet, or answered with no view.
+                                None => {
+                                    ui.label(RichText::new(tl!("This plug-in has not drawn anything yet.")).color(t.text_faint).size(11.5));
+                                }
+                            }
+                        },
+                    );
+                    footer(ui, t, panel, &mut asked);
+                }
+            }
+        });
+    asked
+}
+
+/// Draws a panel's body at the width the panel has, whatever the plug-in's tree asks for.
+///
+/// The tree goes into a child of the panel's own width, and only that width — with the height the
+/// body really used, which is what the scroll area needs — is reported back to the scroll area. So
+/// nothing a plug-in sends can widen the window: a widget whose own size is bigger than the panel
+/// (a 256-character label or button, a `choice` that sizes itself to its text, `progress`) is drawn
+/// past the panel's edge and clipped there, which is a panel that looks wrong rather than a panel
+/// that grows.
+fn at_panel_width(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    let rect = ui.available_rect_before_wrap();
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
+    child.set_clip_rect(child.clip_rect().intersect(rect));
+    add(&mut child);
+    let used = child.min_rect();
+    ui.allocate_rect(egui::Rect::from_min_size(rect.min, vec2(rect.width(), used.height())), Sense::hover());
 }
 
 /// What one frame of drawing collected.
@@ -248,21 +300,21 @@ fn header(ui: &mut egui::Ui, panel: &PanelDraw, t: &Tokens) -> bool {
 }
 
 /// A stopped panel: why it stopped, and the one way out.
-fn stopped(ui: &mut egui::Ui, t: &Tokens, error: &str, panel: &PanelDraw, restarted: &mut Vec<String>) {
+fn stopped(ui: &mut egui::Ui, t: &Tokens, error: &str, asked: &mut AskedFor) {
     ui.label(RichText::new(tl!("This plug-in stopped.")).color(t.danger).size(12.0).strong());
     ui.add_space(2.0);
     ui.label(RichText::new(error).color(t.text_dim).size(11.5));
     ui.add_space(6.0);
     if crate::widgets::primary_button(ui, tl!("Restart Plug-in"), 130.0).clicked() {
-        restarted.push(panel.id.clone());
+        asked.restart = true;
     }
 }
 
 /// The panel's progress bar and the notices it has raised, below whatever it drew.
-fn footer(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, cancelled: &mut Vec<String>) {
+fn footer(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, asked: &mut AskedFor) {
     if let Some(progress) = &panel.progress {
         ui.add_space(6.0);
-        progress_row(ui, t, panel, progress, cancelled);
+        progress_row(ui, t, progress, asked);
     }
     if panel.notices.is_empty() {
         return;
@@ -280,14 +332,14 @@ fn footer(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, cancelled: &mut Vec<
     }
 }
 
-fn progress_row(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, progress: &Progress, cancelled: &mut Vec<String>) {
+fn progress_row(ui: &mut egui::Ui, t: &Tokens, progress: &Progress, asked: &mut AskedFor) {
     ui.horizontal(|ui| {
         let bar = ui.add(egui::ProgressBar::new(progress.fraction.unwrap_or(0.0) as f32).desired_width(ui.available_width() - 66.0).fill(t.accent));
         if let Some(text) = &progress.text {
             bar.on_hover_text(text);
         }
         if progress.cancellable && crate::widgets::compact_button(ui, tl!("Cancel"), 18.0).clicked() {
-            cancelled.push(panel.id.clone());
+            asked.cancel = true;
         }
     });
     if let Some(text) = &progress.text {
@@ -298,7 +350,13 @@ fn progress_row(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, progress: &Pro
 /// Draws one widget tree, collecting every interaction into `pending` — `(panel, widget, value)`,
 /// where a `null` value is a click and anything else is a committed value.
 fn body(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, widget: &Widget, pending: &mut Pending) {
-    let width = ui.available_width();
+    // The room left on this line, not `ui.available_width()`: inside a `row` — a *wrapping* layout,
+    // where a widget is allowed to take a whole line of its own — egui answers that with the whole
+    // row's width. A dropdown or a field drawn after a label was therefore handed the label's width
+    // again and stuck out of the panel by exactly that much, and a window is sized from its content
+    // every frame: the lettering panel's first row (a label, then its page `choice`) widened the
+    // panel by 39 px per frame, without end.
+    let width = ui.available_rect_before_wrap().width();
     match widget {
         Widget::Column { children } => {
             ui.vertical(|ui| {
@@ -433,7 +491,9 @@ fn body(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, widget: &Widget, pendi
 /// scrolling — a lettering panel is mostly made of these.
 fn multiline_field(ui: &mut egui::Ui, id: egui::Id, text: &mut String, hint: &str, height: f32, char_limit: Option<usize>) -> egui::Response {
     let t = Tokens::get(ui.ctx());
-    let width = ui.available_width().max(16.0);
+    // The room left on this line, like [`body`]'s: a script box inside a `row` would otherwise be as
+    // wide as the whole row.
+    let width = ui.available_rect_before_wrap().width().max(16.0);
     let (rect, _) = ui.allocate_exact_size(vec2(width, height.max(48.0)), Sense::hover());
     crate::widgets::surface(ui, rect, t.field, false);
     if !t.bevel {
