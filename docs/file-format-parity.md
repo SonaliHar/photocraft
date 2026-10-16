@@ -95,7 +95,7 @@ D5100 colour profile. Counts and the G14 estimate are unchanged.
 
 ### XCF implementation pending validation
 
-2026-10-15: The [full XCF import work](../specs/002-full-xcf-import/spec.md) now has source
+2026-10-15: Full XCF import work now has source
 implementation for a limited plain raster subset with owned native storage: import, current
 metadata and anonymous selection edits, and `.pcraft` save and reopen through explicit owned
 endpoints. Native saving has interactive and rooted capability routes. Explicit native reopen
