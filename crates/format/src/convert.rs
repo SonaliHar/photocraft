@@ -642,7 +642,15 @@ impl Loader<'_> {
                     *h = self.id_map.get(&h.0).copied().unwrap_or(LayerId(u64::MAX - h.0.min(u64::MAX / 2)));
                 }
                 f.hidden.sort();
+                for (l, _) in &mut f.opacities {
+                    *l = self.id_map.get(&l.0).copied().unwrap_or(LayerId(u64::MAX - l.0.min(u64::MAX / 2)));
+                }
+                f.opacities.sort_by_key(|(l, _)| *l);
             }
+        }
+        // Frames saved without opacities (older files) show every layer at the opacity it has.
+        if let Some(a) = &mut frame_animation {
+            a.fill_opacities(&layers);
         }
         let id = if self.preserve_ids { DocId(m.id) } else { DocId::fresh() };
         Ok(Document {

@@ -2,8 +2,9 @@
 //! a delay and its own layer visibility, played in order. Unlike the video [`Timeline`](crate::Timeline)
 //! it needs no video layers: a frame is a state of the ordinary layer stack.
 //!
-//! `Layer::visible` always shows the selected frame. A frame stores only the layers hidden in it, so a
-//! layer added later is visible in every frame (Photoshop's "New Layers Visible in All Frames").
+//! `Layer::visible` and `Layer::opacity` always show the selected frame. A frame stores the layers
+//! hidden in it, so a layer added later is visible in every frame (Photoshop's "New Layers Visible
+//! in All Frames"), and each layer's opacity in it, so a fade is a change of opacity between frames.
 
 use serde::{Deserialize, Serialize};
 
@@ -45,16 +46,34 @@ impl LoopCount {
 }
 
 /// One frame of the animation.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AnimFrame {
     /// How long the frame shows, in milliseconds (0 plays as fast as the player allows).
     pub delay_ms: u32,
     /// The layers hidden in this frame, sorted by id; every other layer is shown.
     pub hidden: Vec<LayerId>,
+    /// Each layer's opacity in this frame, sorted by id. A layer missing here keeps the opacity it has.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub opacities: Vec<(LayerId, f32)>,
+}
+
+impl AnimFrame {
+    /// The opacity layer `id` has in this frame, if the frame records one.
+    pub fn opacity_of(&self, id: LayerId) -> Option<f32> {
+        self.opacities.binary_search_by_key(&id, |(l, _)| *l).ok().map(|i| self.opacities[i].1)
+    }
+
+    /// Records opacity `v` (0 to 1) for layer `id`.
+    pub fn set_opacity(&mut self, id: LayerId, v: f32) {
+        match self.opacities.binary_search_by_key(&id, |(l, _)| *l) {
+            Ok(i) => self.opacities[i].1 = v,
+            Err(i) => self.opacities.insert(i, (id, v)),
+        }
+    }
 }
 
 /// The document's frame animation.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FrameAnimation {
     /// At least one frame.
     pub frames: Vec<AnimFrame>,
@@ -67,7 +86,11 @@ pub struct FrameAnimation {
 impl FrameAnimation {
     /// One frame showing the layers as they are now.
     pub fn new(layers: &[Layer]) -> Self {
-        FrameAnimation { frames: vec![AnimFrame { delay_ms: 0, hidden: hidden_ids(layers) }], current: 0, loops: LoopCount::Forever }
+        FrameAnimation {
+            frames: vec![AnimFrame { delay_ms: 0, hidden: hidden_ids(layers), opacities: opacities(layers) }],
+            current: 0,
+            loops: LoopCount::Forever,
+        }
     }
 
     /// Keeps the selected frame and every delay valid, whatever was stored.
@@ -78,24 +101,51 @@ impl FrameAnimation {
         self.frames.truncate(MAX_FRAMES);
         for f in &mut self.frames {
             f.delay_ms = f.delay_ms.min(MAX_DELAY_MS);
+            f.opacities.sort_by_key(|(l, _)| *l);
+            f.opacities.dedup_by_key(|(l, _)| *l);
+            for (_, o) in &mut f.opacities {
+                *o = if o.is_finite() { o.clamp(0.0, 1.0) } else { 1.0 };
+            }
         }
         self.current = self.current.min(self.frames.len() - 1);
     }
 
-    /// Records the visibility `layers` show as the selected frame's (an edit made while a frame is
-    /// selected changes that frame only).
+    /// Records the visibility and opacity `layers` show as the selected frame's (an edit made while a
+    /// frame is selected changes that frame only). Layers the other frames don't know yet, such as one
+    /// the edit just added, are recorded in them as they are now.
     pub fn capture(&mut self, layers: &[Layer]) {
         self.clamp();
+        let now = opacities(layers);
         let hidden = hidden_ids(layers);
+        self.ensure_opacities(&now, Some(self.current));
         if let Some(f) = self.frames.get_mut(self.current) {
             f.hidden = hidden;
+            f.opacities = now;
+        }
+    }
+
+    /// Gives every frame an opacity for every layer in `layers` that it has none for.
+    pub fn fill_opacities(&mut self, layers: &[Layer]) {
+        self.ensure_opacities(&opacities(layers), None);
+    }
+
+    fn ensure_opacities(&mut self, now: &[(LayerId, f32)], skip: Option<usize>) {
+        for (i, f) in self.frames.iter_mut().enumerate() {
+            if Some(i) == skip {
+                continue;
+            }
+            for (id, o) in now {
+                if f.opacity_of(*id).is_none() {
+                    f.set_opacity(*id, *o);
+                }
+            }
         }
     }
 
     /// Shows frame `index` on `layers`; false when there is no such frame.
     pub fn apply(&self, index: usize, layers: &mut [Layer]) -> bool {
         let Some(f) = self.frames.get(index) else { return false };
-        set_visibility(layers, &f.hidden);
+        set_state(layers, f);
         true
     }
 
@@ -103,6 +153,22 @@ impl FrameAnimation {
     pub fn duration_ms(&self) -> u64 {
         self.frames.iter().map(|f| u64::from(f.delay_ms)).sum()
     }
+}
+
+/// Every layer in the tree with its opacity, by id.
+fn opacities(layers: &[Layer]) -> Vec<(LayerId, f32)> {
+    fn rec(layers: &[Layer], out: &mut Vec<(LayerId, f32)>) {
+        for l in layers {
+            out.push((l.id, l.opacity));
+            if let Some(ch) = l.children() {
+                rec(ch, out);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    rec(layers, &mut out);
+    out.sort_by_key(|(l, _)| *l);
+    out
 }
 
 /// Every layer in the tree with its eye off, by id.
@@ -123,11 +189,14 @@ fn hidden_ids(layers: &[Layer]) -> Vec<LayerId> {
     out
 }
 
-fn set_visibility(layers: &mut [Layer], hidden: &[LayerId]) {
+fn set_state(layers: &mut [Layer], frame: &AnimFrame) {
     for l in layers {
-        l.visible = hidden.binary_search(&l.id).is_err();
+        l.visible = frame.hidden.binary_search(&l.id).is_err();
+        if let Some(o) = frame.opacity_of(l.id) {
+            l.opacity = o;
+        }
         if let Some(ch) = l.children_mut() {
-            set_visibility(ch, hidden);
+            set_state(ch, frame);
         }
     }
 }
@@ -182,7 +251,7 @@ mod tests {
         let mut d = doc(3);
         d.layers[1].visible = false;
         let mut a = FrameAnimation::new(&d.layers);
-        a.frames.push(AnimFrame { delay_ms: 100, hidden: vec![d.layers[0].id, d.layers[2].id].into_iter().collect() });
+        a.frames.push(AnimFrame { delay_ms: 100, hidden: vec![d.layers[0].id, d.layers[2].id].into_iter().collect(), ..Default::default() });
         a.frames[1].hidden.sort();
         d.frame_animation = Some(a);
         assert!(d.select_animation_frame(1));
@@ -221,6 +290,39 @@ mod tests {
     }
 
     #[test]
+    fn opacity_belongs_to_the_selected_frame() {
+        let mut d = doc(2);
+        let mut a = FrameAnimation::new(&d.layers);
+        a.frames.push(a.frames[0].clone());
+        d.frame_animation = Some(a);
+        d.layers[0].opacity = 0.25;
+        d.capture_animation_frame();
+        let a = d.frame_animation.as_ref().unwrap();
+        assert_eq!(a.frames[0].opacity_of(d.layers[0].id), Some(0.25));
+        assert_eq!(a.frames[1].opacity_of(d.layers[0].id), Some(1.0), "the other frame keeps its opacity");
+        assert!(d.select_animation_frame(1));
+        assert_eq!(d.layers[0].opacity, 1.0);
+        assert!(d.select_animation_frame(0));
+        assert_eq!(d.layers[0].opacity, 0.25);
+    }
+
+    #[test]
+    fn a_layer_added_later_has_its_opacity_in_every_frame() {
+        let mut d = doc(1);
+        let mut a = FrameAnimation::new(&d.layers);
+        a.frames.push(a.frames[0].clone());
+        d.frame_animation = Some(a);
+        let mut l = layer("new", true);
+        l.opacity = 0.5;
+        let id = l.id;
+        d.layers.push(l);
+        d.capture_animation_frame();
+        for f in &d.frame_animation.as_ref().unwrap().frames {
+            assert_eq!(f.opacity_of(id), Some(0.5));
+        }
+    }
+
+    #[test]
     fn nested_layers_follow_their_frame() {
         let mut d = doc(1);
         let inner = layer("inner", true);
@@ -241,8 +343,10 @@ mod tests {
         a.clamp();
         assert_eq!((a.frames.len(), a.current), (1, 0));
         a.frames[0].delay_ms = u32::MAX;
+        a.frames[0].opacities = vec![(LayerId(2), 7.0), (LayerId(1), f32::NAN), (LayerId(2), 0.5)];
         a.clamp();
         assert_eq!(a.frames[0].delay_ms, MAX_DELAY_MS);
+        assert_eq!(a.frames[0].opacities, [(LayerId(1), 1.0), (LayerId(2), 1.0)], "sorted, unique and in range");
     }
 
     #[test]
@@ -255,7 +359,7 @@ mod tests {
     #[test]
     fn serde_round_trips() {
         let mut a = FrameAnimation::new(&[]);
-        a.frames.push(AnimFrame { delay_ms: 250, hidden: vec![LayerId(3), LayerId(9)] });
+        a.frames.push(AnimFrame { delay_ms: 250, hidden: vec![LayerId(3), LayerId(9)], opacities: vec![(LayerId(3), 0.25)] });
         a.loops = LoopCount::Times(3);
         let j = serde_json::to_string(&a).unwrap();
         assert_eq!(serde_json::from_str::<FrameAnimation>(&j).unwrap(), a);

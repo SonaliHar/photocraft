@@ -3190,3 +3190,6 @@ curves	Smooth	Сгладить
 	{count} times	{count} раз
 	Frames before	Кадры до
 	Frames after	Кадры после
+	Tween	Промежуточные кадры
+	Last frame	Последний кадр
+	Frames to add	Добавить кадров

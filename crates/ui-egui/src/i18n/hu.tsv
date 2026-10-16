@@ -4139,3 +4139,6 @@ cameraRaw	Yellow	Sárga
 	{count} times	{count}×
 	Frames before	Előző képkockák
 	Frames after	Következő képkockák
+	Tween	Átmenet
+	Last frame	Utolsó képkocka
+	Frames to add	Hozzáadandó képkockák

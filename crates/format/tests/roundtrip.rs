@@ -704,7 +704,11 @@ fn frame_animation_survives_roundtrip_with_its_hidden_layers_remapped() {
         v.sort();
         v
     };
-    let frames = vec![AnimFrame { delay_ms: 100, hidden: hide(0) }, AnimFrame { delay_ms: 250, hidden: hide(1) }, AnimFrame { delay_ms: 0, hidden: hide(2) }];
+    let frames = vec![
+        AnimFrame { delay_ms: 100, hidden: hide(0), opacities: vec![(id(0), 0.25)] },
+        AnimFrame { delay_ms: 250, hidden: hide(1), ..Default::default() },
+        AnimFrame { delay_ms: 0, hidden: hide(2), ..Default::default() },
+    ];
     doc.frame_animation = Some(FrameAnimation { frames, current: 1, loops: LoopCount::Times(4) });
     doc.select_animation_frame(1);
 
@@ -713,6 +717,9 @@ fn frame_animation_survives_roundtrip_with_its_hidden_layers_remapped() {
     let a = back.frame_animation.clone().expect("animation survived");
     assert_eq!(a.frames.iter().map(|f| f.delay_ms).collect::<Vec<_>>(), [100, 250, 0]);
     assert_eq!((a.current, a.loops), (1, LoopCount::Times(4)));
+    // Opacities follow their layers through id remapping; frames saved without any get the layers' own.
+    assert_eq!(a.frames[0].opacity_of(back.layers[0].id), Some(0.25));
+    assert_eq!(a.frames[1].opacity_of(back.layers[0].id), Some(back.layers[0].opacity));
     // Whatever ids the layers got, frame N hides exactly the other two.
     for n in 0..3 {
         assert!(back.select_animation_frame(n));
@@ -737,7 +744,7 @@ fn a_malformed_frame_animation_is_repaired_on_load() {
     let none = load(FrameAnimation { frames: Vec::new(), current: 9, loops: LoopCount::Forever });
     assert_eq!((none.frames.len(), none.current), (1, 0));
     let wild = load(FrameAnimation {
-        frames: vec![AnimFrame { delay_ms: u32::MAX, hidden: vec![photocraft_doc::LayerId(u64::MAX)] }],
+        frames: vec![AnimFrame { delay_ms: u32::MAX, hidden: vec![photocraft_doc::LayerId(u64::MAX)], ..Default::default() }],
         current: usize::MAX,
         loops: LoopCount::Times(0),
     });

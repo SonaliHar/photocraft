@@ -260,3 +260,93 @@ fn a_group_of_frames_moves_into_a_gap_in_order() {
         assert!(s.execute("animation.moveFrames", bad).is_err());
     }
 }
+
+fn opacity(s: &Session, frame: usize, name: &str) -> f32 {
+    doc(s).frame_animation.as_ref().unwrap().frames[frame].opacity_of(id_of(s, name)).unwrap()
+}
+
+fn hidden(s: &Session, frame: usize, name: &str) -> bool {
+    doc(s).frame_animation.as_ref().unwrap().frames[frame].hidden.contains(&id_of(s, name))
+}
+
+#[test]
+fn tween_fades_between_two_frames() {
+    let mut s = session(&["A"]);
+    s.execute("animation.makeFramesFromLayers", json!({"delayMs": 100})).unwrap();
+    s.execute("animation.selectFrame", json!({"frame": 1})).unwrap();
+    let r = s.execute("animation.tween", json!({"frames": 3})).unwrap();
+    assert_eq!(delays(&s), [100; 5]);
+    assert_eq!(r["selection"], json!([1, 2, 3]));
+    assert_eq!(current(&s), 3);
+    // Frame 0 shows only the Background, frame 4 only A: the new frames cross-fade.
+    for (f, bg, a) in [(1, 0.75, 0.25), (2, 0.5, 0.5), (3, 0.25, 0.75)] {
+        assert!((opacity(&s, f, "Background") - bg).abs() < 1e-5, "frame {f}");
+        assert!((opacity(&s, f, "A") - a).abs() < 1e-5, "frame {f}");
+        assert!(!hidden(&s, f, "Background") && !hidden(&s, f, "A"), "both show while fading");
+    }
+    // The selected frame's look is on the layers.
+    assert!((doc(&s).layers.iter().find(|l| l.name == "A").unwrap().opacity - 0.75).abs() < 1e-5);
+    // The ends are untouched.
+    assert!(hidden(&s, 0, "A") && hidden(&s, 4, "Background"));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(delays(&s).len(), 2);
+}
+
+#[test]
+fn tween_can_go_the_other_way_and_pick_layers() {
+    let mut s = session(&["A"]);
+    s.execute("animation.makeFramesFromLayers", json!({})).unwrap();
+    s.execute("animation.selectFrame", json!({"frame": 0})).unwrap();
+    let a = id_of(&s, "A");
+    s.execute("animation.tween", json!({"with": "next", "frames": 1, "layers": [a.0]})).unwrap();
+    assert_eq!(delays(&s).len(), 3);
+    assert!((opacity(&s, 1, "A") - 0.5).abs() < 1e-5);
+    assert!(!hidden(&s, 1, "Background") && opacity(&s, 1, "Background") == 1.0, "a layer that isn't tweened keeps the selected frame's look");
+    assert_eq!(current(&s), 1);
+}
+
+#[test]
+fn tween_refuses_what_it_cannot_do() {
+    let mut s = session(&["A"]);
+    s.execute("animation.makeFramesFromLayers", json!({})).unwrap();
+    s.execute("animation.selectFrame", json!({"frame": 0})).unwrap();
+    for bad in [
+        json!({}),
+        json!({"with": "first"}),
+        json!({"with": "sideways"}),
+        json!({"with": "next", "frames": 0}),
+        json!({"with": "next", "frames": 501}),
+        json!({"with": "next", "layers": "x"}),
+    ] {
+        assert!(s.execute("animation.tween", bad).is_err());
+    }
+    assert_eq!(delays(&s).len(), 2);
+}
+
+#[test]
+fn opacity_edits_change_only_the_selected_frame() {
+    let mut s = session(&["A"]);
+    s.execute("animation.create", json!({})).unwrap();
+    s.execute("animation.newFrame", json!({})).unwrap();
+    let a = id_of(&s, "A");
+    s.execute("layer.setProps", json!({"layer": a.0, "opacity": 0.3})).unwrap();
+    assert!((opacity(&s, 1, "A") - 0.3).abs() < 1e-5);
+    assert_eq!(opacity(&s, 0, "A"), 1.0);
+    s.execute("animation.selectFrame", json!({"frame": 0})).unwrap();
+    assert_eq!(doc(&s).layer(a).unwrap().opacity, 1.0);
+    s.execute("animation.selectFrame", json!({"frame": 1})).unwrap();
+    assert!((doc(&s).layer(a).unwrap().opacity - 0.3).abs() < 1e-5);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(doc(&s).layer(a).unwrap().opacity, 1.0);
+}
+
+#[test]
+fn pasted_frames_carry_their_opacities() {
+    let mut s = session(&["A"]);
+    s.execute("animation.create", json!({})).unwrap();
+    let a = id_of(&s, "A");
+    s.execute("animation.pasteFrames", json!({"frames": [{"delayMs": 10, "opacities": [[a.0, 0.4], [999_999, 0.1]]}]})).unwrap();
+    assert!((opacity(&s, 1, "A") - 0.4).abs() < 1e-5);
+    assert_eq!(doc(&s).frame_animation.as_ref().unwrap().frames[1].opacities.len(), 2, "unknown layers dropped, known ones all recorded");
+    assert!(s.execute("animation.pasteFrames", json!({"frames": [{"opacities": [[1]]}]})).is_err());
+}

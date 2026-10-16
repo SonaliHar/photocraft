@@ -128,9 +128,10 @@ fn make_frames_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
             .map(|shown| {
                 let mut hidden: Vec<_> = doc.layers.iter().enumerate().filter(|(i, _)| *i != shown).map(|(_, l)| l.id).collect();
                 hidden.sort();
-                AnimFrame { delay_ms: delay, hidden }
+                AnimFrame { delay_ms: delay, hidden, ..Default::default() }
             })
             .collect();
+        a.fill_opacities(&doc.layers);
         a.current = 0;
         a.apply(0, &mut doc.layers);
         doc.frame_animation = Some(a);
@@ -305,7 +306,21 @@ fn paste_frames(s: &mut Session, p: &Value) -> Result<Value> {
                 .and_then(|l| l.iter().map(Value::as_u64).collect::<Option<Vec<_>>>())
                 .ok_or_else(|| bad(CMD, format!("`hidden` must be a list of layer ids, got {v}")))?,
         };
-        pasted.push((delay_ms, ids));
+        let opacities = match f.get("opacities") {
+            None | Some(Value::Null) => Vec::new(),
+            Some(v) => v
+                .as_array()
+                .and_then(|l| {
+                    l.iter()
+                        .map(|pair| {
+                            let pair = pair.as_array().filter(|p| p.len() == 2)?;
+                            Some((pair[0].as_u64()?, pair[1].as_f64().filter(|o| o.is_finite())? as f32))
+                        })
+                        .collect::<Option<Vec<_>>>()
+                })
+                .ok_or_else(|| bad(CMD, format!("`opacities` must be a list of [layer id, opacity] pairs, got {v}")))?,
+        };
+        pasted.push((delay_ms, ids, opacities));
     }
     let st = s.active().ok_or(EngineError::NoDocument)?;
     if st.doc.frame_animation.as_ref().is_some_and(|a| a.frames.len() + pasted.len() > MAX_FRAMES) {
@@ -316,11 +331,15 @@ fn paste_frames(s: &mut Session, p: &Value) -> Result<Value> {
         let known = |id: u64| doc.layer(photocraft_doc::LayerId(id)).is_some();
         let frames: Vec<AnimFrame> = pasted
             .iter()
-            .map(|(delay_ms, ids)| {
+            .map(|(delay_ms, ids, opacities)| {
                 let mut hidden: Vec<_> = ids.iter().copied().filter(|id| known(*id)).map(photocraft_doc::LayerId).collect();
                 hidden.sort();
                 hidden.dedup();
-                AnimFrame { delay_ms: *delay_ms, hidden }
+                let mut frame = AnimFrame { delay_ms: *delay_ms, hidden, ..Default::default() };
+                for (id, o) in opacities.iter().filter(|(id, _)| known(*id)) {
+                    frame.set_opacity(photocraft_doc::LayerId(*id), o.clamp(0.0, 1.0));
+                }
+                frame
             })
             .collect();
         let a = animation(doc, CMD)?;
@@ -331,9 +350,102 @@ fn paste_frames(s: &mut Session, p: &Value) -> Result<Value> {
         a.frames.splice(at..at, frames);
         a.current = at + n - 1;
         selection = (at..at + n).collect();
+        let mut a = a.clone();
+        a.fill_opacities(&doc.layers);
+        a.apply(a.current, &mut doc.layers);
+        doc.frame_animation = Some(a);
+        Ok(())
+    })?;
+    info_selecting(s, selection)
+}
+
+/// Most frames one tween adds.
+const MAX_TWEEN: u64 = 500;
+
+/// Tween: `frames` new frames between the selected frame and the one it is tweened `with`
+/// ("previous", "next", "first" or "last"), fading each of the `layers` (all by default) from its
+/// look in the earlier of the two to its look in the later one. A hidden layer counts as opacity 0,
+/// so a layer shown in only one of the frames fades in or out. The new frames take the selected
+/// frame's delay and are selected.
+fn tween(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "animation.tween";
+    let n = match p.get("frames") {
+        None | Some(Value::Null) => 1,
+        Some(v) => v.as_u64().filter(|n| (1..=MAX_TWEEN).contains(n)).ok_or_else(|| bad(CMD, format!("`frames` must be from 1 to {MAX_TWEEN}, got {v}")))?,
+    } as usize;
+    let with = p.get("with").and_then(Value::as_str).unwrap_or("previous").to_string();
+    let only: Option<Vec<u64>> = match p.get("layers") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(w)) if w == "all" => None,
+        Some(v) => Some(
+            v.as_array()
+                .and_then(|l| l.iter().map(Value::as_u64).collect::<Option<Vec<_>>>())
+                .ok_or_else(|| bad(CMD, format!("`layers` must be \"all\" or a list of layer ids, got {v}")))?,
+        ),
+    };
+    if s.active().and_then(|st| st.doc.frame_animation.as_ref()).is_some_and(|a| a.frames.len() + n > MAX_FRAMES) {
+        return Err(EngineError::Other(format!("an animation holds at most {MAX_FRAMES} frames")));
+    }
+    let mut selection = Vec::new();
+    s.edit("Tween", |doc, _| {
+        fn ids(layers: &[photocraft_doc::Layer], out: &mut Vec<photocraft_doc::LayerId>) {
+            for l in layers {
+                out.push(l.id);
+                if let Some(ch) = l.children() {
+                    ids(ch, out);
+                }
+            }
+        }
+        let mut all = Vec::new();
+        ids(&doc.layers, &mut all);
+        let tweened: Vec<_> = all.into_iter().filter(|id| only.as_ref().is_none_or(|o| o.contains(&id.0))).collect();
+        let fallback: std::collections::HashMap<_, _> = tweened.iter().map(|id| (*id, doc.layer(*id).map_or(1.0, |l| l.opacity))).collect();
+        let a = animation(doc, CMD)?;
+        a.clamp();
+        let (from, len) = (a.current, a.frames.len());
+        let other = match with.as_str() {
+            "previous" => from.checked_sub(1),
+            "next" => (from + 1 < len).then_some(from + 1),
+            "first" => (from != 0).then_some(0),
+            "last" => (from + 1 != len).then_some(len - 1),
+            w => return Err(bad(CMD, format!("`with` must be \"previous\", \"next\", \"first\" or \"last\", got \"{w}\""))),
+        }
+        .ok_or_else(|| EngineError::Other(format!("there is no {with} frame to tween with")))?;
+        let (early, late) = (from.min(other), from.max(other));
+        // What a layer shows in a frame: its opacity, or nothing when hidden.
+        let shown = |f: &AnimFrame, id: photocraft_doc::LayerId| {
+            let o = f.opacity_of(id).unwrap_or(fallback[&id]);
+            (if f.hidden.binary_search(&id).is_ok() { 0.0 } else { o }, o)
+        };
+        let mut made = Vec::with_capacity(n);
+        for k in 1..=n {
+            let t = k as f32 / (n + 1) as f32;
+            let mut f = a.frames[from].clone();
+            for id in &tweened {
+                let ((e_shown, e_op), (l_shown, l_op)) = (shown(&a.frames[early], *id), shown(&a.frames[late], *id));
+                let eff = e_shown + (l_shown - e_shown) * t;
+                let gone = eff <= 1e-4;
+                let op = if gone { if e_shown > 0.0 { e_op } else { l_op } } else { eff };
+                f.set_opacity(*id, op.clamp(0.0, 1.0));
+                match (f.hidden.binary_search(id), gone) {
+                    (Ok(i), false) => {
+                        f.hidden.remove(i);
+                    }
+                    (Err(i), true) => f.hidden.insert(i, *id),
+                    _ => {}
+                }
+            }
+            made.push(f);
+        }
+        let at = early + 1;
+        a.frames.splice(at..at, made);
+        a.current = at + n - 1;
+        selection = (at..at + n).collect();
         let cur = a.current;
-        let a = a.clone();
+        let mut a = a.clone();
+        a.fill_opacities(&doc.layers);
         a.apply(cur, &mut doc.layers);
+        doc.frame_animation = Some(a);
         Ok(())
     })?;
     info_selecting(s, selection)
@@ -431,6 +543,14 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         spec!("animation.setLoop", "Loop Count", r#"{loops:"once"|"forever"|plays} → {animation}"#, has_animation, true, |s, p| set_loop(s, p)),
         spec!("animation.moveFrame", "Move Frame", r#"{from, to} → {animation}"#, has_animation, true, |s, p| move_frame(s, p)),
+        spec!(
+            "animation.tween",
+            "Tween",
+            r#"{with?:"previous"|"next"|"first"|"last", frames?:1, layers?:"all"|[id..]} → {animation, selection}"#,
+            has_animation,
+            true,
+            |s, p| tween(s, p)
+        ),
         spec!("animation.moveFrames", "Move Frames", r#"{frames:[i..], slot} → {animation, selection}"#, has_animation, true, |s, p| move_frames(s, p)),
         spec!(
             "animation.pasteFrames",

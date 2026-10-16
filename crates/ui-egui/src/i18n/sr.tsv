@@ -4293,3 +4293,6 @@ shape	Appearance	Izgled
 	{count} times	{count} puta
 	Frames before	Kadrovi pre
 	Frames after	Kadrovi posle
+	Tween	Međukadrovi
+	Last frame	Poslednji kadar
+	Frames to add	Kadrova za dodavanje
