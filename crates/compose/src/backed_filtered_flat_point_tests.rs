@@ -452,3 +452,6 @@ mod source_activity;
 
 #[path = "backed_filtered_flat_point_ordered_tests.rs"]
 mod ordered;
+
+#[path="backed_programme_selection_flat_tests.rs"]
+mod programme_selection;

@@ -1586,3 +1586,7 @@ mod programme_select_native_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="accounted_common_edit_native_tests.rs"]
 mod common_edit_native_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_programme_selection_native_tests.rs"]
+mod programme_selection_native_tests;

@@ -1,4 +1,5 @@
 //! Complete paid actual-tree and mask proof. No source operation authority.
+use crate::accounted_document::SelectionPermit;
 use crate::{
     Document, FilterMask,
     item_identity::FilterId,
@@ -148,9 +149,14 @@ fn requirements<L: NormalHierarchyIndexLease>(
     lim: NormalHierarchyLimits,
     check: &dyn Fn(u64) -> Result<(), E>,
 ) -> Result<NormalHierarchyMaskIndexRequirements, E> {
+    requirements_selected::<L>(d, lim, check, None)
+}
+fn requirements_selected<L: NormalHierarchyIndexLease>(
+    d: &Document, lim: NormalHierarchyLimits, check: &dyn Fn(u64) -> Result<(), E>, selection: Option<&SelectionPermit<'_>>,
+) -> Result<NormalHierarchyMaskIndexRequirements, E> {
     plain_quantized_header(d, check)?;
     // This complete header prepass admits 16/64MiB before any proof allocation.
-    let t = tree::requirements::<L>(d, lim, check)?;
+    let t = tree::requirements_selected::<L>(d, lim, check, selection)?;
     let entry = vector_bytes::<CheckedFilterMaskCoverage<'_>>(t.mask_count)?;
     let binding = vector_bytes::<NormalHierarchyMaskBinding<'_>>(t.node_count)?;
     let range = vector_bytes::<Range<usize>>(t.stack_count)?;
@@ -189,6 +195,17 @@ fn requirements<L: NormalHierarchyIndexLease>(
     })
 }
 impl Document {
+    pub(crate) fn checked_normal_hierarchy_mask_index_requirements_selected(
+        &self, l: NormalHierarchyLimits, c: &ReadControl<'_>, selection: &SelectionPermit<'_>,
+    ) -> Result<NormalHierarchyMaskIndexRequirements, E> {
+        requirements_selected::<QuotaLease>(self, l, &|n| c.check(n), Some(selection))
+    }
+    pub(crate) fn checked_normal_hierarchy_mask_index_selected(
+        &self, l: NormalHierarchyLimits, q: &BackingQuota, c: &ReadControl<'_>, selection: &SelectionPermit<'_>,
+    ) -> Result<CheckedNormalHierarchyMaskIndex<'_>, E> {
+        self.checked_normal_hierarchy_mask_index_with_reservation_selected(l,c.interrupt,&|n|c.check(n),|n|q.reserve(QuotaKind::Index,n).map_err(|_|E::Quota),Some(selection))
+    }
+
     pub fn checked_normal_hierarchy_mask_index_requirements(
         &self,
         l: NormalHierarchyLimits,
@@ -222,14 +239,20 @@ impl Document {
         l: NormalHierarchyLimits,
         i: &Interrupt<'_>,
         w: &dyn Fn(u64) -> Result<(), E>,
-        mut reserve: impl FnMut(u64) -> Result<L, E>,
+        reserve: impl FnMut(u64) -> Result<L, E>,
+    ) -> Result<CheckedNormalHierarchyMaskIndex<'_, L>, E> {
+        self.checked_normal_hierarchy_mask_index_with_reservation_selected(l, i, w, reserve, None)
+    }
+    pub(crate) fn checked_normal_hierarchy_mask_index_with_reservation_selected<L: NormalHierarchyIndexLease>(
+        &self, l: NormalHierarchyLimits, i: &Interrupt<'_>, w: &dyn Fn(u64) -> Result<(), E>,
+        mut reserve: impl FnMut(u64) -> Result<L, E>, selection: Option<&SelectionPermit<'_>>,
     ) -> Result<CheckedNormalHierarchyMaskIndex<'_, L>, E> {
         let check = |n| {
             i.check().map_err(|_| E::Cancelled)?;
             w(n)?;
             i.check().map_err(|_| E::Cancelled)
         };
-        let req = requirements::<L>(self, l, &check)?;
+        let req = requirements_selected::<L>(self, l, &check, selection)?;
         let mut allocation = reserve(req.proof_index_bytes)?;
         if allocation.bytes() < req.proof_index_bytes {
             return Err(E::Allocation);

@@ -11,7 +11,7 @@ use photocraft_cms::Profile;
 use photocraft_color::{ColorMode, PixelFormat, SampleType, try_read_sample_f64};
 use photocraft_doc::{
     Document, FilterOutputPrecision, LayerContent, LayerId, SampleEncoding,
-    accounted_document::AccountedDocument,
+    accounted_document::{AccountedDocument, CheckedProgrammeSelection, ProgrammeNativeStorageKind},
     import_compositing::{GimpOperator, GimpSpace},
     item_identity::ItemRef,
 };
@@ -209,8 +209,16 @@ impl Purpose {
     fn allows_mixed_opacity(self)->bool { matches!(self,Self::SourceOpacity|Self::Current|Self::MaskedCurrent) }
     fn masked(self)->bool { matches!(self,Self::MaskedSource|Self::MaskedCurrent) }
 }
-fn compile<B: PlanBudget>(doc: &Document, purpose: Purpose, mask_bindings:Option<MaskBindings<'_,B::Lease>>, header: u64, interrupt: &Interrupt<'_>, budget: &mut B) -> Result<(Plan<B::Lease>, B::Lease), E> {
+fn compile<B: PlanBudget>(doc:&Document,purpose:Purpose,mask_bindings:Option<MaskBindings<'_,B::Lease>>,header:u64,interrupt:&Interrupt<'_>,budget:&mut B)->Result<(Plan<B::Lease>,B::Lease),E>{
+    compile_current(doc,purpose,mask_bindings,None,header,interrupt,budget)
+}
+fn compile_current<B: PlanBudget>(doc: &Document, purpose: Purpose, mask_bindings:Option<MaskBindings<'_,B::Lease>>, selection:Option<&CheckedProgrammeSelection<'_>>, header: u64, interrupt: &Interrupt<'_>, budget: &mut B) -> Result<(Plan<B::Lease>, B::Lease), E> {
     charge(budget, interrupt, 1)?;
+    if let Some(proof)=selection{
+        charge(budget,interrupt,128)?;
+        let expected=match purpose{Purpose::Current=>ProgrammeNativeStorageKind::FilteredFlatPoint,Purpose::MaskedCurrent=>ProgrammeNativeStorageKind::MaskedFilteredFlatPoint,_=>return Err(scope())};
+        if !proof.matches_document(doc)||proof.storage_kind()!=expected{return Err(scope());}
+    }
     let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
     let source = doc.source_color_context.as_ref().ok_or_else(scope)?;
     let count = doc.layers.len();
@@ -229,7 +237,7 @@ fn compile<B: PlanBudget>(doc: &Document, purpose: Purpose, mask_bindings:Option
         || state.provenance.format != "xcf"
         || state.provenance.format_version != 22
         || state.current_filter_output_precision != FilterOutputPrecision::Canonical
-        || doc.selection.is_some()
+        || (doc.selection.is_some() && selection.is_none())
         || doc.selection_channel_id.is_some()
         || !doc.channels.is_empty()
         || !doc.paths.is_empty()
@@ -590,7 +598,9 @@ impl<'a> Context<'a> {
         }
         owner.validate_readonly_filtered_flat_point_storage(c).map_err(E::Backing)?;
         let header = u64::try_from(std::mem::size_of::<Self>()).map_err(|_| length())?;
-        let (plan, lease) = compile(owner.document(), Purpose::Current, None, header, c.interrupt, &mut NativeBudget { quota: owner.quota(), control: c })?;
+        let _selection_fee=if owner.document().selection.is_some(){Some(owner.quota().reserve(QuotaKind::Index,(std::mem::size_of::<CheckedProgrammeSelection<'_>>()+128)as u64).map_err(E::Quota)?)}else{None};
+        let proof=if owner.document().selection.is_some(){Some(owner.checked_programme_selection(c).map_err(E::Backing)?)}else{None};
+        let (plan, lease) = compile_current(owner.document(), Purpose::Current, None, proof.as_ref(), header, c.interrupt, &mut NativeBudget { quota: owner.quota(), control: c })?;
         Ok(Self { owner, plan, limits, _lease: lease })
     }
     pub(crate) fn new_masked(owner:&'a AccountedDocument,limits:NormalBandLimits,c:&ReadControl<'_>)->Result<Self,E>{
@@ -600,7 +610,9 @@ impl<'a> Context<'a> {
         let proofs=owner.document().checked_f32_filter_mask_coverages_with(photocraft_doc::xcf_filter_masks::MaskCoverageSetLimits::STANDARD,owner.quota(),c).map_err(E::Backing)?;
         let mut budget=NativeBudget{quota:owner.quota(),control:c};
         let bindings=MaskBindings::build(owner.document(),&proofs,c.interrupt,&mut budget)?;
-        let(plan,lease)=compile(owner.document(),Purpose::MaskedCurrent,Some(bindings),std::mem::size_of::<Self>()as u64,c.interrupt,&mut budget)?;
+        let _selection_fee=if owner.document().selection.is_some(){Some(owner.quota().reserve(QuotaKind::Index,(std::mem::size_of::<CheckedProgrammeSelection<'_>>()+128)as u64).map_err(E::Quota)?)}else{None};
+        let proof=if owner.document().selection.is_some(){Some(owner.checked_programme_selection(c).map_err(E::Backing)?)}else{None};
+        let(plan,lease)=compile_current(owner.document(),Purpose::MaskedCurrent,Some(bindings),proof.as_ref(),std::mem::size_of::<Self>()as u64,c.interrupt,&mut budget)?;
         Ok(Self{owner,plan,limits,_lease:lease})
     }
     pub(crate) fn bounds(&self) -> Rect {

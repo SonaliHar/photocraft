@@ -46,7 +46,7 @@ impl AccountedDocument {
         if !self.is_readonly_assigned_point_storage() {
             return refused();
         }
-        measured_assigned(self.document(), self.quota(), control)?;
+        programme_measured(self, control)?;
         Ok(())
     }
 }

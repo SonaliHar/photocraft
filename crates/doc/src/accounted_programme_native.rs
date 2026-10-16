@@ -21,7 +21,7 @@ pub enum ProgrammeNativeStorageKind {
     MaskedFilteredFlatPoint,
     NormalHierarchy,
 }
-fn kind(owner: &AccountedDocument) -> Result<ProgrammeNativeStorageKind, BackingError> {
+pub(super) fn kind(owner: &AccountedDocument) -> Result<ProgrammeNativeStorageKind, BackingError> {
     use ProgrammeNativeStorageKind as K;
     Ok(match owner.owner._storage_class {
         StorageClass::ReadonlyThresholdAlpha => K::ThresholdAlpha,

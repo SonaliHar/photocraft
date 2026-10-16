@@ -2192,3 +2192,41 @@ selection. Programme-owned pixel selections, selection channels, advanced brushe
 extent growth and live preview remain unfinished. New contracts are ignored
 UNRUN/uncompiled; production compilation/static review remain separate from all
 deferred behavioral, numerical/native/UI/performance and full-stock acceptance.
+
+
+Anonymous pixel selections now have a named programme-owned custody path across
+the nine existing actual storage classes. A real AccountedSelection must match
+the actual quota, installed native view/default/tile identity, allowed Gray8 or
+matching-depth coverage and canvas, with no selection-channel identity. The
+opaque Current witness binds the actual document and class and proves the full
+structural census. Source constructors stay selection-free. Previously strict raw preparation
+endpoints keep their guards; existing generic raw Point preparation retains its
+prior behavior. New selected class admission requires the actual owner witness;
+no temporary Legacy conversion or cleared-Document projection supplies authority. All seven class copiers retain the real immutable guard and
+separately paid installed map/default view across selection, pixel, filter and
+metadata transactions. Existing actual native/profile/mask/programme rules stay.
+
+Private guard-bound Current preparation accepts that witness only for the actual
+owner/document/class. Source and previously strict default wrappers retain
+their rules; unrelated generic raw Point preparation is unchanged. Native
+rehydration consumes a real codec-owned selection Surface, adopts its existing
+paid backing into a real guard, charges the new view and returns the same typed
+class before full Current validation. Existing typed None factories remain;
+unmarked Source and raw marked loaders retain their old refusals. The existing
+selection field and class markers carry these bytes; no schema or format-floor
+change is needed because earlier typed readers refuse selected class shapes.
+
+Registered Select All and Deselect capture the original programme document,
+history, layer view, source/path, channels and preferences before staging. Their
+full OLD/STAGED/noop and final checks share the original finite operation meter,
+deadline/cancellation and actual quota. Existing Legacy capture/replace semantics
+remain. Guarded selections feed the existing selected Round/Pencil producer and
+per-cell Clear/solid Fill kernels. Native U32/F64 brush selection stays F64 after
+the declared base-weight schedule. Wide Clear still accepts exact binary coverage
+only; fractional U32/F64 Clear remains unsupported. Fill remains U8/U16/F32.
+Source bytes/protection, stored programmes/masks, native defaults and siblings are
+retained, and native .pcraft reopening continues edits with a real guard.
+Source selection channels/saved sets, broader selection generators, unsupported
+brush/geometry contexts and full stock support remain unfinished. New contracts
+are ignored UNRUN/uncompiled; compilation/static review do not establish any
+deferred numerical/native/UI/performance or full task acceptance.

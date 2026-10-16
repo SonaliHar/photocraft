@@ -416,3 +416,6 @@ mod native_edit_tests;
 
 #[path="accounted_programme_native_tests.rs"]
 mod programme_native_tests;
+
+#[path="accounted_programme_selection_tests.rs"]
+mod programme_selection_tests;

@@ -12,6 +12,16 @@ use photocraft_color::{PixelFormat, SampleType};
 use photocraft_raster::{Interrupt, Tile, backing::quota::QuotaKind};
 use std::io::{Read, Seek, Write};
 
+/// Actual runtime programme selection custody, never a raw Document grant.
+/// Strict selection-free writers retain their existing class checks unchanged.
+fn programme_selection(owner: &photocraft_doc::accounted_document::AccountedDocument, control: &ReadControl<'_>) -> Result<bool> {
+    if owner.document().selection.is_none() || owner.is_legacy_storage() { return Ok(false); }
+    let proof = owner.checked_programme_selection(control).map_err(error)?;
+    if !proof.matches_owner(owner) || proof.selection().is_none() { return Err(error(BackingError::Integrity)); }
+    control.check(1).map_err(error)?;
+    Ok(true)
+}
+
 enum Object<'a> {
     Tile(Arc<Tile>, SampleType),
     Blob(Arc<Vec<u8>>),
@@ -211,10 +221,13 @@ pub fn save_accounted_current_document_archive<W: Write + Seek>(
     if !owner.quota().shares_ledger(quota) {
         return Err(error(BackingError::Quota));
     }
+    programme_selection(owner, control)?;
     if owner.is_readonly_normal_hierarchy_storage(){return save_accounted_normal_hierarchy_document_archive(owner,output,limits,quota,control)}
     if owner.is_readonly_masked_filtered_flat_point_storage(){return save_accounted_masked_filtered_flat_document_archive(owner,output,limits,quota,control)}
     let hint = if owner.is_readonly_filtered_flat_point_storage() {
-        owner.validate_readonly_filtered_flat_point_storage(control).map_err(error)?;
+        if !programme_selection(owner, control)? {
+            owner.validate_readonly_filtered_flat_point_storage(control).map_err(error)?;
+        }
         Some(crate::NativeCurrentStorageHint::FilteredFlatPoint)
     } else {
         None
@@ -236,7 +249,9 @@ pub fn save_accounted_point_f32_coverage_document_archive<W: Write + Seek>(
     if !owner.is_readonly_point_storage() || !owner.quota().shares_ledger(quota) {
         return Err(error(BackingError::Unsupported));
     }
-    owner.validate_readonly_point_storage(control).map_err(error)?;
+    if !programme_selection(owner, control)? {
+        owner.validate_readonly_point_storage(control).map_err(error)?;
+    }
     let proof = owner.document().checked_f32_filter_mask_coverage_with(control).map_err(error)?;
     let hint = proof.as_ref().map(|_| crate::NativeCurrentStorageHint::PointF32Coverage);
     save_current_document_archive_with_hint(owner.document(), output, limits, quota, control, hint)
@@ -246,14 +261,18 @@ pub fn save_accounted_point_f32_coverage_document_archive<W: Write + Seek>(
 pub fn save_accounted_masked_filtered_flat_document_archive<W:Write+Seek>(owner:&photocraft_doc::accounted_document::AccountedDocument,output:W,limits:OwnedDocumentLimits,quota:&BackingQuota,control:&ReadControl<'_>)->Result<W>{
     control.check(0).map_err(error)?;
     if !owner.is_readonly_masked_filtered_flat_point_storage() || !owner.quota().shares_ledger(quota){return Err(error(BackingError::Unsupported))}
-    owner.validate_readonly_masked_filtered_flat_point_storage(control).map_err(error)?;
+    if !programme_selection(owner, control)? {
+        owner.validate_readonly_masked_filtered_flat_point_storage(control).map_err(error)?;
+    }
     save_current_document_archive_with_hint(owner.document(),output,limits,quota,control,Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint))
 }
 /// Explicit actual-class hierarchy writer; complete semantic CURRENT proof belongs to caller.
 pub fn save_accounted_normal_hierarchy_document_archive<W:Write+Seek>(owner:&photocraft_doc::accounted_document::AccountedDocument,output:W,limits:OwnedDocumentLimits,quota:&BackingQuota,control:&ReadControl<'_>)->Result<W>{
     control.check(0).map_err(error)?;
     if !owner.is_readonly_normal_hierarchy_storage()||!owner.quota().shares_ledger(quota){return Err(error(BackingError::Unsupported))}
-    owner.validate_readonly_normal_hierarchy_current_storage(control).map_err(error)?;
+    if !programme_selection(owner, control)? {
+        owner.validate_readonly_normal_hierarchy_current_storage(control).map_err(error)?;
+    }
     save_current_document_archive_with_hint(owner.document(),output,limits,quota,control,Some(crate::NativeCurrentStorageHint::NormalHierarchy))
 }
 fn save_current_document_archive_with_hint<W: Write + Seek>(

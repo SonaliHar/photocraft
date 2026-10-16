@@ -39,6 +39,10 @@ mod masked_filtered_flat_readonly;
 mod normal_hierarchy_readonly;
 #[path = "accounted_programme_native.rs"]
 mod programme_native;
+#[path = "accounted_programme_selection.rs"]
+mod programme_selection;
+pub use programme_selection::CheckedProgrammeSelection;
+pub(crate) use programme_selection::{SelectionPermit, selection_disallowed};
 pub use programme_native::{CheckedProgrammeNativeTarget, ProgrammeNativeStorageKind};
 pub use flat_composite_readonly::FlatCompositeCompositionPatch;
 pub use gaussian_group_readonly::{GaussianGroupEnabledPatch, GaussianGroupPatch};

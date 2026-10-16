@@ -13,7 +13,7 @@ use photocraft_cms::{Builtin, Profile, WideWork};
 use photocraft_color::{ColorMode, PixelFormat, SampleType, try_read_sample_f64};
 use photocraft_doc::{
     Document, LayerContent, LayerId, SampleEncoding, WorkingProfileInterpretation,
-    accounted_document::AccountedDocument,
+    accounted_document::{AccountedDocument, CheckedProgrammeSelection, ProgrammeNativeStorageKind},
     import_compositing::{GimpOperator, GimpSpace},
     item_identity::{FilterId, ItemRef},
     xcf_filters::{FilterNode, FilterValue},
@@ -561,15 +561,23 @@ pub struct LeasedStockPointPipeline<S, L> {
     _source: S,
     _lease: L,
 }
-fn prepare_plan<B: PlanBudget>(
+fn prepare_plan<B: PlanBudget>(doc:&Document,supplied:Option<&Profile>,purpose:PreparationPurpose,header:u64,interrupt:&Interrupt<'_>,budget:&mut B)->Result<(StockPointPlan,B::Lease),BackedNormalError>{
+    prepare_plan_current(doc,supplied,purpose,None,header,interrupt,budget)
+}
+fn selection_allowed(doc:&Document,purpose:PreparationPurpose,proof:Option<&CheckedProgrammeSelection<'_>>)->bool{
+    purpose==PreparationPurpose::Current && proof.is_some_and(|p|p.storage_kind()==ProgrammeNativeStorageKind::Point&&p.matches_document(doc))
+}
+fn prepare_plan_current<B: PlanBudget>(
     doc: &Document,
     supplied: Option<&Profile>,
     purpose: PreparationPurpose,
+    selection: Option<&CheckedProgrammeSelection<'_>>,
     header: u64,
     interrupt: &Interrupt<'_>,
     budget: &mut B,
 ) -> Result<(StockPointPlan, B::Lease), BackedNormalError> {
     work(budget, interrupt, 1)?;
+    if selection.is_some(){work(budget,interrupt,128)?;if !selection_allowed(doc,purpose,selection){return Err(scope());}}
     let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
     let [layer] = doc.layers.as_slice() else { return Err(scope()) };
     let [filters] = state.filter_stacks.as_slice() else { return Err(scope()) };
@@ -607,7 +615,7 @@ fn prepare_plan<B: PlanBudget>(
             }
             _=>return Err(scope()),
         };
-        return masked_scalar::prepare(doc,supplied,purpose,header,extent,format,default,interrupt,budget);
+        return masked_scalar::prepare(doc,supplied,purpose,selection,header,extent,format,default,interrupt,budget);
     }
     if node.operation.schema_epoch == crate::gimp_masked_exposure::EPOCH {
         let (extent,format,default) = match &layer.content {
@@ -618,7 +626,7 @@ fn prepare_plan<B: PlanBudget>(
             }
             _=>return Err(scope()),
         };
-        return masked_exposure::prepare(doc,supplied,purpose,header,extent,format,default,interrupt,budget);
+        return masked_exposure::prepare(doc,supplied,purpose,selection,header,extent,format,default,interrupt,budget);
     }
     for node in &filters.nodes {
         initial_member(node, budget, interrupt)?;
@@ -635,7 +643,7 @@ fn prepare_plan<B: PlanBudget>(
     crate::gimp_neighborhood::qualify_expanded_residual_mask_storage(state, node, extent).map_err(BackedNormalError::Color)?;
     let stored = doc.sample_encoding.ok_or_else(scope)?;
     if node.operation.schema_epoch == crate::gimp_exposure::LOADED_POINT_EPOCH {
-        return loaded_exposure::prepare(doc, supplied, purpose, header, extent, format, default, interrupt, budget);
+        return loaded_exposure::prepare(doc, supplied, purpose, selection, header, extent, format, default, interrupt, budget);
     }
     if crate::gimp_vibrance::claims(node) {
         return owned_vibrance::prepare(doc, supplied, header, extent, format, default, interrupt, budget);
@@ -790,6 +798,16 @@ impl PreparedStockPointPipeline {
         }
         let (plan, lease) = prepare_plan(doc, Some(supplied), PreparationPurpose::Current, header, control.interrupt, &mut NativeBudget { quota, control })?;
         Ok(Self { plan, quota: quota.clone(), _lease: lease })
+    }
+    fn prepare_selected(proof:&CheckedProgrammeSelection<'_>,supplied:&Profile,control:&ReadControl<'_>)->Result<Self,BackedNormalError>{
+        control.check(128).map_err(BackedNormalError::Backing)?;
+        let owner=proof.owner();let doc=owner.document();
+        if !proof.matches_owner(owner)||!selection_allowed(doc,PreparationPurpose::Current,Some(proof)){return Err(scope());}
+        let quota=owner.quota();
+        if let Some(layer)=doc.layers.first(){if let LayerContent::BackedRaster(backed)=&layer.content{if !quota.shares_ledger(backed.quota()){return Err(BackedNormalError::Backing(BackingError::Quota));}}}
+        let header=(std::mem::size_of::<Self>()as u64).checked_add(128).ok_or_else(length)?;
+        let(plan,lease)=prepare_plan_current(doc,Some(supplied),PreparationPurpose::Current,Some(proof),header,control.interrupt,&mut NativeBudget{quota,control})?;
+        Ok(Self{plan,quota:quota.clone(),_lease:lease})
     }
     /// No external ICC parse is required: this existing generic Point policy
     /// uses the exact implicit basis and controlled effective-profile binding.
@@ -985,7 +1003,12 @@ impl<'a> PreparedBackedStockPointContext<'a> {
         let filters = state.filter_stacks.first().ok_or_else(scope)?;
         let header = (std::mem::size_of::<Self>() as u64).checked_add(128).ok_or_else(length)?;
         let lease = owner.quota().reserve(QuotaKind::Index, header).map_err(BackedNormalError::Quota)?;
-        let pipeline = PreparedStockPointPipeline::prepare(doc, profile, owner.quota(), control)?;
+        let pipeline=if doc.selection.is_some(){
+            let _selection_fee=owner.quota().reserve(QuotaKind::Index,(std::mem::size_of::<CheckedProgrammeSelection<'_>>()+128)as u64).map_err(BackedNormalError::Quota)?;
+            let proof=owner.checked_programme_selection(control).map_err(BackedNormalError::Backing)?;
+            if !proof.matches_owner(owner){return Err(scope());}
+            PreparedStockPointPipeline::prepare_selected(&proof,profile,control)?
+        }else{PreparedStockPointPipeline::prepare(doc, profile, owner.quota(), control)?};
         let node = match pipeline.plan.recipe {
             Recipe::Empty => None,
             Recipe::Filtered => Some(filters.nodes.first().ok_or_else(scope)?.id),
@@ -1121,3 +1144,7 @@ mod masked_exposure_tests;
 #[cfg(test)]
 #[path="backed_stock_point_masked_scalar_tests.rs"]
 mod masked_scalar_tests;
+
+#[cfg(test)]
+#[path="backed_programme_selection_point_tests.rs"]
+pub(crate) mod programme_selection_tests;

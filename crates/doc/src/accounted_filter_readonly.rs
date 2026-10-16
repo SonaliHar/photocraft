@@ -145,6 +145,11 @@ pub(super) fn physical_shape(
     doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>,
     validate_node: impl FnOnce(&crate::xcf_filters::FilterNode) -> Result<(), BackingError>,
 ) -> Result<(), BackingError> {
+    physical_shape_selected(doc, quota, control, validate_node, None)
+}
+pub(super) fn physical_shape_selected(
+    doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>,
+    validate_node: impl FnOnce(&crate::xcf_filters::FilterNode) -> Result<(), BackingError>, selection: Option<&SelectionPermit<'_>>) -> Result<(), BackingError> {
     control.check(1)?;
     if doc.layers.len() != 1
         || doc.size.width == 0
@@ -153,7 +158,7 @@ pub(super) fn physical_shape(
         || doc.size.height > MAX_CANVAS_SIDE
         || !matches!(doc.mode, crate::ColorMode::Rgb | crate::ColorMode::Grayscale)
         || !matches!(doc.depth, crate::SampleType::U16 | crate::SampleType::F32 | crate::SampleType::F64)
-        || doc.selection.is_some()
+        || selection_disallowed(doc, selection)
         || doc.selection_channel_id.is_some()
     {
         return unsupported();
@@ -332,7 +337,7 @@ impl AccountedDocument {
         if self.owner._storage_class != StorageClass::ReadonlyThresholdAlpha {
             return unsupported();
         }
-        measured(self.document(), self.quota(), control)?;
+        programme_measured(self, control)?;
         Ok(())
     }
 }
@@ -410,6 +415,7 @@ struct OriginalRetention {
 }
 #[derive(Clone, Copy)]
 enum CopyKind<'n> {
+    Selection(Option<&'n AccountedSelection>),
     ProgrammeNative(programme_native::Plan<'n>),
     Rename(&'n str),
     LayerName(ReadonlyLayerNamePatch<'n>),
@@ -418,7 +424,7 @@ enum CopyKind<'n> {
 }
 pub(super) fn layer_properties(owner: &AccountedDocument, patch: ReadonlyLayerPropertiesPatch<'_>, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     readonly_layer_properties::validate(patch, control)?;
-    let logical = measured(owner.document(), owner.quota(), control)?;
+    let logical = programme_measured(owner, control)?;
     let Some(plan) = readonly_layer_properties::plan(owner.document(), patch, control)? else {
         control.check(1)?;
         return Ok(owner.clone());
@@ -427,7 +433,7 @@ pub(super) fn layer_properties(owner: &AccountedDocument, patch: ReadonlyLayerPr
 }
 pub(super) fn layer_named(owner: &AccountedDocument, patch: ReadonlyLayerNamePatch<'_>, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     imported_edits::validate_name(patch.name, control)?;
-    let logical = measured(owner.document(), owner.quota(), control)?;
+    let logical = programme_measured(owner, control)?;
     if !readonly_layer_name::changed(owner.document(), patch, control)? {
         control.check(1)?;
         return Ok(owner.clone());
@@ -440,7 +446,7 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadContr
     if name.len() > 4096 {
         return Err(BackingError::Length);
     }
-    let logical = measured(owner.document(), owner.quota(), control)?;
+    let logical = programme_measured(owner, control)?;
     if imported_edits::names_equal(&owner.document().name, name, control)? {
         return Ok(owner.clone());
     }
@@ -449,8 +455,10 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadContr
 // Current metadata copies retain the original paid recipe. Document Rename
 // keeps its old slack; LayerName separately admits both replacement strings.
 fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
+    let replacement_selection=match kind{CopyKind::Selection(g)=>Some(g),_=>None};
+    let selection_copy=if owner.document().selection.is_some()||replacement_selection.is_some(){Some(programme_selection::SelectionCopy::new(owner,replacement_selection,control)?)}else{None};
     let replacement_name_bytes = match kind {
-        CopyKind::ProgrammeNative(_) => 0,
+        CopyKind::ProgrammeNative(_) | CopyKind::Selection(_) => 0,
         CopyKind::Rename(name) => name.len() as u64,
         // Two replacement Strings may each reserve up to twice their length.
         CopyKind::LayerName(patch) => (patch.name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
@@ -469,9 +477,10 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     let payload = owner.quota().reserve(QuotaKind::Resident, 0).map_err(|_| BackingError::Quota)?;
     control.check(logical.total()?)?;
     if let CopyKind::ProgrammeNative(plan) = kind { control.check(plan.copy_work())?; }
-    let mut document = imported_selection::copy_document(owner.document(), control)?;
+    let mut staged = ModelStaging {document:imported_selection::copy_document(owner.document(),control)?,selection_view:None};
+    let selection_guard=if let Some(copy)=selection_copy{copy.install(&mut staged)}else{None};
     let source = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
-    let destination = document.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
+    let destination = staged.document.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
     destination.filter_stacks.try_reserve_exact(1).map_err(|_| BackingError::Allocation)?;
     let stack = source.filter_stacks.first().ok_or(BackingError::Integrity)?;
     let mut nodes = Vec::new();
@@ -490,12 +499,13 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         destination.filter_masks.push(FilterMask { id: mask.id, owner: mask.owner, bounds: mask.bounds, surface: plan.copy(&mask.surface, control)? });
     }
     match kind {
-        CopyKind::ProgrammeNative(plan) => programme_native::apply(&mut document, plan, control)?,
-        CopyKind::Rename(name) => document.name = imported_edits::copy_name(name, control)?,
-        CopyKind::LayerName(patch) => readonly_layer_name::apply(&mut document, patch, control)?,
-        CopyKind::LayerProperties(plan) => readonly_layer_properties::apply(&mut document, plan, control)?,
+        CopyKind::Selection(_) => {},
+        CopyKind::ProgrammeNative(plan) => programme_native::apply(&mut staged.document, plan, control)?,
+        CopyKind::Rename(name) => staged.document.name = imported_edits::copy_name(name, control)?,
+        CopyKind::LayerName(patch) => readonly_layer_name::apply(&mut staged.document, patch, control)?,
+        CopyKind::LayerProperties(plan) => readonly_layer_properties::apply(&mut staged.document, plan, control)?,
         CopyKind::ThresholdAlpha { value_f32_bits, enabled, revision } => {
-            let state = document.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
+            let state = staged.document.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
             let stack = state.filter_stacks.first_mut().ok_or(BackingError::Integrity)?;
             let node = stack.nodes.first_mut().ok_or(BackingError::Integrity)?;
             control.check(1)?;
@@ -510,8 +520,11 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
             stack.revision = revision;
         }
     }
-    let actual =
-        measured(&document, owner.quota(), control)?.index.checked_add(std::mem::size_of::<OriginalRetention>() as u64 + 128).ok_or(BackingError::Length)?;
+    let actual = if selection_guard.is_some(){
+        let p=programme_selection::staged_permit(&staged.document,selection_guard,owner.quota(),control)?;
+        programme_selection::measured(&staged.document,owner.quota(),programme_native::kind(owner)?,&p,control)?.index
+            .checked_add(std::mem::size_of::<OriginalRetention>() as u64 + 128).ok_or(BackingError::Length)?
+    } else { measured(&staged.document, owner.quota(), control)?.index.checked_add(std::mem::size_of::<OriginalRetention>() as u64 + 128).ok_or(BackingError::Length)? };
     if actual > envelope {
         return Err(BackingError::Allocation);
     }
@@ -525,9 +538,9 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     Ok(AccountedDocument {
         owner: Arc::new(ModelOwner {
             _storage_class: StorageClass::ReadonlyThresholdAlpha,
-            document,
-            _selection: None,
-            _selection_view: None,
+            document: staged.document,
+            _selection: selection_guard.cloned(),
+            _selection_view: staged.selection_view,
             retention,
             quota: owner.quota().clone(),
             _model: Some(ModelCharges { _index: index, _payload: payload }),
@@ -538,10 +551,20 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
 // Private additive programme-native bridge. Existing entrypoints and copier
 // schedules retain their own class-specific custody and final census.
 pub(super) fn programme_measured(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+    if owner.document().selection.is_some(){return programme_selection::measured_owner(owner,c)}
     measured(owner.document(), owner.quota(), c)
 }
 pub(super) fn programme_copy(owner: &AccountedDocument, logical: ModelCensus, plan: programme_native::Plan<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     current_copy(owner, logical, CopyKind::ProgrammeNative(plan), c)
+}
+
+pub(super) fn programme_selected_measured(doc:&Document,q:&BackingQuota,p:&SelectionPermit<'_>,c:&ReadControl<'_>)->Result<ModelCensus,BackingError>{
+    physical_shape_selected(doc,q,c,alpha_node,Some(p))?;
+    census_inner(doc,true,true,p.guard(),q,c,true)
+}
+
+pub(super) fn programme_selection_copy(owner:&AccountedDocument,logical:ModelCensus,selection:Option<&AccountedSelection>,c:&ReadControl<'_>)->Result<AccountedDocument,BackingError>{
+    current_copy(owner,logical,CopyKind::Selection(selection),c)
 }
 
 #[cfg(test)]

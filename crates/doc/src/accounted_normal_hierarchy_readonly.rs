@@ -80,12 +80,21 @@ fn shape_rows(
     layers: &[crate::normal_hierarchy_index::NormalHierarchyRow<'_>],
     allow_quantized: bool,
 ) -> Result<(), BackingError> {
+    shape_rows_selected(doc, q, c, purpose, layers, allow_quantized, None)
+}
+fn shape_rows_selected(
+    doc: &Document,
+    q: &BackingQuota,
+    c: &dyn ModelControl,
+    purpose: TopologyPurpose,
+    layers: &[crate::normal_hierarchy_index::NormalHierarchyRow<'_>],
+    allow_quantized: bool, selection: Option<&SelectionPermit<'_>>) -> Result<(), BackingError> {
     c.check(1)?;
     if !(1..=4096).contains(&layers.len())
         || doc.mode != crate::ColorMode::Rgb
         || !(native_sample(doc.depth) || allow_quantized && matches!(doc.depth, crate::SampleType::U8 | crate::SampleType::U16 | crate::SampleType::U32))
         || doc.sample_encoding != Some(crate::SampleEncoding::NonlinearProfile)
-        || doc.selection.is_some()
+        || selection_disallowed(doc, selection)
         || doc.selection_channel_id.is_some()
     {
         return refused();
@@ -554,7 +563,7 @@ impl AccountedDocument {
         if !self.is_readonly_normal_hierarchy_storage() {
             return refused();
         }
-        measured_current(self.document(), self.quota(), c, TopologyPurpose::Current)?;
+        programme_measured(self, c)?;
         Ok(())
     }
     pub fn checked_readonly_normal_hierarchy_current_index(
@@ -564,6 +573,7 @@ impl AccountedDocument {
         if !self.is_readonly_normal_hierarchy_storage() {
             return refused();
         }
+        if self.document().selection.is_some(){let p=programme_selection::owner_permit(self,c)?;return self.document().checked_normal_hierarchy_mask_index_selected(NormalHierarchyLimits::STANDARD,self.quota(),c,&p)}
         self.document().checked_normal_hierarchy_mask_index_with(NormalHierarchyLimits::STANDARD, self.quota(), c)
     }
     pub fn readonly_masked_normal_hierarchy_storage_requirements(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<u64, BackingError> {
@@ -647,6 +657,7 @@ fn accepts(owner: &AccountedDocument) -> bool {
     owner.is_readonly_normal_hierarchy_storage()
 }
 fn measured_owner(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+    if owner.document().selection.is_some(){return programme_selection::measured_owner(owner,c)}
     if !accepts(owner) {
         return refused();
     }
@@ -735,6 +746,7 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, c: &ReadControl<'_>
 }
 #[derive(Clone, Copy)]
 enum CopyKind<'a> {
+    Selection(Option<&'a AccountedSelection>),
     ProgrammeNative(programme_native::Plan<'a>),
     Title(&'a str),
     Native(native::Plan<'a>),
@@ -745,10 +757,13 @@ enum CopyKind<'a> {
     Expanded { target: Option<(usize, LayerId, bool)>, value: bool },
 }
 fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
-    owner.document().checked_normal_hierarchy_mask_index_requirements(NormalHierarchyLimits::STANDARD, c.interrupt, &|n| c.check(n))?;
+    if owner.document().selection.is_some(){let p=programme_selection::owner_permit(owner,c)?;owner.document().checked_normal_hierarchy_mask_index_requirements_selected(NormalHierarchyLimits::STANDARD,c,&p)?;}
+    else{owner.document().checked_normal_hierarchy_mask_index_requirements(NormalHierarchyLimits::STANDARD,c.interrupt,&|n|c.check(n))?;}
+    let replacement_selection=match kind{CopyKind::Selection(g)=>Some(g),_=>None};
+    let selection_copy=if owner.document().selection.is_some()||replacement_selection.is_some(){Some(programme_selection::SelectionCopy::new(owner,replacement_selection,c)?)}else{None};
     let name_bytes = match kind {
         CopyKind::Title(name) => (name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
-        CopyKind::ProgrammeNative(_) | CopyKind::Native(_) | CopyKind::Filter(_) | CopyKind::Move(_) | CopyKind::Remove(_) | CopyKind::Expanded { .. } => 0,
+        CopyKind::Selection(_) | CopyKind::ProgrammeNative(_) | CopyKind::Native(_) | CopyKind::Filter(_) | CopyKind::Move(_) | CopyKind::Remove(_) | CopyKind::Expanded { .. } => 0,
         CopyKind::Metadata(plan) => plan.replacement_name_bytes()?,
     };
     let archive_bytes = match kind {
@@ -779,6 +794,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         c.check(extra_work)?;
     }
     let mut staged = ModelStaging { document: imported_selection::copy_normal_hierarchy(owner.document(), c)?, selection_view: None };
+    let selection_guard=if let Some(copy)=selection_copy{copy.install(&mut staged)}else{None};
     let source = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     let destination = staged.document.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
     destination.filter_stacks = vector(source.filter_stacks.len())?;
@@ -796,6 +812,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         destination.filter_masks.push(FilterMask { id: mask.id, owner: mask.owner, bounds: mask.bounds, surface: plan.copy(&mask.surface, c)? });
     }
     match kind {
+        CopyKind::Selection(_) => {},
         CopyKind::ProgrammeNative(plan) => programme_native::apply(&mut staged.document, plan, c)?,
         CopyKind::Title(name) => staged.document.name = imported_edits::copy_name(name, c)?,
         CopyKind::Native(plan) => native::apply(&mut staged.document,plan,c)?,
@@ -833,7 +850,10 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
             }
         }
     }
-    let actual = measured_current(&staged.document, owner.quota(), c, TopologyPurpose::Current)?;
+    let actual = if selection_guard.is_some(){
+        let p=programme_selection::staged_permit(&staged.document,selection_guard,owner.quota(),c)?;
+        programme_selection::measured(&staged.document,owner.quota(),programme_native::kind(owner)?,&p,c)?
+    } else { measured_current(&staged.document, owner.quota(), c, TopologyPurpose::Current)? };
     let actual_index = actual.index.checked_sub(header).ok_or(BackingError::Integrity)?;
     if actual_index > envelope || actual.payload > payload {
         return Err(BackingError::Allocation);
@@ -845,8 +865,8 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         owner: Arc::new(ModelOwner {
             _storage_class: owner.owner._storage_class,
             document: staged.document,
-            _selection: None,
-            _selection_view: None,
+            _selection: selection_guard.cloned(),
+            _selection_view: staged.selection_view,
             retention: owner.owner.retention.clone(),
             quota: owner.quota().clone(),
             _model: Some(ModelCharges { _index: index, _payload: payload_lease }),
@@ -911,10 +931,21 @@ impl AccountedDocument {
 // Private additive programme-native bridge. Existing entrypoints and copier
 // schedules retain their own class-specific custody and final census.
 pub(super) fn programme_measured(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+    if owner.document().selection.is_some(){return programme_selection::measured_owner(owner,c)}
     measured_owner(owner, c)
 }
 pub(super) fn programme_copy(owner: &AccountedDocument, logical: ModelCensus, plan: programme_native::Plan<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     current_copy(owner, logical, CopyKind::ProgrammeNative(plan), c)
+}
+
+pub(super) fn programme_selected_measured(doc:&Document,q:&BackingQuota,p:&SelectionPermit<'_>,c:&ReadControl<'_>)->Result<ModelCensus,BackingError>{
+    let index=doc.checked_normal_hierarchy_mask_index_selected(NormalHierarchyLimits::STANDARD,q,c,p)?;
+    shape_rows_selected(doc,q,c,TopologyPurpose::Current,index.rows(),true,Some(p))?;
+    census_with_mask_policy(doc,true,true,p.guard(),q,c,ReadonlyMaskPolicy::FilteredFlat)
+}
+
+pub(super) fn programme_selection_copy(owner:&AccountedDocument,logical:ModelCensus,selection:Option<&AccountedSelection>,c:&ReadControl<'_>)->Result<AccountedDocument,BackingError>{
+    current_copy(owner,logical,CopyKind::Selection(selection),c)
 }
 
 #[cfg(test)]

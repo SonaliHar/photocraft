@@ -5,6 +5,7 @@ pub(super) fn prepare<B: PlanBudget>(
     doc: &Document,
     supplied: Option<&Profile>,
     purpose: PreparationPurpose,
+    selection: Option<&CheckedProgrammeSelection<'_>>,
     header: u64,
     extent: Rect,
     format: PixelFormat,
@@ -37,7 +38,7 @@ pub(super) fn prepare<B: PlanBudget>(
         || !state.source_items.is_empty()
         || !state.editable_indexed.is_empty()
         || state.floating.is_some()
-        || doc.selection.is_some()
+        || (doc.selection.is_some() && !selection_allowed(doc,purpose,selection))
         || doc.selection_channel_id.is_some()
         || !doc.channels.is_empty()
         || !doc.paths.is_empty()

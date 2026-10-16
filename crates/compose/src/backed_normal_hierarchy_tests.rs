@@ -496,3 +496,6 @@ mod u32_plain;
 
 #[path="backed_normal_hierarchy_native_tests.rs"]
 mod native_edit;
+
+#[path="backed_programme_selection_hierarchy_tests.rs"]
+mod programme_selection;

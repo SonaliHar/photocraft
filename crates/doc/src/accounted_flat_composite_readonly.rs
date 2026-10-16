@@ -62,6 +62,9 @@ fn present(doc: &Document, id: ItemRef, c: &ReadControl<'_>) -> Result<(), Backi
     Err(BackingError::Integrity)
 }
 fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<(), BackingError> {
+    shape_selected(doc, q, c, None)
+}
+fn shape_selected(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>, selection: Option<&SelectionPermit<'_>>) -> Result<(), BackingError> {
     c.check(1)?;
     let state = doc.xcf_state.as_ref().ok_or(BackingError::Unsupported)?;
     if doc.size.width == 0
@@ -71,7 +74,7 @@ fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<(), Ba
         || u64::from(doc.size.width).checked_mul(u64::from(doc.size.height)).ok_or(BackingError::Length)? > 1 << 30
         || !matches!(doc.mode, ColorMode::Rgb | ColorMode::Grayscale)
         || !matches!(doc.depth, SampleType::U8 | SampleType::U16 | SampleType::U32 | SampleType::F32 | SampleType::F64)
-        || doc.selection.is_some()
+        || selection_disallowed(doc, selection)
         || doc.selection_channel_id.is_some()
         || !state.resources.is_empty()
         || !state.item_sets.is_empty()
@@ -266,7 +269,7 @@ impl AccountedDocument {
         if !self.is_readonly_flat_composite_storage() {
             return Err(BackingError::Unsupported);
         }
-        measured(self.document(), self.quota(), c)?;
+        programme_measured(self, c)?;
         Ok(())
     }
 }
@@ -276,7 +279,7 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, c: &ReadControl<'_>
         return Err(BackingError::Length);
     }
     imported_edits::validate_name(name, c)?;
-    let logical = measured(owner.document(), owner.quota(), c)?;
+    let logical = programme_measured(owner, c)?;
     if imported_edits::names_equal(&owner.document().name, name, c)? {
         return Ok(owner.clone());
     }
@@ -284,6 +287,7 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, c: &ReadControl<'_>
 }
 #[derive(Clone, Copy)]
 enum CopyKind<'a> {
+    Selection(Option<&'a AccountedSelection>),
     ProgrammeNative(programme_native::Plan<'a>),
     Title(&'a str),
     Metadata(metadata::Plan<'a>),
@@ -293,8 +297,10 @@ enum CopyKind<'a> {
 fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     let header = AccountedDocument::owned_model_reservation_bytes();
     let index = logical.index.checked_sub(header).ok_or(BackingError::Integrity)?;
+    let replacement_selection=match kind{CopyKind::Selection(g)=>Some(g),_=>None};
+    let selection_copy=if owner.document().selection.is_some()||replacement_selection.is_some(){Some(programme_selection::SelectionCopy::new(owner,replacement_selection,c)?)}else{None};
     let name_bytes = match kind {
-        CopyKind::ProgrammeNative(_) => 0,
+        CopyKind::ProgrammeNative(_) | CopyKind::Selection(_) => 0,
         CopyKind::Title(name) => (name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
         CopyKind::Metadata(plan) => plan.replacement_name_bytes()?,
         CopyKind::Composition(_) => 0,
@@ -308,14 +314,19 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     c.check(logical.total()?)?;
     if let CopyKind::ProgrammeNative(plan) = kind { c.check(plan.copy_work())?; }
     let mut staged = ModelStaging { document: imported_selection::copy_document(owner.document(), c)?, selection_view: None };
+    let selection_guard=if let Some(copy)=selection_copy{copy.install(&mut staged)}else{None};
     match kind {
+        CopyKind::Selection(_) => {},
         CopyKind::ProgrammeNative(plan) => programme_native::apply(&mut staged.document, plan, c)?,
         CopyKind::Title(name) => staged.document.name = imported_edits::copy_name(name, c)?,
         CopyKind::Metadata(plan) => metadata::apply(&mut staged.document, plan, c)?,
         CopyKind::Composition(plan) => composition::apply(&mut staged.document, plan, c)?,
         CopyKind::Translation(plan) => translation::apply(&mut staged.document, plan, c)?,
     }
-    let actual = measured(&staged.document, owner.quota(), c)?;
+    let actual = if selection_guard.is_some(){
+        let p=programme_selection::staged_permit(&staged.document,selection_guard,owner.quota(),c)?;
+        programme_selection::measured(&staged.document,owner.quota(),programme_native::kind(owner)?,&p,c)?
+    } else { measured(&staged.document, owner.quota(), c)? };
     let actual_index = actual.index.checked_sub(header).ok_or(BackingError::Integrity)?;
     if actual_index > envelope || actual.payload > payload {
         return Err(BackingError::Allocation);
@@ -327,8 +338,8 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         owner: Arc::new(ModelOwner {
             _storage_class: StorageClass::ReadonlyFlatComposite,
             document: staged.document,
-            _selection: None,
-            _selection_view: None,
+            _selection: selection_guard.cloned(),
+            _selection_view: staged.selection_view,
             // Direct codec retention, never a previous model owner/title chain.
             retention: owner.owner.retention.clone(),
             quota: owner.quota().clone(),
@@ -341,10 +352,19 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
 // Private additive programme-native bridge. Existing entrypoints and copier
 // schedules retain their own class-specific custody and final census.
 pub(super) fn programme_measured(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+    if owner.document().selection.is_some(){return programme_selection::measured_owner(owner,c)}
     measured(owner.document(), owner.quota(), c)
 }
 pub(super) fn programme_copy(owner: &AccountedDocument, logical: ModelCensus, plan: programme_native::Plan<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     current_copy(owner, logical, CopyKind::ProgrammeNative(plan), c)
+}
+
+pub(super) fn programme_selected_measured(doc:&Document,q:&BackingQuota,p:&SelectionPermit<'_>,c:&ReadControl<'_>)->Result<ModelCensus,BackingError>{
+    shape_selected(doc,q,c,Some(p))?;selection_census(doc,true,p.guard(),q,c)
+}
+
+pub(super) fn programme_selection_copy(owner:&AccountedDocument,logical:ModelCensus,selection:Option<&AccountedSelection>,c:&ReadControl<'_>)->Result<AccountedDocument,BackingError>{
+    current_copy(owner,logical,CopyKind::Selection(selection),c)
 }
 
 #[cfg(test)]

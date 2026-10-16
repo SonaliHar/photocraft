@@ -107,8 +107,9 @@ impl OwnedDocumentArchive {
     ///
     /// This validates current storage only. The caller must establish any source,
     /// profile, rendering or application recipe separately; persisted epochs and
-    /// locators restore none of those authorities. Saved selection is refused by
-    /// the closed document constructor. The normal archive handoff is unchanged
+    /// locators restore none of those authorities. A saved anonymous selection
+    /// is directly rehydrated as actual paid CURRENT selection custody on this
+    /// same programme class. The normal archive handoff is unchanged
     /// and never automatically selects this endpoint from serialized fields.
     pub fn into_accounted_readonly_threshold_alpha_storage(self, control: &ReadControl<'_>) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
         self.into_accounted_with(control, AccountedHandoff::ReadonlyThresholdAlphaStorage)
@@ -175,6 +176,31 @@ impl OwnedDocumentArchive {
         if !valid_handoff {
             return Err(FormatError::Unsupported("native current storage hint requires its exact owned handoff".into()));
         }
+        // Existing marker/endpoint decisions above remain final. Anonymous
+        // CURRENT selection custody is restored directly into the caller's
+        // selected programme class, never through the generic Legacy handoff.
+        let programme_selection = if self.document.selection.is_some() {
+            use photocraft_doc::accounted_document::ProgrammeNativeStorageKind as K;
+            match &handoff {
+                AccountedHandoff::Document => None,
+                AccountedHandoff::ReadonlyThresholdAlphaStorage => Some(K::ThresholdAlpha),
+                AccountedHandoff::ReadonlyHistogramThresholdStorage => Some(K::HistogramThreshold),
+                AccountedHandoff::ReadonlyPointStorage => Some(K::Point),
+                AccountedHandoff::ReadonlyAssignedPointStorage => Some(K::AssignedPoint),
+                AccountedHandoff::ReadonlyGaussianGroupStorage => Some(K::GaussianGroup),
+                AccountedHandoff::ReadonlyFlatCompositeStorage => Some(K::FlatComposite),
+                AccountedHandoff::ReadonlyMaskedFilteredFlatStorage => Some(K::MaskedFilteredFlatPoint),
+                AccountedHandoff::ReadonlyNormalHierarchyStorage => Some(K::NormalHierarchy),
+                AccountedHandoff::ReadonlyFilteredFlatStorage => {
+                    // Unmarked filtered-flat native data still takes the strict
+                    // original Source factory; a selection cannot upgrade it.
+                    if self.current_storage_hint != Some(crate::NativeCurrentStorageHint::FilteredFlatPoint) {
+                        return Err(FormatError::Unsupported("selected filtered-flat current storage requires its marker".into()));
+                    }
+                    Some(K::FilteredFlatPoint)
+                }
+            }
+        } else { None };
         let quota = self._model.quota().clone();
         control.check(0).map_err(error)?;
         let bytes = (std::mem::size_of::<NativeRetention>() as u64).checked_add(64).ok_or_else(|| error(BackingError::Length))?;
@@ -184,6 +210,11 @@ impl OwnedDocumentArchive {
         control.check(0).map_err(error)?;
         let Self { document, current_storage_hint, _archive, _model } = self;
         let retention = Arc::new(NativeRetention { _archive, _model, _owner: lease });
+        if let Some(kind) = programme_selection {
+            return photocraft_doc::accounted_document::AccountedDocument::from_owned_programme_rehydrating_selection(
+                kind, document, retention, quota, control,
+            ).map_err(error);
+        }
         match handoff {
             AccountedHandoff::ReadonlyNormalHierarchyStorage=>photocraft_doc::accounted_document::AccountedDocument::new_readonly_masked_normal_hierarchy_current_storage(document,retention,quota,control),
             AccountedHandoff::Document => {
@@ -388,3 +419,7 @@ mod stored_color_v9_tests;
 #[cfg(test)]
 #[path = "owned_document/current_storage_hint_tests.rs"]
 mod current_storage_hint_tests;
+
+#[cfg(test)]
+#[path = "owned_document/programme_selection_tests.rs"]
+mod programme_selection_tests;

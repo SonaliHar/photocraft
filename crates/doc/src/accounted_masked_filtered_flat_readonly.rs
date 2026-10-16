@@ -2,12 +2,15 @@
 use super::*;
 use crate::xcf_filter_masks::{FilterMaskCoverageClass, MaskCoverageSetLimits};
 pub(super) fn measured(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>, source: bool) -> Result<ModelCensus, BackingError> {
+    measured_policy(doc,q,c,source,None)
+}
+pub(super) fn measured_policy(doc:&Document,q:&BackingQuota,c:&ReadControl<'_>,source:bool,selection:Option<&SelectionPermit<'_>>)->Result<ModelCensus,BackingError>{
     doc.checked_f32_filter_mask_coverage_set_requirements(MaskCoverageSetLimits::STANDARD, c)?;
-    filtered_flat_readonly::shape_with_purpose(
+    filtered_flat_readonly::shape_with_purpose_selected(
         doc,
         q,
         c,
-        if source { filtered_flat_readonly::TopologyPurpose::Source } else { filtered_flat_readonly::TopologyPurpose::Current },
+        if source { filtered_flat_readonly::TopologyPurpose::Source } else { filtered_flat_readonly::TopologyPurpose::Current }, selection,
     )?;
     let set = doc.checked_f32_filter_mask_coverages_with(MaskCoverageSetLimits::STANDARD, q, c)?;
     let state = doc.xcf_state.as_ref().ok_or(BackingError::Integrity)?;
@@ -31,7 +34,7 @@ pub(super) fn measured(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>, so
     }
     doc.validate_xcf_state_with_checked_filter_masks(&set, c.interrupt)
         .map_err(|_| if c.interrupt.cancelled() { BackingError::Cancelled } else { BackingError::Integrity })?;
-    census_with_mask_policy(doc, true, true, None, q, c, ReadonlyMaskPolicy::FilteredFlat)
+    census_with_mask_policy(doc, true, true, selection.and_then(|p|p.guard()), q, c, ReadonlyMaskPolicy::FilteredFlat)
 }
 impl AccountedDocument {
     pub fn readonly_masked_filtered_flat_point_storage_requirements(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<u64, BackingError> {
@@ -98,7 +101,7 @@ impl AccountedDocument {
         if !self.is_readonly_masked_filtered_flat_point_storage() {
             return Err(BackingError::Unsupported);
         }
-        measured(self.document(), self.quota(), c, false)?;
+        filtered_flat_readonly::programme_measured(self, c)?;
         Ok(())
     }
 }

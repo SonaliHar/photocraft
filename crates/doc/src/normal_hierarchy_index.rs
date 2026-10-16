@@ -1,4 +1,5 @@
 //! Paid immutable actual-tree ordinals. Structural custody, never a source or evaluator grant.
+use crate::accounted_document::{SelectionPermit, selection_disallowed};
 pub use crate::xcf_filter_masks::MaskCoverageSetLease as NormalHierarchyIndexLease;
 use crate::{Document, Layer, LayerContent, LayerId, Rect, item_identity::ItemRef};
 use photocraft_raster::{
@@ -142,11 +143,16 @@ pub(crate) fn requirements<L: NormalHierarchyIndexLease>(
     lim: NormalHierarchyLimits,
     check: &dyn Fn(u64) -> Result<(), E>,
 ) -> Result<NormalHierarchyIndexRequirements, E> {
+    requirements_selected::<L>(d, lim, check, None)
+}
+pub(crate) fn requirements_selected<L: NormalHierarchyIndexLease>(
+    d: &Document, lim: NormalHierarchyLimits, check: &dyn Fn(u64) -> Result<(), E>, selection: Option<&SelectionPermit<'_>>,
+) -> Result<NormalHierarchyIndexRequirements, E> {
     check(1)?;
     let s = d.xcf_state.as_ref().ok_or(E::Unsupported)?;
     if !d.channels.is_empty()
         || !d.paths.is_empty()
-        || d.selection.is_some()
+        || selection_disallowed(d, selection)
         || d.selection_channel_id.is_some()
         || d.quick_mask.is_some()
         || s.items.len() > 8192

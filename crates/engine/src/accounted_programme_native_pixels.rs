@@ -47,9 +47,9 @@ fn locks(owner: &AccountedDocument, id: LayerId, operation: Operation, c: &ReadC
     }
     Ok(a.locks.transparency || a.imported_locks.alpha)
 }
-fn no_selection(owner: &AccountedDocument, command: &str) -> Result<()> {
-    if owner.document().selection.is_some() || owner.document().selection_channel_id.is_some() {
-        return Err(bad(command, "programme native pixels require no pixel or channel selection"));
+fn selection_context(owner: &AccountedDocument, command: &str) -> Result<()> {
+    if owner.document().selection_channel_id.is_some() {
+        return Err(bad(command, "programme native pixels do not edit channel selections"));
     }
     Ok(())
 }
@@ -90,7 +90,9 @@ impl<'a> Prepared<'a> {
         let st = s.active().ok_or(EngineError::NoDocument)?;
         let owner = st.doc.accounted().ok_or(BackingError::Unsupported)?;
         let kind = accounted_programme_current::kind(owner).ok_or(BackingError::Unsupported)?;
-        no_selection(owner, command)?;
+        selection_context(owner, command)?;
+        let selection_guard=owner.checked_programme_selection(c)?;
+        if !selection_guard.matches_owner(owner){return Err(BackingError::Integrity.into())}
         accounted_programme_current::validate(owner, kind, c)?;
         let view = st.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
         if st.active_layer != view.target().active
@@ -133,7 +135,7 @@ impl<'a> Prepared<'a> {
         if matches!(operation, Operation::Fill(_)) && !matches!(format.sample, SampleType::U8 | SampleType::U16 | SampleType::F32) {
             return Err(bad(command, "ordinary Fill requires U8/U16/F32 native pixels"));
         }
-        let selection: Option<&Surface> = None;
+        let selection: Option<&Surface> = selection_guard.selection();
         let area = owner.document().bounds();
         let bpp = format.bytes_per_pixel();
         let length = mul(mul(area.width() as usize, area.height() as usize)?, bpp)?;
@@ -347,7 +349,9 @@ impl<'a> Prepared<'a> {
         {
             return Err(bad(command, "the prepared programme pixels target older document/view/source/tool/history state"));
         }
-        no_selection(owner, command)?;
+        selection_context(owner, command)?;
+        let selection_guard=owner.checked_programme_selection(c)?;
+        if !selection_guard.matches_owner(owner){return Err(BackingError::Integrity.into())}
         let alpha_locked = locks(owner, self.witness.layer, self.operation, c)?;
         if (alpha_locked || self.operation.keeps_alpha()) != self.preserve_alpha {
             return Err(BackingError::Integrity.into());

@@ -14,7 +14,7 @@ pub fn candidate(owner:&AccountedDocument)->bool{owner.is_legacy_storage()||acco
 fn domain(owner:&AccountedDocument,c:&ReadControl<'_>)->Result<NativeStrokeDomain>{
  if owner.is_legacy_storage(){return Ok(NativeStrokeDomain::Legacy)}
  let kind=accounted_programme_current::kind(owner).ok_or(BackingError::Unsupported)?;
- if kind==ProgrammeKind::NormalHierarchy{
+ if kind==ProgrammeKind::NormalHierarchy&&owner.document().selection.is_none(){
   c.check(1)?;let x=owner.document().xcf_state.as_ref().ok_or(BackingError::Unsupported)?;
   if x.filter_stacks.len()>4096{return Err(BackingError::Length.into())}
   let mut stored=!x.filter_masks.is_empty();for st in &x.filter_stacks{c.check(1)?;stored|=!st.nodes.is_empty();}
@@ -120,7 +120,7 @@ impl<'a> Request<'a>{
  pub(crate) fn parse(s:&Session,id:&str,p:&'a Value,c:&ReadControl<'_>)->Result<Self>{c.check(1)?;idle(s,id)?;if !p.is_object(){return Err(fail(id,"stroke parameters must be an object"))}let id=match id{"paint.stroke"=>"paint.stroke","paint.pencil"=>"paint.pencil",_=>return Err(BackingError::Unsupported.into())};let owner=s.active().and_then(|st|st.doc.accounted()).ok_or(BackingError::Unsupported)?;let domain=domain(owner,c)?;match domain{NativeStrokeDomain::Legacy=>owner.validate_selection_replacement(c)?,NativeStrokeDomain::NormalHierarchy=>plain(owner,c)?,NativeStrokeDomain::StoredProgramme(_)=>{}}Ok(Self{id,params:p,domain})}
  pub(crate) fn prepare(self,s:&Session,c:&ReadControl<'_>)->Result<Prepared<'a>>{
   idle(s,self.id)?;let state=s.active().ok_or(EngineError::NoDocument)?;let owner=state.doc.accounted().ok_or(BackingError::Unsupported)?;validate_owner(owner,self.domain,c)?;
-  if owner.document().selection_channel_id.is_some()||(self.domain!=NativeStrokeDomain::Legacy&&owner.document().selection.is_some()){return Err(fail(self.id,"native brush requires an installed Legacy pixel selection"))}
+  if owner.document().selection_channel_id.is_some(){return Err(fail(self.id,"native brush does not edit channel selections"))}
   if !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
   c.check(64<<20)?;crate::brush_cmds::stroke_dispatch_preflight(s,self.id,self.params,false)?;
   let layer=match self.params.get("layer"){Some(v)=>LayerId(v.as_u64().filter(|v|*v!=0).ok_or_else(||fail(self.id,"nonzero layer identity required"))?),None=>state.active_layer.ok_or(EngineError::NoDocument)?};
@@ -141,8 +141,9 @@ impl<'a> Request<'a>{
   let channel=ChannelView{target:state.channel_view.target,color_hidden:flags(&state.channel_view.color_hidden,c)?,alpha_visible:flags(&state.channel_view.alpha_visible,c)?,quick_mask_hidden:state.channel_view.quick_mask_hidden,layer_mask:None,editing_mask:None};
   let actual=path.as_ref().map_or(0,String::capacity).checked_add(source.as_ref().map_or(0,|v|v.label.capacity()+v.path.as_ref().map_or(0,String::capacity))).and_then(|n|n.checked_add(channel.color_hidden.capacity()+channel.alpha_visible.capacity())).and_then(|n|n.checked_add(std::mem::size_of::<Prepared<'_>>()+1024)).ok_or(BackingError::Length)?;lease.reconcile_capacity(actual as u64).map_err(|_|BackingError::Allocation)?;
   let zoom=self.params.get("zoom").and_then(Value::as_f64).unwrap_or(1.0)as f32;
-  let patch=if let Some(selection)=owner.document().selection.as_ref(){
-   if self.domain!=NativeStrokeDomain::Legacy{return Err(BackingError::Unsupported.into())}
+  let selection_guard=if matches!(self.domain,NativeStrokeDomain::StoredProgramme(_)){Some(owner.checked_programme_selection(c)?)}else{None};
+  let selection=match &selection_guard{Some(guard)=>{if !guard.matches_owner(owner){return Err(BackingError::Integrity.into())}guard.selection()},None=>owner.document().selection.as_ref()};
+  let patch=if let Some(selection)=selection{
    if let Some(color)=wide_color{prepare_clipped_native_wide_stroke_selected(backed.checked_view(),backed.operative_bounds(),&recipe.brush,&recipe.points,color,selection,alpha_locked,zoom,NativeStrokeLimits::STANDARD,owner.quota(),c).map_err(native)?.render(c).map_err(native)?}else{prepare_clipped_native_stroke_selected(backed.checked_view(),backed.operative_bounds(),&recipe.brush,&recipe.points,selection,alpha_locked,zoom,NativeStrokeLimits::STANDARD,owner.quota(),c).map_err(native)?.render(c).map_err(native)?}
   }else{
    if let Some(color)=wide_color{prepare_clipped_native_wide_stroke(backed.checked_view(),backed.operative_bounds(),&recipe.brush,&recipe.points,color,alpha_locked,zoom,NativeStrokeLimits::STANDARD,owner.quota(),c).map_err(native)?.render(c).map_err(native)?}else{
@@ -194,7 +195,7 @@ pub fn capture_accounted_native_stroke_target(s:&Session)->Result<Option<std::sy
  let work=std::sync::Arc::new(NativeStrokeWork{work:photocraft_io::accounted_operation_work::OperationWork::standard(&limits)?,_fee:meter_fee});
  bounded(&work,|c|{
   let Some(state)=s.active()else{return Ok(None)};let Some(owner)=state.doc.accounted().filter(|o|candidate(o))else{return Ok(None)};
-  idle(s,"paint.stroke")?;let domain=domain(owner,c)?;validate_owner(owner,domain,c)?;if owner.document().selection_channel_id.is_some()||(domain!=NativeStrokeDomain::Legacy&&owner.document().selection.is_some()){return Err(fail("paint.stroke","native brush requires an installed Legacy pixel selection"))}
+  idle(s,"paint.stroke")?;let domain=domain(owner,c)?;validate_owner(owner,domain,c)?;if matches!(domain,NativeStrokeDomain::StoredProgramme(_)){let guard=owner.checked_programme_selection(c)?;if !guard.matches_owner(owner){return Err(BackingError::Integrity.into())}}if owner.document().selection_channel_id.is_some(){return Err(fail("paint.stroke","native brush does not edit channel selections"))}
   if !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
   let layer=state.active_layer.ok_or(EngineError::NoDocument)?;let access=if !owner.is_legacy_storage(){owner.accounted_layer_access(layer,c)?}else{accounted_layer_access(owner.document(),layer,c)?}.ok_or(EngineError::NoLayer(layer))?;
   let LayerContent::BackedRaster(backed)=&access.layer.content else{return Err(BackingError::Unsupported.into())};

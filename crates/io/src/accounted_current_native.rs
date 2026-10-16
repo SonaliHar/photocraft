@@ -64,6 +64,20 @@ pub fn save_accounted_current_archive<W: Write + Seek>(
     if !owner.quota().shares_ledger(quota) {
         return Err(backing(BackingError::Quota));
     }
+    // Global anonymous pixel-selection custody is independent of effect masks.
+    // Only the actual programme owner can supply this proof. Every semantic
+    // context below still proves the complete CURRENT recipe on this owner.
+    if owner.document().selection.is_some() && !owner.is_legacy_storage() {
+        let selection = owner.checked_programme_selection(control).map_err(|error| {
+            if error == BackingError::Cancelled { FormatError::Cancelled } else { backing(error) }
+        })?;
+        if !selection.matches_owner(owner) || selection.selection().is_none() {
+            return Err(backing(BackingError::Integrity));
+        }
+        control.check(1).map_err(|error| {
+            if error == BackingError::Cancelled { FormatError::Cancelled } else { backing(error) }
+        })?;
+    }
     // Structural intent comes from the actual retained runtime owner, including
     // a derived empty stack. Epoch inference cannot grant this separate class.
     let hierarchy = owner.is_readonly_normal_hierarchy_storage();

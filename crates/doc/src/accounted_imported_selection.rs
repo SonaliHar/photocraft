@@ -467,6 +467,16 @@ pub(super) fn copy_filtered_flat(doc: &Document, quota: &BackingQuota, c: &ReadC
     super::filtered_flat_readonly::shape(doc, quota, c)?;
     copy_document_inner(doc, c, false)
 }
+// Current-only guarded copies repeat their actual class shape; no raw Source
+// validator or generic imported-selection rule is weakened.
+pub(super) fn copy_gaussian_group_selected(doc:&Document,quota:&BackingQuota,p:&SelectionPermit<'_>,c:&ReadControl<'_>)->Result<Document,BackingError>{
+    super::gaussian_group_readonly::shape_selected(doc,quota,c,Some(p))?;
+    copy_document_inner(doc,c,true)
+}
+pub(super) fn copy_filtered_flat_selected(doc:&Document,quota:&BackingQuota,p:&SelectionPermit<'_>,c:&ReadControl<'_>)->Result<Document,BackingError>{
+    super::filtered_flat_readonly::shape_with_purpose_selected(doc,quota,c,super::filtered_flat_readonly::TopologyPurpose::Current,Some(p))?;
+    copy_document_inner(doc,c,false)
+}
 fn copy_document_inner(doc: &Document, c: &ReadControl<'_>, isolated: bool) -> Result<Document, BackingError> {
     copy_document_inner_layers(doc,c,isolated,None)
 }

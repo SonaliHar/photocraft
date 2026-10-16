@@ -33,7 +33,7 @@ fn observational_epoch_is_readonly_before_wire_helpers_or_native_reads() {
         ("edit.fill", json!({})),
         ("select.all", json!({})),
     ] {
-        if !matches!(id,"layer.setProps"|"edit.clear"|"edit.fill") { assert!(super::super::super::disabled_reason(&s, id, &Value::Null).unwrap().is_some()); }
+        if !matches!(id,"layer.setProps"|"edit.clear"|"edit.fill"|"select.all") { assert!(super::super::super::disabled_reason(&s, id, &Value::Null).unwrap().is_some()); }
         if id.starts_with("xcf.filter.") {
             assert!(Request::parse(&s, id, &params, &ctl()).is_err());
         }
