@@ -463,13 +463,29 @@ impl LiquifyDialog {
 fn preview_blend(selection: Option<&(Surface, LayerMask)>, bounds: Rect, max_side: usize) -> Vec<PreviewBlend> {
     let Some((original, mask)) = selection else { return Vec::new() };
     let original = ProxyImage::new(original, bounds, max_side);
-    let coverage = ProxyImage::new(&mask.surface, bounds, max_side);
-    original
-        .px
-        .into_iter()
-        .zip(coverage.px)
-        .map(|(original, m)| PreviewBlend { original, coverage: if mask.enabled { 1.0 - mask.density * (1.0 - m[0]) } else { 1.0 } })
-        .collect()
+    let (width, scale) = (original.w, original.scale as i32);
+    let mut coverage = Vec::new();
+    let mut row_height = 0;
+    // Read one downsampling strip, not an additional whole RGBA mask proxy. The same box
+    // footprint as the colour proxy preserves fractional selection coverage at fit zoom.
+    original.px.into_iter().enumerate().map(|(i, original)| {
+        let (x, y) = (i % width, i / width);
+        if x == 0 {
+            let y0 = bounds.y0 + y as i32 * scale;
+            let y1 = (y0 + scale).min(bounds.y1);
+            row_height = (y1 - y0) as usize;
+            mask.values_into(Rect::new(bounds.x0, y0, bounds.x0 + width as i32 * scale, y1), &mut coverage);
+        }
+        let row_width = width * scale as usize;
+        let mut sum = 0.0;
+        for dy in 0..row_height {
+            for dx in 0..scale as usize {
+                sum += coverage.get(dy * row_width + x * scale as usize + dx).copied().unwrap_or(0.0);
+            }
+        }
+        let count = row_height * scale as usize;
+        PreviewBlend { original, coverage: if count > 0 { sum / count as f32 } else { 0.0 } }
+    }).collect()
 }
 
 /// Opens the dialog on the active layer.
