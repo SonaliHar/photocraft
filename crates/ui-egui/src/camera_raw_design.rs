@@ -48,6 +48,17 @@ pub struct Design {
     pub rail_tool_gap: f32,
     pub rail_bottom_inset: f32,
     pub rail_separator_gap: f32,
+    pub histogram_height: f32,
+    pub histogram_corner_size: f32,
+    pub metadata_height: f32,
+    pub edit_bar_height: f32,
+    pub profile_bar_height: f32,
+    pub bar_inset: f32,
+    pub title_action_size: f32,
+    pub title_action_gap: f32,
+    pub curve_selector_size: f32,
+    pub curve_selector_gap: f32,
+    pub white_balance_label_width: f32,
     pub panel_order: Vec<String>,
     /// Optional view preset, applied only when this value changes in the JSON.
     pub preview: Option<crate::camera_raw_workspace_ui::WorkspaceState>,
@@ -97,6 +108,17 @@ impl Default for Design {
             rail_tool_gap: 4.0,
             rail_bottom_inset: 10.0,
             rail_separator_gap: 10.0,
+            histogram_height: 118.0,
+            histogram_corner_size: 16.0,
+            metadata_height: 26.0,
+            edit_bar_height: 40.0,
+            profile_bar_height: 40.0,
+            bar_inset: 22.0,
+            title_action_size: 24.0,
+            title_action_gap: 6.0,
+            curve_selector_size: 20.0,
+            curve_selector_gap: 6.0,
+            white_balance_label_width: 78.0,
             panel_order: crate::camera_raw_workspace_ui::SECTIONS.iter().map(|name| (*name).into()).collect(),
             preview: None,
         }
@@ -165,6 +187,17 @@ impl Design {
             ("railToolGap", value.rail_tool_gap, 0.0, 16.0),
             ("railBottomInset", value.rail_bottom_inset, 0.0, 48.0),
             ("railSeparatorGap", value.rail_separator_gap, 0.0, 24.0),
+            ("histogramHeight", value.histogram_height, 64.0, 240.0),
+            ("histogramCornerSize", value.histogram_corner_size, 12.0, 28.0),
+            ("metadataHeight", value.metadata_height, 18.0, 40.0),
+            ("editBarHeight", value.edit_bar_height, 28.0, 60.0),
+            ("profileBarHeight", value.profile_bar_height, 28.0, 60.0),
+            ("barInset", value.bar_inset, 8.0, 32.0),
+            ("titleActionSize", value.title_action_size, 18.0, 32.0),
+            ("titleActionGap", value.title_action_gap, 0.0, 12.0),
+            ("curveSelectorSize", value.curve_selector_size, 16.0, 28.0),
+            ("curveSelectorGap", value.curve_selector_gap, 0.0, 12.0),
+            ("whiteBalanceLabelWidth", value.white_balance_label_width, 65.0, 110.0),
         ] {
             if !number.is_finite() || !(min..=max).contains(&number) {
                 return Err(format!("{label} must be finite and between {min} and {max}"));
@@ -368,6 +401,9 @@ mod tests {
             r#"{"panelOrder":["Execute"]}"#,
             r#"{"exposure":2}"#,
             r#"{"panelWidth":1e100}"#,
+            r#"{"histogramHeight":0}"#,
+            r#"{"curveSelectorSize":1e100}"#,
+            r#"{"whiteBalanceLabelWidth":-1}"#,
         ] {
             assert!(Design::parse(bad).is_err(), "{bad}");
         }

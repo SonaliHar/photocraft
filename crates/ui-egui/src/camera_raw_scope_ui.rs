@@ -346,11 +346,12 @@ fn warning(ui: &mut egui::Ui, rect: Rect, mask: u8, on: &mut bool, label: &str) 
     let t = Tokens::get(ui.ctx());
     let response = ui.interact(rect, ui.id().with(label), Sense::click()).on_hover_text(label);
     response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, label));
-    let r = rect.shrink(3.0);
+    ui.painter().rect_stroke(rect, 0.0, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
+    let r = rect.shrink(2.0);
     ui.painter().add(egui::Shape::convex_polygon(
         vec![pos2(r.center().x, r.top()), r.left_bottom(), r.right_bottom()],
-        if mask == 0 { t.histogram_background() } else { t.histogram_color(mask) },
-        Stroke::new(1.0, if *on { t.text } else { t.text_faint }),
+        if mask == 0 { Color32::BLACK } else { t.histogram_color(mask) },
+        if *on { Stroke::new(1.0, t.text) } else { Stroke::NONE },
     ));
     if response.clicked() {
         *on = !*on;
@@ -385,7 +386,7 @@ fn graph(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut CameraRawScopeSt
     ui.painter().rect_filled(rect, t.radius_sm, t.histogram_background());
     let plot = rect.shrink(4.0);
     crate::rgb_histogram::paint(ui.painter(), plot, d.histogram(), &t);
-    let corner = 18.0;
+    let corner = crate::camera_raw_design::get(ui.ctx()).histogram_corner_size;
     if let Some(sample) = d.hover_sample(false) {
         crate::rgb_histogram::paint_sample(ui.painter(), plot, sample.rgb, &t);
         let [r, g, b] = sample.rgb.map(|x| x * 255.0);
@@ -504,13 +505,12 @@ pub(crate) fn header(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut Came
         let (_, response) = ui.allocate_exact_size(vec2(ui.available_width(), 48.0), Sense::click());
         context_menu(&response, d.selection.is_some(), view);
     } else {
-        let height = (ui.available_height() * 0.18).clamp(48.0, 110.0);
+        let height = crate::camera_raw_design::get(ui.ctx()).histogram_height;
         graph(ui, d, view, height);
         if view.vectorscope {
             vectorscope(ui, d, view, (ui.available_height() * 0.3).clamp(100.0, 220.0));
         }
     }
-    ui.add_space(8.0);
 }
 
 pub(crate) fn floating(ctx: &egui::Context, d: &mut CameraRawDialog, view: &mut CameraRawScopeState, dock: Rect) {

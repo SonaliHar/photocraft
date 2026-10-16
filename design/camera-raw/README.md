@@ -107,3 +107,31 @@ Numeric inactive text is still centered despite valueTextLeftAligned; handle
 geometry, bypass eyes, scrollbar treatment and other panel-specific geometry
 still need native changes. A global right inset cannot establish Curve/Grading
 parity; inspect their own overlays before changing them.
+
+## Native bars: rebuilt, pending visual review (2026-10-16)
+
+The next native batch restores the Curve glyph selectors, White balance
+combobox and neutral picker, Profile row with three-square/magnifier glyph,
+Edit row, persistent metadata row, filled corner clipping indicators, and
+top action icons. The Profile row currently identifies the embedded treatment;
+additional camera profiles, Auto tone, HDR editing and tutorials remain disabled.
+B&W uses the existing saturation adjustment. The neutral picker solves the
+existing relative Temperature/Tint gain model in the document encoding; it does
+not introduce a Kelvin model or claim Adobe's processing.
+
+After the enabling build, these additional `layout.json` properties can be
+tuned live: `histogramHeight` (118), `histogramCornerSize` (16),
+`metadataHeight` (26), `editBarHeight` (40), `profileBarHeight` (40),
+`barInset` (22), `titleActionSize` (24), `titleActionGap` (6),
+`curveSelectorSize` (20), `curveSelectorGap` (6), and
+`whiteBalanceLabelWidth` (78). They remain optional in the active JSON; the rebuilt preview accepts them.
+The previous preview executable rejects these new keys.
+The view-only `whiteBalanceTool` field is then available through the workspace
+control JSON as well. Activating the picker and the sampler is mutually exclusive.
+
+Rustfmt and whitespace validation have run. Unit tests were added for metadata
+fallbacks, invalid sample rejection, neutral-gain solving and new JSON bounds.
+The owner requested the enabling rebuild: cargo build -p photocraft -j 4
+passed in 3m08s, and the PS1 launched the new preview. Test execution and
+post-build screenshot validation remain pending. Both the section-edge
+correction and this bar batch are now in target/debug/photocraft.exe.

@@ -4,13 +4,22 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $previewRoot = Split-Path -Parent $PSScriptRoot
-$previewExe = Join-Path $previewRoot 'target/acr18/debug/photocraft.exe'
+$previewTarget = Join-Path $previewRoot 'target/acr18'
+$existingDebugExe = Join-Path $previewRoot 'target/debug/photocraft.exe'
+$previewExe = Join-Path $previewTarget 'debug/photocraft.exe'
+# Rebuild the same cached target that ordinary preview launches already use.
+if (-not (Test-Path -LiteralPath $previewExe) -and (Test-Path -LiteralPath (Join-Path $previewRoot 'target/debug/.fingerprint'))) {
+    $previewTarget = Join-Path $previewRoot 'target'
+    $previewExe = $existingDebugExe
+}
 if ($Build) {
     Push-Location $previewRoot
     try {
-        $env:CARGO_TARGET_DIR = Join-Path $previewRoot 'target/acr18'
-        $env:CARGO_PROFILE_DEV_DEBUG = '0'
-        $env:CARGO_PROFILE_DEV_INCREMENTAL = 'false'
+        $env:CARGO_TARGET_DIR = $previewTarget
+        if ($previewTarget -eq (Join-Path $previewRoot 'target/acr18')) {
+            $env:CARGO_PROFILE_DEV_DEBUG = '0'
+            $env:CARGO_PROFILE_DEV_INCREMENTAL = 'false'
+        }
         cargo build -p photocraft -j 4
         if ($LASTEXITCODE -ne 0) { throw 'The native preview build failed.' }
     } finally { Pop-Location }

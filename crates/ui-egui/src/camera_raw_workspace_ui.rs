@@ -66,6 +66,7 @@ pub struct WorkspaceState {
     pub grid: bool,
     pub grid_size: f32,
     pub grid_opacity: f32,
+    pub white_balance_tool: bool,
 }
 impl Default for WorkspaceState {
     fn default() -> Self {
@@ -84,6 +85,7 @@ impl Default for WorkspaceState {
             grid: false,
             grid_size: 40.0,
             grid_opacity: 0.35,
+            white_balance_tool: false,
         }
     }
 }
@@ -454,25 +456,28 @@ pub(crate) fn rail(ui: &mut Ui, rect: Rect, state: &mut WorkspaceState, navigati
         state.info = !state.info;
     }
     separator_row(&mut tools);
-    let zoom_tool = icons::button(&mut tools, "zoom-in", size, !navigation.hand && !*sampler, tl!("Zoom Tool"));
+    let zoom_tool = icons::button(&mut tools, "zoom-in", size, !navigation.hand && !*sampler && !state.white_balance_tool, tl!("Zoom Tool"));
     if zoom_tool.double_clicked() {
         navigation.fit();
     }
     if zoom_tool.clicked() {
         navigation.hand = false;
         *sampler = false;
+        state.white_balance_tool = false;
     }
-    let hand_tool = icons::button(&mut tools, "hand", size, navigation.hand && !*sampler, tl!("Hand Tool"));
+    let hand_tool = icons::button(&mut tools, "hand", size, navigation.hand && !*sampler && !state.white_balance_tool, tl!("Hand Tool"));
     if hand_tool.double_clicked() {
         navigation.fit();
     }
     if hand_tool.clicked() {
         navigation.hand = true;
         *sampler = false;
+        state.white_balance_tool = false;
     }
     separator_row(&mut tools);
     if icons::button(&mut tools, "pipette", size, *sampler, tl!("Color Sampler")).clicked() {
         *sampler = !*sampler;
+        state.white_balance_tool = false;
     }
     if icons::button(&mut tools, "grid-3x3", size, state.grid, tl!("Grid")).clicked() {
         state.grid = !state.grid;

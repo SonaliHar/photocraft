@@ -24,6 +24,9 @@ use crate::PhotocraftApp;
 use crate::theme::Tokens;
 use crate::widgets;
 
+#[path = "camera_raw_bars_ui.rs"]
+mod bars;
+
 const PROXY_SIDE: usize = 900;
 
 /// How long a swap to the next photo may take before the dialog shows that it is busy.
@@ -1553,6 +1556,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         }
         let ok_label = if d.target == Target::OpenRaw { tl!("Open") } else { tl!("OK") };
         let scope = &mut app.ui.camera_raw_scope;
+        bars::top_actions(ui, title, &mut action, scope);
         // Clip both pixels and scope overlays before painting the settings dock/footer.
         let view = lay.view;
         d.viewport = Some(view);
@@ -1563,7 +1567,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let mut preview = ui.new_child(egui::UiBuilder::new().max_rect(view));
         preview.set_clip_rect(view.intersect(ui.clip_rect()));
         preview.painter().rect_filled(view, 0.0, t.canvas);
-        let (r, response, panning, zoom_box) = super::camera_raw_preview_ui::interact(&mut preview, navigation, view, size, &mut scope.sampler_tool);
+        let mut preview_sampling = scope.sampler_tool || workspace.white_balance_tool;
+        let (r, response, panning, zoom_box) = super::camera_raw_preview_ui::interact(&mut preview, navigation, view, size, &mut preview_sampling);
+        if !preview_sampling {
+            scope.sampler_tool = false;
+            workspace.white_balance_tool = false;
+        }
         let tex = if d.show_before { d.before_tex.as_ref() } else { d.tex.as_ref() };
         if let Some(tex) = tex {
             // Never tile a checker across the offscreen extent of a highly zoomed image.
@@ -1579,6 +1588,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             }
             d.scope.preview_rect = Some(r);
             super::camera_raw_scope_ui::preview(&mut preview, d, scope, r, &response, panning);
+            bars::pick_white_balance(&preview, d, r, &response, &mut workspace.white_balance_tool, panning);
         }
         super::camera_raw_workspace_ui::grid(&preview, r, view, workspace);
         if let Some(region) = zoom_box {
@@ -1600,9 +1610,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         // Panels.
         let right = lay.right;
         painter.rect_filled(right, 0.0, t.dock);
-        painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
-        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(0.0, 10.0))));
+        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right));
         props.style_mut().override_font_id = Some(FontId::proportional(design.panel_font_size));
+        props.spacing_mut().item_spacing.y = 0.0;
         // Overflow must not resize a curve while selecting a point reveals its fields.
         props.spacing_mut().scroll.floating = true;
         if busy_visible {
@@ -1610,39 +1620,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         }
         // This header is outside the settings scroll area and follows the same Before/After
         // selector as the texture. Both derive from the same completed preview revision.
-        egui::Frame::new().inner_margin(egui::Margin::symmetric(14, 0)).show(&mut props, |ui| {
-            super::camera_raw_scope_ui::header(ui, d, scope);
-            let summary = super::camera_raw_workspace_ui::capture_summary(&d.camera_info);
-            if !summary.is_empty() {
-                ui.label(egui::RichText::new(summary).size(11.0).color(t.text_dim));
-            }
-        });
-        props.horizontal(|ui| {
-            ui.add_space(14.0);
-            ui.strong(if workspace.info { tl!("Info") } else { tl!("Edit") });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.menu_button("…", |ui| {
-                    if ui.button(tl!("Reset to Open")).clicked() {
-                        action = Some("reset-open");
-                        ui.close();
-                    }
-                    if ui.button(tl!("Reset to Default")).clicked() {
-                        action = Some("reset-default");
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button(tl!("Load Settings…")).clicked() {
-                        action = Some("load");
-                        ui.close();
-                    }
-                    if ui.button(tl!("Save Settings…")).clicked() {
-                        action = Some("save");
-                        ui.close();
-                    }
-                });
-            });
-        });
-        props.add_space(8.0);
+        super::camera_raw_scope_ui::header(&mut props, d, scope);
+        bars::metadata(&mut props, &d.camera_info);
+        bars::edit_bar(&mut props, d, workspace.info);
+        if !workspace.info {
+            bars::profile_bar(&mut props);
+        }
         d.scope.alt_tone = None;
         let mut dirty = false;
         egui::ScrollArea::vertical().id_salt("camera-raw-props").show(&mut props, |ui| {
@@ -1688,10 +1671,10 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                     }
                     "Color" => {
                         super::camera_raw_workspace_ui::section(ui, "Color", &mut workspace.panels, |ui| {
-                            widgets::section_label(
-                                ui,
-                                if p.temperature == 0.0 && p.tint == 0.0 { tl!("White Balance: As Shot") } else { tl!("White Balance: Custom") },
-                            );
+                            dirty |= bars::white_balance(ui, p, &mut workspace.white_balance_tool);
+                            if workspace.white_balance_tool {
+                                scope.sampler_tool = false;
+                            }
                             row(ui, &mut dirty, "Temperature", &mut p.temperature, -100.0..=100.0, Some(&ts));
                             row(ui, &mut dirty, "Tint", &mut p.tint, -100.0..=100.0, Some(&tn));
                             row(ui, &mut dirty, "Vibrance", &mut p.vibrance, -100.0..=100.0, None);
@@ -1743,25 +1726,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                         super::camera_raw_workspace_ui::section(ui, "Curve", &mut workspace.panels, |ui| {
                             use super::camera_raw_workspace_ui::CurveChannel;
                             let previous = workspace.curve_channel;
-                            ui.horizontal_wrapped(|ui| {
-                                for (channel, label) in [
-                                    (CurveChannel::Parametric, "Parametric"),
-                                    (CurveChannel::Master, "RGB"),
-                                    (CurveChannel::Red, "Red"),
-                                    (CurveChannel::Green, "Green"),
-                                    (CurveChannel::Blue, "Blue"),
-                                ] {
-                                    if widgets::pill_tab(
-                                        ui,
-                                        crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", label),
-                                        workspace.curve_channel == channel,
-                                    )
-                                    .clicked()
-                                    {
-                                        workspace.curve_channel = channel;
-                                    }
-                                }
-                            });
+                            bars::curve_selectors(ui, &mut workspace.curve_channel);
                             if previous != workspace.curve_channel {
                                 d.curve_state = Default::default();
                             }
@@ -1871,11 +1836,18 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         });
         super::camera_raw_scope_ui::floating(ctx, d, scope, right);
         super::camera_raw_scope_ui::shortcuts(ctx, scope);
+        if scope.sampler_tool {
+            workspace.white_balance_tool = false;
+        }
         d.dirty |= dirty;
         if d.dirty {
             ctx.request_repaint();
         }
         ui.add_enabled_ui(!busy_visible, |ui| super::camera_raw_workspace_ui::rail(ui, lay.rail, workspace, navigation, &mut scope.sampler_tool));
+        // Section headers paint opaque backgrounds over the dock's earlier edge.
+        // ACR keeps one continuous dock boundary through headers and bodies;
+        // paint it after the controls instead of outlining each section.
+        painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
         // Footer.
         let foot = lay.foot;
         painter.rect_filled(foot, 0.0, t.dock);
