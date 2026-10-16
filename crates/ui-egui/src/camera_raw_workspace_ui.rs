@@ -125,18 +125,36 @@ pub(crate) fn capture_summary(info: &photocraft_algo::exif::CameraInfo) -> Strin
 }
 
 pub(crate) fn disclosed_slider(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, expanded: &mut bool) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        let width = (ui.available_width() - 26.0).max(60.0);
-        ui.allocate_ui_with_layout(vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-            changed |= slider_row_with(ui, tr(label), value, range, "", None, widgets::RowGestures { reset: Some(0.0), wheel_step: None }).changed();
-        });
-        let name = if *expanded { "chevron-down" } else { "chevron-left" };
-        if icons::button(ui, name, 22.0, false, &format!("{} {}", tr(label), tl!("Details"))).clicked() {
-            *expanded = !*expanded;
-        }
-    });
-    changed
+    let design = super::camera_raw_design::get(ui.ctx());
+    widgets::slider_row_prec_styled_trailing(
+        ui,
+        tr(label),
+        value,
+        range,
+        "",
+        None,
+        widgets::RowGestures { reset: Some(0.0), wheel_step: None },
+        None,
+        design.value_field_width,
+        Some(design.slider_style()),
+        |ui| {
+            ui.spacing_mut().item_spacing.x = design.disclosure_button_gap;
+            let name = if *expanded { "chevron-down" } else { "chevron-left" };
+            if icons::button_with_icon_size(
+                ui,
+                name,
+                design.disclosure_button_size,
+                design.disclosure_button_size * 0.5,
+                false,
+                &format!("{} {}", tr(label), tl!("Details")),
+            )
+            .clicked()
+            {
+                *expanded = !*expanded;
+            }
+        },
+    )
+    .changed()
 }
 
 pub(crate) fn prepare(current: &WorkspaceState, value: &Value) -> Result<WorkspaceState, String> {
@@ -418,14 +436,25 @@ pub(crate) fn rail(ui: &mut Ui, rect: Rect, state: &mut WorkspaceState, navigati
     if icons::button(&mut top, "sliders-horizontal", 28.0, !state.info, tl!("Edit")).clicked() {
         state.info = false;
     }
-    let bottom = Rect::from_min_max(pos2(rect.left() + 4.0, (rect.bottom() - 176.0).max(top.min_rect().bottom())), rect.right_bottom() - vec2(4.0, 4.0));
+    let design = super::camera_raw_design::get(ui.ctx());
+    let available = (rect.bottom() - design.rail_bottom_inset - top.min_rect().bottom() - 8.0).max(1.0);
+    let gap = design.rail_tool_gap.min(available / 20.0);
+    let separator = design.rail_separator_gap.min(available / 10.0);
+    let size = design.rail_tool_size.min((rect.width() - 8.0).max(1.0)).min(((available - 6.0 * gap - 2.0 * separator) / 5.0).max(1.0));
+    let height = 5.0 * size + 6.0 * gap + 2.0 * separator;
+    let bottom = Rect::from_min_size(pos2(rect.center().x - size / 2.0, rect.bottom() - design.rail_bottom_inset - height), vec2(size, height));
     let mut tools = ui.new_child(egui::UiBuilder::new().max_rect(bottom));
+    tools.spacing_mut().item_spacing.y = gap;
     tools.set_clip_rect(bottom.intersect(rect));
-    if icons::button(&mut tools, "info", 28.0, state.info, tl!("Info")).clicked() {
+    let separator_row = |ui: &mut Ui| {
+        let (r, _) = ui.allocate_exact_size(vec2(size, separator), Sense::hover());
+        ui.painter().line_segment([r.left_center(), r.right_center()], Stroke::new(1.0, t.separator));
+    };
+    if icons::button(&mut tools, "info", size, state.info, tl!("Info")).clicked() {
         state.info = !state.info;
     }
-    tools.separator();
-    let zoom_tool = icons::button(&mut tools, "zoom-in", 28.0, !navigation.hand && !*sampler, tl!("Zoom Tool"));
+    separator_row(&mut tools);
+    let zoom_tool = icons::button(&mut tools, "zoom-in", size, !navigation.hand && !*sampler, tl!("Zoom Tool"));
     if zoom_tool.double_clicked() {
         navigation.fit();
     }
@@ -433,7 +462,7 @@ pub(crate) fn rail(ui: &mut Ui, rect: Rect, state: &mut WorkspaceState, navigati
         navigation.hand = false;
         *sampler = false;
     }
-    let hand_tool = icons::button(&mut tools, "hand", 28.0, navigation.hand && !*sampler, tl!("Hand Tool"));
+    let hand_tool = icons::button(&mut tools, "hand", size, navigation.hand && !*sampler, tl!("Hand Tool"));
     if hand_tool.double_clicked() {
         navigation.fit();
     }
@@ -441,11 +470,11 @@ pub(crate) fn rail(ui: &mut Ui, rect: Rect, state: &mut WorkspaceState, navigati
         navigation.hand = true;
         *sampler = false;
     }
-    tools.separator();
-    if icons::button(&mut tools, "pipette", 28.0, *sampler, tl!("Color Sampler")).clicked() {
+    separator_row(&mut tools);
+    if icons::button(&mut tools, "pipette", size, *sampler, tl!("Color Sampler")).clicked() {
         *sampler = !*sampler;
     }
-    if icons::button(&mut tools, "grid-3x3", 28.0, state.grid, tl!("Grid")).clicked() {
+    if icons::button(&mut tools, "grid-3x3", size, state.grid, tl!("Grid")).clicked() {
         state.grid = !state.grid;
     }
 }

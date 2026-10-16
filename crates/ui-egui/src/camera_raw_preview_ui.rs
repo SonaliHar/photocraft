@@ -2,7 +2,7 @@
 use egui::{Key, Modifiers, PointerButton, Pos2, Rect, Response, Sense, Ui, Vec2, vec2};
 use serde_json::Value;
 
-use crate::{state::CameraRawPreviewState, widgets};
+use crate::{state::CameraRawPreviewState, theme::Tokens};
 
 const MIN_ZOOM: f32 = 0.0001;
 const MAX_ZOOM: f32 = 16.0;
@@ -234,29 +234,63 @@ pub(crate) fn interact(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport:
     (state.image_rect(viewport, size), response, panning || temporary_zoom, zoom_box)
 }
 
+fn navigation_button(ui: &mut Ui, text: &str, size: Vec2, selected: bool) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    if response.hovered() || selected {
+        ui.painter().rect_filled(rect, 0.0, if response.hovered() { t.hover } else { t.field });
+    }
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        text,
+        egui::FontId::proportional(super::camera_raw_design::get(ui.ctx()).panel_font_size),
+        t.text_dim,
+    );
+    if selected {
+        ui.painter().line_segment([rect.left_bottom(), rect.right_bottom()], egui::Stroke::new(1.0, t.text));
+    }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, text));
+    response
+}
+
 pub(crate) fn toolbar(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport: Rect, size: Vec2, _sampler: &mut bool) {
-    if widgets::secondary_button(ui, tl!("Fit in View"), 84.0).clicked() {
+    let design = super::camera_raw_design::get(ui.ctx());
+    let height = design.navigation_control_height.min(ui.available_height()).max(1.0);
+    ui.spacing_mut().item_spacing.x = design.navigation_control_gap;
+    let mut fitted = *state;
+    fitted.fit();
+    let fit_label = format!("{} ({:.1}%)", tl!("Fit"), fitted.scale(viewport, size) * 100.0);
+    if navigation_button(ui, &fit_label, vec2(design.navigation_fit_width, height), state.zoom.is_none()).clicked() {
         state.fit();
     }
-    if widgets::secondary_button(ui, tl!("100%"), 52.0).clicked() {
-        state.zoom_at(1.0, viewport.center(), viewport, size);
+    let zoom_value = state.zoom.unwrap_or(1.0);
+    let zoom_label = format!("{:.0}%", zoom_value * 100.0);
+    let arrow_width = 16.0;
+    if navigation_button(ui, &zoom_label, vec2(design.navigation_zoom_width - arrow_width, height), state.zoom.is_some()).clicked() {
+        state.zoom_at(zoom_value, viewport.center(), viewport, size);
     }
-    let mut zoom = state.zoom;
-    let mut options = vec![(None, tl!("Fit in View"))];
-    let labels = ["25%", "50%", "100%", "200%", "400%", "800%", "1600%"];
-    for (z, label) in [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0].into_iter().zip(labels) {
-        options.push((Some(z), label));
-    }
-    let current_label = format!("{:.1}%", state.scale(viewport, size) * 100.0);
-    if !options.iter().any(|(z, _)| *z == zoom) {
-        options.push((zoom, &current_label));
-    }
-    if widgets::dropdown(ui, "cr-preview-zoom", &mut zoom, &options, 80.0) {
-        match zoom {
-            Some(z) => state.zoom_at(z, viewport.center(), viewport, size),
-            None => state.fit(),
+    let arrow = navigation_button(ui, "", vec2(arrow_width, height), false).on_hover_text(tl!("Zoom"));
+    arrow.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Zoom")));
+    let t = Tokens::get(ui.ctx());
+    let center = arrow.rect.center();
+    ui.painter().line_segment([center + vec2(-3.0, -1.5), center + vec2(0.0, 1.5)], egui::Stroke::new(1.0, t.text_dim));
+    ui.painter().line_segment([center + vec2(0.0, 1.5), center + vec2(3.0, -1.5)], egui::Stroke::new(1.0, t.text_dim));
+    egui::Popup::menu(&arrow).show(|ui| {
+        if ui.selectable_label(state.zoom.is_none(), tl!("Fit in View")).clicked() {
+            state.fit();
+            ui.close();
         }
-    }
+        for z in [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0] {
+            if ui.selectable_label(state.zoom == Some(z), format!("{:.0}%", z * 100.0)).clicked() {
+                state.zoom_at(z, viewport.center(), viewport, size);
+                ui.close();
+            }
+        }
+    });
+    let (divider, _) = ui.allocate_exact_size(vec2(1.0, height), Sense::hover());
+    ui.painter().line_segment([divider.left_top(), divider.left_bottom()], egui::Stroke::new(1.0, t.separator));
+    ui.add_space(8.0);
 }
 
 #[cfg(test)]

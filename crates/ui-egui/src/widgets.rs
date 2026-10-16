@@ -1179,6 +1179,24 @@ pub fn slider_row_prec_styled(
     field_width: f32,
     style: Option<SliderRowStyle>,
 ) -> Response {
+    slider_row_prec_styled_trailing(ui, label, value, range, suffix, gradient, g, decimals, field_width, style, |_| {})
+}
+
+/// A control beside the numeric field; the track still spans the complete row.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn slider_row_prec_styled_trailing(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    suffix: &str,
+    gradient: Option<&[Color32]>,
+    g: RowGestures,
+    decimals: Option<u32>,
+    field_width: f32,
+    style: Option<SliderRowStyle>,
+    trailing: impl FnOnce(&mut Ui),
+) -> Response {
     let t = Tokens::get(ui.ctx());
     let original_gap = ui.spacing().item_spacing.y;
     let original_height = ui.spacing().interact_size.y;
@@ -1192,6 +1210,7 @@ pub fn slider_row_prec_styled(
         let l = ui.label(egui::RichText::new(tl!(label)).color(t.text_dim));
         scrub_label_within(ui, &l, f32::INFINITY);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            trailing(ui);
             changed_resp = Some(
                 value_field_box(
                     ui,

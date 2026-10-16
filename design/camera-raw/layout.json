@@ -51,5 +51,15 @@
   "valueTextLeftAligned": true,
   "valueTextPadding": 4,
   "valueTextOffsetY": 0.5,
-  "valueFieldOffsetY": 1
+  "valueFieldOffsetY": 1,
+  "disclosureButtonSize": 16,
+  "disclosureButtonGap": 4,
+  "navigationControlHeight": 28,
+  "navigationFitWidth": 92,
+  "navigationZoomWidth": 72,
+  "navigationControlGap": 0,
+  "railToolSize": 28,
+  "railToolGap": 4,
+  "railBottomInset": 10,
+  "railSeparatorGap": 10
 }
