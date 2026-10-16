@@ -13,3 +13,4 @@ mod mcp_wire;
 mod missing_font_warnings;
 mod native_save_name;
 mod openraster;
+mod smart_filter_authorization;
