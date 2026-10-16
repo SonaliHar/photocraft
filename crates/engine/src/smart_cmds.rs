@@ -175,6 +175,15 @@ pub fn source_decode_count(bytes: &[u8], fmt: PixelFormat) -> u32 {
     SOURCE_CACHE.lock().ok().and_then(|c| c.iter().find(|e| e.key == key).map(|e| e.decodes)).unwrap_or(0)
 }
 
+pub(crate) fn rerenders_from_source(sm: &SmartObject, fmt: PixelFormat) -> bool {
+    matches!(&sm.source, SmartSource::Embedded { bytes, .. } if source_decode_count(bytes, fmt) > 0)
+        && sm
+            .smart_filters
+            .iter()
+            .filter(|f| sm.filters_enabled && f.visible)
+            .all(|f| crate::commands::find(&f.command).is_some() && crate::jobs::authorize_render_command(&f.command, &f.params).is_ok())
+}
+
 fn buffer_to_surface(buf: &photocraft_compose::Buffer, fmt: PixelFormat) -> Surface {
     let n = fmt.channels();
     let mut data = vec![0.0f32; buf.px.len() * n];

@@ -252,8 +252,11 @@ fn resample_doc(doc: &mut Document, nw: u32, nh: u32, filter: Resample) {
     }
     // Content that reaches the canvas edge keeps it: a Background stays opaque to the border.
     let canvas = Rect::from_xywh(0, 0, ow, oh);
+    let rerendered = rerendered_smart_caches(&doc.layers);
     for_each_surface(&mut doc.layers, true, &mut |surf, is_mask| {
-        *surf = resize_surface_in_canvas(surf, sx, sy, if is_mask { Resample::Bilinear } else { filter }, canvas);
+        if !rerendered.contains(&std::ptr::from_ref(surf)) {
+            *surf = resize_surface_in_canvas(surf, sx, sy, if is_mask { Resample::Bilinear } else { filter }, canvas);
+        }
     });
     let k = ((sx + sy) / 2.0) as f32;
     for_each_layer(&mut doc.layers, &mut |l| scale_effects(&mut l.effects, k));
@@ -267,6 +270,24 @@ fn resample_doc(doc: &mut Document, nw: u32, nh: u32, filter: Resample) {
     crate::canvas_geom::transform_geometry(doc, &photocraft_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] });
     doc.size = Size::new(nw, nh);
     crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
+}
+
+fn rerendered_smart_caches(layers: &[Layer]) -> Vec<*const Surface> {
+    let mut out = Vec::new();
+    for l in layers {
+        match &l.content {
+            LayerContent::Smart(sm) => {
+                if let Some(c) = &sm.cache
+                    && crate::smart_cmds::rerenders_from_source(sm, c.format())
+                {
+                    out.push(std::ptr::from_ref(c));
+                }
+            }
+            LayerContent::Group(g) => out.extend(rerendered_smart_caches(&g.children)),
+            _ => {}
+        }
+    }
+    out
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {

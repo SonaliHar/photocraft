@@ -350,6 +350,15 @@ fn transform_layer_with(
     apply_transform(doc_sel, group, l, h, affine, interp, ctl)
 }
 
+fn warp_unrendered_cache(sm: &mut photocraft_doc::SmartObject, h: &Homography, interp: Interp) -> Result<()> {
+    let rerenders = sm.cache.as_ref().is_some_and(|c| crate::smart_cmds::rerenders_from_source(sm, c.format()));
+    if let Some(c) = sm.cache.as_mut().filter(|_| !rerenders) {
+        let src = c.content_bounds();
+        *c = warp_surface(c, src, h, interp)?;
+    }
+    Ok(())
+}
+
 fn apply_transform(
     doc_sel: Option<&Surface>,
     group: Locks,
@@ -401,10 +410,7 @@ fn apply_transform(
                 None => crate::smart_cmds::set_placement(sm, h.mul(&crate::smart_cmds::placement(sm))),
             }
             // Fallback appearance for sources that can't be re-rendered.
-            if let Some(c) = &mut sm.cache {
-                let src = c.content_bounds();
-                *c = warp_surface(c, src, h, interp)?;
-            }
+            warp_unrendered_cache(sm, h, interp)?;
             if let Some(m) = &mut sm.filter_mask {
                 m.surface = warp_gray(&m.surface, h, interp)?;
             }
