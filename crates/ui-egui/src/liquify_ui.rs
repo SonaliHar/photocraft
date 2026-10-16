@@ -459,7 +459,7 @@ impl LiquifyDialog {
     }
 }
 
-/// Opens the dialog on the active layer.
+/// Cache original pixels and average coverage at the same resolution as the preview.
 fn preview_blend(selection: Option<&(Surface, LayerMask)>, bounds: Rect, max_side: usize) -> Vec<PreviewBlend> {
     let Some((original, mask)) = selection else { return Vec::new() };
     let original = ProxyImage::new(original, bounds, max_side);
@@ -472,6 +472,7 @@ fn preview_blend(selection: Option<&(Surface, LayerMask)>, bounds: Rect, max_sid
         .collect()
 }
 
+/// Opens the dialog on the active layer.
 pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
     let (layer, mut surf, _) = crate::distort_ui::active_pixels(app)?;
     let st = app.session.active().ok_or("no document")?;
@@ -1256,6 +1257,28 @@ mod tests {
                 assert!(p[c].abs_diff(expected) <= 2, "preview {p:?}, committed channel {c}: {expected}");
             }
         }
+    }
+
+    #[test]
+    fn preview_mask_downsampling_preserves_partial_coverage_and_density_5989() {
+        let bounds = Rect::new(0, 0, 4, 2);
+        let mut original = Surface::new(photocraft_doc::PixelFormat::RGBA8);
+        original.fill_rect(bounds, &[1.0, 0.0, 0.0, 0.5]);
+        let mut surface = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+        surface.fill_rect(Rect::new(0, 0, 1, 2), &[1.0]);
+        let mut selected = (original, LayerMask { surface, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+        let blend = preview_blend(Some(&selected), bounds, 2);
+        assert_eq!(blend.len(), 2);
+        assert_eq!(blend[0].coverage, 0.5);
+        assert_eq!(blend[1].coverage, 0.0);
+        assert_eq!(blend[0].original[0], blend[0].original[3], "red remains premultiplied");
+        selected.1.density = 0.5;
+        let blend = preview_blend(Some(&selected), bounds, 2);
+        assert_eq!(blend[0].coverage, 0.75);
+        assert_eq!(blend[1].coverage, 0.5);
+        selected.1.enabled = false;
+        assert!(preview_blend(Some(&selected), bounds, 2).iter().all(|p| p.coverage == 1.0));
+        assert!(preview_blend(None, bounds, 2).is_empty());
     }
 
     #[test]
