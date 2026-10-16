@@ -1,0 +1,24 @@
+[package]
+name = "photocraft-plugin-typertools"
+description = "TyperTools for PhotoCraft: manga and comic lettering (WebAssembly panel plug-in, ABI v2)"
+version = "1.4.9"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Not a member of the PhotoCraft workspace: it builds for wasm32-unknown-unknown only, and its
+# dependencies must not be able to reach the host's crates.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

@@ -3,9 +3,34 @@
 //!
 //! Each fixture's `pc_event` answers with a fixed script, and then **echoes the event it is given**
 //! straight back inside a `storage.set`. That makes the event the host delivered readable from a
-//! test, byte for byte — which is how the timer fires and the refusals are checked.
+//! test, byte for byte — which is how the timer fires and the refusals are checked. The one event a
+//! scripted fixture does not treat that way is a tick's `doc.changed`, which another test's session
+//! can deliver at any moment: see [`tick_guard`].
+//!
+//! The installed plug-ins *and* the open panels are process-wide, so one id belongs to one test: a
+//! second test using it installs over the first one's instance, and the panel it is clicking becomes
+//! someone else's. A tick reaches every panel in the process too, so the tests that tick take
+//! [`ticking`] first.
 
 use super::*;
+
+/// Held by the tests that call `plugin.panel.tick`, for the length of the test.
+///
+/// `tick` advances *every* open panel in the process, so one test's tick lands in the middle of
+/// another test's assertions: it fires the other panel's timers, re-points the document the panel
+/// believes it is showing and grows its event counter. That is the host as it is, and it has no owner
+/// to appeal to — the application itself holds one session, and the tick *is* its frame — so a panel
+/// being ticked by a session that did not open it is a thing these tests have to live with rather
+/// than a bug to fix here. Taking this lock is how they live with it deterministically: two tests
+/// that tick cannot interleave, so each one's own ticks are the only ones inside its assertions.
+/// (Whatever a test's own tick does to a panel another test owns is still its own doing — which is
+/// why no assertion here speaks for the whole process, only for the panel it opened.)
+static TICKING: Mutex<()> = Mutex::new(());
+
+/// See [`TICKING`]: held for the length of a test that ticks.
+fn ticking() -> MutexGuard<'static, ()> {
+    TICKING.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Where the fixture's pieces live. The echo buffer sits high in the initial eight pages, below
 /// where `pc_alloc` starts handing out blocks (8 pages = 524,288).
@@ -57,6 +82,24 @@ fn echo_body() -> String {
     )
 }
 
+/// The reply a scripted fixture answers a `doc.changed` with: the view it already sent.
+///
+/// Panels are process-wide, so while one test runs, every other test in this binary ticks *its* panel
+/// too, and each of their frames delivers a `doc.changed` naming their session's document. A fixture
+/// that answered every call from one counter would have the reply meant for a click eaten by a tick,
+/// and the click would hear the echo of its own event instead — a flake no assertion can repair,
+/// because the test cannot see which call it got, nor when another session ticked past it. A tick
+/// gets the view back instead, which is idempotent (it is what the panel already sent) and writes
+/// nothing: the script then lines up with the events *this* test sends, and `storage["last"]` is only
+/// ever written by its own.
+fn tick_guard() -> String {
+    format!(
+        "(if (call $is_doc_changed (local.get $p) (local.get $len))
+           (then (return (i64.or (i64.shl (i64.const {}) (i64.const 32)) (i64.const {REPLIES_AT})))))",
+        VIEW.len()
+    )
+}
+
 /// A panel module for `id`: `pc_event` answers with `replies` in order and echoes the event back
 /// once the script runs out. A reply of [`TRAP`] traps instead of answering.
 fn panel(id: &str, replies: &[&str]) -> Vec<u8> {
@@ -66,6 +109,10 @@ fn panel(id: &str, replies: &[&str]) -> Vec<u8> {
 /// [`panel`] with a manifest of its own, for the tests that vary what a panel asks for: what it may
 /// run follows from `capabilities`, so a panel that asks for nothing must be able to do nothing.
 fn panel_with(manifest: &str, replies: &[&str]) -> Vec<u8> {
+    // The first reply is the view the panel sends on `init`, and it is also what a tick is answered
+    // with (see [`tick_guard`]) — so it is not one of the scripted answers below, and it is never a
+    // trap.
+    assert_eq!(replies.first(), Some(&VIEW), "a fixture's script starts with the view its panel sends");
     let mut data = String::new();
     for (i, reply) in replies.iter().enumerate() {
         if *reply != TRAP {
@@ -84,7 +131,11 @@ fn panel_with(manifest: &str, replies: &[&str]) -> Vec<u8> {
         };
         body = format!("(if (result i64) (i32.eq (local.get $n) (i32.const {i})) (then {then}) (else {body}))");
     }
-    module_with(manifest, &format!("(local.set $n (global.get $calls))\n  (global.set $calls (i32.add (local.get $n) (i32.const 1)))\n  {body}"), &data)
+    module_with(
+        manifest,
+        &format!("(local.set $n (global.get $calls))\n  {}\n  (global.set $calls (i32.add (local.get $n) (i32.const 1)))\n  {body}", tick_guard()),
+        &data,
+    )
 }
 
 /// What the fixtures' panels declare: reading the document and adding layers to it, and a store.
@@ -130,6 +181,19 @@ fn module_with(manifest: &str, event_body: &str, data: &str) -> Vec<u8> {
     (if (result i32) (i32.eq (local.get $old) (i32.const -1))
       (then (i32.const 0)) (else (i32.mul (local.get $old) (i32.const 65536)))))
   (func (export "pc_free") (param $p i32) (param $n i32))
+  (func $is_doc_changed (param $p i32) (param $len i32) (result i32) (local $i i32) (local $end i32)
+    (local.set $end (i32.sub (local.get $len) (i32.const 8)))
+    (block $out
+      (loop $scan
+        (br_if $out (i32.gt_s (local.get $i) (local.get $end)))
+        ;; `doc.chan`: the frame's own `"type": "doc.changed"`, which only a tick sends.
+        (if (i32.and
+              (i32.eq (i32.load (i32.add (local.get $p) (local.get $i))) (i32.const 0x2E636F64))
+              (i32.eq (i32.load (i32.add (local.get $p) (i32.add (local.get $i) (i32.const 4)))) (i32.const 0x6E616863)))
+          (then (return (i32.const 1))))
+        (local.set $i (i32.add (local.get $i) (i32.const 1)))
+        (br $scan)))
+    (i32.const 0))
   (func (export "pc_event") (param $p i32) (param $len i32) (result i64) (local $n i32)
     {event_body})
 )"#,
@@ -271,9 +335,46 @@ fn a_click_reaches_the_panel_and_its_operations_are_carried_out() {
     cleanup(&mut s, id);
 }
 
+/// Another session's tick must not eat this panel's answers.
+///
+/// Panels are process-wide and `tick` announces the *calling* session's document to all of them, so a
+/// second session in the same process — another test in this binary, or a client on the control
+/// channel while the user works — hands this panel a `doc.changed` naming *its* document at any
+/// moment. The script answers the events this test sends, so the click still hears the reply written
+/// for it, and the document in it is the one the panel's own session holds.
+#[test]
+fn another_sessions_tick_does_not_eat_a_panels_answers() {
+    let _ticking = ticking();
+    let id = "test.panel.shared";
+    let mut s = app(id, &panel(id, &[VIEW, r#"[{"op": "doc.info", "id": "d1"}]"#]));
+    open(&mut s, id);
+    // A second session, with a document of its own, ticks every panel in the process — including
+    // this one, which is not its own. (`panels` is that count, not one: the other tests' panels are
+    // open too, and one tick reaches all of them.)
+    let mut other = Session::new();
+    other.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let ticked = other.execute("plugin.panel.tick", json!({})).unwrap();
+    assert!(ticked["panels"].as_u64().unwrap_or(0) >= 1, "{ticked}");
+    // It answers for the panels it was told about and no more: the `errors` of a process-wide tick
+    // are the whole process's, and a panel of another test's that fails on its own is not this one's
+    // to answer for — only this id's own entries would be.
+    let errors = ticked["errors"].as_array().cloned().unwrap_or_default();
+    assert!(!errors.iter().any(|e| e["id"] == id), "ticking this panel from another session is not an error: {ticked}");
+    // The click is answered by the script's reply for it, not by the echo of its own event.
+    click(&mut s, id, "go").unwrap();
+    let answer = last_event(&mut s, id);
+    assert_eq!(answer["type"], "result", "the click heard the reply the script holds for it: {answer}");
+    assert_eq!(answer["id"], "d1");
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["width"], 40, "and `doc.info` read the panel's own session's document: {answer}");
+    cleanup(&mut s, id);
+}
+
 #[test]
 fn a_timer_fires_as_the_result_of_the_operation_that_armed_it() {
+    let _ticking = ticking();
     let id = "test.panel.timer";
+
     let mut s = app(id, &panel(id, &[VIEW, r#"[{"op": "timer.set", "id": "poll", "ms": 16}]"#]));
     open(&mut s, id);
     click(&mut s, id, "go").unwrap();
@@ -450,7 +551,10 @@ fn a_panel_runs_a_command_the_host_allows_and_hears_the_answer() {
 /// did not ask for the capability for, both come back as `ok: false` with the reason.
 #[test]
 fn a_panel_is_told_why_a_command_was_refused() {
-    let id = "test.panel.refused";
+    // Not the id above: one id belongs to one test. The registry is process-wide, and a second test
+    // installing the same id replaces the instance the first one is clicking — which is how this
+    // test failed five runs in thirteen when it shared `test.panel.refused`.
+    let id = "test.panel.denied";
     let ask = |command: &str| format!(r#"[{{"op": "doc.command", "id": "nope", "command": "{command}"}}]"#);
     // `file.open` is not in the host's list, however the manifest is written.
     let open_ask = ask("file.open");
@@ -530,6 +634,7 @@ fn removing_or_replacing_a_plug_in_ends_its_instance() {
 /// type into its field, and read back what the host was told.
 #[test]
 fn the_example_panel_plug_in_works_end_to_end() {
+    let _ticking = ticking();
     let id = EXAMPLE_ID;
     let mut s = app(id, EXAMPLE);
     let st = open(&mut s, id);
@@ -592,5 +697,165 @@ fn the_example_panel_plug_in_works_end_to_end() {
     s.execute("plugin.remove", json!({"id": id})).unwrap();
     s.execute("plugin.install", json!({"data": b64(EXAMPLE)})).unwrap();
     assert_eq!(open(&mut s, id)["view"]["children"][1]["value"], "");
+    cleanup(&mut s, id);
+}
+
+/// The TyperTools port from `examples/plugins/typertools`, as its `build.sh` leaves it.
+///
+/// It is the reason the panel ABI exists at all, and the widest thing that can be installed into
+/// it: a panel with its own library, its own script parser and a run of engine commands per click.
+/// The example panel above proves the ABI's shape; this proves it is enough to letter a page with.
+const TYPERTTOOLS: &[u8] = include_bytes!("../../../plugins/tests/fixtures/typertools.wasm");
+const TYPERTTOOLS_ID: &str = "org.photocraft.typertools";
+
+/// Every piece of text in a widget tree, in drawing order — labels, values, placeholders.
+///
+/// A panel's view is a tree whose shape belongs to the panel, so a test that drives one should ask
+/// what it *says* rather than where: the port's pages gain and lose rows as the ABI grows, and an
+/// assertion on `children[7]` would be a test of the layout rather than of the lettering.
+fn said(v: &Value) -> String {
+    let mut out = Vec::new();
+    fn walk(v: &Value, out: &mut Vec<String>) {
+        match v {
+            Value::Object(m) => {
+                for key in ["text", "label", "value", "placeholder", "title"] {
+                    if let Some(s) = m.get(key).and_then(Value::as_str) {
+                        out.push(s.to_string());
+                    }
+                }
+                for (_, child) in m {
+                    walk(child, out);
+                }
+            }
+            Value::Array(a) => a.iter().for_each(|c| walk(c, out)),
+            _ => {}
+        }
+    }
+    walk(v, &mut out);
+    out.join(" · ")
+}
+
+/// Finds a widget by the id the ABI gives it — the one thing about a view a test may rely on, since
+/// the id is what events come back with.
+fn widget<'a>(v: &'a Value, id: &str) -> Option<&'a Value> {
+    match v {
+        Value::Object(m) => {
+            if m.get("id").and_then(Value::as_str) == Some(id) {
+                return Some(v);
+            }
+            m.values().find_map(|c| widget(c, id))
+        }
+        Value::Array(a) => a.iter().find_map(|c| widget(c, id)),
+        _ => None,
+    }
+}
+
+/// The TyperTools port, driven the way a letterer drives it: a script is pasted, Create is pressed,
+/// and the document has a type layer in that line's style.
+#[test]
+fn the_typertools_plug_in_letters_a_page_end_to_end() {
+    let _ticking = ticking();
+    let id = TYPERTTOOLS_ID;
+    let mut s = Session::new();
+    s.execute("plugin.install", json!({"data": b64(TYPERTTOOLS)})).unwrap();
+    // A page worth lettering on: the port contracts the marquee by 10 px a side and refuses one
+    // under 200 px², so a postage stamp would be refused before it started.
+    s.execute("file.new", json!({"width": 400, "height": 300})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    let st = open(&mut s, id);
+    assert_eq!(st["name"], "TyperTools for PhotoCraft");
+    assert_eq!(st["abi"], 2);
+    assert_eq!(st["state"], "running");
+    assert_eq!(st["error"], Value::Null);
+    // The two questions `init` asks — the document, and which fonts the host has — are answered
+    // inside the same call, so the very first view already describes the page it is lettering on.
+    // Nothing had to be clicked for it, and nothing is polled for: it is a reply, not a frame.
+    let first = said(&st["view"]);
+    assert!(first.contains("400 × 300 px"), "{first}");
+    assert!(first.contains("selection 400 × 300"), "the marquee it will letter into: {first}");
+    assert!(first.contains("no type layer selected"), "{first}");
+    assert!(first.contains("Dialogue"), "the starter library is loaded for a letterer with none: {first}");
+    assert_eq!(st["grants"]["document"], json!(["read", "addLayers"]));
+    assert_eq!(st["grants"]["network"], Value::Null, "a panel cannot reach the network, whatever it asks for");
+
+    // Paste a chapter: one line of dialogue, then a stage direction the default ignore prefixes
+    // skip. The line field counts dialogue, not rows, so the note is not a line the buttons can be
+    // pointed at — which is what the arrows and the field are for.
+    s.execute("plugin.panel.event", json!({"id": id, "event": {"type": "ui.change", "id": "script", "value": "I'll be home by six.\n## (a note to myself)"}}))
+        .unwrap();
+    let typed = inspect(&mut s, id);
+    let after = said(&typed["view"]);
+    assert!(after.contains("I'll be home by six."), "the line the buttons will letter: {after}");
+    assert_eq!(widget(&typed["view"], "lineNo").and_then(|w| w["max"].as_f64()), Some(1.0), "one line of dialogue in two rows: {after}");
+    assert!(typed["storage"]["script"].as_str().unwrap_or_default().contains("home by six"), "the script is kept, so it comes back with the panel");
+
+    // Create: the marquee becomes a type layer saying that line, in the default style.
+    let st = click(&mut s, id, "create").unwrap();
+    assert!(st["error"].is_null(), "{st}");
+    let info = s.execute("type.info", json!({})).unwrap();
+    assert_eq!(info["text"], "I'll be home by six.");
+    assert_eq!(info["orientation"], "Horizontal");
+    // The style's own size is in points, and the page is at the default 72 dpi, so the number the
+    // style carries is the number the layer gets.
+    let size = info["runs"][0]["style"]["size_pt"].as_f64().unwrap_or_default();
+    assert!((size - 14.0).abs() < 0.5, "the Dialogue style is 14 pt: {info}");
+    // Paragraph text fitted to the marquee, not to the page: the port letters into the selection
+    // contracted by 10 px a side, and gives the new box 90 % of that width — TyperTools' own
+    // constant, kept because the letterer's page is laid out around it.
+    let box_rect = &info["shape"]["Box"];
+    assert!(!box_rect.is_null(), "boxed paragraph text: {info}");
+    assert!((box_rect["width"].as_f64().unwrap_or_default() - 380.0 * 0.9).abs() < 0.5, "{info}");
+    // The whole action is one history step, so one undo takes the layer away again — and the run
+    // really did touch the document rather than only saying it had.
+    //
+    // The panel learns of it the way it learns of any other edit: the host tells it, on the next
+    // tick, that what it can see has changed. It does not poll, and its own command is not a special
+    // case — a panel that assumed its own edits came back to it would be wrong the moment the user
+    // touched the same layer.
+    s.execute("plugin.panel.tick", json!({"id": id})).unwrap();
+    let st = inspect(&mut s, id);
+    assert!(said(&st["view"]).contains("1 type layer"), "the report names what it made: {}", said(&st["view"]));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.execute("type.info", json!({})).is_err(), "one undo, one action: {st}");
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(s.execute("type.info", json!({})).unwrap()["text"], "I'll be home by six.");
+
+    // A style applied to what is already there: the layer keeps its text and takes the style.
+    let st = click(&mut s, id, "apply").unwrap();
+    assert!(st["error"].is_null(), "{st}");
+    assert_eq!(s.execute("type.info", json!({})).unwrap()["text"], "I'll be home by six.", "applying a style does not rewrite what the layer says");
+
+    // A size step grows the type by one document pixel's worth of points — one point at the default
+    // 72 dpi — and leaves the line where it was: the box grows with the type, as TyperTools' own
+    // step does (right and bottom, the origin held), and the type is then put back so its centre on
+    // the page has not moved.
+    let before = s.execute("type.info", json!({})).unwrap();
+    let st = click(&mut s, id, "sizeUp").unwrap();
+    assert!(st["error"].is_null(), "{st}");
+    let after = s.execute("type.info", json!({})).unwrap();
+    let (was, now) = (before["runs"][0]["style"]["size_pt"].as_f64().unwrap_or_default(), after["runs"][0]["style"]["size_pt"].as_f64().unwrap_or_default());
+    assert!((now - (was + 1.0)).abs() < 0.05, "one step up: {was} → {now}");
+    let centre = |v: &Value| -> (f64, f64) {
+        let b = &v["bounds"];
+        let (x0, y0) = (b[0].as_f64().unwrap_or_default(), b[1].as_f64().unwrap_or_default());
+        let (x1, y1) = (b[2].as_f64().unwrap_or_default(), b[3].as_f64().unwrap_or_default());
+        ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+    };
+    let (bx, by) = centre(&before);
+    let (ax, ay) = centre(&after);
+    // The bounds are whole pixels of rendered content, so half a pixel is the measurement's own
+    // resolution rather than the layer having moved.
+    assert!((ax - bx).abs() <= 1.0, "the line stayed where it was: {bx} → {ax}\n{after}");
+    assert!((ay - by).abs() <= 1.0, "{by} → {ay}\n{after}");
+    let bigger = |v: &Value, k: &str| v["shape"]["Box"][k].as_f64().unwrap_or_default();
+    assert!(bigger(&after, "height") > bigger(&before, "height"), "the box grew with the type: {after}");
+    assert!(bigger(&after, "width") > bigger(&before, "width"), "{after}");
+
+    // Nothing the port asked for was ever refused: a refused `doc.command` comes back as an error
+    // the panel would have shown, so a panel with a clean screen is the proof that the five commands
+    // `permissions` grants are the five it needed and no more.
+    let st = inspect(&mut s, id);
+    assert!(!said(&st["view"]).contains("does not let a panel run"), "{}", said(&st["view"]));
+    assert!(!said(&st["view"]).contains("Select a type layer first"), "{}", said(&st["view"]));
     cleanup(&mut s, id);
 }

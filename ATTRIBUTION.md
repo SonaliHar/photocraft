@@ -75,6 +75,12 @@ The other built-in ICC profiles and the generated LUT looks are produced by code
 (`crates/cms/src/builtin.rs`, `crates/cms/src/lutfile.rs`) and dedicated to the public domain
 (CC0-1.0); they are not separate files.
 
+## Example plug-ins
+
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `examples/plugins/typertools/` (all files) | TyperTools for PhotoCraft: a lettering panel (manga and comic dialogue) that reimplements the behaviour, panel layout and style-library format of TyperTools 1.4.9 for Adobe Photoshop | PhotoCraft contributors; the behaviour and interface reimplemented from TyperTools by Swirt (Andrew) | Original Rust written against PhotoCraft's own type engine, from behaviour observed in and documented by <https://github.com/Swirt/typertools-src> (MIT, © 2017 Swirt). No file, source line, artwork, locale string or vendored library of it is copied — in particular its bundled GPL `app_src/lib/jam/*` (© Michel MARIANI) and Adobe's `CSInterface.js` are not used, and the plug-in contains no ExtendScript | MIT OR Apache-2.0, like the code |
+
 ## Documentation and README
 
 | Path | Title | Author | Source | License |
