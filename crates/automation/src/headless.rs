@@ -1073,3 +1073,7 @@ mod owned_vibrance_tests;
 #[cfg(all(test, not(target_arch="wasm32")))]
 #[path="headless/owned_pure_point_geometry_tests.rs"]
 mod owned_pure_point_geometry_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_nine_point_geometry_tests.rs"]
+mod owned_nine_point_geometry_tests;

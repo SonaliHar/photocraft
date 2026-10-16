@@ -1301,7 +1301,6 @@ pub(crate) fn qualify_point_family_context(
     extent:Rect,profile:&Profile,stored:SampleEncoding,interrupt:&photocraft_raster::Interrupt<'_>,
 )->Result<PointCurrentFamilies> {
     interrupt.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
-    let item=state.items.iter().find(|item|item.item==ItemRef::Layer(layer.id));
     if let Some(node) = stack.nodes.iter().find(|node| crate::gimp_semi_flatten::claims(node)) {
         if stack.nodes.len() != 1 { return Err(CompositionError::Unsupported("Semi-Flatten current singleton")); }
         crate::gimp_semi_flatten::qualify_context(doc, extent, node)?;
@@ -1311,25 +1310,16 @@ pub(crate) fn qualify_point_family_context(
             && node.operation.schema_epoch == crate::gimp_filters::CHANNEL_MIXER_PRECISION_EPOCH
             && node.operation.stored_version == "0:0"
     });
-    if channel_mixer && (doc.size != photocraft_doc::Size::new(8, 6) || extent != Rect::new(0, 0, 8, 6)) {
-        return Err(CompositionError::Unsupported("Channel Mixer exact current extent"));
-    }
     let mono_signed = stack.nodes.first().is_some_and(|node| {
         node.operation.name == "gegl:mono-mixer"
             && node.operation.schema_epoch == crate::gimp_filters::MONO_MIXER_SIGNED_PRECISION_EPOCH
             && node.operation.stored_version == "0:0"
     });
-    if mono_signed && (doc.size != photocraft_doc::Size::new(8, 6) || extent != Rect::new(0, 0, 8, 6)) {
-        return Err(CompositionError::Unsupported("unqualified expanded Mono Mixer current extent"));
-    }
     let color_overlay = stack.nodes.first().is_some_and(|node| {
         node.operation.name == "gegl:color-overlay"
             && node.operation.schema_epoch == crate::gimp_filters::COLOR_OVERLAY_PRECISION_EPOCH
             && node.operation.stored_version == "0:0"
     });
-    if color_overlay && (doc.size != photocraft_doc::Size::new(8, 6) || extent != Rect::new(0, 0, 8, 6)) {
-        return Err(CompositionError::Unsupported("unqualified Color Overlay current extent"));
-    }
     let color_rotate = stack.nodes.first().is_some_and(|node| {
         node.operation.name == "gegl:color-rotate" && node.operation.schema_epoch == crate::gimp_color_rotate::COLOR_ROTATE_PERCEPTUAL_EPOCH
     });
@@ -1372,7 +1362,7 @@ pub(crate) fn qualify_point_family_context(
             && node.operation.schema_epoch == crate::gimp_filters::ABSOLUTE_LINEAR_PRECISION_EPOCH
             && node.operation.stored_version == "0:0"
     });
-    if absolute && (doc.size != photocraft_doc::Size::new(8, 6) || extent != Rect::new(0, 0, 8, 6) || stored != SampleEncoding::Linear) {
+    if absolute && stored != SampleEncoding::Linear {
         return Err(CompositionError::Unsupported("unqualified Absolute Linear current extent/encoding"));
     }
     let red_eye = stack.nodes.first().is_some_and(|node| {
@@ -1381,6 +1371,7 @@ pub(crate) fn qualify_point_family_context(
             && node.operation.stored_version == "0:0"
     });
     if red_eye {
+        let item=state.items.iter().find(|item|item.item==ItemRef::Layer(layer.id));
         let node = stack.nodes.first().ok_or(CompositionError::Invalid("Red Eye current node"))?;
         let dimensions = i64::from(extent.x1)
             .checked_sub(i64::from(extent.x0))
@@ -1440,11 +1431,36 @@ pub(crate) fn qualify_point_family_context(
     {
         return Err(CompositionError::Unsupported("unqualified finite Alpha Clip current precision"));
     }
-    if component_extract && !component_geometry && (doc.size != photocraft_doc::Size::new(8, 6) || extent != Rect::new(0, 0, 8, 6)) {
-        return Err(CompositionError::Unsupported("unqualified Component Extract current extent"));
-    }
-    if alpha_clip && (doc.size != photocraft_doc::Size::new(8, 6) || extent != Rect::new(0, 0, 8, 6)) {
-        return Err(CompositionError::Unsupported("unqualified Alpha Clip current extent"));
+    // Only the nine precision domains share this origin geometry policy.
+    // Component's separately witnessed offset epoch and all other families keep
+    // their existing geometry. Plain Document callers cannot assume L1 custody.
+    if absolute || channel_mixer || mono_signed || color_overlay || (component_extract && !component_geometry) || alpha_clip {
+        let [actual_layer] = doc.layers.as_slice() else {
+            return Err(CompositionError::Unsupported("point origin singleton layer"));
+        };
+        let [actual_stack] = state.filter_stacks.as_slice() else {
+            return Err(CompositionError::Unsupported("point origin singleton stack"));
+        };
+        if state.items.len() != 2
+            || state.filter_masks.len() != 1
+            || stack.nodes.len() != 1
+            || actual_stack.nodes.len() != 1
+            || actual_layer.id != layer.id
+            || stack.owner != ItemRef::Layer(layer.id)
+            || actual_stack.owner != stack.owner
+            || actual_stack.nodes.first().map(|node| node.id) != stack.nodes.first().map(|node| node.id)
+            || extent.x0 != 0
+            || extent.y0 != 0
+            || extent.is_empty()
+            || extent.width() > 262144
+            || extent.height() > 262144
+            || u64::from(extent.width()).checked_mul(u64::from(extent.height())).is_none_or(|pixels| pixels > 1 << 30)
+            || extent != doc.bounds()
+            || extent.size() != doc.size
+            || state.items.iter().find(|item| item.item == ItemRef::Layer(layer.id)).and_then(|item| item.raster_bounds) != Some(extent)
+        {
+            return Err(CompositionError::Unsupported("point checked origin canonical/native extent"));
+        }
     }
     interrupt.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
     Ok(PointCurrentFamilies {channel_mixer,mono_signed,color_overlay,color_rotate,unpremultiply,absolute,red_eye,component_extract,alpha_clip})

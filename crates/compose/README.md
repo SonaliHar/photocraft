@@ -1098,3 +1098,40 @@ custody, all resident fees and strict final refusal remain unchanged. These
 finite ceilings promise no completion time, image size, RSS or numerical fidelity.
 Caller-supplied ReadControl APIs retain their own lower controls; no hidden
 standard selection replaces them. Native-large remains unavailable.
+
+Nine existing specialized PointReplace domains now admit checked positive
+full-canvas drawable bounds at the origin: Absolute Linear, Channel Mixer,
+signed Mono Mixer, Color Overlay, the three Component Extract precision domains
+and the two Alpha Clip precision domains. Their existing epochs, typed arguments,
+precision/model/encoding/profile and native/working/result-domain rules remain
+unchanged. Absolute's finite working HDR and finite Alpha Clip's distinct limits
+remain supported as before; no blanket unit-input or nonlinear-RGB assumption
+is added. Already dynamic families and separate witnessed geometry epochs retain
+their own geometry rules.
+
+Qualification checks both sides at most 262144 and checked area at most 2^30,
+with exact source plane totals and the existing 64-pixel visitor contract.
+CURRENT and standalone preparation explicitly join the bounded canonical owner
+to the actual native extent and document canvas. The existing shared mask proof
+retains byte-zero default/full physical tile/padding checks, its 16 MiB physical
+payload cap and existing coordinate/token semantics. Signed-zero words are not
+byte-zero. The newer three-family numeric-zero mask policy is not transferred.
+Original source filter activation must be present; an explicitly disabled source
+filter was already permitted and still receives complete qualification.
+
+These nine exact operation/schema/Replace-compatibility triples also select the
+existing finite standard service through the shared runtime hint. Names alone
+do not select other Mono Original or Component Geometry policies. This changes
+no renderer or command authority. Existing typed argument/activation and
+registered supported layer metadata remain fully recipe-gated. Move, remove,
+direct compound metadata and new derived-empty roles remain closed for the nine
+epochs. No UI size predicate needed broadening.
+
+Source qualification now prepays each unchanged encoding conversion's actual
+profile validation ceiling plus transfer and sample-loop work for these nine
+roles, on the same budget/control. Repeated profile validation is not discounted
+or treated as a cached validation. It can constrain large source admission even
+under standard work; geometry bounds promise neither completion nor throughput.
+No physical source/default/padding identity, exact GIMP numerics, large-image,
+visual, native workflow or performance acceptance follows from this expansion.
+All new regression groups remain ignored, unrun and uncompiled.

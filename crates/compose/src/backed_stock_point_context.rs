@@ -1018,3 +1018,7 @@ mod vibrance_tests;
 #[cfg(test)]
 #[path = "backed_point_origin_geometry_tests.rs"]
 mod origin_geometry_tests;
+
+#[cfg(test)]
+#[path = "backed_point_replace_origin_geometry_tests.rs"]
+mod point_replace_origin_geometry_tests;

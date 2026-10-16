@@ -2236,3 +2236,29 @@ intake already selects standard work before parsing and is not reselected here.
 No resource-policy UI, native_large, memory exemption or new Move/compound-metadata
 permission is added. Tests, native/widget workflows, timing, memory and numerical
 acceptance remain deferred.
+
+The existing Absolute Linear, Channel Mixer, signed Mono Mixer, Color Overlay,
+three Component Extract precision and two Alpha Clip precision roles now permit
+checked positive full-canvas origin geometry under their existing epochs. Existing
+parameter widths/tags/ranges, native/working/result domains, profile/precision,
+raw policy and activity rules remain authoritative. Original source activation
+must be present, including explicit disabled state. Complete source/current
+proof remains mandatory before disabled/hidden shortcuts.
+
+No new command is registered. Existing typed set/enable and supported readonly
+layer metadata transactions retain their current/staged and publication fences.
+Singleton move and remove, direct compound metadata and additional empty CURRENT
+roles remain unavailable for these nine epochs. Their existing controls already
+have no fixed-size candidate check. Native continuation means `.pcraft`.
+
+Finite work service requires each exact operation/schema/Replace compatibility
+triple, not a six-name alias. Other Mono Original, Component Geometry, residual,
+configured and already dynamic families keep their independent policies. Work
+routing grants no semantic validity. Existing byte-zero physical mask/default/
+padding proof and 16 MiB mask payload cap stay in force; signed zero is not
+byte-zero. The newer three-family numeric-zero mask rules are not inherited.
+Actual repeated source profile validation and transfer work are charged before
+the unchanged conversion. Structural size bounds, finite work and deadlines are
+admission ceilings rather than a supported-image-size or completion promise.
+All behavioral, numerical, native/widget, timing and performance gates remain
+deferred.

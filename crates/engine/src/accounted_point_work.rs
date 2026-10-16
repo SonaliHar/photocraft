@@ -1,9 +1,7 @@
 //! Bounded work routing only. This never validates a source, recipe or command.
-use photocraft_doc::{ColorMode, LayerContent, SampleEncoding, item_identity::ItemRef, accounted_document::AccountedDocument};
 use photocraft_color::SampleType;
-use photocraft_raster::{
-    backing::{BackingError, ReadControl},
-};
+use photocraft_doc::{ColorMode, LayerContent, SampleEncoding, accounted_document::AccountedDocument, item_identity::ItemRef};
+use photocraft_raster::backing::{BackingError, ReadControl};
 /// Select finite standard service for existing Box or the narrowly qualified
 /// implicit Point routes. Full current/native/command validation remains mandatory.
 pub fn is_current_standard_work_candidate(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<bool, BackingError> {
@@ -41,7 +39,22 @@ pub fn is_current_pure_point_work_candidate(owner: &AccountedDocument, c: &ReadC
                 |v: &str| matches!(v, photocraft_compose::SEMI_FLATTEN_EPOCH | photocraft_compose::HUE_CHROMA_EPOCH | photocraft_compose::VIBRANCE_EPOCH);
             Ok(matches!(node.operation.name.as_str(), "gimp:semi-flatten" | "gegl:hue-chroma" | "gegl:vibrance")
                 || epoch(&node.operation.schema_epoch)
-                || compat.is_some_and(epoch))
+                || compat.is_some_and(epoch)
+                // These nine existing roles share their old Replace compatibility
+                // epoch. Require the exact operation/schema/compatibility triple;
+                // names alone would include unrelated original/geometry policies.
+                || node.operation.stored_version == "0:0"
+                    && compat == Some("xcf-22-stock-point-replace-fields-v1")
+                    && matches!((node.operation.name.as_str(),node.operation.schema_epoch.as_str()),
+                        ("gegl:absolute","xcf-22-stock-absolute-linear-precision-v1")
+                        | ("gegl:channel-mixer","xcf-22-stock-channel-mixer-precision-v1")
+                        | ("gegl:mono-mixer","xcf-22-stock-mono-mixer-signed-precision-v1")
+                        | ("gegl:color-overlay","xcf-22-stock-color-overlay-six-precision-v1")
+                        | ("gegl:component-extract","xcf-22-stock-component-extract-four-precision-v1")
+                        | ("gegl:component-extract","xcf-22-stock-component-extract-cmyk-precision-v1")
+                        | ("gegl:component-extract","xcf-22-stock-component-extract-ycbcr-precision-v1")
+                        | ("gegl:alpha-clip","xcf22-stock-alpha-clip-precision-v1")
+                        | ("gegl:alpha-clip","xcf22-stock-alpha-clip-finite-precision-v1")))
         }
         [] => {
             c.check(128)?;
@@ -76,5 +89,5 @@ pub fn is_current_pure_point_work_candidate(owner: &AccountedDocument, c: &ReadC
 }
 
 #[cfg(test)]
-#[path="accounted_point_work_tests.rs"]
+#[path = "accounted_point_work_tests.rs"]
 mod tests;

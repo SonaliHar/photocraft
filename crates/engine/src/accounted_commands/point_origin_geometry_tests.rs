@@ -174,7 +174,7 @@ fn node(s: &Session) -> &FilterNode {
 }
 fn patch(s: &Session, family: usize) -> Value {
     let value = if family == 0 {
-        json!({"name":"color","value":{"Color":{"components":[0.25f32,0.5,0.75,0.375].map(|v| json!({"Float32Bits":v.to_bits()})),"encoding":"NonlinearProfile","profile":null}}})
+        json!({"name":"color","value":{"Color":{"components":[0.25f32,0.5,0.75,0.375].map(|v| json!({"Float32Bits":v.to_bits()})),"encoding":"nonlinear_profile","profile":null}}})
     } else {
         json!({"name":if family == 1 {"hue"} else {"vibrance"},"value":{"Number":{"Float32Bits":15f32.to_bits()}}})
     };

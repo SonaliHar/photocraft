@@ -245,7 +245,10 @@ pub(crate) fn classify<P: ExactParsedPlane>(
         photocraft_compose::gimp_red_eye::qualified_owner_geometry(epoch, (file.width, file.height), (owner.width, owner.height), owner.offset)
             && owner_tuple == (0, -1, -1)
     } else if absolute || channel_mixer || mono_signed || component || alpha_clip || overlay.is_some() {
-        file.width == 8 && file.height == 6 && owner.width == 8 && owner.height == 6 && owner.offset == (0, 0) && owner_tuple == (0, -1, -1)
+        (owner.width, owner.height) == (file.width, file.height)
+            && owner.offset == (0, 0)
+            && u64::from(file.width).checked_mul(u64::from(file.height)).is_some_and(|pixels| pixels <= (1u64 << 30))
+            && owner_tuple == (0, -1, -1)
     } else {
         owner_tuple == (0, -1, -1)
     };
@@ -311,6 +314,20 @@ pub(crate) fn classify<P: ExactParsedPlane>(
             | PointReplaceFamily::AlphaClip
             | PointReplaceFamily::AlphaClipFinite
     );
+    // The nine origin-geometry roles repeat the legacy CMS profile validator
+    // for every pixel, even for same-encoding copies. Admit that real work
+    // independently of mapper preparation; the conversion and domain stay exact.
+    let conversion_extra_work = if absolute || channel_mixer || mono_signed || overlay.is_some() || component && !component_geometry || alpha_clip {
+        poll(control, shared, 128)?;
+        let profile = if file.model == Model::Gray { photocraft_cms::Builtin::SGray.profile() } else { photocraft_cms::Builtin::Srgb.profile() };
+        let semantic = usize::try_from(photocraft_cms::xcf_color::semantic_analytic_profile_work_ceiling(profile)
+            .map_err(|_|IoError::Unsupported("point Replace source profile work".into()))?)
+            .map_err(|_|IoError::Unsupported("point Replace source profile work size".into()))?;
+        // Up to one forward and one inverse analytic curve evaluation per
+        // color channel, separately from semantic validation and old loop work.
+        channels.checked_sub(1).and_then(|n|n.checked_mul(2 * 128)).and_then(|n|n.checked_add(semantic))
+            .ok_or_else(||IoError::Unsupported("point Replace source conversion work size".into()))?
+    } else {0};
     let mut admitted = true;
     let mut visited = 0u64;
     plane.visit_native(control, &mut |chunk| {
@@ -367,7 +384,7 @@ pub(crate) fn classify<P: ExactParsedPlane>(
                         return Ok(false);
                     }
                     let mut working = [0f64; 3];
-                    poll(control, shared, 128)?;
+                    poll(control, shared, conversion_extra_work.checked_add(128).ok_or_else(||IoError::Unsupported("point Replace source transfer work".into()))?)?;
                     let working_encoding = if absolute
                         || channel_mixer
                         || mono_signed
@@ -910,3 +927,7 @@ mod tests {
         assert_eq!(std::fs::read(root.join("brightness-rgb-float_non_linear.negative-x.source.xcf")).unwrap(), bytes);
     }
 }
+
+#[cfg(test)]
+#[path="xcf_point_replace_origin_geometry_tests.rs"]
+mod origin_geometry_tests;
