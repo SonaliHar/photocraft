@@ -1670,3 +1670,53 @@ producer observations, not PhotoCraft numerical acceptance. Fourteen new ignored
 contracts remain UNRUN/uncompiled. All PhotoCraft tests, numerical/native/UI/
 performance and final gates remain deferred; SC002 display<=2/255 and exact
 source/native/ICC/structure criteria still apply. Full stock support is unfinished.
+
+
+The exact singleton masked `gegl:exposure` 1:0 route uses
+`xcf22-gegl-exposure-masked-wide-v1` and ReadonlyPoint storage. It retains the
+original two F32 parameters, raw mask bytes and source metadata. RGB nonlinear
+F32/F64 roots use the existing full positive-origin bounds; arbitrary geometry
+within those bounds is a declared extension beyond the observed 8x6 sources.
+Masks are scalar Gray without alpha in the native precision. Raw coverage must
+be finite and nonnegative and its checked F32 cast must lie in [0,1]. The full
+F64 rounding preimage of Float1 is admitted, preserving GIMP's observed raw
+1.0000000361224046 white value. Negative tiny values refuse even when their
+Float cast would be negative zero. Raw numeric nonzero determines presence
+before conversion, so a positive F64 subnormal still selects the masked path.
+Default and physical padding remain byte-zero, with the existing 16MiB physical
+mask cap. A separately prepaid physical scan and immutable selected-mask proof
+retain all other Document invariants; generic mask validation remains strict.
+
+Every enabled nonempty mask sample executes the full Exposure leaf and Linear
+premultiplied difference mix, including local coverage0/1 and identity settings.
+The mix computes alpha, handles exactly zero alpha through the straight Linear
+hidden-RGB fallback, transfers back and checks the Float output without clamp,
+epsilon or alpha restoration. Disabled input still receives full proof before
+wide pass-through. The old whole-empty byte-zero full-effect sentinel stays on
+its original path; it is not evidence for an explicit black mask. Matched display
+and numerical acceptance remain deferred.
+
+Existing Point argument/enable/metadata/rename/remove/history commands and
+captured Exposure controls retain complete OLD/history/STAGED, lock, source and
+publication fences. Intentional removal deletes operative mask pixels; source
+property metadata and source identity remain, and undo works before closing.
+Neither deleted pixels nor undo history are required in a reopened empty state.
+Mask painting, generic filter opacity, mixed masked stages and other operations
+are separate work.
+
+Native storage adds the exact `point_f32_coverage` intent with original header
+format and minimum-reader floors11 before migration. The owned reader performs
+selected coverage and whole-Document validation before returning an archive;
+raw and unmarked readers stay strict. A portable IO writer first proves the
+actual CURRENT Point interpretation under the original shared quota/control,
+then selects the coverage writer. Pathful, pathless and Headless opens force
+marked archives through Point and reject generic or mixed-class handoff. Other
+native classes retain their writers. Generic latest format is11, with a
+no-invention migration; empty Point states use strict storage without this hint.
+
+Nineteen new ignored contracts are UNRUN and uncompiled, spanning mask/model,
+native storage, source mapping, numeric/backend, commands, controls and native
+workflow boundaries. One historical latest-version assertion changed10 to11.
+Production compilation and static review are recorded separately in execution
+notes. PhotoCraft tests, runtime, native GUI, offscreen rendering, corpus,
+performance and final gates remain deferred. Full stock XCF support is unfinished.

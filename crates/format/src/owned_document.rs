@@ -15,7 +15,7 @@ mod finite_catalog;
 mod save;
 mod source;
 use accounting::RetainedReservations;
-pub use save::{save_accounted_current_document_archive, save_current_document_archive};
+pub use save::{save_accounted_current_document_archive, save_accounted_point_f32_coverage_document_archive, save_current_document_archive};
 
 /// Standard owned-codec per-raster logical ceiling. This is a descriptor allowance,
 /// not a resident allocation or encoded archive allowance. Native-large remains
@@ -160,8 +160,13 @@ impl OwnedDocumentArchive {
             _model: RetainedReservations,
             _owner: photocraft_raster::backing::quota::QuotaLease,
         }
-        if self.current_storage_hint.is_some() && !matches!(handoff, AccountedHandoff::ReadonlyFilteredFlatStorage) {
-            return Err(FormatError::Unsupported("native current storage hint requires owned filtered-flat handoff".into()));
+        let valid_handoff = match self.current_storage_hint {
+            None => true,
+            Some(crate::NativeCurrentStorageHint::FilteredFlatPoint) => matches!(handoff, AccountedHandoff::ReadonlyFilteredFlatStorage),
+            Some(crate::NativeCurrentStorageHint::PointF32Coverage) => matches!(handoff, AccountedHandoff::ReadonlyPointStorage),
+        };
+        if !valid_handoff {
+            return Err(FormatError::Unsupported("native current storage hint requires its exact owned handoff".into()));
         }
         let quota = self._model.quota().clone();
         control.check(0).map_err(error)?;
@@ -173,18 +178,36 @@ impl OwnedDocumentArchive {
         let Self { document, current_storage_hint, _archive, _model } = self;
         let retention = Arc::new(NativeRetention { _archive, _model, _owner: lease });
         match handoff {
-            AccountedHandoff::Document => photocraft_doc::accounted_document::AccountedDocument::from_owned_rehydrating_selection(document, retention, quota, control),
-            AccountedHandoff::ReadonlyThresholdAlphaStorage => photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_threshold_alpha_storage(document, retention, quota, control),
-            AccountedHandoff::ReadonlyHistogramThresholdStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_threshold_storage(document, retention, quota, control),
-            AccountedHandoff::ReadonlyPointStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_point_storage(document, retention, quota, control),
-            AccountedHandoff::ReadonlyAssignedPointStorage => photocraft_doc::accounted_document::AccountedDocument::new_readonly_assigned_point_storage(document, retention, quota, control),
-            AccountedHandoff::ReadonlyGaussianGroupStorage => photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_gaussian_group(document, retention, quota, control),
+            AccountedHandoff::Document => {
+                photocraft_doc::accounted_document::AccountedDocument::from_owned_rehydrating_selection(document, retention, quota, control)
+            }
+            AccountedHandoff::ReadonlyThresholdAlphaStorage => {
+                photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_threshold_alpha_storage(document, retention, quota, control)
+            }
+            AccountedHandoff::ReadonlyHistogramThresholdStorage => {
+                photocraft_doc::accounted_document::AccountedDocument::new_readonly_threshold_storage(document, retention, quota, control)
+            }
+            AccountedHandoff::ReadonlyPointStorage => {
+                photocraft_doc::accounted_document::AccountedDocument::new_readonly_point_storage(document, retention, quota, control)
+            }
+            AccountedHandoff::ReadonlyAssignedPointStorage => {
+                photocraft_doc::accounted_document::AccountedDocument::new_readonly_assigned_point_storage(document, retention, quota, control)
+            }
+            AccountedHandoff::ReadonlyGaussianGroupStorage => {
+                photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_gaussian_group(document, retention, quota, control)
+            }
             AccountedHandoff::ReadonlyFilteredFlatStorage => match current_storage_hint {
-                Some(crate::NativeCurrentStorageHint::FilteredFlatPoint) => photocraft_doc::accounted_document::AccountedDocument::new_readonly_filtered_flat_point_current_storage(document, retention, quota, control),
+                Some(crate::NativeCurrentStorageHint::FilteredFlatPoint) => {
+                    photocraft_doc::accounted_document::AccountedDocument::new_readonly_filtered_flat_point_current_storage(document, retention, quota, control)
+                }
                 None => photocraft_doc::accounted_document::AccountedDocument::new_readonly_filtered_flat_point_storage(document, retention, quota, control),
+                Some(crate::NativeCurrentStorageHint::PointF32Coverage) => return Err(FormatError::Unsupported("coverage requires Point handoff".into())),
             },
-            AccountedHandoff::ReadonlyFlatCompositeStorage => photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_flat_composite(document, retention, quota, control),
-        }.map_err(error)
+            AccountedHandoff::ReadonlyFlatCompositeStorage => {
+                photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_flat_composite(document, retention, quota, control)
+            }
+        }
+        .map_err(error)
     }
 
     /// Selector only; the consuming handoff and complete current proof remain mandatory.
@@ -303,7 +326,11 @@ pub fn load_document_from_owned_archive(
         legacy_linked_contents: HashMap::new(),
         tiles: HashMap::new(),
     };
-    let document = loader.document_with_interrupt(&manifest.document, control.interrupt)?;
+    let document = if manifest.current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
+        loader.document_with_coverage_control(&manifest.document, control.interrupt, Some(control))?
+    } else {
+        loader.document_with_interrupt(&manifest.document, control.interrupt)?
+    };
     let max_id = loader.max_id;
     drop(loader);
     if requires_reader_v9_after_validation(&document,&quota,control)? && manifest.minimum_reader_version<9 {

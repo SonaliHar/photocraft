@@ -9,8 +9,25 @@ use crate::{FormatError, Result};
 pub(crate) type Step = fn(&mut Value) -> Result<()>;
 
 /// `STEPS[i]` upgrades version `i + 1` to `i + 2`.
-pub(crate) const STEPS: &[Step] =
-    &[resolution_axes, source_cache_blobs, current_text_origin, finite_raster_content, current_resource_resolution, current_linked_geometry, brown_layer_label, stored_color, current_storage_hint];
+pub(crate) const STEPS: &[Step] = &[
+    resolution_axes,
+    source_cache_blobs,
+    current_text_origin,
+    finite_raster_content,
+    current_resource_resolution,
+    current_linked_geometry,
+    brown_layer_label,
+    stored_color,
+    current_storage_hint,
+    point_f32_coverage,
+];
+// 10 -> 11: a new closed hint value; absence and old values remain exact.
+fn point_f32_coverage(value: &mut Value) -> Result<()> {
+    if value.get("document").and_then(Value::as_object).is_none() {
+        return Err(FormatError::corrupt("manifest has no document object"));
+    }
+    Ok(())
+}
 fn stored_color(value: &mut Value) -> Result<()> {
     if value.get("document").and_then(Value::as_object).is_none() {
         return Err(FormatError::corrupt("manifest has no document object"));

@@ -1072,6 +1072,62 @@ impl Document {
     }
     /// Interrupt-aware validation. Source payload hashes use bounded chunks.
     pub fn validate_xcf_state_with(&self, control: &photocraft_raster::Interrupt<'_>) -> Result<(), XcfValidationError> {
+        self.validate_xcf_state_selected(control, None)
+    }
+    /// Full ordinary invariants, with only the actual proof-bound mask's raw
+    /// strict scan replaced by its completed checked-Float coverage scan.
+    pub fn validate_xcf_state_with_checked_filter_mask(
+        &self,
+        proof: &xcf_filter_masks::CheckedFilterMaskCoverage<'_>,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<(), XcfValidationError> {
+        let invalid = || XcfValidationError::new("filter_mask_identity", "selected mask is not the actual singleton target");
+        let state = self.xcf_state.as_ref().ok_or_else(invalid)?;
+        if self.layers.len() != 1 || state.filter_stacks.len() != 1 || state.filter_masks.len() != 1 {
+            return Err(invalid());
+        }
+        let layer = self.layers.first().ok_or_else(invalid)?;
+        let stack = state.filter_stacks.first().ok_or_else(invalid)?;
+        let mask = state.filter_masks.first().ok_or_else(invalid)?;
+        if layer.is_group() || stack.owner != item_identity::ItemRef::Layer(layer.id) || stack.nodes.len() != 1 {
+            return Err(invalid());
+        }
+        let node = stack.nodes.first().ok_or_else(invalid)?;
+        if !proof.covers(mask) || node.id != mask.owner || node.mask != Some(item_identity::ItemRef::Mask(mask.id)) {
+            return Err(invalid());
+        }
+        self.validate_xcf_state_selected(control, Some(proof))
+    }
+    /// Resolve the closed singleton structural native coverage purpose. Names,
+    /// epochs and rendering/source authority are deliberately not inferred.
+    pub fn checked_f32_filter_mask_coverage_with(
+        &self,
+        c: &photocraft_raster::backing::ReadControl<'_>,
+    ) -> Result<Option<xcf_filter_masks::CheckedFilterMaskCoverage<'_>>, photocraft_raster::backing::BackingError> {
+        use photocraft_raster::backing::BackingError as E;
+        c.check(1)?;
+        let state = self.xcf_state.as_ref().ok_or(E::Unsupported)?;
+        if self.layers.len() != 1 || state.filter_stacks.len() != 1 || state.filter_masks.len() > 1 {
+            return Err(E::Unsupported);
+        }
+        let layer = self.layers.first().ok_or(E::Integrity)?;
+        let stack = state.filter_stacks.first().ok_or(E::Integrity)?;
+        if layer.is_group() || stack.owner != item_identity::ItemRef::Layer(layer.id) || stack.nodes.len() > 1 {
+            return Err(E::Unsupported);
+        }
+        match (stack.nodes.first(), state.filter_masks.first()) {
+            (None, None) => Ok(None),
+            (Some(node), Some(mask)) if node.id == mask.owner && node.mask == Some(item_identity::ItemRef::Mask(mask.id)) => {
+                mask.validate_checked_f32_coverage_with(c).map(Some)
+            }
+            _ => Err(E::Integrity),
+        }
+    }
+    fn validate_xcf_state_selected(
+        &self,
+        control: &photocraft_raster::Interrupt<'_>,
+        selected: Option<&xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,
+    ) -> Result<(), XcfValidationError> {
         if control.cancelled() {
             return Err(XcfValidationError::new("cancelled", "document validation cancelled"));
         }
@@ -1096,7 +1152,7 @@ impl Document {
             return Err(XcfValidationError::new("path_identity", "invalid or duplicate saved path identity"));
         }
         if let Some(state) = &self.xcf_state {
-            state.validate_with(self, control)?;
+            state.validate_with_selected_filter_mask(self, control, selected)?;
         }
         Ok(())
     }

@@ -40,7 +40,11 @@ pub use standard_work::is_current_pure_point_work_candidate;
 /// storage, native/profile and complete CURRENT recipe proof remain mandatory.
 pub fn is_owned_current_filtered_flat_candidate(archive:&OwnedDocumentArchive, control:&ReadControl<'_>)->std::result::Result<bool,BackingError>{
     control.check(1)?;
-    if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint){return Ok(true)}
+    match archive.current_storage_hint() {
+        Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) => return Ok(true),
+        Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) => return Ok(false),
+        None => {}
+    }
     is_current_filtered_flat_candidate(archive.document(),control)
 }
 
@@ -531,8 +535,11 @@ impl Session {
                 return Err(EngineError::Other("an open document already owns this accounted identity".into()));
             }
         }
-        if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint)
-            && !matches!(handoff,NativeHandoff::CurrentFilteredFlat) {return Err(BackingError::Unsupported.into())}
+        match archive.current_storage_hint() {
+            Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) if !matches!(handoff,NativeHandoff::CurrentFilteredFlat) => return Err(BackingError::Unsupported.into()),
+            Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) if !matches!(handoff,NativeHandoff::CurrentPoint) => return Err(BackingError::Unsupported.into()),
+            _ => {}
+        }
         if matches!(handoff, NativeHandoff::Document)
             && (is_owned_current_filtered_flat_candidate(&archive,control)? || is_current_point_candidate(archive.document(), control)?
                 || is_current_analytic_geometry_candidate(archive.document(), control)?
@@ -725,3 +732,7 @@ mod filtered_flat_source_activity_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="accounted_filtered_flat_ordered_tests.rs"]
 mod filtered_flat_ordered_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "accounted_masked_native_tests.rs"]
+mod masked_native_tests;

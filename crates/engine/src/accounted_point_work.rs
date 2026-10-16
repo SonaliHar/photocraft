@@ -61,6 +61,10 @@ pub fn is_current_pure_point_work_candidate(owner: &AccountedDocument, c: &ReadC
             if node.operation.name=="gegl:exposure" && node.operation.stored_version=="1:0"
                 && node.operation.schema_epoch==photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH
                 && compat==Some(photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH){return Ok(true)}
+            // Masked Point uses its own exact triple, never an Exposure name grant.
+            if node.operation.name=="gegl:exposure" && node.operation.stored_version=="1:0"
+                && node.operation.schema_epoch==photocraft_compose::EXPOSURE_MASKED_EPOCH
+                && compat==Some(photocraft_compose::EXPOSURE_MASKED_EPOCH){return Ok(true)}
             // Existing positive routes retain their exact prior checks/debits.
             if existing {
                 return Ok(true);

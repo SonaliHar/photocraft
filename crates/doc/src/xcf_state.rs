@@ -414,6 +414,27 @@ impl XcfState {
         self.validate_with(doc, &photocraft_raster::Interrupt::NONE)
     }
     pub fn validate_with(&self, doc: &Document, control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
+        self.validate_with_selected_filter_mask(doc, control, None)
+    }
+    pub(crate) fn validate_with_selected_filter_mask(
+        &self,
+        doc: &Document,
+        control: &photocraft_raster::Interrupt<'_>,
+        selected: Option<&crate::xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,
+    ) -> Result<()> {
+        if let Some(proof) = selected {
+            let mut found = 0usize;
+            for mask in &self.filter_masks {
+                control.check().map_err(|_| invalid("cancelled"))?;
+                if proof.covers(mask) {
+                    found += 1;
+                }
+            }
+            if found != 1 {
+                return Err(invalid("filter_mask_identity"));
+            }
+        }
+
         if control.cancelled() {
             return Err(invalid("cancelled"));
         }
@@ -488,7 +509,9 @@ impl XcfState {
             if !mask_ids.insert(mask.id) {
                 return Err(invalid("filter_mask_identity"));
             }
-            mask.validate_with(control)?;
+            if !selected.is_some_and(|proof| proof.covers(mask)) {
+                mask.validate_with(control)?;
+            }
         }
         let mut indexed_owners = BTreeSet::new();
         let mut indexed_bytes = 0usize;

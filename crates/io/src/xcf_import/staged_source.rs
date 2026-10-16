@@ -96,6 +96,10 @@ impl StagePolicy for SourceSelectedPolicy {
             if staged_filtered_flat::hint(file,ctl,budget)?{return Ok(if staged_filtered_flat::opacity::has_nonunit(file,ctl,budget)? {SelectedStagedFamily::FilteredFlatOpacity}else{SelectedStagedFamily::FilteredFlat})}
         }
         let old=Self::family(file);
+        if old==SelectedStagedFamily::Point(crate::xcf_filters::PointReplaceFamily::Exposure) {
+            let budget=shared.ok_or_else(||IoError::Unsupported("masked source selection accounting".into()))?;
+            if crate::xcf_point_replace_source::masked_exposure_source::hint(file,ctl,budget)? {return Ok(SelectedStagedFamily::Point(crate::xcf_filters::PointReplaceFamily::MaskedExposure));}
+        }
         if old!=SelectedStagedFamily::Plain{return Ok(old)}
         let budget=shared.ok_or_else(||IoError::Unsupported("selected source requires accounting".into()))?;
         if staged_filtered_flat::hint(file,ctl,budget)?{return Ok(if staged_filtered_flat::opacity::has_nonunit(file,ctl,budget)? {SelectedStagedFamily::FilteredFlatOpacity}else{SelectedStagedFamily::FilteredFlat})}
@@ -511,6 +515,10 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         let histogram = family == SelectedStagedFamily::Threshold;
         let threshold = family == SelectedStagedFamily::ThresholdAlpha || histogram;
         let point = match family {
+            SelectedStagedFamily::Point(crate::xcf_filters::PointReplaceFamily::MaskedExposure) => {
+                if !crate::xcf_point_replace_source::masked_exposure_source::qualify(file,ctl,shared)? {return Err(IoError::Unsupported("masked source outside exact original predicate".into()));}
+                Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(crate::xcf_filters::PointReplaceFamily::MaskedExposure))
+            }
             SelectedStagedFamily::Point(expected) => {
                 let actual = crate::xcf_point_replace_source::classify(file, ctl, shared)?;
                 if actual != Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(expected)) {
@@ -1175,3 +1183,7 @@ mod gray_box_profile_tests;
 #[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
 #[path="staged_neighborhood/box_geometry_gray_transfer_profile_tests.rs"]
 mod gray_transfer_box_profile_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "staged_masked_exposure_tests.rs"]
+mod masked_exposure_tests;

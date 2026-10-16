@@ -1732,6 +1732,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
     } = P::admissions(&file, ctl, preparation.as_ref().map(|(budget, _)| *budget))?;
     if filtered_flat_domain && filtered_flat_opacity_domain {return Err(IoError::Unsupported("conflicting mixed source purpose".into()));}
     let filtered_flat_source_domain=filtered_flat_domain || filtered_flat_opacity_domain;
+    let masked_exposure_source=point_replace_domain==Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(crate::xcf_filters::PointReplaceFamily::MaskedExposure));
     let mut floating_ids = (None, None);
     let mut budget = Budget { used: file.charged_bytes, max: resident, peak: file.charged_bytes, shared };
     budget.charge(
@@ -2096,7 +2097,10 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 staged_filtered_flat::work(ctl,source_budget,(d.effects.len() as u64).checked_mul(8).ok_or_else(||unsupported(d,"filtered mask count work"))?)?;
                 effect_mask_mapping::preflight_filtered_root(d,ctl)?;
             }
-            let masks = effect_masks(
+            let masks = if masked_exposure_source {
+                let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"masked source structural accounting"))?;
+                effect_mask_mapping::map_masked_source(d,owner,next_filter_id,&mut next_mask_id,&mut state,&mut budget,ctl,doc.bounds(),source_budget)?
+            }else{effect_masks(
                 d,
                 owner,
                 next_filter_id,
@@ -2147,7 +2151,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 exposure_geometry_domain,
                 point_replace_domain.map(|_| doc.bounds()),
                 observed_box_geometry_domain.then(||doc.bounds()),
-            )?;
+            )?};
             let neighborhood_domain = if let Some(domain) = point_replace_domain.or(owned_point_domain).or(owned_neighborhood_domain) {
                 domain
             } else if unpremultiply_domain {
@@ -2575,11 +2579,17 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         state.selection.active = state.selection.selected.first().copied();
     }
     doc.xcf_state = Some(state);
-    doc.validate_xcf_state_with(ctl).map_err(
-        |e| {
-            if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF imported state: {e}")) }
-        },
-    )?;
+    let structural=if masked_exposure_source {
+        let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||IoError::Unsupported("masked source final structural accounting".into()))?;
+        // Keep every debit and zero-work poll on the same original ledger;
+        // the positive poll fee also invokes its original parent observer.
+        let work=|units:u64|source_budget.consume_work(units.max(1),"masked source final coverage").map_err(|e|if e.kind==ErrorKind::Cancelled{photocraft_raster::backing::BackingError::Cancelled}else{photocraft_raster::backing::BackingError::Work});
+        let mask=doc.xcf_state.as_ref().and_then(|state|state.filter_masks.first()).ok_or_else(||IoError::Unsupported("masked source actual final mask missing".into()))?;
+        let proof=mask.validate_checked_f32_coverage_with_local_work(ctl,&work).map_err(crate::xcf_point_replace_source::masked_exposure_source::coverage_error)?;
+        if !proof.raw_nonempty(){return Err(IoError::Unsupported("masked source final field empty".into()));}
+        doc.validate_xcf_state_with_checked_filter_mask(&proof,ctl)
+    }else{doc.validate_xcf_state_with(ctl)};
+    structural.map_err(|e|if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("XCF imported state: {e}"))})?;
     if let (true, Some(font)) = (stem_text_domain, authorized_font) {
         let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("authorized text scene requires transaction accounting".into()))?;
         let mut adapter = SharedPreparation { shared, failure: None };

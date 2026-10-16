@@ -748,12 +748,22 @@ fn channel_m(c: &AlphaChannel, sink: &mut dyn Sink<'_>) -> Result<ChannelM> {
 }
 
 pub(crate) fn doc_m<'doc>(d: &'doc Document, sink: &mut dyn Sink<'doc>) -> Result<DocM> {
+    doc_m_with_checked_filter_mask(d, sink, None)
+}
+pub(crate) fn doc_m_with_checked_filter_mask<'doc>(
+    d: &'doc Document,
+    sink: &mut dyn Sink<'doc>,
+    proof: Option<&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,
+) -> Result<DocM> {
     sink.poll()?;
     if !d.resolution_dpi.is_finite() {
         return Err(FormatError::NonFinite { path: "document.resolution_dpi".into() });
     }
-    d.validate_xcf_state_with(&sink.control())
-        .map_err(|e| if sink.control().cancelled() { FormatError::Cancelled } else { FormatError::Unsupported(e.to_string()) })?;
+    match proof {
+        Some(proof) => d.validate_xcf_state_with_checked_filter_mask(proof, &sink.control()),
+        None => d.validate_xcf_state_with(&sink.control()),
+    }
+    .map_err(|e| if sink.control().cancelled() { FormatError::Cancelled } else { FormatError::Unsupported(e.to_string()) })?;
     let xcf_state = d
         .xcf_state
         .as_ref()
@@ -1189,6 +1199,14 @@ impl Loader<'_> {
     }
 
     pub(crate) fn document_with_interrupt(&mut self, m: &DocM, control: &photocraft_raster::Interrupt<'_>) -> Result<Document> {
+        self.document_with_coverage_control(m, control, None)
+    }
+    pub(crate) fn document_with_coverage_control(
+        &mut self,
+        m: &DocM,
+        control: &photocraft_raster::Interrupt<'_>,
+        coverage_control: Option<&photocraft_raster::backing::ReadControl<'_>>,
+    ) -> Result<Document> {
         // Reserve every stored id before allocating identities missing from older bundles. If an
         // id is implausibly large, remap the whole document while retaining shared contents groups.
         if self.preserve_ids {
@@ -1368,11 +1386,19 @@ impl Loader<'_> {
                     inline_caches.push((index, cache));
                 }
             }
+            if coverage_control.is_some() && m.xcf_filter_masks.len() > 1 {
+                return Err(FormatError::corrupt("coverage purpose requires at most one actual mask"));
+            }
             for mask in &m.xcf_filter_masks {
-                state.filter_masks.push(
-                    photocraft_doc::FilterMask::try_new(mask.id, mask.owner, self.surface(&mask.surface)?, mask.bounds)
-                        .map_err(|e| FormatError::corrupt(e.to_string()))?,
-                );
+                let surface = self.surface(&mask.surface)?;
+                let current = if coverage_control.is_some() {
+                    // Private candidate only. The closed actual-mask scan and full
+                    // Doc validation below precede any returned archive.
+                    photocraft_doc::FilterMask { id: mask.id, owner: mask.owner, surface, bounds: mask.bounds }
+                } else {
+                    photocraft_doc::FilterMask::try_new(mask.id, mask.owner, surface, mask.bounds).map_err(|e| FormatError::corrupt(e.to_string()))?
+                };
+                state.filter_masks.push(current);
             }
             if control.cancelled() {
                 return Err(FormatError::Cancelled);
@@ -1470,11 +1496,12 @@ impl Loader<'_> {
             text_styles: self.model_clone(&m.text_styles)?,
             slices,
         };
-        document.validate_xcf_state_with(control).map_err(
-            |e| {
-                if e.code == "cancelled" { FormatError::Cancelled } else { FormatError::corrupt(e.to_string()) }
-            },
-        )?;
+        let proof = coverage_control.map(|c| document.checked_f32_filter_mask_coverage_with(c)).transpose().map_err(crate::owned_document::error)?.flatten();
+        match proof.as_ref() {
+            Some(proof) => document.validate_xcf_state_with_checked_filter_mask(proof, control),
+            None => document.validate_xcf_state_with(control),
+        }
+        .map_err(|e| if e.code == "cancelled" { FormatError::Cancelled } else { FormatError::corrupt(e.to_string()) })?;
         Ok(document)
     }
 

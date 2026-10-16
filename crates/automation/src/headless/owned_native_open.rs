@@ -85,7 +85,9 @@ impl Headless {
                     .map_err(photocraft_engine::EngineError::from)?
             };
             control.check(1).map_err(photocraft_engine::EngineError::from)?;
-            if archive.current_storage_hint().is_some() {
+            if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) {
+                self.session.add_owned_native_point_archive(archive, label, Some(path), control)?;
+            } else if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) {
                 self.session.add_owned_native_filtered_flat_archive(archive, label, Some(path), control)?;
             } else if threshold {
                 self.session.add_owned_native_threshold_alpha_archive(archive, label, Some(path), control)?;
@@ -139,3 +141,7 @@ mod tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_native_box_work_tests.rs"]
 mod box_work_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "owned_masked_native_tests.rs"]
+mod masked_native_tests;

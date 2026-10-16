@@ -220,6 +220,26 @@ pub fn save_accounted_current_document_archive<W: Write + Seek>(
     save_current_document_archive_with_hint(owner.document(), output, limits, quota, control, hint)
 }
 
+/// Explicit structural coverage writer. Caller must first prove the complete
+/// CURRENT program; this function supplies no operation/source eligibility.
+/// Empty continuation uses the ordinary strict path with no coverage hint.
+pub fn save_accounted_point_f32_coverage_document_archive<W: Write + Seek>(
+    owner: &photocraft_doc::accounted_document::AccountedDocument,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<W> {
+    control.check(0).map_err(error)?;
+    if !owner.is_readonly_point_storage() || !owner.quota().shares_ledger(quota) {
+        return Err(error(BackingError::Unsupported));
+    }
+    owner.validate_readonly_point_storage(control).map_err(error)?;
+    let proof = owner.document().checked_f32_filter_mask_coverage_with(control).map_err(error)?;
+    let hint = proof.as_ref().map(|_| crate::NativeCurrentStorageHint::PointF32Coverage);
+    save_current_document_archive_with_hint(owner.document(), output, limits, quota, control, hint)
+}
+
 fn save_current_document_archive_with_hint<W: Write + Seek>(
     doc: &Document,
     output: W,
@@ -252,9 +272,20 @@ fn save_current_document_archive_with_hint<W: Write + Seek>(
     let entries = ChargedVec::with_capacity(limits.max_reservations, quota, control).map_err(error)?;
     let mut sink = OwnedSink { entries, finite: None, reservations, limits, control };
     crate::convert::check_nesting(&doc.layers, *control.interrupt)?;
-    let document = crate::convert::doc_m(doc, &mut sink)?;
-    let requires_v9 = super::requires_reader_v9_after_validation(doc,quota,control)?;
-    let version = if current_storage_hint.is_some() {
+    let coverage = if current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
+        doc.checked_f32_filter_mask_coverage_with(control).map_err(error)?
+    } else {
+        None
+    };
+    let document = if current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
+        crate::convert::doc_m_with_checked_filter_mask(doc, &mut sink, coverage.as_ref())?
+    } else {
+        crate::convert::doc_m(doc, &mut sink)?
+    };
+    let requires_v9 = super::requires_reader_v9_after_validation(doc, quota, control)?;
+    let version = if current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
+        11
+    } else if current_storage_hint.is_some() {
         10
     } else if requires_v9 {
         9

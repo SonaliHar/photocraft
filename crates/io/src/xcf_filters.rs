@@ -24,6 +24,7 @@ pub(crate) enum PointReplaceFamily {
     MixedBrightnessContrast,
     MixedGeglLevels,
     LoadedExposure,
+    MaskedExposure,
     MixedLoadedExposure,
     MixedInvertLinear,
     MixedInvertGamma,
@@ -62,6 +63,7 @@ impl PointReplaceFamily {
             Self::MixedBrightnessContrast => NeighborhoodDomain::MixedBrightnessContrast,
             Self::MixedGeglLevels => NeighborhoodDomain::MixedGeglLevels,
             Self::LoadedExposure => NeighborhoodDomain::ExposureLoadedPoint,
+            Self::MaskedExposure => NeighborhoodDomain::ExposureMaskedPoint,
             Self::MixedLoadedExposure => NeighborhoodDomain::ExposureLoadedMixed,
             Self::MixedInvertLinear => NeighborhoodDomain::MixedInvertLinear,
             Self::MixedInvertGamma => NeighborhoodDomain::MixedInvertGamma,
@@ -108,6 +110,7 @@ pub(crate) enum NeighborhoodDomain {
     MixedBrightnessContrast,
     MixedGeglLevels,
     ExposureLoadedPoint,
+    ExposureMaskedPoint,
     ExposureLoadedMixed,
     MixedInvertLinear,
     MixedInvertGamma,
@@ -727,6 +730,8 @@ fn qualified_stack_with_activation<P>(
             return Err(unsupported(effect,"mixed affine source identity"));
         }
 
+        let masked_exposure=domain==NeighborhoodDomain::ExposureMaskedPoint;
+        if masked_exposure && (!generic_replace||effects.len()!=1||!crate::xcf_point_replace_source::masked_exposure_source::envelope(effect)) {return Err(unsupported(effect,"masked Point Exposure envelope"));}
         let loaded_point=domain==NeighborhoodDomain::ExposureLoadedPoint;
         let loaded_mixed=domain==NeighborhoodDomain::ExposureLoadedMixed;
         let loaded_exposure=loaded_point||loaded_mixed;
@@ -1131,7 +1136,7 @@ fn qualified_stack_with_activation<P>(
                 let ArgumentValue::Float32Bits(bits)=argument.value else{return Err(unsupported(effect,"mixed affine F32 storage"))};
                 arguments.push(FilterArgument{name:argument.name.clone(),value:FilterValue::Number(ExactNumber::Float32Bits(bits))});
             }
-        } else if mixed_exposure || loaded_exposure {
+        } else if mixed_exposure || loaded_exposure || masked_exposure {
             if loaded_exposure {crate::xcf_point_replace_source::loaded_exposure_source::parameters(effect).ok_or_else(||unsupported(effect,"loaded Exposure parameters"))?;}
             else {mixed_exposure_source::parameters(effect).ok_or_else(||unsupported(effect,"mixed Exposure parameters"))?;}
             if arguments.capacity()>4 {return Err(unsupported(effect,"mixed Exposure argument capacity"));}
@@ -1171,7 +1176,7 @@ fn qualified_stack_with_activation<P>(
         for argument in effect
             .arguments
             .iter()
-            .filter(|_| !levels && !color_balance && !mixed_affine && !mixed_invert && !loaded_exposure && !mixed_exposure && !hue_chroma && !vibrance && !semi_flatten && !color_exchange && !color_overlay && !color_to_alpha && !component_extract && !alpha_clip)
+            .filter(|_| !levels && !color_balance && !masked_exposure && !mixed_affine && !mixed_invert && !loaded_exposure && !mixed_exposure && !hue_chroma && !vibrance && !semi_flatten && !color_exchange && !color_overlay && !color_to_alpha && !component_extract && !alpha_clip)
         {
             if alien_map {
                 let (value, scalar) = match (&*argument.name, &argument.value) {
@@ -1515,7 +1520,7 @@ fn qualified_stack_with_activation<P>(
             .map_err(|_| unsupported(effect, "Red Eye typed parameters"))?;
         } else if video {
             photocraft_compose::gimp_video_degradation::typed_arguments(&arguments).map_err(|_| unsupported(effect, "Video Degradation typed schema"))?;
-        } else if mixed_affine || loaded_exposure || mixed_invert || mixed_exposure || hue_chroma || vibrance || semi_flatten || color_rotate || channel_mixer || mono_signed || color_exchange || color_overlay || color_to_alpha || component_extract || alpha_clip {
+        } else if masked_exposure || mixed_affine || loaded_exposure || mixed_invert || mixed_exposure || hue_chroma || vibrance || semi_flatten || color_rotate || channel_mixer || mono_signed || color_exchange || color_overlay || color_to_alpha || component_extract || alpha_clip {
             // The dedicated typed constructor already validated every name.
         } else if pixelize {
             if arguments.len() != 8 {
@@ -1611,6 +1616,8 @@ fn qualified_stack_with_activation<P>(
                     photocraft_compose::INVERT_LINEAR_MIXED_EPOCH
                 } else if mixed_invert_gamma {
                     photocraft_compose::INVERT_GAMMA_MIXED_EPOCH
+                } else if masked_exposure {
+                    photocraft_compose::EXPOSURE_MASKED_EPOCH
                 } else if loaded_point {
                     photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH
                 } else if loaded_mixed {
@@ -1724,6 +1731,8 @@ fn qualified_stack_with_activation<P>(
                     photocraft_compose::INVERT_LINEAR_MIXED_EPOCH
                 } else if mixed_invert_gamma {
                     photocraft_compose::INVERT_GAMMA_MIXED_EPOCH
+                } else if masked_exposure {
+                    photocraft_compose::EXPOSURE_MASKED_EPOCH
                 } else if loaded_point {
                     photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH
                 } else if loaded_mixed {

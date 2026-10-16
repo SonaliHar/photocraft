@@ -228,7 +228,7 @@ fn save_native_path_with(
         |file| {
             match document {
                 NativeSaveModel::Document(document) => { photocraft_format::owned_document::save_current_document_archive(document, file, limits, quota, control)?; }
-                NativeSaveModel::Accounted(document) => { photocraft_format::owned_document::save_accounted_current_document_archive(document, file, limits, quota, control)?; }
+                NativeSaveModel::Accounted(document) => { crate::accounted_current_native::save_accounted_current_archive(document, file, limits, quota, control)?; }
             }
             Ok(())
         },

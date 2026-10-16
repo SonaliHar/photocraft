@@ -662,6 +662,22 @@ pub(crate) fn hue_chroma_node(node:&photocraft_doc::xcf_filters::FilterNode)->bo
 pub(crate) fn hue_chroma_owner(owner:&photocraft_doc::accounted_document::AccountedDocument)->bool{
     owner.is_readonly_point_storage() && owner.document().xcf_state.as_ref().is_some_and(|state|matches!(state.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[node] if hue_chroma_node(node))))
 }
+pub(crate) fn masked_exposure_point_node(node:&FilterNode)->bool {
+    node.operation.name=="gegl:exposure" && node.operation.stored_version=="1:0"
+        && node.operation.schema_epoch==photocraft_compose::EXPOSURE_MASKED_EPOCH
+        && node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::EXPOSURE_MASKED_EPOCH)
+}
+pub(crate) fn masked_exposure_point_owner(owner:&photocraft_doc::accounted_document::AccountedDocument)->bool {
+    let d=owner.document();
+    owner.is_readonly_point_storage() && d.layers.len()==1 && d.mode==photocraft_doc::ColorMode::Rgb
+        && d.sample_encoding==Some(photocraft_doc::SampleEncoding::NonlinearProfile)
+        && d.source_color_context.as_ref().is_some_and(|c|c.original_icc.is_none() && matches!((d.depth,c.source_precision),(photocraft_color::SampleType::F32,650)|(photocraft_color::SampleType::F64,750)))
+        && d.xcf_state.as_ref().is_some_and(|s|matches!(s.filter_stacks.as_slice(),[stack] if d.layers.first().is_some_and(|l|stack.owner==ItemRef::Layer(l.id)) && matches!(stack.nodes.as_slice(),[node] if masked_exposure_point_node(node))))
+}
+/// Exact actual-owner/node hint; complete OLD and STAGED programs remain authority.
+pub fn masked_exposure_point_edit_candidate(owner:&photocraft_doc::accounted_document::AccountedDocument,node:&FilterNode)->bool {
+    masked_exposure_point_owner(owner) && owner.document().xcf_state.as_ref().is_some_and(|s|matches!(s.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[actual] if std::ptr::eq(actual,node))))
+}
 pub(crate) fn loaded_exposure_point_node(node:&FilterNode)->bool {
     node.operation.name=="gegl:exposure" && node.operation.stored_version=="1:0"
         && node.operation.schema_epoch==photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH

@@ -40,6 +40,8 @@ pub(crate) mod hue_chroma_source;
 pub(crate) mod vibrance_source;
 #[path="xcf_exposure_loaded_source.rs"]
 pub(crate) mod loaded_exposure_source;
+#[path="xcf_exposure_masked_source.rs"]
+pub(crate) mod masked_exposure_source;
 
 /// Exact source argument validation without allocating a mapped filter stack.
 fn finite_alpha_operation<P>(effect: &photocraft_xcf::Effect<P>) -> Option<photocraft_algo::gimp::alpha_clip_finite::AlphaClipFinite> {

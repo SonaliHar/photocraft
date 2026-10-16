@@ -7,6 +7,7 @@ use photocraft_doc::{
 };
 use serde_json::json;
 mod exposure_loaded;
+mod exposure_masked;
 mod alpha_clip;
 mod alpha_clip_finite;
 mod assigned_box;
@@ -366,6 +367,10 @@ pub(crate) fn filter_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, laye
             }
             if vibrance::scope(&document, node) {
                 vibrance::controls(app, ui, &document, revision, layer, node, unlocked, &caption);
+                return;
+            }
+            if exposure_masked::scope(&document,node) {
+                exposure_masked::controls(app,ui,&document,revision,node,unlocked);
                 return;
             }
             ui.horizontal_wrapped(|ui| {
