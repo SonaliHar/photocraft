@@ -4281,3 +4281,18 @@ shape	Appearance	Izgled
 	This document's layers: {needed} of {budget} for layers	Slojevi ovog dokumenta: {needed} od {budget} za slojeve
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Slojevima ovog dokumenta treba {needed}, a smeju da zauzmu {budget}: ceo dokument se ponovo iscrtava na CPU-u
 	GPU Memory (MB, 0 = Automatic)	GPU memorija (MB, 0 = Automatski)
+	Create Frame Animation	Napravi animaciju kadrova
+	Make Frames From Layers	Napravi kadrove od slojeva
+	Forever	Zauvek
+	Once	Jednom
+	No delay	Bez kašnjenja
+	First frame	Prvi kadar
+	Duplicate Selected Frame	Dupliraj izabrani kadar
+	Delete Selected Frame	Obriši izabrani kadar
+	{seconds} sec.	{seconds} s
+	{count} times	{count} puta
+	Frames before	Kadrovi pre
+	Frames after	Kadrovi posle
+	Tween	Međukadrovi
+	Last frame	Poslednji kadar
+	Frames to add	Kadrova za dodavanje

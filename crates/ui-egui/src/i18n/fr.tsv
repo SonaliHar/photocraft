@@ -3213,3 +3213,18 @@ curves	Smooth	Lisser
 	This document's layers: {needed} of {budget} for layers	Calques de ce document : {needed} sur {budget} pour les calques
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Les calques de ce document ont besoin de {needed} mais peuvent occuper {budget} : le document entier se redessine sur le CPU
 	GPU Memory (MB, 0 = Automatic)	Mémoire GPU (Mo, 0 = Automatique)
+	Create Frame Animation	Créer une animation image par image
+	Make Frames From Layers	Créer des images à partir des calques
+	Forever	Indéfiniment
+	Once	Une fois
+	No delay	Aucun délai
+	First frame	Première image
+	Duplicate Selected Frame	Dupliquer l’image sélectionnée
+	Delete Selected Frame	Supprimer l’image sélectionnée
+	{seconds} sec.	{seconds} s
+	{count} times	{count} fois
+	Frames before	Images avant
+	Frames after	Images après
+	Tween	Interpolation
+	Last frame	Dernière image
+	Frames to add	Images à ajouter

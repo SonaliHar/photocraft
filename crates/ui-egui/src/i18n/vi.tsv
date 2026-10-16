@@ -3694,3 +3694,18 @@ curves	Smooth	Làm mượt
 	This document's layers: {needed} of {budget} for layers	Các lớp của tài liệu này: {needed} trên {budget} dành cho lớp
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Các lớp của tài liệu này cần {needed} nhưng chỉ được dùng {budget}: vẽ lại toàn bộ tài liệu dùng CPU
 	GPU Memory (MB, 0 = Automatic)	Bộ nhớ GPU (MB, 0 = Tự động)
+	Create Frame Animation	Tạo hoạt ảnh khung hình
+	Make Frames From Layers	Tạo khung hình từ các lớp
+	Forever	Mãi mãi
+	Once	Một lần
+	No delay	Không trễ
+	First frame	Khung hình đầu tiên
+	Duplicate Selected Frame	Nhân bản khung hình đã chọn
+	Delete Selected Frame	Xóa khung hình đã chọn
+	{seconds} sec.	{seconds} giây
+	{count} times	{count} lần
+	Frames before	Khung hình trước
+	Frames after	Khung hình sau
+	Tween	Tạo khung trung gian
+	Last frame	Khung hình cuối cùng
+	Frames to add	Số khung hình cần thêm

@@ -3816,3 +3816,18 @@ navigator	Zoom	Zvětšení
 	This document's layers: {needed} of {budget} for layers	Vrstvy tohoto dokumentu: {needed} z {budget} pro vrstvy
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Vrstvy tohoto dokumentu potřebují {needed}, ale mohou zabrat {budget}: překreslení celého dokumentu probíhá na CPU
 	GPU Memory (MB, 0 = Automatic)	Paměť GPU (MB, 0 = Automaticky)
+	Create Frame Animation	Vytvořit animaci snímků
+	Make Frames From Layers	Vytvořit snímky z vrstev
+	Forever	Navždy
+	Once	Jednou
+	No delay	Bez zpoždění
+	First frame	První snímek
+	Duplicate Selected Frame	Duplikovat vybraný snímek
+	Delete Selected Frame	Odstranit vybraný snímek
+	{seconds} sec.	{seconds} s
+	{count} times	{count}×
+	Frames before	Snímky před
+	Frames after	Snímky po
+	Tween	Prolnout
+	Last frame	Poslední snímek
+	Frames to add	Počet přidaných snímků

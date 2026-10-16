@@ -4127,3 +4127,18 @@ cameraRaw	Yellow	Sárga
 	This document's layers: {needed} of {budget} for layers	A dokumentum rétegei: {needed} / {budget} a rétegeknek
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	A dokumentum rétegeinek {needed} kell, de {budget} foglalhatnak: a teljes dokumentum újrarajzolása a CPU-n fut
 	GPU Memory (MB, 0 = Automatic)	GPU-memória (MB, 0 = Automatikus)
+	Create Frame Animation	Képkockás animáció létrehozása
+	Make Frames From Layers	Képkockák létrehozása rétegekből
+	Forever	Folyamatosan
+	Once	Egyszer
+	No delay	Nincs késleltetés
+	First frame	Első képkocka
+	Duplicate Selected Frame	Kijelölt képkocka kettőzése
+	Delete Selected Frame	Kijelölt képkocka törlése
+	{seconds} sec.	{seconds} mp
+	{count} times	{count}×
+	Frames before	Előző képkockák
+	Frames after	Következő képkockák
+	Tween	Átmenet
+	Last frame	Utolsó képkocka
+	Frames to add	Hozzáadandó képkockák

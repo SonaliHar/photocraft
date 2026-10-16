@@ -3968,3 +3968,18 @@ curves	Smooth	Vloeiend maken
 	This document's layers: {needed} of {budget} for layers	Lagen van dit document: {needed} van {budget} voor lagen
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	De lagen van dit document hebben {needed} nodig maar mogen {budget} gebruiken: het hele document wordt op de CPU opnieuw getekend
 	GPU Memory (MB, 0 = Automatic)	GPU-geheugen (MB, 0 = Automatisch)
+	Create Frame Animation	Frame-animatie maken
+	Make Frames From Layers	Frames maken uit lagen
+	Forever	Voor altijd
+	Once	Eén keer
+	No delay	Geen vertraging
+	First frame	Eerste frame
+	Duplicate Selected Frame	Geselecteerd frame dupliceren
+	Delete Selected Frame	Geselecteerd frame verwijderen
+	{seconds} sec.	{seconds} sec.
+	{count} times	{count} keer
+	Frames before	Frames ervoor
+	Frames after	Frames erna
+	Tween	Tussenframes
+	Last frame	Laatste frame
+	Frames to add	Toe te voegen frames
