@@ -9,8 +9,8 @@
 //! OK runs `filter.liquify` with the same strokes and gets the same field.
 
 use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
-use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, LiquifyTool, ProxyImage, auto_cell};
-use photocraft_doc::LayerId;
+use photocraft_algo::liquify::{LiquifyField, LiquifyStroke, LiquifyTool, PreviewBlend, ProxyImage, auto_cell};
+use photocraft_doc::{LayerContent, LayerId, LayerMask};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
@@ -133,6 +133,9 @@ pub struct LiquifyDialog {
     lasso: Option<(bool, Vec<[f64; 2]>)>,
     proxy: ProxyImage,
     source: Surface,
+    selection: Option<(Surface, LayerMask)>,
+    proxy_blend: Vec<PreviewBlend>,
+    view_blend: Vec<PreviewBlend>,
     out: Vec<[u8; 4]>,
     tex: Option<TextureHandle>,
     /// Proxy pixels to re-render and upload (x0, y0, x1, y1).
@@ -327,7 +330,7 @@ impl LiquifyDialog {
     /// Re-renders the dirty proxy pixels into `out` (the texture upload happens in `show`).
     fn render_dirty(&mut self) {
         if let Some(r) = self.dirty {
-            self.proxy.render(&self.field, r, &mut self.out);
+            self.proxy.render_blended(&self.field, r, &mut self.out, &self.proxy_blend);
         }
     }
 
@@ -371,13 +374,16 @@ impl LiquifyDialog {
             self.view_bounds = Some(bounds);
             self.view_tex = None;
             self.view_dirty = Some(bounds);
+            self.view_blend = preview_blend(self.selection.as_ref(), bounds, usize::MAX);
         }
         let Some(dirty) = self.view_dirty.take().map(|r| r.intersect(&bounds)) else { return };
         if dirty.is_empty() {
             return;
         }
         let started = crate::gpu_canvas::now_ms();
-        let rendered = ProxyImage::render_full_resolution(&self.source, &self.field, bounds, dirty, &mut self.view_out, &mut self.view_source_scratch);
+        let rendered = ProxyImage::render_full_resolution_blended(
+            &self.source, &self.field, bounds, dirty, &mut self.view_out, &mut self.view_source_scratch, &self.view_blend,
+        );
         if !rendered {
             self.view_bounds = None;
             self.view_tex = None;
@@ -416,7 +422,7 @@ impl LiquifyDialog {
         let (w, h) = (self.proxy.w, self.proxy.h);
         match (&mut self.tex, self.dirty.take()) {
             (None, _) => {
-                self.proxy.render(&self.field, [0, 0, w, h], &mut self.out);
+                self.proxy.render_blended(&self.field, [0, 0, w, h], &mut self.out, &self.proxy_blend);
                 let img = egui::ColorImage::new([w, h], self.out.iter().map(|p| Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3])).collect());
                 self.tex = Some(ctx.load_texture("liquify-proxy", img, egui::TextureOptions::LINEAR));
             }
@@ -448,13 +454,51 @@ impl LiquifyDialog {
 }
 
 /// Opens the dialog on the active layer.
+fn preview_blend(selection: Option<&(Surface, LayerMask)>, bounds: Rect, max_side: usize) -> Vec<PreviewBlend> {
+    let Some((original, mask)) = selection else { return Vec::new() };
+    let original = ProxyImage::new(original, bounds, max_side);
+    let coverage = ProxyImage::new(&mask.surface, bounds, max_side);
+    original.px.into_iter().zip(coverage.px).map(|(original, m)| PreviewBlend {
+        original,
+        coverage: if mask.enabled { 1.0 - mask.density * (1.0 - m[0]) } else { 1.0 },
+    }).collect()
+}
+
 pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
-    let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
+    let (layer, mut surf, _) = crate::distort_ui::active_pixels(app)?;
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
+    let selection_mask = || st.doc.selection.as_ref().map(|s| LayerMask {
+        surface: s.clone(), enabled: true, linked: true, density: 1.0, feather: 0.0,
+    });
+    let mut selection = selection_mask().map(|mask| (surf.clone(), mask));
+    if let Some(LayerContent::Smart(sm)) = st.doc.layer(layer).map(|l| &l.content) {
+        // The stored cache already includes the stack mask. Warp the unmasked stack instead,
+        // then mix with the original placed pixels, as the engine does when committing.
+        if let Some(unmasked) = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, sm.smart_filters.len()).map_err(|e| e.to_string())? {
+            if sm.filters_enabled {
+                surf = unmasked;
+                selection = match sm.filter_mask.clone().or_else(selection_mask) {
+                    Some(mask) => {
+                        let original = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, 0)
+                            .map_err(|e| e.to_string())?.ok_or("smart object source became unavailable")?;
+                        Some((original, mask))
+                    }
+                    None => None,
+                };
+            } else {
+                // A new filter is recorded but remains invisible while the stack is disabled.
+                selection = Some((surf.clone(), LayerMask {
+                    surface: Surface::new(photocraft_doc::PixelFormat::GRAY8),
+                    enabled: true, linked: true, density: 1.0, feather: 0.0,
+                }));
+            }
+        }
+    }
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
     let cell = auto_cell(canvas);
     let proxy = ProxyImage::new(&surf, canvas, PROXY_SIDE);
+    let proxy_blend = preview_blend(selection.as_ref(), canvas, PROXY_SIDE);
     let out = vec![[0u8; 4]; proxy.w * proxy.h];
     let center = [f64::from(canvas.x0 + canvas.x1) / 2.0, f64::from(canvas.y0 + canvas.y1) / 2.0];
     let mut d = LiquifyDialog {
@@ -469,6 +513,9 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> 
         lasso: None,
         proxy,
         source: surf,
+        selection,
+        proxy_blend,
+        view_blend: Vec::new(),
         out,
         tex: None,
         dirty: None,
@@ -1083,6 +1130,45 @@ mod tests {
         let after = doc.layer(layer).unwrap().surface().unwrap().read_region(doc.bounds());
         assert_eq!(before, after, "unselected stroke must not change committed pixels");
         assert!(!preview_changed, "Liquify preview changes unselected pixels although commit preserves them");
+    }
+
+    #[test]
+    fn zoomed_selection_preview_matches_unchanged_commit_5989() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_layer();
+        app.session
+            .edit("select left", |doc, _| {
+                let mut selection = Surface::new(photocraft_doc::PixelFormat::GRAY8);
+                selection.fill_rect(Rect::new(0, 0, 30, 80), &[1.0]);
+                doc.selection = Some(selection);
+                Ok(())
+            })
+            .unwrap();
+        open(&mut app, &ctx).unwrap();
+        let area = ERect::from_min_size(pos2(0.0, 0.0), vec2(60.0, 40.0));
+        let (layer, before, preview_before) = {
+            let d = app.distort.liquify.as_mut().unwrap();
+            d.zoom = 2.0;
+            d.center = [85.0, 40.0];
+            d.update_view_preview(&ctx, area);
+            assert_eq!(d.view_bounds, Some(Rect::new(70, 30, 100, 50)));
+            (d.layer, d.source.read_region(d.canvas), d.view_out.clone())
+        };
+        control(&mut app, &json!({"tool": "forwardWarp", "size": 24})).unwrap();
+        for ev in [ToolEvent::Down { x: 80.0, y: 40.0, pressure: 1.0 }, ToolEvent::Move { x: 90.0, y: 40.0, pressure: 1.0 }, ToolEvent::Up { x: 90.0, y: 40.0 }]
+        {
+            pointer(&mut app, ev, egui::Modifiers::NONE);
+        }
+        let preview_changed = {
+            let d = app.distort.liquify.as_mut().unwrap();
+            d.update_view_preview(&ctx, area);
+            d.view_out != preview_before
+        };
+        commit(&mut app);
+        let doc = &app.session.active().unwrap().doc;
+        let after = doc.layer(layer).unwrap().surface().unwrap().read_region(doc.bounds());
+        assert_eq!(before, after, "unselected stroke must not change committed pixels");
+        assert!(!preview_changed, "Zoomed Liquify preview changes unselected pixels although commit preserves them");
     }
 
     #[test]
