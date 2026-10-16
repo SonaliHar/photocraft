@@ -163,6 +163,10 @@ pub(super) fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, root: Layer
             if let Some(destination)=destination {
                 submit(app,&target,"xcf.filter.move",serde_json::json!({"filterId":target.filter.0.to_string(),"index":destination}));
             }
+            let safe_remove=count>=2 && (snapshot.layers.len()!=1 || count>=3);
+            if ui.add_enabled(safe_remove && validate(app,&target),egui::Button::new(tl!("Remove"))).clicked() {
+                submit(app,&target,"xcf.filter.remove",serde_json::json!({"filterId":target.filter.0.to_string()}));
+            }
             // Each admitted stack and existing wire destinations are bounded
             // to 1024; the document-wide node census stays at 4096.
         });
@@ -190,3 +194,7 @@ mod ordered_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_point_move_tests.rs"]
 mod move_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="filtered_flat_point_remove_tests.rs"]
+mod remove_tests;

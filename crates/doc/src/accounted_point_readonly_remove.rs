@@ -82,7 +82,7 @@ fn archived_equal(candidate: &str, original: &str, mask: MaskId, c: &ReadControl
     c.check(total as u64)?;
     Ok(candidate.as_bytes().iter().copied().eq(bytes.get(..length).ok_or(BackingError::Length)?.iter().copied().chain(original.bytes())))
 }
-fn archive_plan(state: &crate::XcfState, mask: Option<MaskId>, filter: FilterId, c: &ReadControl<'_>) -> Result<(u64, u64), BackingError> {
+pub(in crate::accounted_document) fn archive_plan(state: &crate::XcfState, mask: Option<MaskId>, filter: FilterId, c: &ReadControl<'_>) -> Result<(u64, u64), BackingError> {
     for record in &state.opaque {
         c.check(1)?;
         if let Some(owner) = record.owner {
@@ -181,7 +181,7 @@ impl AccountedDocument {
         )
     }
 }
-fn identity(original: &str, mask: MaskId, c: &ReadControl<'_>) -> Result<String, BackingError> {
+pub(in crate::accounted_document) fn identity(original: &str, mask: MaskId, c: &ReadControl<'_>) -> Result<String, BackingError> {
     let (prefix, count) = prefix(mask)?;
     let length = count.checked_add(original.len()).ok_or(BackingError::Length)?;
     let mut result = String::new();

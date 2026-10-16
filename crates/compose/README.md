@@ -1287,8 +1287,9 @@ Actual copies, reply and original journal overlap are paid, and failure drops
 payloads before their fee receipts. Preview and native continuation remain
 `.pcraft`; the source XCF remains protected.
 
-Generic adoption, layer movement, filter insertion/removal, masks,
-pixel/selection editing and unrelated mutations remain closed. A filter edit
+Generic adoption, layer movement, filter insertion, removals outside the
+supported topology, masks, pixel/selection editing and unrelated mutations
+remain closed. A filter edit
 candidate is a routing hint, not semantic qualification. Regression groups are
 ignored, unrun and uncompiled; behavioral and numerical acceptance is deferred.
 
@@ -1316,3 +1317,22 @@ locks, cumulative work and publication fences apply in both cases. Dedicated
 Up, Down and Top controls capture the same frame's target and offer only
 expressible destinations. This grants filter movement, not layer movement.
 Ten new ignored regression groups are authored but uncompiled and unrun.
+
+
+The existing `xcf.filter.remove` command accepts a canonical decimal `filterId`
+and removes that actual mixed-stack node through the paid transaction. This
+increment requires at least two nodes in its target stack, or three if the
+document has only one root, so the result retains the current mixed class.
+Deleting the last node of a stack or reducing a single-root document to one
+node refuses atomically. Complete OLD/history/STAGED proof includes inactive
+nodes and masks before removal; deletion cannot hide invalid input.
+
+The copy removes the actual mask and its canonical row, preserves surviving
+node order and IDs, and increments the target stack revision once. Non-rendering
+source properties owned by the deleted mask are archived with unchanged bytes
+and a distinct inert identity; dependencies, required properties and identity
+collisions refuse before copying. Original source/native/profile custody,
+cumulative controls, locks, undo, journal/reply and final publication fences
+remain. Dedicated Remove controls offer only supported targets. Source XCF
+writing, derived-empty topology and broader removal remain unimplemented.
+Regression drafts are ignored, uncompiled and unrun; acceptance is deferred.

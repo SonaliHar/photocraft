@@ -91,7 +91,7 @@ pub(crate) fn supports_for_session(session:&Session,id:&str)->bool{
 }
 /// No editing or selection route is granted by readonly mixed-root storage.
 pub(crate) fn filtered_flat_mutation_refused(session:&Session,id:&str)->bool{
-    supports_for_session(session,id) && !matches!(id,"edit.undo"|"edit.redo"|"history.selectState"|"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move"|"layer.setProps"|"layer.renameLayer")
+    supports_for_session(session,id) && !matches!(id,"edit.undo"|"edit.redo"|"history.selectState"|"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move"|"xcf.filter.remove"|"layer.setProps"|"layer.renameLayer")
         && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage())
 }
 
@@ -162,7 +162,7 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
         crate::accounted_clear::validate_request(session, params)?;
         return Ok(Request::Clear(params));
     }
-    if matches!(id,"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage()) {
+    if matches!(id,"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move"|"xcf.filter.remove") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage()) {
         return Ok(Request::FilteredFlat(filtered_flat::Request::parse(session,id,params,control)?));
     }
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove") {
@@ -332,7 +332,7 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     if observed_box_mutation_refused(session, id) {
         return Ok(Some("this observed Box geometry recipe is read-only"));
     }
-    if matches!(id, "xcf.filter.move" | "xcf.filter.remove") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_point_storage() || id=="xcf.filter.move" && owner.is_readonly_filtered_flat_point_storage()) {
+    if matches!(id, "xcf.filter.move" | "xcf.filter.remove") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_point_storage() || owner.is_readonly_filtered_flat_point_storage()) {
         return Ok(Some("this accounted filter storage has no qualified stack edit recipe"));
     }
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable")

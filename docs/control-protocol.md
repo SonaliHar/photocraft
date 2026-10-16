@@ -2330,8 +2330,9 @@ revision increments; metadata leaves filter values intact. Final stale-target,
 history/channel/view/source/preferences and publication fences remain binding.
 Native continuation saves `.pcraft`; this does not add XCF export.
 
-Generic owner adoption, layer movement, filter insertion/removal, masks,
-pixel/selection edits and unrelated mutations remain unavailable. Behavioral,
+Generic owner adoption, layer movement, filter insertion, removals outside the
+supported topology, masks, pixel/selection edits and unrelated mutations remain
+unavailable. Behavioral,
 native, numerical, visual and performance acceptance, complete stock support
 and the remaining multilayer implementation remain open.
 
@@ -2351,8 +2352,8 @@ exactly and all-disabled stacks preserve input. GIMP controls establish directio
 and matching F32 producer sequences, while F64 sequential differences and unique
 graph-format/Float/Babl/FMA/profile equivalence remain unresolved. No numerical
 waiver or source HDR import authority is introduced. Native continuation stays
-`.pcraft`; filter insertion/removal, layer movement, masks and selection editing
-remain outside this increment.
+`.pcraft`; filter insertion, removals outside the supported topology, layer
+movement, masks and selection editing remain outside this increment.
 
 
 Accounted saving and owned reopen follow the owned-document format route.
@@ -2388,3 +2389,22 @@ Legacy colour/number-only data retains its previous required-version policy.
 This changes native compatibility headers; it grants no colour interpretation,
 filter rendering or broader source admission. New regression drafts are ignored,
 uncompiled and unrun; native round-trip execution remains deferred.
+
+
+The existing `xcf.filter.remove` command accepts a canonical decimal `filterId`
+and removes that actual mixed-stack node through the paid transaction. This
+increment requires at least two nodes in its target stack, or three if the
+document has only one root, so the result retains the current mixed class.
+Deleting the last node of a stack or reducing a single-root document to one
+node refuses atomically. Complete OLD/history/STAGED proof includes inactive
+nodes and masks before removal; deletion cannot hide invalid input.
+
+The copy removes the actual mask and its canonical row, preserves surviving
+node order and IDs, and increments the target stack revision once. Non-rendering
+source properties owned by the deleted mask are archived with unchanged bytes
+and a distinct inert identity; dependencies, required properties and identity
+collisions refuse before copying. Original source/native/profile custody,
+cumulative controls, locks, undo, journal/reply and final publication fences
+remain. Dedicated Remove controls offer only supported targets. Source XCF
+writing, derived-empty topology and broader removal remain unimplemented.
+Regression drafts are ignored, uncompiled and unrun; acceptance is deferred.

@@ -249,3 +249,6 @@ fn ordered_target_failures_and_copy_rollback_keep_original() {
 
 #[path = "accounted_filtered_flat_readonly_move_tests.rs"]
 mod move_tests;
+
+#[path = "accounted_filtered_flat_readonly_remove_tests.rs"]
+mod remove_tests;

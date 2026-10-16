@@ -11,6 +11,8 @@ use photocraft_raster::Surface;
 mod filter;
 #[path = "accounted_filtered_flat_readonly_move.rs"]
 mod filter_move;
+#[path = "accounted_filtered_flat_readonly_remove.rs"]
+mod filter_remove;
 #[path = "accounted_filtered_flat_readonly_metadata.rs"]
 pub(super) mod metadata;
 fn refused<T>() -> Result<T, BackingError> {
@@ -733,13 +735,22 @@ enum CopyKind<'a> {
     Title(&'a str),
     Filter(filter::Plan),
     Move(filter_move::Plan),
+    Remove(filter_remove::Plan),
     Metadata(metadata::Plan<'a>),
 }
 fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
     let name_bytes = match kind {
         CopyKind::Title(name) => (name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
-        CopyKind::Filter(_) | CopyKind::Move(_) => 0,
+        CopyKind::Filter(_) | CopyKind::Move(_) | CopyKind::Remove(_) => 0,
         CopyKind::Metadata(plan) => plan.replacement_name_bytes()?,
+    };
+    let archive_bytes = match kind {
+        CopyKind::Remove(plan) => plan.copy_index_bytes(),
+        _ => 0,
+    };
+    let extra_work = match kind {
+        CopyKind::Remove(plan) => plan.copy_work()?,
+        _ => 0,
     };
     let header = AccountedDocument::owned_model_reservation_bytes();
     let envelope = logical
@@ -747,6 +758,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         .checked_sub(header)
         .and_then(|v| v.checked_add(name_bytes))
         .and_then(|v| v.checked_mul(2))
+        .and_then(|v| v.checked_add(archive_bytes))
         .and_then(|v| v.checked_add(4096))
         .ok_or(BackingError::Length)?;
     let payload = logical.payload.checked_mul(2).ok_or(BackingError::Length)?;
@@ -754,6 +766,9 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     let mut index = owner.quota().reserve(QuotaKind::Index, envelope).map_err(|_| BackingError::Quota)?;
     let mut payload_lease = owner.quota().reserve(QuotaKind::Resident, payload).map_err(|_| BackingError::Quota)?;
     c.check(logical.total()?)?;
+    if extra_work != 0 {
+        c.check(extra_work)?;
+    }
     let mut staged = ModelStaging { document: imported_selection::copy_filtered_flat(owner.document(), owner.quota(), c)?, selection_view: None };
     let source = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     let destination = staged.document.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
@@ -775,6 +790,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         CopyKind::Title(name) => staged.document.name = imported_edits::copy_name(name, c)?,
         CopyKind::Filter(plan) => filter::apply(&mut staged.document, plan, c)?,
         CopyKind::Move(plan) => filter_move::apply(&mut staged.document, plan, c)?,
+        CopyKind::Remove(plan) => filter_remove::apply(&mut staged.document, plan, c)?,
         CopyKind::Metadata(plan) => metadata::apply(&mut staged.document, plan, c)?,
     }
     let actual = measured(&staged.document, owner.quota(), c)?;

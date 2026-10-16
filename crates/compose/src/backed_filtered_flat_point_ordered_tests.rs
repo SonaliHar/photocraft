@@ -370,3 +370,6 @@ fn stage_owners_and_failures_keep_real_custody() {
 
 #[path = "backed_filtered_flat_point_move_tests.rs"]
 mod filter_move;
+
+#[path = "backed_filtered_flat_point_remove_tests.rs"]
+mod filter_remove;

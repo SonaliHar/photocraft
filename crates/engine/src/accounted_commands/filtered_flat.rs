@@ -4,7 +4,7 @@
 use super::*;
 use crate::{DocumentSnapshot, accounted_view::AccountedView, channel_cmds::ChannelView, document_history::DocumentHistory, source_policy::SourceIdentity};
 use photocraft_doc::{
-    accounted_document::{AccountedDocument, PointArgumentPatch, PointArgumentValue, PointFilterPatch, PointFilterMovePatch},
+    accounted_document::{AccountedDocument, PointArgumentPatch, PointArgumentValue, PointFilterPatch, PointFilterMovePatch, PointFilterRemovePatch},
     item_identity::{FilterId, ItemRef},
 };
 
@@ -197,7 +197,7 @@ fn context(session: &Session, id: &str, params: &Value) -> Result<()> {
     if !state.doc.accounted().is_some_and(|o| o.is_readonly_filtered_flat_point_storage()) {
         return Err(BackingError::Unsupported.into());
     }
-    if !matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move")
+    if !matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove")
         || params.get("coalesce").is_some()
         || session.coalesce_request.is_some()
         || state.coalesce.is_some()
@@ -254,8 +254,16 @@ impl<'a> Request<'a> {
             "xcf.filter.set" => "xcf.filter.set",
             "xcf.filter.enable" => "xcf.filter.enable",
             "xcf.filter.move" => "xcf.filter.move",
+            "xcf.filter.remove" => "xcf.filter.remove",
             _ => return Err(BackingError::Unsupported.into()),
         };
+        if id == "xcf.filter.remove" {
+            let object=params.as_object().filter(|o|o.len()==1 && o.contains_key("filterId")).ok_or_else(||bad(id,"only filterId supported"))?;
+            let text=object.get("filterId").and_then(Value::as_str).filter(|s|!s.is_empty()&&s.len()<=20&&!s.starts_with('0')&&s.bytes().all(|b|b.is_ascii_digit()))
+                .ok_or_else(||bad(id,"canonical filterId required"))?;
+            let filter=FilterId(text.parse().map_err(|_|bad(id,"filterId overflow"))?);
+            return Ok(Self{id,params,fields:Fields{filter,arguments:[None;10],count:0,enabled:None},move_to:None});
+        }
         if id == "xcf.filter.move" {
             let object=params.as_object().filter(|o|o.len()==2 && o.keys().all(|k|matches!(k.as_str(),"filterId"|"index")))
                 .ok_or_else(||bad(id,"only filterId,index supported"))?;
@@ -286,7 +294,10 @@ impl<'a> Request<'a> {
         }
         validate_recipe(owner, ctl)?;
         let (stack, node, layer,node_index) = target(owner, self.fields.filter, ctl)?;
-        if self.move_to.is_some() && stack.revision==u64::MAX {return Err(BackingError::Length.into())}
+        if (self.move_to.is_some() || self.id=="xcf.filter.remove") && stack.revision==u64::MAX {return Err(BackingError::Length.into())}
+        if self.id=="xcf.filter.remove" && (stack.nodes.len()<2 || owner.document().layers.len()==1 && stack.nodes.len()<3) {
+            return Err(bad(self.id,"removal must retain the current mixed topology"));
+        }
         let visibility_changed = self.fields.enabled.is_some_and(|v| v != node.enabled);
         locks(owner, layer, visibility_changed, ctl)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
@@ -361,7 +372,9 @@ impl<'a> Request<'a> {
             }
             *slot = PointArgumentPatch { name: argument.name, value: argument.value };
         }
-        let staged = if let Some(index)=self.move_to {
+        let staged = if self.id=="xcf.filter.remove" {
+            owner.try_remove_readonly_filtered_flat_point_filter(PointFilterRemovePatch{layer,filter:self.fields.filter,expected_stack_revision:stack.revision},ctl)?
+        } else if let Some(index)=self.move_to {
             if index>=stack.nodes.len(){return Err(bad(self.id,"index is outside the current owner stack"))}
             owner.try_move_readonly_filtered_flat_point_filter(PointFilterMovePatch{layer,filter:self.fields.filter,expected_stack_revision:stack.revision,index},ctl)?
         } else { owner.try_with_readonly_filtered_flat_point_filter(
@@ -381,7 +394,7 @@ impl<'a> Request<'a> {
             history.max_states = session.prefs().performance.history_states.max(1) as usize;
             history.max_bytes = session.prefs().performance.history_budget_bytes();
             history.set_current_layers_borrowed(view.target(), ctl)?;
-            history.try_commit_prepared_accounted(owner, staged, if self.move_to.is_some(){"Move GIMP Stock Filter"}else{"Edit GIMP Stock Filter"}, view.target(), ctl)?
+            history.try_commit_prepared_accounted(owner, staged, if self.move_to.is_some(){"Move GIMP Stock Filter"}else if self.id=="xcf.filter.remove"{"Remove GIMP Stock Filter"}else{"Edit GIMP Stock Filter"}, view.target(), ctl)?
         } else {
             state.doc.clone()
         };
@@ -554,3 +567,7 @@ mod tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="filtered_flat_move_tests.rs"]
 mod move_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="filtered_flat_remove_tests.rs"]
+mod remove_tests;

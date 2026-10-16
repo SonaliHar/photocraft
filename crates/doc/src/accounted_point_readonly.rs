@@ -25,6 +25,7 @@ pub use filter_move::PointFilterMovePatch;
 #[path = "accounted_point_readonly_remove.rs"]
 mod filter_remove;
 pub use filter_remove::PointFilterRemovePatch;
+pub(super) use filter_remove::{archive_plan as removed_mask_archive_plan, identity as removed_mask_archive_identity};
 #[path = "accounted_point_readonly/metadata.rs"]
 pub(super) mod metadata;
 #[path = "accounted_point_readonly/properties.rs"]
