@@ -59,9 +59,7 @@ pub fn pen_needs_xwayland(session: DisplaySession, var: impl Fn(&str) -> Option<
     if session != DisplaySession::Wayland || set("PHOTOCRAFT_NATIVE_WAYLAND") || !set("DISPLAY") || !x11_libs() {
         return false;
     }
-    // Flatpak sandboxes often hide tablets from `/proc/bus/input/devices` (#4029, #6194); native
-    // Wayland would get no pen input at all, so match the documented Xwayland workaround.
-    pen() || set("FLATPAK_ID")
+    pen()
 }
 
 /// `BTN_TOOL_PEN` (linux/input-event-codes.h): the key a pen tablet's stylus, a pen display's or
@@ -333,16 +331,16 @@ mod tests {
     }
 
     #[test]
-    fn flatpak_on_wayland_opens_through_xwayland_when_proc_lists_no_pen() {
+    fn flatpak_on_wayland_without_display_stays_on_native_wayland() {
         use std::collections::HashMap;
         let env = |pairs: &[(&str, &str)]| {
             let m: HashMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
             move |k: &str| m.get(k).cloned()
         };
-        let flatpak = [("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", ":0"), ("FLATPAK_ID", "ai.storyteller.photocraft")];
-        assert!(pen_needs_xwayland(DisplaySession::Wayland, env(&flatpak), || false, || true));
-        let host = [("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", ":0")];
-        assert!(!pen_needs_xwayland(DisplaySession::Wayland, env(&host), || false, || true));
+        // Default Flatpak: Wayland socket only, no `$DISPLAY`; `FLATPAK_ID` must not force Xwayland.
+        let flatpak = [("WAYLAND_DISPLAY", "wayland-0"), ("FLATPAK_ID", "ai.storyteller.photocraft")];
+        assert!(!pen_needs_xwayland(DisplaySession::Wayland, env(&flatpak), || false, || true));
+        assert!(!pen_needs_xwayland(DisplaySession::Wayland, env(&flatpak), || true, || true));
     }
 
     /// Ugee and some other drivers report `BTN_STYLUS` without `BTN_TOOL_PEN` (#6194).
