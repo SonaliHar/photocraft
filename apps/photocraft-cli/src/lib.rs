@@ -1,4 +1,4 @@
-//! Headless Photocraft command line. `run` is the whole program, so it can be
+//! Headless PhotoCraft command line. `run` is the whole program, so it can be
 //! tested in-process as well as through the binary.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
