@@ -4,9 +4,9 @@
 //! rotate, skew and flips are affine special cases; Distort and Perspective use the full
 //! homography. Warping is an inverse mapping with premultiplied-alpha sampling (nearest, bilinear
 //! or Photoshop's Keys bicubic), processed per destination tile (in parallel on native) so memory stays
-//! bounded by the tile working set. Bicubic reductions are pre-filtered with a proper resize
-//! first, so shrinking a layer doesn't alias; an affine map reduces each axis by its own scale, so
-//! an axis that doesn't shrink stays sharp.
+//! bounded by the tile working set. Bicubic reductions are pre-filtered, so shrinking a layer
+//! doesn't alias: an affine map's source is resized first, each axis by its own scale, so an axis
+//! that doesn't shrink stays sharp, and a perspective map filters each pixel for its own reduction.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -388,9 +388,9 @@ fn singular_values(j: [f64; 4]) -> (f64, f64) {
 
 // Per-pixel prefiltering of perspective maps (#4864). The source is reduced by 2⁻ᵃ along x and
 // 2⁻ᵇ along y into octave cells (a, b), (0, 0) being the source itself; each destination pixel
-// samples the cell just below its own reduction, with a Keys kernel widened by what that cell's
-// reduction leaves, so every part of the source is filtered for its own reduction. Cells are built
-// only where some pixel reads them.
+// samples, along each axis, the finest octave no smaller than its own factor (2⁻ᵃ ≥ f), with a
+// Keys kernel widened by what that octave leaves (2⁻ᵃ / f), so every part of the source is
+// filtered for its own reduction. Cells are built only where some pixel reads them.
 
 /// The coarsest octave, 2⁻⁶: the 1/64 the one-factor prefilter stopped at.
 const MAX_LEVEL: u8 = 6;
@@ -413,6 +413,8 @@ const CHUNK: i32 = 4 * TILE_SIZE;
 /// The source area (pixels) below which the valve never refuses the cells: a small layer's cells
 /// cost little, however many of them its map needs.
 const VALVE_FLOOR: f64 = (1u32 << 22) as f64;
+/// The valve's probe plans every 8th pixel each way, about 1/64 of a full plan's work.
+const PROBE_STEP: usize = 8;
 
 fn octave_scale(a: usize) -> f64 {
     OCTAVE.get(a).copied().unwrap_or(1.0)
@@ -546,7 +548,7 @@ fn pixel_lod(g: &Geometry, x: i32, y: i32) -> Option<Lod> {
 
 /// The first and last pixel within 2r of position `p`, where a kernel widened by `r` isn't 0.
 fn tap_span(p: f64, r: f64) -> (i64, i64) {
-    ((p - 2.0 * r).floor() as i64 + 1, (p + 2.0 * r).ceil() as i64 - 1)
+    (((p - 2.0 * r).floor() as i64).saturating_add(1), ((p + 2.0 * r).ceil() as i64).saturating_sub(1))
 }
 
 /// Pixel `i` of a row `lo..hi`, clamped into it: past the edge the edge repeats, as the pixel
@@ -610,7 +612,8 @@ fn sample_widened(win: &[f32], rect: Rect, cell: Rect, (p, q): (f64, f64), (rx, 
         [a, b] => t.add([a, b], win),
         [a, b, c, d] => t.add([a, b, c, d], win),
         [a, b, c, d, e] => t.add([a, b, c, d, e], win),
-        _ => t.add_any(acc, win),
+        // With alpha a pixel has 2, 4 or 5 channels (`ColorMode::color_channels` and alpha).
+        _ => {}
     }
 }
 
@@ -645,19 +648,6 @@ impl WindowTaps<'_> {
             *a += s * self.k;
         }
     }
-
-    fn add_any(&self, acc: &mut [f64], win: &[f32]) {
-        let n = acc.len();
-        for (&row, &wy) in self.rows.iter().zip(self.wy) {
-            for (&col, &wx) in self.cols.iter().zip(self.wx) {
-                if let Some(px) = row.checked_add(col).and_then(|o| win.get(o..o.checked_add(n)?)) {
-                    for (a, &v) in acc.iter_mut().zip(px) {
-                        *a += f64::from(v) * wx * wy * self.k;
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// The windows a destination tile reads: per cell, the bounding box of every tap its pixels take
@@ -667,10 +657,11 @@ struct TilePlan {
     cells: Vec<(u8, u8, Rect)>,
 }
 
-/// Plans tile `t`. `None` when it draws nothing: today's footprint tests, with the source looked for
-/// as far as a pixel's filter reaches, so a tile whose own footprint is empty but whose filters
-/// reach the source still draws.
-fn plan_tile(t: Rect, g: &Geometry, src: &Surface) -> Option<TilePlan> {
+/// Plans tile `t` from every `step`th pixel each way (1 for the plan it renders with; a coarser
+/// step's windows lie inside that plan's). `None` when it draws nothing: today's footprint tests,
+/// with the source looked for as far as a pixel's filter reaches, so a tile whose own footprint is
+/// empty but whose filters reach the source still draws.
+fn plan_tile(t: Rect, g: &Geometry, src: &Surface, step: usize) -> Option<TilePlan> {
     let foot = footprint(&t, &g.inv, g.side, g.w_lo, g.src_rect);
     if foot.is_empty() || !src.has_tiles_in(foot.inflate(REACH)) {
         return None;
@@ -682,8 +673,9 @@ fn plan_tile(t: Rect, g: &Geometry, src: &Surface) -> Option<TilePlan> {
         return (!win.is_empty()).then(|| TilePlan { tile: t, cells: vec![(0, 0, win)] });
     }
     let mut boxes = [[Rect::EMPTY; 7]; 7];
-    for y in t.y0..t.y1 {
-        for x in t.x0..t.x1 {
+    let step = step.max(1);
+    for y in (t.y0..t.y1).step_by(step) {
+        for x in (t.x0..t.x1).step_by(step) {
             let Some(l) = pixel_lod(g, x, y) else { continue };
             for (a, rx, wx) in l.ax.entries() {
                 for (b, ry, wy) in l.ay.entries() {
@@ -807,7 +799,10 @@ impl Render<'_> {
             let (mx, my) = (t.x0 + (t.width() / 2) as i32, t.y0 + (t.height() / 2) as i32);
             let mut any = false;
             for q in [Rect::new(t.x0, t.y0, mx, my), Rect::new(mx, t.y0, t.x1, my), Rect::new(t.x0, my, mx, t.y1), Rect::new(mx, my, t.x1, t.y1)] {
-                if let Some(p) = plan_tile(q, self.g, self.src).filter(|_| !q.is_empty()) {
+                if q.is_empty() {
+                    continue;
+                }
+                if let Some(p) = plan_tile(q, self.g, self.src, 1) {
                     any |= self.tile(q, &p.cells, depth + 1, top, buf)?;
                 }
             }
@@ -872,23 +867,24 @@ impl Render<'_> {
     }
 }
 
-/// Bicubic by a perspective map: each pixel of `tiles` filtered for its own reduction, from octave
-/// cells of the source built only where the tiles read them. `Ok(None)` (the valve) when building
-/// them would read more than three times the source's area or hold more pixels than the source
-/// (taken as at least 4 Mpx), a pathological map; the caller then runs today's one-factor path.
-fn warp_per_pixel(src: &Surface, g: &Geometry, tiles: &[Rect], ctl: &Interrupt, tuning: Tuning) -> Result<Option<Vec<TileOut>>, AllocationError> {
-    let plan = |t: &Rect| if ctl.cancelled() { None } else { plan_tile(*t, g, src) };
+/// Plans each of `tiles` from every `step`th pixel ([`plan_tile`]), in parallel on native.
+fn plan_tiles(tiles: &[Rect], g: &Geometry, src: &Surface, ctl: &Interrupt, step: usize) -> Vec<TilePlan> {
+    let plan = |t: &Rect| if ctl.cancelled() { None } else { plan_tile(*t, g, src, step) };
     #[cfg(not(target_arch = "wasm32"))]
-    let plans: Vec<TilePlan> = {
+    let plans = {
         use rayon::prelude::*;
         tiles.par_iter().filter_map(plan).collect()
     };
     #[cfg(target_arch = "wasm32")]
-    let plans: Vec<TilePlan> = tiles.iter().filter_map(plan).collect();
-    // One build job per cell, tile row and four tile columns of it, covering what the plans read
-    // there; each job makes whole tiles of its own.
+    let plans = tiles.iter().filter_map(plan).collect();
+    plans
+}
+
+/// The cell builds `plans` need: one job per cell, tile row and four tile columns of it, covering
+/// what the plans read there; each job makes whole tiles of its own.
+fn build_jobs(plans: &[TilePlan]) -> BTreeMap<(u8, u8, i32, i32), Rect> {
     let mut jobs: BTreeMap<(u8, u8, i32, i32), Rect> = BTreeMap::new();
-    for p in &plans {
+    for p in plans {
         for &(a, b, r) in p.cells.iter().filter(|c| (c.0, c.1) != (0, 0)) {
             for j in r.y0.div_euclid(BAND)..=(r.y1 - 1).div_euclid(BAND) {
                 for k in r.x0.div_euclid(CHUNK)..=(r.x1 - 1).div_euclid(CHUNK) {
@@ -899,14 +895,35 @@ fn warp_per_pixel(src: &Surface, g: &Geometry, tiles: &[Rect], ctl: &Interrupt, 
             }
         }
     }
-    let area = (f64::from(g.src_rect.width()) * f64::from(g.src_rect.height())).max(VALVE_FLOOR);
+    jobs
+}
+
+/// The valve: whether the cell builds `jobs` would read more than three times the source's area
+/// or hold more pixels than the source, the area taken as at least `tuning.valve_floor`.
+fn refuses(jobs: &BTreeMap<(u8, u8, i32, i32), Rect>, g: &Geometry, tuning: Tuning) -> bool {
+    let area = (f64::from(g.src_rect.width()) * f64::from(g.src_rect.height())).max(tuning.valve_floor);
     let (mut reads, mut held) = (0.0, 0.0);
-    for (&(a, b, _, _), r) in &jobs {
+    for (&(a, b, _, _), r) in jobs {
         let px = f64::from(r.width()) * f64::from(r.height());
         held += px;
         reads += px / (octave_scale(usize::from(a)) * octave_scale(usize::from(b)));
     }
-    if tuning.force_valve || reads > 3.0 * area || held > area {
+    reads > 3.0 * area || held > area
+}
+
+/// Bicubic by a perspective map: each pixel of `tiles` filtered for its own reduction, from octave
+/// cells of the source built only where the tiles read them. `Ok(None)` when the valve
+/// ([`refuses`]) turns the cells down, as for a near-uniform shrink in the top quarter of an octave
+/// on both axes, which samples four cells everywhere; the caller then runs today's one-factor path.
+fn warp_per_pixel(src: &Surface, g: &Geometry, tiles: &[Rect], ctl: &Interrupt, tuning: Tuning) -> Result<Option<Vec<TileOut>>, AllocationError> {
+    // A probe first, every 8th pixel each way, at about 1/64 the cost: its windows lie inside the
+    // full plan's, so cells the valve turns down for it, it would turn down for the full plan too.
+    if refuses(&build_jobs(&plan_tiles(tiles, g, src, ctl, PROBE_STEP)), g, tuning) {
+        return Ok(None);
+    }
+    let plans = plan_tiles(tiles, g, src, ctl, 1);
+    let jobs = build_jobs(&plans);
+    if refuses(&jobs, g, tuning) {
         return Ok(None);
     }
     let jobs: Vec<((u8, u8, i32, i32), Rect)> = jobs.into_iter().collect();
@@ -1016,18 +1033,21 @@ fn footprint(t: &Rect, inv: &Homography, side: Option<f64>, w_lo: f64, src_rect:
     if straddles { src_rect } else { Rect::new(fx0, fy0, fx1, fy1).intersect(&src_rect) }
 }
 
-/// Knobs the tests turn: the valve forced (a perspective map takes today's one-factor path), the
-/// window cap, and every tile planned pixel by pixel.
+/// Knobs the tests turn: the valve forced (a perspective map takes today's one-factor path, as the
+/// valve's own fallback does), the window cap, the valve's floor, and every tile planned pixel by
+/// pixel.
 #[derive(Clone, Copy, Debug)]
 struct Tuning {
     force_valve: bool,
     window_cap: usize,
+    /// The source area below which the valve never refuses the cells ([`refuses`]).
+    valve_floor: f64,
     /// Plan every tile pixel by pixel, even where [`samples_source_only`] says no pixel needs it.
     plan_pixels: bool,
 }
 
 impl Tuning {
-    const DEFAULT: Tuning = Tuning { force_valve: false, window_cap: WINDOW_CAP, plan_pixels: false };
+    const DEFAULT: Tuning = Tuning { force_valve: false, window_cap: WINDOW_CAP, valve_floor: VALVE_FLOOR, plan_pixels: false };
 }
 
 /// A cancelled `ctl` skips the remaining tiles; the caller discards the result.
@@ -1043,7 +1063,7 @@ fn warp(
 }
 
 fn warp_with(
-    src_in: &Surface,
+    src: &Surface,
     src_rect: Rect,
     h: &Homography,
     interp: Interp,
@@ -1051,10 +1071,8 @@ fn warp_with(
     ctl: &Interrupt,
     tuning: Tuning,
 ) -> Result<Surface, photocraft_raster::AllocationError> {
-    let (rect_in, h_in) = (src_rect, h);
-    let mut fmt = src_in.format();
+    let mut fmt = src.format();
     let converted;
-    let src = src_in;
     let mut src = if fmt.alpha {
         src
     } else {
@@ -1133,8 +1151,10 @@ fn warp_with(
         let cells = std::array::from_fn(|a| std::array::from_fn(|b| scaled_rect(src_rect, octave_scale(a), octave_scale(b))));
         let source_only = !tuning.plan_pixels && side.is_some() && samples_source_only(&h, src_rect);
         let g = Geometry { h, inv, src_rect, side, w_lo, front, cells, source_only };
+        // The valve's fallback, today's one-factor path, from the source as converted above: the
+        // per-pixel path reduces nothing first, so `h` and `src_rect` are still the caller's.
         let Some(done) = warp_per_pixel(src_ref, &g, &tiles, ctl, tuning)? else {
-            return warp_with(src_in, rect_in, h_in, interp, clip, ctl, Tuning { force_valve: true, ..tuning });
+            return warp_with(src_ref, src_rect, &h, interp, clip, ctl, Tuning { force_valve: true, ..tuning });
         };
         if ctl.cancelled() {
             return Ok(out);
@@ -1924,8 +1944,28 @@ mod tests {
         [[0.0, 0.0], [w, 0.0], [0.75 * w, 0.375 * h], [0.25 * w, 0.375 * h]]
     }
 
+    /// A near-uniform shrink to about 55 % with a mild perspective: every pixel in the top quarter
+    /// of octave 0 on both axes, so it samples four cells, which the valve turns down.
+    fn shrink55(w: f64, h: f64) -> [[f64; 2]; 4] {
+        [[0.0, 0.0], [0.55 * w, 0.01 * h], [0.555 * w, 0.555 * h], [0.0, 0.55 * h]]
+    }
+
     fn map(q: fn(f64, f64) -> [[f64; 2]; 4], w: i32, h: i32) -> Homography {
         Homography::rect_to_quad([0.0, 0.0, f64::from(w), f64::from(h)], q(f64::from(w), f64::from(h))).unwrap()
+    }
+
+    /// The per-pixel path's geometry for `h` over `r` as `warp_with` builds it (for a map whose
+    /// source stays in front of its horizon), and the destination tiles it plans.
+    fn setup(h: Homography, r: Rect) -> (Geometry, Vec<Rect>) {
+        let (x0, y0, x1, y1) = (f64::from(r.x0) - 1.0, f64::from(r.y0) - 1.0, f64::from(r.x1) + 1.0, f64::from(r.y1) + 1.0);
+        let fwd_w = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| h.w(x, y));
+        let side = [1.0, -1.0].into_iter().find(|&s| fwd_w.iter().all(|&c| s * c > 0.0));
+        assert!(side.is_some(), "{h:?} crosses its horizon");
+        let w_lo = 1.0 / fwd_w.iter().fold(0.0f64, |m, c| m.max(c.abs()));
+        let cells = std::array::from_fn(|a| std::array::from_fn(|b| scaled_rect(r, octave_scale(a), octave_scale(b))));
+        let g = Geometry { h, inv: h.inverse().unwrap(), src_rect: r, side, w_lo, front: None, cells, source_only: false };
+        let dst = warp_output_bounds(r, &h).unwrap();
+        (g, dst.tiles().map(|tc| tc.rect().intersect(&dst)).filter(|t| !t.is_empty()).collect())
     }
 
     /// `w` × `h` opaque RGB of `sample` depth whose pixel (x, y) is `f(x, y)`.
@@ -2074,94 +2114,93 @@ mod tests {
     /// The rmse of the red channel against an adaptive box supersample of the bilinearly
     /// interpolated source (8 to 64 samples per axis, 4 per source pixel of footprint), over the
     /// source's interior (24 px margin), by region: below 15 %, 30-80 % and from 80 % of the width
-    /// (the wedge and Q6) or the height (the trapezoid). Computed once for both tests.
-    fn aliasing_table() -> &'static [Aliasing] {
-        static TABLE: std::sync::OnceLock<Vec<Aliasing>> = std::sync::OnceLock::new();
-        TABLE.get_or_init(|| {
-            use rayon::prelude::*;
-            let (w, ht) = (1000, 750);
-            let r = Rect::new(0, 0, w, ht);
-            let mut table = Vec::new();
-            for (name, q) in [("wedge", wedge as fn(f64, f64) -> [[f64; 2]; 4]), ("q6", q6), ("trapezoid", trapezoid)] {
-                let h = map(q, w, ht);
-                let inv = h.inverse().unwrap();
-                let along_v = name == "trapezoid";
-                for (pattern, pf) in patterns() {
-                    let src = paint(w, ht, SampleType::U8, |x, y| {
-                        let v = pf(x, y);
-                        [v, v, v, 1.0]
-                    });
-                    let (now, today) = (warp_surface(&src, r, &h, Interp::Bicubic).unwrap(), warp_today(&src, r, &h));
-                    let b = now.content_bounds().union(&today.content_bounds());
-                    let (pn, pt) = (now.read_region(b), today.read_region(b));
-                    let bw = b.width() as usize;
-                    let sample = |x: f64, y: f64| -> f64 {
-                        let (u, v) = inv.apply(x, y);
-                        let (u, v) = (u - 0.5, v - 0.5);
-                        let (ix, iy) = (u.floor(), v.floor());
-                        let (fx, fy) = (u - ix, v - iy);
-                        let (ix, iy) = (ix as i32, iy as i32);
-                        let g = |x: i32, y: i32| f64::from(pf(x.clamp(0, w - 1), y.clamp(0, ht - 1)));
-                        (g(ix, iy) * (1.0 - fx) + g(ix + 1, iy) * fx) * (1.0 - fy) + (g(ix, iy + 1) * (1.0 - fx) + g(ix + 1, iy + 1) * fx) * fy
-                    };
-                    let acc = (b.y0..b.y1)
-                        .into_par_iter()
-                        .map(|y| {
-                            let mut acc = [[0.0f64; 3]; 3];
-                            for x in b.x0..b.x1 {
-                                let (fx, fy) = (f64::from(x), f64::from(y));
-                                let (u, v) = inv.apply(fx + 0.5, fy + 0.5);
-                                if !(u >= 24.0 && u <= f64::from(w) - 24.0 && v >= 24.0 && v <= f64::from(ht) - 24.0) {
-                                    continue;
-                                }
-                                let (c, l) = if along_v { (v, f64::from(ht)) } else { (u, f64::from(w)) };
-                                let reg = if c < 0.15 * l {
-                                    0
-                                } else if (0.3 * l..0.8 * l).contains(&c) {
-                                    1
-                                } else if c >= 0.8 * l {
-                                    2
-                                } else {
-                                    continue;
-                                };
-                                let (u1, v1) = inv.apply(fx + 1.5, fy + 0.5);
-                                let (u2, v2) = inv.apply(fx + 0.5, fy + 1.5);
-                                let foot = ((u1 - u).abs() + (u2 - u).abs()).max((v1 - v).abs() + (v2 - v).abs());
-                                let ns = ((4.0 * foot).ceil() as usize).clamp(8, 64);
-                                let mut s = 0.0;
-                                for j in 0..ns {
-                                    for i in 0..ns {
-                                        s += sample(fx + (i as f64 + 0.5) / ns as f64, fy + (j as f64 + 0.5) / ns as f64);
-                                    }
-                                }
-                                let reference = s / (ns * ns) as f64;
-                                let k = ((y - b.y0) as usize * bw + (x - b.x0) as usize) * 4;
-                                acc[reg][0] += 1.0;
-                                acc[reg][1] += (f64::from(pn[k]) - reference).powi(2);
-                                acc[reg][2] += (f64::from(pt[k]) - reference).powi(2);
+    /// (the wedge and Q6) or the height (the trapezoid).
+    fn aliasing_table() -> Vec<Aliasing> {
+        use rayon::prelude::*;
+        let (w, ht) = (1000, 750);
+        let r = Rect::new(0, 0, w, ht);
+        let mut table = Vec::new();
+        for (name, q) in [("wedge", wedge as fn(f64, f64) -> [[f64; 2]; 4]), ("q6", q6), ("trapezoid", trapezoid)] {
+            let h = map(q, w, ht);
+            let inv = h.inverse().unwrap();
+            let along_v = name == "trapezoid";
+            for (pattern, pf) in patterns() {
+                let src = paint(w, ht, SampleType::U8, |x, y| {
+                    let v = pf(x, y);
+                    [v, v, v, 1.0]
+                });
+                let (now, today) = (warp_surface(&src, r, &h, Interp::Bicubic).unwrap(), warp_today(&src, r, &h));
+                let b = now.content_bounds().union(&today.content_bounds());
+                let (pn, pt) = (now.read_region(b), today.read_region(b));
+                let bw = b.width() as usize;
+                let sample = |x: f64, y: f64| -> f64 {
+                    let (u, v) = inv.apply(x, y);
+                    let (u, v) = (u - 0.5, v - 0.5);
+                    let (ix, iy) = (u.floor(), v.floor());
+                    let (fx, fy) = (u - ix, v - iy);
+                    let (ix, iy) = (ix as i32, iy as i32);
+                    let g = |x: i32, y: i32| f64::from(pf(x.clamp(0, w - 1), y.clamp(0, ht - 1)));
+                    (g(ix, iy) * (1.0 - fx) + g(ix + 1, iy) * fx) * (1.0 - fy) + (g(ix, iy + 1) * (1.0 - fx) + g(ix + 1, iy + 1) * fx) * fy
+                };
+                let acc = (b.y0..b.y1)
+                    .into_par_iter()
+                    .map(|y| {
+                        let mut acc = [[0.0f64; 3]; 3];
+                        for x in b.x0..b.x1 {
+                            let (fx, fy) = (f64::from(x), f64::from(y));
+                            let (u, v) = inv.apply(fx + 0.5, fy + 0.5);
+                            if !(u >= 24.0 && u <= f64::from(w) - 24.0 && v >= 24.0 && v <= f64::from(ht) - 24.0) {
+                                continue;
                             }
-                            acc
-                        })
-                        .reduce(|| [[0.0f64; 3]; 3], |a, b| std::array::from_fn(|i| std::array::from_fn(|j| a[i][j] + b[i][j])));
-                    let rmse = |k: usize| std::array::from_fn(|reg| (acc[reg][k] / acc[reg][0].max(1.0)).sqrt());
-                    table.push(Aliasing { map: name, pattern, now: rmse(1), today: rmse(2) });
-                }
+                            let (c, l) = if along_v { (v, f64::from(ht)) } else { (u, f64::from(w)) };
+                            let reg = if c < 0.15 * l {
+                                0
+                            } else if (0.3 * l..0.8 * l).contains(&c) {
+                                1
+                            } else if c >= 0.8 * l {
+                                2
+                            } else {
+                                continue;
+                            };
+                            let (u1, v1) = inv.apply(fx + 1.5, fy + 0.5);
+                            let (u2, v2) = inv.apply(fx + 0.5, fy + 1.5);
+                            let foot = ((u1 - u).abs() + (u2 - u).abs()).max((v1 - v).abs() + (v2 - v).abs());
+                            let ns = ((4.0 * foot).ceil() as usize).clamp(8, 64);
+                            let mut s = 0.0;
+                            for j in 0..ns {
+                                for i in 0..ns {
+                                    s += sample(fx + (i as f64 + 0.5) / ns as f64, fy + (j as f64 + 0.5) / ns as f64);
+                                }
+                            }
+                            let reference = s / (ns * ns) as f64;
+                            let k = ((y - b.y0) as usize * bw + (x - b.x0) as usize) * 4;
+                            acc[reg][0] += 1.0;
+                            acc[reg][1] += (f64::from(pn[k]) - reference).powi(2);
+                            acc[reg][2] += (f64::from(pt[k]) - reference).powi(2);
+                        }
+                        acc
+                    })
+                    .reduce(|| [[0.0f64; 3]; 3], |a, b| std::array::from_fn(|i| std::array::from_fn(|j| a[i][j] + b[i][j])));
+                let rmse = |k: usize| std::array::from_fn(|reg| (acc[reg][k] / acc[reg][0].max(1.0)).sqrt());
+                table.push(Aliasing { map: name, pattern, now: rmse(1), today: rmse(2) });
             }
-            for a in &table {
-                println!(
-                    "{:9} {:9} wide {:.3}/{:.3} middle {:.3}/{:.3} narrow {:.3}/{:.3}",
-                    a.map, a.pattern, a.now[0], a.today[0], a.now[1], a.today[1], a.now[2], a.today[2]
-                );
-            }
-            table
-        })
+        }
+        for a in &table {
+            println!(
+                "{:9} {:9} wide {:.3}/{:.3} middle {:.3}/{:.3} narrow {:.3}/{:.3}",
+                a.map, a.pattern, a.now[0], a.today[0], a.now[1], a.today[1], a.now[2], a.today[2]
+            );
+        }
+        table
     }
 
     /// #4864: where a perspective map shrinks the source most (the far, narrow side), fine patterns
     /// alias no more than with today's one factor, and much less on average: today's factor is set
-    /// at the centre, so it filtered the narrow side for less than its reduction.
+    /// at the centre, so it filtered the narrow side for less than its reduction. The wide side and
+    /// the middle, filtered for their own (smaller) reductions, alias no more than today either.
+    /// One test, so the table is computed once: nextest runs each test in its own process.
     #[test]
-    fn perspective_narrow_side_aliases_no_more() {
+    fn perspective_aliases_no_more_than_today() {
         let table = aliasing_table();
         for name in ["wedge", "q6", "trapezoid"] {
             let rows: Vec<&Aliasing> = table.iter().filter(|a| a.map == name).collect();
@@ -2171,13 +2210,7 @@ mod tests {
             let (now, today) = (rows.iter().map(|a| a.now[2]).sum::<f64>() / 7.0, rows.iter().map(|a| a.today[2]).sum::<f64>() / 7.0);
             assert!(now <= 0.85 * today, "{name}: mean narrow-side rmse {now:.3} vs today's {today:.3}");
         }
-    }
-
-    /// #4864: the wide side and the middle of a perspective map, filtered for their own (smaller)
-    /// reductions, alias no more than with today's one factor.
-    #[test]
-    fn perspective_interior_no_new_aliasing() {
-        for a in aliasing_table() {
+        for a in &table {
             for (reg, region) in [(0, "wide"), (1, "middle")] {
                 assert!(a.now[reg] <= a.today[reg] + 0.01, "{} {} {region}: rmse {:.3} vs today's {:.3}", a.map, a.pattern, a.now[reg], a.today[reg]);
             }
@@ -2192,6 +2225,16 @@ mod tests {
 
     /// A pixel and its |second difference|.
     type D2 = (i32, i32, f64);
+
+    /// The largest |second difference| of the pixels `near` picks, and the 99.9th percentile of the
+    /// others.
+    fn near_max_and_p999(d: &[D2], near: impl Fn(&D2) -> bool) -> (f64, f64) {
+        let (near, rest): (Vec<&D2>, Vec<&D2>) = d.iter().partition(|p| near(p));
+        let mut rest: Vec<f64> = rest.iter().map(|p| p.2).collect();
+        rest.sort_by(f64::total_cmp);
+        let p999 = rest.get(((rest.len() as f64 - 1.0) * 0.999) as usize).copied().unwrap_or(0.0);
+        (near.iter().map(|p| p.2).fold(0.0f64, f64::max), p999)
+    }
 
     /// |second difference| of the red and green channels along rows and columns at each pixel
     /// whose four neighbours lie in the interior of `r`.
@@ -2217,10 +2260,10 @@ mod tests {
     }
 
     /// #4864: a smooth gradient stays smooth under a perspective map. There is no seam next to the
-    /// destination tiles, where windows and cells change, and no more curvature than today's one
-    /// factor leaves, give or take half. The reporter's wedge curves most at its narrow tip, where
-    /// the octave cells' filters reach the source's edge: 2.9e-3 at F32 against today's 2.2e-3 and
-    /// Bilinear's 7.1e-4.
+    /// destination tiles, where windows and cells change, no more curvature than today's one factor
+    /// leaves, give or take half, and the faint bands next to octave changes don't grow. The
+    /// reporter's wedge curves most at its narrow tip, where the octave cells' filters reach the
+    /// source's edge: 2.9e-3 at F32 against today's 2.2e-3 and Bilinear's 7.1e-4.
     #[test]
     fn perspective_ramp_is_smooth() {
         let r = Rect::new(0, 0, 1000, 750);
@@ -2233,13 +2276,24 @@ mod tests {
                 let today = second_differences(&warp_today(&src, r, &h), &inv, r);
                 let max = |d: &[(i32, i32, f64)]| d.iter().map(|p| p.2).fold(0.0f64, f64::max);
                 assert!(max(&now) <= 1.5 * max(&today), "{sample:?} {name}: max |second difference| {:.2e} vs today's {:.2e}", max(&now), max(&today));
-                let near = |&(x, y, _): &(i32, i32, f64)| [x, y].iter().any(|&c| c.rem_euclid(TILE).min(TILE - c.rem_euclid(TILE)) <= 2);
-                let (seam, rest): (Vec<&D2>, Vec<&D2>) = now.iter().partition(|p| near(p));
-                let mut rest: Vec<f64> = rest.iter().map(|p| p.2).collect();
-                rest.sort_by(f64::total_cmp);
-                let p999 = rest.get(((rest.len() as f64 - 1.0) * 0.999) as usize).copied().unwrap_or(0.0);
-                let seam_max = seam.iter().map(|p| p.2).fold(0.0f64, f64::max);
-                assert!(seam_max <= 1.5 * p999, "{sample:?} {name}: |second difference| next to tile edges {seam_max:.2e} vs p99.9 elsewhere {p999:.2e}");
+                let tile_edge = |&(x, y, _): &D2| [x, y].iter().any(|&c| c.rem_euclid(TILE).min(TILE - c.rem_euclid(TILE)) <= 2);
+                let (seam, p999) = near_max_and_p999(&now, tile_edge);
+                assert!(seam <= 1.5 * p999, "{sample:?} {name}: |second difference| next to tile edges {seam:.2e} vs p99.9 elsewhere {p999:.2e}");
+                // Within 2 px of where a pixel's octave or cross-fade changes, switching cells leaves
+                // faint bands: off the narrow side (the last 20 %, where the tip's curvature
+                // dominates), 2.2× the p99.9 elsewhere under the wedge and 1.3× under the
+                // trapezoid. Held there, so they can't grow.
+                let (g, _) = setup(h, r);
+                let key = |x: i32, y: i32| pixel_lod(&g, x, y).map(|l| (l.ax.lv[0], l.ax.n, l.ay.lv[0], l.ay.n));
+                let change = |&(x, y, _): &D2| (-2..=2).any(|dy| (-2..=2).any(|dx| key(x + dx, y + dy) != key(x, y)));
+                let narrow = |&(x, y, _): &D2| {
+                    let (u, v) = inv.apply(f64::from(x) + 0.5, f64::from(y) + 0.5);
+                    if name == "trapezoid" { v >= 600.0 } else { u >= 800.0 }
+                };
+                let rest: Vec<D2> = now.iter().copied().filter(|p| !narrow(p)).collect();
+                let (bands, p999) = near_max_and_p999(&rest, change);
+                let bound = if name == "wedge" { 2.5 } else { 1.6 };
+                assert!(bands <= bound * p999, "{sample:?} {name}: |second difference| next to octave changes {bands:.2e} vs p99.9 elsewhere {p999:.2e}");
             }
         }
     }
@@ -2363,6 +2417,55 @@ mod tests {
         let got = golden_hashes(|s, r, h, clip| warp_with(s, r, h, Interp::Bicubic, clip, &Interrupt::NONE, forced).unwrap());
         let (name, want) = GOLDEN[10];
         assert_eq!(got.get(10), Some(&(name, want)), "{got:#018x?}");
+    }
+
+    /// #4864: when the valve turns the cells down, the warp is today's, bit for bit, through the
+    /// valve's own fallback, for a layer with alpha and for one converted once to gain it. The
+    /// floor is lowered so this small layer trips it; at the default floor the same map is
+    /// filtered per pixel.
+    #[test]
+    fn the_valve_falls_back_to_todays_output() {
+        let (w, hh) = (400, 300);
+        let r = Rect::new(0, 0, w, hh);
+        let h = map(shrink55, w, hh);
+        let low = Tuning { valve_floor: 0.0, ..Tuning::DEFAULT };
+        let formats = [(SampleType::U8, true), (SampleType::F32, true), (SampleType::U16, false)];
+        for fmt in formats.map(|(sample, alpha)| PixelFormat::new(ColorMode::Rgb, sample, alpha)) {
+            let src = paint(w, hh, fmt.sample, |x, y| {
+                let v = ((x * 7 + y * 3) % 23) as f32 / 22.0;
+                [v, ((x / 3) & 1) as f32, ((y / 2) & 1) as f32, 1.0]
+            })
+            .try_convert(fmt)
+            .unwrap();
+            let today = warp_today(&src, r, &h);
+            let fell_back = warp_with(&src, r, &h, Interp::Bicubic, None, &Interrupt::NONE, low).unwrap();
+            assert!(fell_back == today, "{fmt:?}: the valve's fallback isn't today's output");
+            assert!(warp_surface(&src, r, &h, Interp::Bicubic).unwrap() != today, "{fmt:?}: the map isn't filtered per pixel");
+        }
+    }
+
+    /// #4864: the valve's probe, every 8th pixel each way, plans windows inside the full plan's, so
+    /// it never reads or holds more: cells the valve turns down for the probe, it turns down for the
+    /// full plan too. A near-uniform 55 % shrink is turned down from the probe alone.
+    #[test]
+    fn the_valve_probe_plans_inside_the_full_plan() {
+        let (w, hh) = (400, 300);
+        let r = Rect::new(0, 0, w, hh);
+        let src = paint(w, hh, SampleType::U8, |x, y| [((x * 7 + y * 3) % 23) as f32 / 22.0, 0.5, 0.5, 1.0]);
+        let low = Tuning { valve_floor: 0.0, ..Tuning::DEFAULT };
+        let maps = [("wedge", wedge as fn(f64, f64) -> [[f64; 2]; 4]), ("q6", q6), ("trapezoid", trapezoid), ("shrink55", shrink55)];
+        for (name, q) in maps {
+            let (g, tiles) = setup(map(q, w, hh), r);
+            let plan = |step| build_jobs(&plan_tiles(&tiles, &g, &src, &Interrupt::NONE, step));
+            let (probe, full) = (plan(PROBE_STEP), plan(1));
+            assert!(!probe.is_empty(), "{name}: the probe reads no cell");
+            for (k, p) in &probe {
+                assert!(full.get(k).is_some_and(|f| f.union(p) == *f), "{name} {k:?}: the probe's {p:?} lies outside the full plan's {:?}", full.get(k));
+            }
+            if name == "shrink55" {
+                assert!(refuses(&probe, &g, low) && refuses(&full, &g, low), "{name}: not turned down");
+            }
+        }
     }
 
     /// The per-axis rule exactly as `prefilter_scales` computed it before it was shared with the
