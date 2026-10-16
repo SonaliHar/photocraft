@@ -2080,6 +2080,75 @@ fn levels_steps_match_photoshop() {
     }
 }
 
+// Photoshop 26.11 Levels adjustment layers on an 8-bit sRGB 0..255 ramp (#6517, synthetic parity
+// run of #6511). PhotoCraft 0.9.0 missed each listed level by one because it did not round the
+// midtone gamma to a whole level; every other level of both ramps already matched.
+// - levels-02: master 20..235, gamma 1.2, output 10..245 (29 and 30 both land on 28).
+// - levels-03: red 10..245, gamma 0.8, output 0..250; master untouched.
+#[test]
+fn levels_match_photoshop_parity_run() {
+    let ch = |ib: f32, iw: f32, gamma: f32, ob: f32, ow: f32| LevelsChannel {
+        in_black: ib / 255.0,
+        in_white: iw / 255.0,
+        gamma,
+        out_black: ob / 255.0,
+        out_white: ow / 255.0,
+    };
+    let id = LevelsChannel::default();
+    let run = |adj: &Adjustment, xs: &[u8]| {
+        let px = xs.iter().map(|&x| f32::from(x) / 255.0).map(|v| [v, v, v, 1.0]).collect();
+        let mut b = Buffer { rect: Rect::new(0, 0, xs.len() as i32, 1), px };
+        adjust::apply_depth(adj, &mut b, adjust::Transfer::Srgb, Some(SampleType::U8));
+        b.px
+    };
+    let master = Adjustment::Levels {
+        master: ch(20.0, 235.0, 1.2, 10.0, 245.0),
+        per_channel: [id.clone(), id.clone(), id.clone()],
+        space: Default::default(),
+        black: LevelsChannel::default(),
+    };
+    let red = Adjustment::Levels {
+        master: id.clone(),
+        per_channel: [ch(10.0, 245.0, 0.8, 0.0, 250.0), id.clone(), id.clone()],
+        space: Default::default(),
+        black: LevelsChannel::default(),
+    };
+    let oracles: [(&Adjustment, &[u8], &[u8]); 2] = [
+        (
+            &master,
+            &[
+                28, 29, 30, 31, 34, 37, 39, 45, 47, 48, 55, 61, 62, 63, 64, 65, 73, 74, 75, 106, 107, 108, 114, 127, 128, 129, 131, 132, 139, 140, 143, 150,
+                164, 165, 167, 168, 178, 181, 187, 194, 199, 203, 206, 215, 217, 218, 229,
+            ],
+            &[
+                25, 28, 28, 29, 35, 39, 41, 50, 51, 52, 63, 70, 71, 72, 73, 74, 84, 85, 86, 120, 121, 122, 128, 142, 143, 144, 145, 146, 154, 155, 157, 165,
+                179, 180, 180, 182, 192, 194, 201, 206, 212, 216, 218, 227, 228, 229, 239,
+            ],
+        ),
+        (
+            &red,
+            &[
+                21, 26, 28, 31, 34, 38, 40, 41, 44, 45, 51, 55, 56, 61, 62, 68, 87, 88, 89, 100, 101, 102, 103, 104, 105, 123, 139, 140, 141, 142, 143, 144,
+                146, 147, 148, 149, 157, 173, 180, 185, 186, 189, 190, 194, 195, 201, 220, 224, 225, 227, 230, 231, 235,
+            ],
+            &[
+                6, 9, 11, 13, 15, 18, 20, 21, 23, 24, 27, 31, 32, 36, 37, 43, 63, 64, 65, 75, 76, 77, 78, 79, 80, 101, 119, 120, 121, 122, 123, 124, 126, 127,
+                128, 129, 139, 159, 167, 174, 175, 177, 178, 184, 185, 192, 218, 223, 224, 225, 230, 231, 236,
+            ],
+        ),
+    ];
+    for (k, (adj, xs, want)) in oracles.iter().enumerate() {
+        assert_eq!(xs.len(), want.len());
+        for ((p, x), w) in run(adj, xs).iter().zip(*xs).zip(*want) {
+            assert_eq!((p[0] * 255.0).round(), f32::from(*w), "case {k}: level {x}");
+            // The untouched channels keep the master's result (levels-03: identity).
+            if k == 1 {
+                assert_eq!((p[1] * 255.0).round(), f32::from(*x), "case {k}: green at {x}");
+            }
+        }
+    }
+}
+
 // The shadow toe stays a well-behaved curve for any gamma: from 0 to 1, rising, and without a
 // jump where it meets the power curve.
 #[test]
