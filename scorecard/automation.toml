@@ -49,9 +49,9 @@ note = "file_cmds.rs and file_cmds/batch_naming.rs: folder/array input, per-file
 [[item]]
 id = "AUTO-219-6"
 target = "Plug-in ABI v2: panel kind, progress/cancel calls, read other layers, Last Filter repeats"
-status = "missing"
+status = "partial"
 issue = 219
-note = "runtime.rs:15 ABI_VERSION = 1; manifest.rs:18 Kind::Filter only"
+note = "Panel API 1 supports installable WASM panels and explicit editing-command grants. Package-owned native/WASM image processing has progress/cancellation, comparison previews and Apply to a new document or same-size layer. Experimental panel API 2 adds contributed commands, bounded layer snapshots, atomic rename/visibility edits, document invalidations and read-only inspectors (docs/plugin-api-v2.md). Filter ABI stays v1; broader document/pixel APIs and Last Filter repeats remain open."
 
 [[item]]
 id = "AUTO-219-7"

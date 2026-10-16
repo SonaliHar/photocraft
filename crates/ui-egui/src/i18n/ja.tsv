@@ -3851,3 +3851,10 @@ curves	Smooth	スムーズ
 # View › Guides › right-click a guide
 	Edit Selected Guides	選択したガイドを編集
 	Clear Selected Guides	選択したガイドを消去
+
+# Native-panel extensions
+	Manage Extensions…	拡張機能を管理…
+
+# Plugins menu
+	Plugins	プラグイン
+	Manage Plugins…	プラグインを管理…

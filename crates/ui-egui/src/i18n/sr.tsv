@@ -4248,3 +4248,10 @@ shape	Appearance	Izgled
 # View › Guides › right-click a guide
 	Edit Selected Guides	Uredi izabrane vodilje
 	Clear Selected Guides	Ukloni izabrane vodilje
+
+# Native-panel extensions
+	Manage Extensions…	Управљање проширењима…
+
+# Plugins menu
+	Plugins	Додаци
+	Manage Plugins…	Управљање додацима…

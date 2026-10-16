@@ -2775,3 +2775,11 @@ curves	Smooth	平滑
 # View › Guides › right-click a guide
 	Edit Selected Guides	編輯所選參考線
 	Clear Selected Guides	清除所選參考線
+
+# Native-panel extensions
+	Manage Extensions…	管理擴充功能…
+	Extensions	擴充功能
+
+# Plugins menu
+	Plugins	外掛程式
+	Manage Plugins…	管理外掛程式…

@@ -4137,3 +4137,10 @@ navigator	Zoom	Zoom
 # View › Guides › right-click a guide
 	Edit Selected Guides	Editar guías seleccionadas
 	Clear Selected Guides	Borrar guías seleccionadas
+
+# Native-panel extensions
+	Manage Extensions…	Administrar extensiones…
+
+# Plugins menu
+	Plugins	Complementos
+	Manage Plugins…	Administrar complementos…

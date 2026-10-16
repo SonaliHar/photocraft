@@ -1,6 +1,6 @@
 # PhotoCraft architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (workspace size and test counts recounted; current-state summary added; the design plan below is kept, with its deviations listed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (AI plugins migrated to the generic API; dedicated core model and algorithm adapters removed; general image plugin package v2 and owned native/WASM processors; workspace size and test counts recounted; current-state summary added; the design plan below is kept, with its deviations listed) · **Target:** Adobe Photoshop 2026
 
 ## Current state (2026-10-10)
 
@@ -22,6 +22,16 @@ What exists on `main` today. The numbered sections below are the original design
 - **Files:** own PSD/PSB crate (`psd`), flat codecs (`codecs`), camera raw (`raw`), HEIF (`heif`),
   Affinity (`affinity`), document mapping (`io`), native `.pcraft` (`format`, atomic saves).
   Coverage: [`file-format-parity.md`](file-format-parity.md).
+- **Extensions (2026-10-15):** installable native panels with sandboxed WebAssembly event handlers,
+  explicit editing-command grants, a persistent desktop store and a top-level Plugins menu. Version 2
+  packages may supply their own native image worker and/or sandboxed pixel filters through
+  `plugin.processImage`, without registering a new host service. The host owns source snapshots,
+  colour conversion, jobs, cancellation, comparison previews and confirmed result application.
+  AI algorithms, models and runtime libraries remain entirely in their version-2 packages; see [`extensions.md`](extensions.md) and
+  [`plugin-image-processing.md`](plugin-image-processing.md).
+  Native packages can also declare `plugin.runTask` for explicit document-independent work
+  in their own worker, with bounded JSON results, progress/cancellation and installation leases;
+  see [`plugin-native-tasks.md`](plugin-native-tasks.md).
 - **Not built (yet) from the plan:** the `ml` crate (no ML runtime; see gap G15), plug-in ABI v2.
 - **Deviations from the plan below:** `photocraft-tablet` is the one crate allowed `unsafe`
   (AppKit pen events); `affinity`, `heif` and `raw` crates were added; the phased roadmap in §15
@@ -477,7 +487,7 @@ psd/src/
     access fail closed at the automation boundary.
 - **Actions:** recorded `Vec<CommandInvocation>`, replayable in batch (File → Automate → Batch).
 - **Scripting (later):** embed a scripting language over the same registry. Options are Rhai, or Lua via mlua (C). JS via QuickJS is possible if we want Photoshop-script familiarity.
-- **Plugins:** sandboxed WebAssembly filter plug-ins (`photocraft-plugins`, L4) run by `wasmi`, a pure-Rust interpreter, with fuel, memory, stack and wall-time limits and no host imports. They are driven by the `plugin.*` commands and listed under Filter › Plug-ins; the ABI is in [`plugins.md`](plugins.md). Native Photoshop `.8BF`/CEP/UXP hosting is out of scope (it needs unsafe FFI and can't run on the web). Panel plug-ins are later.
+- **Plugins:** sandboxed WebAssembly filter plug-ins (`photocraft-plugins`, L4) run by `wasmi`, a pure-Rust interpreter, with fuel, memory, stack and wall-time limits and no host imports. They are driven by the `plugin.*` commands and listed under Plugins; the ABI is in [`plugins.md`](plugins.md). Native Photoshop `.8BF`/CEP/UXP hosting is out of scope (it needs unsafe FFI and can't run on the web). Native-panel extensions use a separate versioned API ([`extensions.md`](extensions.md)); self-contained desktop `.pcplugin` packages include their native engine, dependencies and assets through the general image-processing contract (native worker or bundled WASM filters). Algorithm-specific host services are removed. Image processors can stage one bounded comparison transaction (`engine/src/plugin_preview.rs`): its native panel displays before/after and applies only on confirmation, opening a new document or adding a same-size undoable layer. Experimental [panel API 2](plugin-api-v2.md) adds contributed commands, bounded layer snapshots, atomic rename/visibility edits, document invalidations and read-only inspectors. See the [development guide](plugin-development.md) for core hooks and authoring. Arbitrary panel layouts and broader document, pixel and tool capabilities remain later.
 
 ---
 
@@ -588,6 +598,7 @@ Each phase ends with a demoable build and green CI on all targets. Phases 8–10
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Native-panel extension API v1: installation, bounded WASM events, explicit editing grants and a Rust starter; Photoshop compatibility and broader host APIs remain open; estimates unchanged |
 | 2026-10-13 | minor | Workspace size and `#[test]` counts recounted (393k → 539k lines, 5,460 → 8,040 tests); other current-state figures unchanged |
 | 2026-10-10 | minor | Current-state summary and deviations from the plan; status line; broken link to `photoshop-parity.md` repointed to `target-app-parity.md` |
 | 2026-09-30 | major | Design plan v1 |

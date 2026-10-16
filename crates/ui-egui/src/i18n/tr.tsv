@@ -3905,3 +3905,10 @@ cameraData	Lens	Lens
 # View › Guides › right-click a guide
 	Edit Selected Guides	Seçili Kılavuzları Düzenle
 	Clear Selected Guides	Seçili Kılavuzları Temizle
+
+# Native-panel extensions
+	Manage Extensions…	Uzantıları yönet…
+
+# Plugins menu
+	Plugins	Eklentiler
+	Manage Plugins…	Eklentileri yönet…

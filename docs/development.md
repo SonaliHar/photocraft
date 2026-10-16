@@ -1,5 +1,13 @@
 # Development guide
 
+For independent plugins, start with the [plugin developer handbook](plugin-development.md).
+It covers separate panel/filter projects, neutral starters, API contracts, testing and releases.
+This page covers development of the PhotoCraft host application.
+
+For plugin recovery, the desktop accepts `--disable-plugins` to skip plugin loading and block
+plugin execution for one launch. It retains saved settings and installed files; see
+[plugin safety and recovery](plugin-safety.md#start-without-plugins).
+
 ## Prerequisites
 
 - Rust stable (1.95+). Add the web target with `rustup target add wasm32-unknown-unknown`.

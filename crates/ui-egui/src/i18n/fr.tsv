@@ -3179,3 +3179,10 @@ curves	Smooth	Lisser
 # View › Guides › right-click a guide
 	Edit Selected Guides	Modifier les repères sélectionnés
 	Clear Selected Guides	Effacer les repères sélectionnés
+
+# Native-panel extensions
+	Manage Extensions…	Gérer les extensions…
+
+# Plugins menu
+	Plugins	Modules externes
+	Manage Plugins…	Gérer les modules externes…

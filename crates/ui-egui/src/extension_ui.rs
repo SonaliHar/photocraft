@@ -1,0 +1,599 @@
+//! Host-rendered extension panels and the installer. Extension authors provide data and WASM,
+//! never toolkit objects. Legacy panels stay passive; API-2 inspectors activate on opening.
+use std::collections::BTreeMap;
+
+use base64::Engine;
+use photocraft_plugins::{
+    ParamSpec,
+    extension::{MAX_MODULE_BYTES, Manifest},
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use crate::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, menus::MenuItem};
+
+const PREFIX: &str = "window.extension.";
+pub const MANAGER: &str = "window.extensions";
+
+mod installer;
+mod platform;
+mod preview;
+mod storage;
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ExtensionUi {
+    pub manager_open: bool,
+    pub panels: BTreeMap<String, PanelState>,
+    #[serde(skip)]
+    pending: Option<Pending>,
+    #[serde(skip)]
+    status: String,
+    #[serde(skip)]
+    path: String,
+    #[serde(skip)]
+    pub(crate) drop_rect: Option<egui::Rect>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct Pending {
+    input: Value,
+    manifest: Manifest,
+    native: bool,
+    storage: photocraft_engine::extension_cmds::StorageSize,
+    download_bytes: u64,
+    replace: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PanelState {
+    pub open: bool,
+    pub values: Value,
+    pub message: String,
+    pub error: bool,
+    #[serde(skip)]
+    view_active: bool,
+    #[serde(skip)]
+    pub job: Option<u64>,
+    #[serde(skip)]
+    pub preview: Option<u64>,
+    #[serde(skip)]
+    preview_values: Value,
+    #[serde(skip)]
+    preview_view: preview::View,
+}
+
+pub fn insert_menu_items(app: &PhotocraftApp, items: &mut Vec<MenuItem>) {
+    let Some(manager) = items.iter().position(|i| i.id == MANAGER) else { return };
+    // The manager remains the final entry after dynamically inserted filter plugins too.
+    let manager = items.remove(manager);
+    let at = items.iter().rposition(|i| i.path.first().is_some_and(|top| top == "Plugins")).map_or(items.len(), |at| at + 1);
+    items.insert(at, manager);
+    for (offset, (id, extension)) in app.session.extensions.installed.iter().enumerate() {
+        let open = app.ui.extensions.panels.get(id).is_some_and(|p| p.open);
+        let manifest = &extension.extension.manifest;
+        let command_group = !manifest.contributes.commands.is_empty();
+        items.insert(
+            at + offset,
+            MenuItem {
+                id: format!("{PREFIX}{id}"),
+                label: if command_group { "Open panel".into() } else { manifest.name.clone() },
+                path: if command_group { vec!["Plugins".into(), manifest.name.clone()] } else { vec!["Plugins".into()] },
+                shortcut: None,
+                enabled: extension.enabled,
+                checked: Some(open),
+                color: None,
+            },
+        );
+    }
+    platform::insert_commands(app, items);
+}
+
+pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
+    if id == MANAGER {
+        return Some(true);
+    }
+    id.strip_prefix(PREFIX).map(|id| app.session.extensions.installed.get(id).is_some_and(|p| p.enabled))
+}
+
+pub fn menu(app: &mut PhotocraftApp, id: &str) -> Option<Result<Value, String>> {
+    if id == MANAGER {
+        app.ui.extensions.manager_open = true;
+        return Some(Ok(json!({"open": true})));
+    }
+    let id = id.strip_prefix(PREFIX)?;
+    let Some(installed) = app.session.extensions.installed.get(id).filter(|e| e.enabled) else {
+        return Some(Err("extension is unavailable or disabled".into()));
+    };
+    let has_preview = installed.extension.manifest.panel.preview;
+    let inspector = !installed.extension.manifest.contributes.inspectors.is_empty();
+    let panel = app.ui.extensions.panels.entry(id.into()).or_default();
+    panel.open = !panel.open;
+    // Revalidate saved values when an extension has been updated.
+    panel.values =
+        Value::Object(installed.extension.manifest.values(&panel.values).or_else(|_| installed.extension.manifest.values(&Value::Null)).unwrap_or_default());
+    let open = panel.open;
+    if inspector && let Err(error) = platform::set_view_open(app, id, open) {
+        return Some(Err(error));
+    }
+    if !open && has_preview {
+        let mut panel = app.ui.extensions.panels.remove(id).unwrap_or_default();
+        preview::discard(app, &mut panel);
+        app.ui.extensions.panels.insert(id.into(), panel);
+    }
+    Some(Ok(json!({"open": open})))
+}
+
+fn inspect(app: &mut PhotocraftApp, mut input: Value) -> Result<Value, String> {
+    app.ui.extensions.manager_open = true;
+    app.ui.extensions.pending = None;
+    app.ui.extensions.status.clear();
+    let reviewed = inspect_inner(app, &mut input);
+    if let Err(error) = &reviewed {
+        app.ui.extensions.status = error.clone();
+    }
+    reviewed
+}
+
+fn inspect_inner(app: &mut PhotocraftApp, input: &mut Value) -> Result<Value, String> {
+    let result = app.run("extension.inspect", input.clone())?;
+    let manifest: Manifest = serde_json::from_value(result.get("manifest").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?;
+    input["expectedHash"] = result.get("hash").cloned().unwrap_or(Value::Null);
+    app.ui.extensions.manager_open = true;
+    let native = result.get("package").and_then(|package| package.get("native")).is_some_and(Value::is_object);
+    let storage = serde_json::from_value(result.get("storage").cloned().unwrap_or(Value::Null)).map_err(|e| e.to_string())?;
+    let download_bytes = result.get("downloadBytes").and_then(Value::as_u64).ok_or("Plugin size is unavailable. Review the plugin again.")?;
+    app.ui.extensions.pending = Some(Pending { input: input.clone(), manifest, native, storage, download_bytes, replace: false });
+    app.ui.extensions.status.clear();
+    Ok(json!({"review": true}))
+}
+
+fn choose(app: &mut PhotocraftApp) -> Result<Value, String> {
+    if app.services.file_dialog.is_none() {
+        return Err("The file browser is unavailable. Enter a file path or drop a plugin file.".into());
+    }
+    let extensions = if cfg!(target_arch = "wasm32") { vec!["pcext".into(), "wasm".into()] } else { vec!["pcplugin".into(), "pcext".into(), "wasm".into()] };
+    app.ask_file(FileDialogRequest::Open { multiple: false, initial_dir: None, extensions: Some(extensions) }, |app, answer| {
+        installer::review_answer(app, answer)
+    })
+}
+
+pub(crate) fn review_drop(app: &mut PhotocraftApp, files: &[egui::DroppedFileHandle]) -> Result<(), String> {
+    installer::review_drop(app, files)
+}
+
+/// Browser drops arrive as a batch of already-read bytes through the platform inbox.
+pub(crate) fn review_arrived(app: &mut PhotocraftApp, files: &[(String, Vec<u8>)]) -> bool {
+    installer::review_arrived(app, files)
+}
+
+fn field(ui: &mut egui::Ui, field: &photocraft_plugins::extension::Field, values: &mut Value) {
+    match &field.spec {
+        ParamSpec::Number { min, max, default } => {
+            let mut value = values.get(&field.id).and_then(Value::as_f64).unwrap_or(*default);
+            if ui.add(egui::Slider::new(&mut value, *min..=*max).text(&field.label)).changed() {
+                values[&field.id] = json!(value);
+            }
+        }
+        ParamSpec::Int { min, max, default } => {
+            let mut value = values.get(&field.id).and_then(Value::as_i64).unwrap_or(*default);
+            if ui.add(egui::Slider::new(&mut value, *min..=*max).text(&field.label)).changed() {
+                values[&field.id] = json!(value);
+            }
+        }
+        ParamSpec::Bool { default } => {
+            let mut value = values.get(&field.id).and_then(Value::as_bool).unwrap_or(*default);
+            if ui.checkbox(&mut value, &field.label).changed() {
+                values[&field.id] = json!(value);
+            }
+        }
+        ParamSpec::Choice { options, default } => {
+            let mut value = values
+                .get(&field.id)
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| default.clone())
+                .or_else(|| options.first().cloned())
+                .unwrap_or_default();
+            ui.label(&field.label);
+            egui::ComboBox::from_id_salt(&field.id)
+                .width(ui.available_width().max(40.0))
+                .selected_text(&value)
+                .truncate()
+                .show_ui(ui, |ui| {
+                    ui.set_max_width((ui.ctx().content_rect().width() - 32.0).clamp(40.0, 480.0));
+                    for option in options {
+                        if ui.add(egui::Button::selectable(value == *option, option).wrap()).on_hover_text(option).clicked() {
+                            value = option.clone();
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(&value);
+            values[&field.id] = json!(value);
+        }
+    }
+}
+
+pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if app.session.pump_plugin_events() > 0 {
+        ctx.request_repaint();
+    }
+    if app.session.plugin_events_pending() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
+    if app.ui.extensions.manager_open {
+        manager(app, ctx);
+    } else {
+        app.ui.extensions.drop_rect = None;
+    }
+    // Retain settings for disabled installations, but release removed panel state/textures.
+    // Recovery startup deliberately skips loading installations and must preserve their settings.
+    if !app.session.plugins_disabled {
+        app.ui.extensions.panels.retain(|id, _| app.session.extensions.installed.contains_key(id));
+        for (id, panel) in &mut app.ui.extensions.panels {
+            if app.session.extensions.installed.get(id).is_some_and(|installed| !installed.enabled) {
+                panel.preview_view.clear_textures();
+                panel.view_active = false;
+            }
+        }
+    }
+    let manifests = app.session.extensions.installed.values().filter(|p| p.enabled).map(|p| p.extension.manifest.clone()).collect::<Vec<_>>();
+    // Session::job exposes running work only. Finished jobs remain in the recent history so
+    // a panel can consume success, failure, or cancellation after the engine has applied it.
+    let jobs = if app.ui.extensions.panels.values().any(|panel| panel.open && panel.job.is_some()) { app.session.jobs_with_recent() } else { Vec::new() };
+    for manifest in manifests {
+        let Some(mut panel) = app.ui.extensions.panels.get(&manifest.id).filter(|p| p.open).cloned() else { continue };
+        let inspector = !manifest.contributes.inspectors.is_empty();
+        if inspector && (!panel.view_active || !app.session.plugin_view_is_open(&manifest.id)) {
+            match app.run("extension.view.open", json!({"id": manifest.id})) {
+                Ok(_) => panel.view_active = true,
+                Err(error) => {
+                    panel.error = true;
+                    panel.message = error;
+                    panel.open = false;
+                }
+            }
+        }
+        panel.values = Value::Object(manifest.values(&panel.values).or_else(|_| manifest.values(&Value::Null)).unwrap_or_default());
+        let mut event = None;
+        let mut done = false;
+        let mut cancel = None;
+        let job = panel.job.and_then(|id| jobs.iter().find(|job| job.id.0 == id));
+        if let Some(job) = job
+            && job.state != "running"
+        {
+            panel.error = job.state == "failed";
+            panel.message = job
+                .error
+                .clone()
+                .or_else(|| job.result.as_ref().and_then(|r| r.get("message")).and_then(Value::as_str).map(str::to_owned))
+                .unwrap_or_else(|| if job.state == "cancelled" { "Cancelled. The original is unchanged.".into() } else { "Completed.".into() });
+            if let Some(preview) = job.result.as_ref().and_then(|result| result.get("preview")).and_then(Value::as_u64) {
+                panel.preview = Some(preview);
+            }
+            panel.job = None;
+        } else if panel.job.is_some() && job.is_none() {
+            // A panel can remain closed while enough other jobs finish to evict its result.
+            // Release the stale reference without inventing a successful or failed outcome.
+            panel.error = false;
+            panel.message = "Processing status is no longer available. Check the open images for the result.".into();
+            panel.job = None;
+        }
+        if manifest.panel.preview {
+            // A control-channel command may finish processing before the panel is opened.
+            if panel.preview.is_none()
+                && panel.job.is_none()
+                && let Some(preview) = app.session.plugin_preview_for(&manifest.id)
+            {
+                panel.preview = Some(preview.id);
+                panel.preview_values = panel.values.clone();
+                panel.message = "Preview ready. Compare the image, then Apply or Discard.".into();
+            }
+            preview::validate(app, &mut panel);
+            let action = preview::window(app, ctx, &manifest, &mut panel, job.filter(|job| job.state == "running"));
+            event = action.event;
+            done = action.done;
+            cancel = action.cancel;
+            if let Some(target) = action.apply {
+                preview::apply(app, &mut panel, target);
+            }
+            if action.discard {
+                preview::discard(app, &mut panel);
+                panel.error = false;
+                panel.message = "Preview discarded. Generate a new preview to compare another result.".into();
+            }
+        } else {
+            egui::Window::new(&manifest.name)
+                .id(egui::Id::new(("extension", &manifest.id)))
+                .open(&mut panel.open)
+                .default_width(330.0)
+                .default_height(500.0)
+                .min_height(180.0)
+                .default_pos(egui::pos2(120.0, 105.0))
+                .vscroll(false)
+                .show(ctx, |ui| {
+                    let scroll_height = (ui.available_height() - 36.0).clamp(100.0, 440.0);
+                    egui::ScrollArea::vertical().max_height(scroll_height).show(ui, |ui| {
+                        ui.label(&manifest.description);
+                        ui.separator();
+                        if let Some(doc) = app.session.active() {
+                            ui.weak(format!("{} · {} × {}", doc.doc.name, doc.doc.size.width, doc.doc.size.height));
+                        }
+                        for f in &manifest.panel.fields {
+                            ui.push_id(&f.id, |ui| field(ui, f, &mut panel.values));
+                        }
+                        if inspector {
+                            platform::inspector(ui, app, &manifest.id);
+                        }
+                        if let Some(job) = job.filter(|j| j.state == "running") {
+                            ui.add(egui::ProgressBar::new(job.progress).show_percentage().text(&job.message));
+                            if ui.button("Cancel processing").clicked() {
+                                cancel = Some(job.id.0);
+                            }
+                        }
+                        ui.add_space(8.0);
+                        for button in &manifest.panel.buttons {
+                            if ui
+                                .add_enabled(
+                                    panel.job.is_none() && app.session.active_job().is_none() && crate::menus::modal_allows(app, "extension.invoke"),
+                                    egui::Button::new(&button.label),
+                                )
+                                .clicked()
+                            {
+                                event = Some(button.id.clone());
+                            }
+                        }
+                        if !panel.message.is_empty() {
+                            ui.separator();
+                            let text = if panel.error { format!("Action failed: {}", panel.message) } else { panel.message.clone() };
+                            ui.label(text);
+                        }
+                    });
+                    ui.separator();
+                    if ui.button("Done").clicked() {
+                        done = true;
+                    }
+                });
+        }
+        if done {
+            panel.open = false;
+        }
+        if inspector && !panel.open {
+            let _ = app.run("extension.view.close", json!({"id": manifest.id}));
+            panel.view_active = false;
+        }
+        if let Some(id) = cancel {
+            app.session.cancel_job(photocraft_engine::jobs::JobId(id));
+        }
+        if let Some(event) = event {
+            match app.run("extension.invoke", json!({"id": manifest.id, "event": event, "values": panel.values})) {
+                Ok(result) => {
+                    panel.error = false;
+                    panel.job = result.get("job").and_then(Value::as_u64);
+                    if manifest.panel.preview {
+                        // Image jobs revoke their old comparison in the engine. Maintenance
+                        // tasks retain it, so clicking a task must never discard it here.
+                        panel.preview =
+                            result.get("preview").and_then(Value::as_u64).or_else(|| app.session.plugin_preview_for(&manifest.id).map(|preview| preview.id));
+                        if panel.preview.is_none() || result.get("preview").is_some() {
+                            panel.preview_values = panel.values.clone();
+                            panel.preview_view.clear_textures();
+                        }
+                    }
+                    panel.message =
+                        result.get("message").and_then(Value::as_str).unwrap_or(if panel.job.is_some() { "Processing…" } else { "Completed." }).into();
+                }
+                Err(error) => {
+                    panel.error = true;
+                    panel.message = error;
+                }
+            }
+        }
+        if manifest.panel.preview {
+            preview::validate(app, &mut panel);
+            if !panel.open {
+                preview::discard(app, &mut panel);
+            }
+        }
+        app.ui.extensions.panels.insert(manifest.id, panel);
+    }
+}
+
+fn manager(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let mut open = true;
+    let mut browse = false;
+    let mut inspect_path = false;
+    let mut install = false;
+    let mut change = None;
+    let mut reveal = None;
+    let mut done = false;
+    let extensions = app
+        .session
+        .extensions
+        .installed
+        .iter()
+        .map(|(id, p)| {
+            #[cfg(not(target_arch = "wasm32"))]
+            let native = p.native.is_some();
+            #[cfg(target_arch = "wasm32")]
+            let native = false;
+            (id.clone(), p.extension.manifest.clone(), p.enabled, native, p.storage)
+        })
+        .collect::<Vec<_>>();
+    let manager_window = egui::Window::new("Manage Plugins")
+        .id(egui::Id::new("extension-manager"))
+        .open(&mut open)
+        .default_width(480.0)
+        .default_height(560.0)
+        .min_height(180.0)
+        .default_pos(egui::pos2(210.0, 115.0))
+        .vscroll(false)
+        .show(ctx, |ui| {
+            let scroll_height = (ui.available_height() - 36.0).clamp(100.0, 520.0);
+            egui::ScrollArea::vertical().max_height(scroll_height).show(ui, |ui| {
+                ui.label("Add plugins created for PhotoCraft.");
+                let path_label = ui.label("Plugin file");
+                ui.horizontal(|ui| {
+                    let font = egui::TextStyle::Button.resolve(ui.style());
+                    let browse_width = ui.fonts_mut(|fonts| fonts.layout_no_wrap("Browse…".into(), font, ui.visuals().text_color()).size().x)
+                        + 2.0 * ui.spacing().button_padding.x
+                        + 4.0;
+                    let path_width = (ui.available_width() - browse_width - ui.spacing().item_spacing.x).max(40.0);
+                    if ui
+                        .add_sized(
+                            egui::vec2(path_width, ui.spacing().interact_size.y),
+                            egui::TextEdit::singleline(&mut app.ui.extensions.path).hint_text("Plugin file path").desired_width(f32::INFINITY),
+                        )
+                        .labelled_by(path_label.id)
+                        .changed()
+                    {
+                        app.ui.extensions.pending = None;
+                        app.ui.extensions.status.clear();
+                    }
+                    if ui.add_enabled(!app.file_dialog_open(), egui::Button::new("Browse…")).clicked() {
+                        browse = true;
+                    }
+                });
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(!app.ui.extensions.path.trim().is_empty() && !app.file_dialog_open(), egui::Button::new("Review plugin")).clicked() {
+                        inspect_path = true;
+                    }
+                    ui.weak(".pcplugin, .pcext or .wasm");
+                });
+                if app.ui.extensions.pending.is_none() {
+                    let tokens = crate::theme::Tokens::get(ctx);
+                    let dragging = ctx.input(|input| !input.raw.hovered_files.is_empty());
+                    let fill = if dragging { tokens.accent_soft } else { tokens.field };
+                    let stroke = if dragging { tokens.accent_border } else { tokens.field_border };
+                    if ui
+                        .add_sized(
+                            egui::vec2(ui.available_width(), 58.0),
+                            egui::Button::new("Drop a plugin file here\nor click to browse").fill(fill).stroke(egui::Stroke::new(1.0, stroke)),
+                        )
+                        .clicked()
+                        && !app.file_dialog_open()
+                    {
+                        browse = true;
+                    }
+                }
+                if let Some(pending) = &mut app.ui.extensions.pending {
+                    ui.separator();
+                    ui.strong(format!("{} {}", pending.manifest.name, pending.manifest.version));
+                    ui.label(&pending.manifest.description);
+                    if !pending.manifest.author.is_empty() {
+                        ui.weak(format!("By {}", pending.manifest.author));
+                    }
+                    ui.label(format!("Package size: {}", storage::bytes(pending.download_bytes)))
+                        .on_hover_text(format!("{} bytes in the selected plugin file.", pending.download_bytes));
+                    storage::row(ui, pending.storage);
+                    ui.label("Requested access:");
+                    if pending.manifest.permissions.document_read {
+                        ui.label("• Active document name, size, color mode and active layer");
+                    }
+                    for id in &pending.manifest.permissions.commands {
+                        let name = photocraft_engine::commands::find(id).map(|c| c.label).unwrap_or(id);
+                        ui.label(format!("• {name}"));
+                    }
+                    platform::capabilities(ui, &pending.manifest);
+                    if pending.native {
+                        ui.label(if pending.storage.model_bytes > 0 {
+                            "Includes its local processing engine and models."
+                        } else {
+                            "Includes its local processing engine."
+                        });
+                        ui.weak("Native code runs with your operating system permissions. Install plugins only from publishers you trust.");
+                    } else {
+                        ui.weak("Plugin code has no file, network or native process access.");
+                    }
+                    // A corrupt installation is absent from the loaded list. Keep explicit repair
+                    // available so a reviewed package can replace its damaged installation record.
+                    ui.checkbox(&mut pending.replace, "Replace or repair an existing installation");
+                    if ui.button("Install plugin").clicked() {
+                        install = true;
+                    }
+                }
+                ui.separator();
+                if extensions.is_empty() {
+                    ui.weak("No plugins installed. Choose a plugin file to get started.");
+                }
+                egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
+                    for (id, manifest, enabled, native, storage) in &extensions {
+                        ui.push_id(id, |ui| {
+                            ui.horizontal(|ui| {
+                                let mut value = *enabled;
+                                if ui.checkbox(&mut value, &manifest.name).changed() {
+                                    change = Some(("extension.enable", json!({"id": id, "enabled": value})));
+                                }
+                                ui.weak(&manifest.version);
+                                if ui.add_enabled(*enabled, egui::Button::new("Open")).clicked() {
+                                    reveal = Some(id.clone());
+                                }
+                                if ui.button("Remove").clicked() {
+                                    change = Some(("extension.remove", json!({"id": id})));
+                                }
+                            });
+                            ui.weak(&manifest.description);
+                            storage::row(ui, *storage);
+                            if *native {
+                                ui.weak("Local processing engine included and ready.");
+                            }
+                        });
+                    }
+                });
+                for error in &app.session.extensions.load_errors {
+                    ui.label(error);
+                }
+                if !app.ui.extensions.status.is_empty() {
+                    ui.separator();
+                    ui.label(&app.ui.extensions.status);
+                }
+            });
+            ui.separator();
+            if ui.button("Done").clicked() {
+                done = true;
+            }
+        });
+    app.ui.extensions.manager_open = open && !done;
+    app.ui.extensions.drop_rect = manager_window.map(|window| window.response.rect).filter(|_| app.ui.extensions.manager_open);
+    let result = if browse {
+        Some(choose(app))
+    } else if inspect_path {
+        Some(installer::review_path(app))
+    } else if install {
+        app.ui.extensions.pending.clone().map(|pending| {
+            let mut input = pending.input;
+            input["replace"] = json!(pending.replace);
+            // Permission applies only to the reviewed package hash and this installation.
+            if pending.native {
+                input["allowNative"] = json!(true);
+            }
+            let result = app.run("extension.install", input);
+            if result.is_ok() {
+                app.ui.extensions.pending = None;
+                app.menu_cache = None;
+            }
+            result
+        })
+    } else if let Some((command, params)) = change {
+        let result = app.run(command, params);
+        app.menu_cache = None;
+        Some(result)
+    } else {
+        None
+    };
+    if let Some(result) = result {
+        app.ui.extensions.status = match result {
+            Ok(value) if value.get("fileDialog").is_some() || value.get("review").is_some() || value.get("dialog").is_some() => String::new(),
+            Ok(_) => "Changes saved.".into(),
+            Err(e) if e == crate::file_dialog::CANCELLED => String::new(),
+            Err(e) => e,
+        };
+    }
+    if let Some(id) = reveal {
+        app.ui.extensions.panels.entry(id.clone()).or_default().open = false;
+        let _ = menu(app, &format!("{PREFIX}{id}"));
+    }
+}
+
+#[cfg(test)]
+mod tests;

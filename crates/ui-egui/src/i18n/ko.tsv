@@ -3353,3 +3353,11 @@ curves	Smooth	매끄럽게
 # View › Guides › right-click a guide
 	Edit Selected Guides	선택한 안내선 편집
 	Clear Selected Guides	선택한 안내선 지우기
+
+# Native-panel extensions
+	Manage Extensions…	확장 기능 관리…
+	Extensions	확장 기능
+
+# Plugins menu
+	Plugins	플러그인
+	Manage Plugins…	플러그인 관리…
