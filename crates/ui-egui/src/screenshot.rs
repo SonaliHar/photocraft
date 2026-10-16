@@ -354,6 +354,13 @@ mod tests {
     }
 
     #[test]
+    fn the_menu_items_are_enabled_without_a_document() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        assert!(crate::menus::is_enabled(&app, "file.screenshot.library"));
+        assert_eq!(crate::menus::is_enabled(&app, "file.screenshot.new"), cfg!(target_os = "macos"));
+    }
+
+    #[test]
     fn names_are_the_date_and_time_and_stay_unique() {
         let d = dir("names");
         assert_eq!(unique_stem(&d, "2026-10-15 18-42-07"), "2026-10-15 18-42-07");
