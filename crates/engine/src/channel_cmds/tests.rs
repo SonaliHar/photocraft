@@ -917,3 +917,50 @@ fn layers_panel_mask_target_isolates_the_curve_channel() {
     let row = isolated_curve_channel_for(s.active().unwrap(), true).expect("quick mask wins");
     assert_eq!((row.name.as_str(), row.gray), ("Quick Mask", Some(GraySurface::QuickMask)));
 }
+
+/// #6123: spot channels are stored as Photoshop shows them, black = solid ink. A black fill adds
+/// ink, which Merge Spot Channel prints; space added to the canvas is paper, at every depth.
+#[test]
+fn spot_channels_take_black_as_ink_and_grow_as_paper() {
+    for depth in [8, 16, 32] {
+        let mut s = session_depth(depth);
+        let r = s.execute("channel.newSpot", json!({"color": "#ff00ff", "solidity": 100, "fromSelection": false})).unwrap();
+        let i = r["channel"].as_u64().unwrap() as usize;
+        assert_eq!(chan(&s, i, 7, 7), 1.0, "{depth}: a new spot channel is paper");
+        // Black inside a selection is ink.
+        rect(&mut s, 5, 5, 10, 5, "replace");
+        s.execute("paint.bucket", json!({"x": 7, "y": 7, "color": "#000000", "target": {"channel": i}, "tolerance": 0})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        assert_eq!((chan(&s, i, 7, 7), chan(&s, i, 30, 15)), (0.0, 1.0), "{depth}: ink inside, paper outside");
+        // The canvas grows by 10 px on every side: the new space is paper, the ink moves with it.
+        s.execute("image.canvasSize", json!({"width": 60, "height": 40, "anchor": "center"})).unwrap();
+        assert_eq!(chan(&s, i, 1, 1), 1.0, "{depth}: added space holds no ink");
+        assert_eq!(chan(&s, i, 17, 17), 0.0, "{depth}: the ink moved with the canvas");
+        // Merge Spot Channel prints solid magenta where the channel is black, nothing elsewhere.
+        s.execute("channel.mergeSpot", json!({"channel": i})).unwrap();
+        let ink = px(&s, 17, 17);
+        assert!((ink[0] - 1.0).abs() < 0.01 && ink[1] < 0.01 && (ink[2] - 1.0).abs() < 0.01, "{depth}: {ink:?}");
+        let paper = px(&s, 40, 30);
+        assert!(paper[..3].iter().all(|v| (v - 1.0).abs() < 0.01), "{depth}: {paper:?}");
+    }
+}
+
+/// Channel Options keeps a channel's values when it becomes a spot channel or an alpha channel
+/// again, as Photoshop shows them; only space added later follows the kind (paper for a spot
+/// channel, black for an alpha channel).
+#[test]
+fn alpha_and_spot_channels_keep_their_values_and_grow_by_kind() {
+    let mut s = session();
+    rect(&mut s, 0, 0, 10, 10, "replace");
+    s.execute("channel.new", json!({"fill": "selection"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (1.0, 0.0));
+    s.execute("channel.options", json!({"channel": 0, "indicates": "spot"})).unwrap();
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (1.0, 0.0), "same values: the black becomes ink");
+    s.execute("image.canvasSize", json!({"width": 50, "height": 20, "anchor": "left"})).unwrap();
+    assert_eq!(chan(&s, 0, 45, 10), 1.0, "added space of a spot channel is paper");
+    s.execute("channel.options", json!({"channel": 0, "indicates": "masked"})).unwrap();
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15), chan(&s, 0, 45, 10)), (1.0, 0.0, 1.0), "values kept");
+    s.execute("image.canvasSize", json!({"width": 60, "height": 20, "anchor": "left"})).unwrap();
+    assert_eq!(chan(&s, 0, 55, 10), 0.0, "added space of an alpha channel is black");
+}
