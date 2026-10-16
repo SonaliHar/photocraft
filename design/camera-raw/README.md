@@ -9,9 +9,11 @@ Open the live native preview from the repository root:
 ./scripts/preview_camera_raw.ps1
 ```
 
-The script builds an isolated debug executable once if missing, then opens a
-synthetic color fixture. `-Image <path>` opens a specific image instead; `-Build`
-rebuilds after changes to native behavior. It uses a separate preview profile.
+The script reuses an existing debug executable and opens a synthetic color
+fixture. Normal launches never compile. If the isolated target/acr18 build is
+absent, it reuses target/debug/photocraft.exe. `-Image <path>` opens a specific
+image instead; only explicit `-Build` compiles native behavior. A missing
+executable reports that one build is needed. It uses a separate preview profile.
 It does not replace the editor discovered by Image Triage.
 
 While the preview is open, save either of these files:

@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $previewRoot = Split-Path -Parent $PSScriptRoot
 $previewExe = Join-Path $previewRoot 'target/acr18/debug/photocraft.exe'
-if ($Build -or -not (Test-Path -LiteralPath $previewExe)) {
+if ($Build) {
     Push-Location $previewRoot
     try {
         $env:CARGO_TARGET_DIR = Join-Path $previewRoot 'target/acr18'
@@ -14,6 +14,16 @@ if ($Build -or -not (Test-Path -LiteralPath $previewExe)) {
         cargo build -p photocraft -j 4
         if ($LASTEXITCODE -ne 0) { throw 'The native preview build failed.' }
     } finally { Pop-Location }
+}
+if (-not (Test-Path -LiteralPath $previewExe)) {
+    # Reuse the normal development build when the isolated preview was built on
+    # another machine. Ordinary design launches must never start Cargo implicitly.
+    $existingDebugExe = Join-Path $previewRoot 'target/debug/photocraft.exe'
+    if (Test-Path -LiteralPath $existingDebugExe) {
+        $previewExe = $existingDebugExe
+    } else {
+        throw 'No native preview executable is available. Build it once with ./scripts/preview_camera_raw.ps1 -Build.'
+    }
 }
 $env:PHOTOCRAFT_CAMERA_RAW_LAYOUT_FILE = Join-Path $previewRoot 'design/camera-raw/layout.json'
 $env:PHOTOCRAFT_THEME_FILE = Join-Path $previewRoot 'design/camera-raw/tokens.json'
@@ -37,6 +47,7 @@ im.save(p)
 if (-not (Test-Path -LiteralPath $Image)) { throw "Image not found: $Image" }
 # An explicitly requested visible preview; keep its settings separate from the owner's editor.
 Start-Process -FilePath $previewExe -WorkingDirectory $previewRoot -ArgumentList @('--raw-workspace', ('"' + (Resolve-Path -LiteralPath $Image).Path + '"'))
+Write-Output "Using existing executable: $previewExe"
 Write-Output "Live layout: $env:PHOTOCRAFT_CAMERA_RAW_LAYOUT_FILE"
 Write-Output "Live colors: $env:PHOTOCRAFT_THEME_FILE"
 Write-Output 'Save either JSON file to update the running preview. New processing behavior still requires Rust changes.'
