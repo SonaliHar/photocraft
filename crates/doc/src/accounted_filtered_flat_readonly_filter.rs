@@ -13,11 +13,24 @@ pub(super) struct Plan {
     revision: u64,
     replacements: [Option<(usize, PointArgumentValue)>; 10],
     enabled: Option<bool>,
+    opacity: Option<(u64, u64)>,
 }
-fn prepare(owner: &AccountedDocument, patch: PointFilterPatch<'_>, c: &ReadControl<'_>) -> Result<(ModelCensus, Option<Plan>), BackingError> {
+fn prepare(
+    owner: &AccountedDocument,
+    patch: PointFilterPatch<'_>,
+    opacity_f64_bits: Option<u64>,
+    c: &ReadControl<'_>,
+) -> Result<(ModelCensus, Option<Plan>), BackingError> {
     c.check(1)?;
     if !owner.is_readonly_filtered_flat_point_storage() {
         return refused();
+    }
+    if let Some(bits) = opacity_f64_bits {
+        c.check(1)?;
+        let value = f64::from_bits(bits);
+        if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+            return Err(BackingError::Bounds);
+        }
     }
     if patch.arguments.len() > 10 {
         return Err(BackingError::Length);
@@ -73,7 +86,8 @@ fn prepare(owner: &AccountedDocument, patch: PointFilterPatch<'_>, c: &ReadContr
     let node_index = node_index.ok_or(BackingError::Bounds)?;
     let node = stack.nodes.get(node_index).ok_or(BackingError::Integrity)?;
     let mut replacements = [None; 10];
-    let mut changed = patch.enabled.is_some_and(|v| v != node.enabled);
+    let opacity = opacity_f64_bits.map(|after| (node.opacity_f64_bits, after));
+    let mut changed = patch.enabled.is_some_and(|v| v != node.enabled) || opacity.is_some_and(|(before, after)| before != after);
     for (slot, replacement) in patch.arguments.iter().enumerate() {
         c.check(1)?;
         for previous in patch.arguments.get(..slot).ok_or(BackingError::Length)? {
@@ -115,6 +129,7 @@ fn prepare(owner: &AccountedDocument, patch: PointFilterPatch<'_>, c: &ReadContr
             revision,
             replacements,
             enabled: patch.enabled,
+            opacity,
         }),
     ))
 }
@@ -122,13 +137,36 @@ impl AccountedDocument {
     /// Structural preflight only. Caller must independently prove the complete
     /// current document, operation/range/locks and publication fences, even noop.
     pub fn validate_readonly_filtered_flat_point_filter(&self, patch: PointFilterPatch<'_>, c: &ReadControl<'_>) -> Result<(), BackingError> {
-        prepare(self, patch, c)?;
+        self.validate_readonly_filtered_flat_point_filter_with_opacity(patch, None, c)
+    }
+    /// Atomic structural arguments/activation/opacity preflight. Exact finite
+    /// unit F64 words are data, not operation/source/renderer authority. OLD and
+    /// STAGED operative proofs and locks remain external, including raw noops.
+    pub fn validate_readonly_filtered_flat_point_filter_with_opacity(
+        &self,
+        patch: PointFilterPatch<'_>,
+        opacity_f64_bits: Option<u64>,
+        c: &ReadControl<'_>,
+    ) -> Result<(), BackingError> {
+        prepare(self, patch, opacity_f64_bits, c)?;
         Ok(())
     }
     /// Replace existing named raw words and/or one activation bit in one paid
     /// whole-document copy. Other roots/stacks/masks/source/profile stay exact.
     pub fn try_with_readonly_filtered_flat_point_filter(&self, patch: PointFilterPatch<'_>, c: &ReadControl<'_>) -> Result<Self, BackingError> {
-        let (logical, plan) = prepare(self, patch, c)?;
+        self.try_with_readonly_filtered_flat_point_filter_with_opacity(patch, None, c)
+    }
+    /// Atomically replace existing raw arguments, enabled and/or opacity in one
+    /// paid whole-model copy, with one changed-only revision. +/-zero words stay
+    /// distinct; omitted opacity preserves its original word. No other runtime
+    /// class, mask, source property or rendering permission is granted.
+    pub fn try_with_readonly_filtered_flat_point_filter_with_opacity(
+        &self,
+        patch: PointFilterPatch<'_>,
+        opacity_f64_bits: Option<u64>,
+        c: &ReadControl<'_>,
+    ) -> Result<Self, BackingError> {
+        let (logical, plan) = prepare(self, patch, opacity_f64_bits, c)?;
         let Some(plan) = plan else {
             c.check(1)?;
             return Ok(self.clone());
@@ -150,6 +188,12 @@ pub(super) fn apply(doc: &mut Document, plan: Plan, c: &ReadControl<'_>) -> Resu
     if node.id != plan.filter {
         return Err(BackingError::Integrity);
     }
+    if let Some((before, _)) = plan.opacity {
+        c.check(1)?;
+        if node.opacity_f64_bits != before {
+            return Err(BackingError::Integrity);
+        }
+    }
     for (index, replacement) in plan.replacements.into_iter().flatten() {
         c.check(1)?;
         let argument = node.arguments.get_mut(index).ok_or(BackingError::Integrity)?;
@@ -157,6 +201,9 @@ pub(super) fn apply(doc: &mut Document, plan: Plan, c: &ReadControl<'_>) -> Resu
     }
     if let Some(enabled) = plan.enabled {
         node.enabled = enabled;
+    }
+    if let Some((_, after)) = plan.opacity {
+        node.opacity_f64_bits = after;
     }
     stack.revision = plan.revision;
     c.check(1)

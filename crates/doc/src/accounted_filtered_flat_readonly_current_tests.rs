@@ -178,3 +178,6 @@ fn current_intake_and_copy_failures_preserve_custody() {
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "xcf/filtered_flat_exposure_tests.rs"]
 mod exposure_tests;
+
+#[path = "xcf/filtered_flat_opacity_tests.rs"]
+mod opacity_tests;
