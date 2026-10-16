@@ -33,6 +33,8 @@ pub(crate) mod root;
 mod owned_hue;
 #[path = "backed_stock_point_vibrance.rs"]
 mod owned_vibrance;
+#[path = "backed_stock_point_loaded_exposure.rs"]
+mod loaded_exposure;
 
 #[derive(Clone, Copy)]
 enum Recipe {
@@ -186,7 +188,7 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
             "gegl:brightness-contrast" => node.operation.schema_epoch == gimp_filters::BRIGHTNESS_CONTRAST_PRECISION_EPOCH,
             "gegl:levels" => node.operation.schema_epoch == gimp_filters::GEGL_LEVELS_PRECISION_EPOCH,
             "gegl:exposure" => {
-                matches!(node.operation.schema_epoch.as_str(), gimp_filters::EXPOSURE_BLACK_PRECISION_EPOCH | gimp_filters::EXPOSURE_GEOMETRY_EPOCH)
+                matches!(node.operation.schema_epoch.as_str(), gimp_filters::EXPOSURE_BLACK_PRECISION_EPOCH | gimp_filters::EXPOSURE_GEOMETRY_EPOCH | crate::gimp_exposure::LOADED_POINT_EPOCH)
             }
             "gegl:color-temperature" => node.operation.schema_epoch == gimp_filters::COLOR_TEMPERATURE_PRECISION_EPOCH,
             "gegl:sepia" => node.operation.schema_epoch == gimp_filters::SEPIA_PRECISION_EPOCH,
@@ -233,7 +235,8 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
     }
     work(budget, interrupt, policy.compatibility_epoch.len() as u64)?;
     let compatibility = match node.operation.schema_epoch.as_str() {
-        gimp_filters::EXPOSURE_GEOMETRY_EPOCH
+        crate::gimp_exposure::LOADED_POINT_EPOCH
+        | gimp_filters::EXPOSURE_GEOMETRY_EPOCH
         | gimp_filters::RGB_CLIP_HDR_EPOCH
         | gimp_filters::MONO_MIXER_EDITS_EPOCH
         | crate::gimp_unpremultiply::UNPREMULTIPLY_EPOCH => node.operation.schema_epoch.as_str(),
@@ -524,9 +527,15 @@ pub(crate) fn bound_profile(
 /// storage owner exists. It provides a CURRENT recipe only: callers retain the
 /// complete model/source/native backing and their independent original proof.
 /// All heaps are destroyed before their real same-ledger preparation charge.
+enum StockPointProgram {
+    Ordered(OrderedStack),
+    LoadedExposure { candidate: crate::gimp_exposure::PreparedExposure, enabled: bool },
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PreparationPurpose { Source, Current }
 struct StockPointPlan {
     recipe: Recipe,
-    stack: OrderedStack,
+    stack: StockPointProgram,
     _current_profile: Profile,
     format: PixelFormat,
     opaque_input: bool,
@@ -549,6 +558,7 @@ pub struct LeasedStockPointPipeline<S, L> {
 fn prepare_plan<B: PlanBudget>(
     doc: &Document,
     supplied: Option<&Profile>,
+    purpose: PreparationPurpose,
     header: u64,
     interrupt: &Interrupt<'_>,
     budget: &mut B,
@@ -565,6 +575,7 @@ fn prepare_plan<B: PlanBudget>(
         return Err(scope());
     }
     let node = filters.nodes.first().ok_or_else(scope)?;
+    if node.operation.schema_epoch == crate::gimp_exposure::LOADED_POINT_EPOCH && (state.items.len()!=2 || state.filter_masks.len()!=1) { return Err(scope()); }
     if state.provenance.format_version != 22
         || state.filter_masks.len().checked_add(1) != Some(state.items.len())
         || (if witnessed || remaining_optional_mask(node) { state.filter_masks.len() > filters.nodes.len() } else { state.filter_masks.len() != 1 })
@@ -594,6 +605,9 @@ fn prepare_plan<B: PlanBudget>(
     crate::gimp_render::qualify_residual_origin_context(doc, layer, state, filters, extent).map_err(BackedNormalError::Color)?;
     crate::gimp_neighborhood::qualify_expanded_residual_mask_storage(state, node, extent).map_err(BackedNormalError::Color)?;
     let stored = doc.sample_encoding.ok_or_else(scope)?;
+    if node.operation.schema_epoch == crate::gimp_exposure::LOADED_POINT_EPOCH {
+        return loaded_exposure::prepare(doc, supplied, purpose, header, extent, format, default, interrupt, budget);
+    }
     if crate::gimp_vibrance::claims(node) {
         return owned_vibrance::prepare(doc, supplied, header, extent, format, default, interrupt, budget);
     }
@@ -712,7 +726,7 @@ fn prepare_plan<B: PlanBudget>(
     // refund can expose headroom while this owned plan remains live.
     let plan = StockPointPlan {
         recipe: Recipe::Filtered,
-        stack,
+        stack: StockPointProgram::Ordered(stack),
         _current_profile: current_profile,
         format,
         opaque_input: legacy_opaque(node) || node.operation.name == "gegl:rgb-clip",
@@ -745,7 +759,7 @@ impl PreparedStockPointPipeline {
                 }
             }
         }
-        let (plan, lease) = prepare_plan(doc, Some(supplied), header, control.interrupt, &mut NativeBudget { quota, control })?;
+        let (plan, lease) = prepare_plan(doc, Some(supplied), PreparationPurpose::Current, header, control.interrupt, &mut NativeBudget { quota, control })?;
         Ok(Self { plan, quota: quota.clone(), _lease: lease })
     }
     /// No external ICC parse is required: this existing generic Point policy
@@ -760,7 +774,7 @@ impl PreparedStockPointPipeline {
             .checked_add(128)
             .and_then(|n| u64::try_from(n).ok())
             .ok_or(CompositionError::Invalid("stock Point generic header"))?;
-        let (plan, lease) = prepare_plan(doc, None, header, interrupt, &mut SharedBudget { budget }).map_err(preparation_error)?;
+        let (plan, lease) = prepare_plan(doc, None, PreparationPurpose::Source, header, interrupt, &mut SharedBudget { budget }).map_err(preparation_error)?;
         Ok(LeasedStockPointPipeline { _plan: plan, _source: source_lease, _lease: lease })
     }
     pub(crate) fn format(&self) -> PixelFormat {
@@ -783,7 +797,15 @@ impl PreparedStockPointPipeline {
         position: (i32, i32),
         control: &ReadControl<'_>,
     ) -> Result<[f64; 4], BackedNormalError> {
-        evaluate_bound_point(&self.plan.stack, self.plan.format, self.plan.unit_input, self.plan.half_input, self.plan.opaque_input, &self.quota, raw, format, position, control)
+        match &self.plan.stack {
+            StockPointProgram::Ordered(stack) => evaluate_bound_point(stack, self.plan.format, self.plan.unit_input, self.plan.half_input, self.plan.opaque_input, &self.quota, raw, format, position, control),
+            StockPointProgram::LoadedExposure { candidate, enabled } => {
+                control.check(format.bytes_per_pixel() as u64 + 1).map_err(BackedNormalError::Backing)?;
+                if format != self.plan.format || raw.len() != format.bytes_per_pixel() { return Err(scope()); }
+                let read = |channel| try_read_sample_f64(raw, format.sample, channel).map_err(|_| length());
+                candidate.evaluate([read(0)?,read(1)?,read(2)?,read(3)?],*enabled,false,&self.quota,control)
+            }
+        }
     }
 }
 

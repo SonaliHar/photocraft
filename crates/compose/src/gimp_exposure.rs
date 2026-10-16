@@ -19,6 +19,8 @@ use photocraft_raster::{
     },
 };
 pub const EPOCH: &str = "xcf22-gegl-exposure-mixed-wide-v1";
+pub const LOADED_POINT_EPOCH: &str = "xcf22-gegl-exposure-loaded-black-zero-wide-v2";
+pub const LOADED_MIXED_EPOCH: &str = "xcf22-gegl-exposure-mixed-loaded-black-zero-wide-v2";
 const INPUT_WORK: u64 = 128;
 const TRANSFER_WORK: u64 = 3 * 128;
 const SCALAR_WORK: u64 = 3 * 128;
@@ -77,6 +79,91 @@ pub fn parameters(arguments: &[FilterArgument]) -> Result<Parameters, Compositio
         stops.ok_or(CompositionError::Unsupported("Exposure missing stops"))?,
         black.ok_or(CompositionError::Unsupported("Exposure missing black"))?,
     )
+}
+/// Loaded V2 interpretation, separate from strict incoming edit validation.
+/// Raw words are retained exactly; only the two observed outward endpoints
+/// use effective +0. This type supplies no source/profile/epoch authority.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LoadedParameters {
+    words: [u32; 2],
+    effective: Parameters,
+}
+impl LoadedParameters {
+    pub fn from_words(stops: u32, black: u32) -> Result<Self, CompositionError> {
+        let effective_black = if matches!(black, 0x3dcc_cccd | 0xbdcc_cccd) { 0f32.to_bits() } else { black };
+        Ok(Self { words: [stops, black], effective: Parameters::from_words(stops, effective_black)? })
+    }
+    pub fn raw_words(self) -> [u32; 2] {
+        self.words
+    }
+    pub fn effective(self) -> Parameters {
+        self.effective
+    }
+}
+pub fn loaded_parameters(arguments: &[FilterArgument]) -> Result<LoadedParameters, CompositionError> {
+    if arguments.len() != 2 {
+        return Err(CompositionError::Unsupported("loaded Exposure two F32 arguments"));
+    }
+    let mut stops = None;
+    let mut black = None;
+    for argument in arguments {
+        let FilterValue::Number(ExactNumber::Float32Bits(bits)) = argument.value else {
+            return Err(CompositionError::Unsupported("loaded Exposure F32 argument"));
+        };
+        let slot = match argument.name.as_str() {
+            "exposure" => &mut stops,
+            "black-level" => &mut black,
+            _ => return Err(CompositionError::Unsupported("loaded Exposure argument name")),
+        };
+        if slot.replace(bits).is_some() {
+            return Err(CompositionError::Unsupported("loaded Exposure duplicate argument"));
+        }
+    }
+    LoadedParameters::from_words(
+        stops.ok_or(CompositionError::Unsupported("loaded Exposure missing stops"))?,
+        black.ok_or(CompositionError::Unsupported("loaded Exposure missing black"))?,
+    )
+}
+fn canonical_loaded(
+    node: &FilterNode,
+    stored: SampleEncoding,
+    version: u32,
+    extent: photocraft_geom::Rect,
+    epoch: &str,
+) -> Result<LoadedParameters, CompositionError> {
+    crate::gimp_semi_flatten::positive_origin(extent)?;
+    if !matches!(epoch, LOADED_POINT_EPOCH | LOADED_MIXED_EPOCH)
+        || version != 22
+        || node.operation.name != "gegl:exposure"
+        || node.operation.stored_version != "1:0"
+        || node.operation.schema_epoch != epoch
+        || stored != SampleEncoding::NonlinearProfile
+        || node.opacity_f64_bits != 1f64.to_bits()
+        || node.source_clipping != Some(0)
+        || node.source_region != Some(0)
+        || !node.auxiliary.is_empty()
+        || !matches!(node.mask, Some(photocraft_doc::item_identity::ItemRef::Mask(_)))
+        || node.composition.as_ref().is_none_or(|p| p.compatibility_epoch != epoch || p.source_mode != 62 || p.legacy || p.pass_through || p.resolved.is_some())
+    {
+        return Err(CompositionError::Unsupported("loaded Exposure canonical envelope"));
+    }
+    loaded_parameters(&node.arguments)
+}
+pub(crate) fn canonical_loaded_point(
+    node: &FilterNode,
+    stored: SampleEncoding,
+    version: u32,
+    extent: photocraft_geom::Rect,
+) -> Result<LoadedParameters, CompositionError> {
+    canonical_loaded(node, stored, version, extent, LOADED_POINT_EPOCH)
+}
+pub(crate) fn canonical_loaded_mixed(
+    node: &FilterNode,
+    stored: SampleEncoding,
+    version: u32,
+    extent: photocraft_geom::Rect,
+) -> Result<LoadedParameters, CompositionError> {
+    canonical_loaded(node, stored, version, extent, LOADED_MIXED_EPOCH)
 }
 pub(crate) fn claims(node: &FilterNode) -> bool {
     node.operation.name == "gegl:exposure" || node.operation.schema_epoch == EPOCH
@@ -182,3 +269,7 @@ impl PreparedExposure {
 #[cfg(test)]
 #[path = "gimp_exposure_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "gimp_exposure_loaded_tests.rs"]
+mod loaded_tests;

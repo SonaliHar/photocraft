@@ -382,3 +382,6 @@ mod exposure;
 
 #[path = "backed_filtered_flat_point_invert_tests.rs"]
 mod invert;
+
+#[path = "backed_filtered_flat_point_loaded_exposure_tests.rs"]
+mod loaded_exposure;

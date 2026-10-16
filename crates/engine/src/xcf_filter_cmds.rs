@@ -662,6 +662,19 @@ pub(crate) fn hue_chroma_node(node:&photocraft_doc::xcf_filters::FilterNode)->bo
 pub(crate) fn hue_chroma_owner(owner:&photocraft_doc::accounted_document::AccountedDocument)->bool{
     owner.is_readonly_point_storage() && owner.document().xcf_state.as_ref().is_some_and(|state|matches!(state.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[node] if hue_chroma_node(node))))
 }
+pub(crate) fn loaded_exposure_point_node(node:&FilterNode)->bool {
+    node.operation.name=="gegl:exposure" && node.operation.stored_version=="1:0"
+        && node.operation.schema_epoch==photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH
+        && node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH)
+}
+pub(crate) fn loaded_exposure_point_owner(owner:&photocraft_doc::accounted_document::AccountedDocument)->bool {
+    owner.is_readonly_point_storage() && owner.document().layers.len()==1
+        && owner.document().xcf_state.as_ref().is_some_and(|s|matches!(s.filter_stacks.as_slice(),[stack] if owner.document().layers.first().is_some_and(|l|stack.owner==ItemRef::Layer(l.id)) && matches!(stack.nodes.as_slice(),[node] if loaded_exposure_point_node(node))))
+}
+/// Exact retained-node UI hint only. Complete paid CURRENT proof remains mandatory.
+pub fn loaded_exposure_point_edit_candidate(owner:&photocraft_doc::accounted_document::AccountedDocument,node:&FilterNode)->bool {
+    loaded_exposure_point_owner(owner) && owner.document().xcf_state.as_ref().is_some_and(|s|matches!(s.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[actual] if std::ptr::eq(actual,node))))
+}
 pub(crate) fn semi_flatten_literal_node(node:&photocraft_doc::xcf_filters::FilterNode)->bool{
     node.operation.name=="gimp:semi-flatten" && node.operation.stored_version=="0:0" && node.operation.schema_epoch==photocraft_compose::SEMI_FLATTEN_EPOCH && node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::SEMI_FLATTEN_EPOCH)
 }

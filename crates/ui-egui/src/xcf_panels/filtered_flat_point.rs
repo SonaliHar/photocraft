@@ -101,6 +101,9 @@ fn controls(ui: &mut egui::Ui, node: &FilterNode, enabled_ui: bool) -> Option<(&
             (enabled!=node.enabled).then(||("xcf.filter.enable",json!({"filterId":node.id.0.to_string(),"enabled":enabled})))
         }
         "gegl:exposure" => {
+            if node.operation.schema_epoch==photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH {
+                return exposure_loaded::edit(ui,node,enabled_ui,true);
+            }
             let word=|name:&str|match &node.arguments.iter().find(|a|a.name==name)?.value {
                 photocraft_doc::xcf_filters::FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Float32Bits(bits))=>Some(*bits),
                 _=>None,

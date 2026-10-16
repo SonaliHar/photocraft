@@ -105,7 +105,7 @@ pub(super) fn prepare<B: PlanBudget>(
     Ok((
         StockPointPlan {
             recipe: Recipe::Empty,
-            stack,
+            stack: StockPointProgram::Ordered(stack),
             _current_profile: current_profile,
             format,
             opaque_input: false,

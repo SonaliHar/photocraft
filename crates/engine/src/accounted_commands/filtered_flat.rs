@@ -145,7 +145,7 @@ fn family(node: &photocraft_doc::xcf_filters::FilterNode) -> Option<u8> {
         "gimp:semi-flatten" => (0, "0:0", photocraft_compose::SEMI_FLATTEN_EPOCH),
         "gegl:hue-chroma" => (1, "0:0", photocraft_compose::HUE_CHROMA_EPOCH),
         "gegl:vibrance" => (2, "0:0", photocraft_compose::VIBRANCE_EPOCH),
-        "gegl:exposure" => (3, "1:0", photocraft_compose::EXPOSURE_MIXED_EPOCH),
+        "gegl:exposure" => (3, "1:0", if node.operation.schema_epoch==photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH {photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH}else{photocraft_compose::EXPOSURE_MIXED_EPOCH}),
         "gegl:invert-linear" => (4, "0:0", photocraft_compose::INVERT_LINEAR_MIXED_EPOCH),
         "gegl:invert-gamma" => (5, "0:0", photocraft_compose::INVERT_GAMMA_MIXED_EPOCH),
         _ => return None,
@@ -186,7 +186,7 @@ fn valid_node(node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
     }
     for (i, a) in node.arguments.iter().enumerate() {
         if node.arguments.iter().take(i).any(|old| old.name == a.name)
-            || !matches!(&a.value,FilterValue::Number(ExactNumber::Float32Bits(b)) if number_in_domain(kind,&a.name,*b))
+            || !matches!(&a.value,FilterValue::Number(ExactNumber::Float32Bits(b)) if number_in_domain(kind,&a.name,*b) || kind==3 && node.operation.schema_epoch==photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH && a.name=="black-level" && matches!(*b,0x3dcc_cccd|0xbdcc_cccd))
         {
             return false;
         }

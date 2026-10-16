@@ -343,7 +343,7 @@ fn compile<B: PlanBudget>(doc: &Document, purpose: Purpose, header: u64, interru
                     crate::gimp_invert::canonical(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?;
                 } else if crate::gimp_exposure::claims(node) {
                     charge(budget,interrupt,512)?;
-                    crate::gimp_exposure::canonical(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?;
+                    if node.operation.schema_epoch==crate::gimp_exposure::LOADED_MIXED_EPOCH { let parameters=crate::gimp_exposure::canonical_loaded_mixed(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?; let [_,raw_black]=parameters.raw_words(); if purpose==Purpose::Source && !matches!(raw_black,0x3dcc_cccd|0xbdcc_cccd) {return Err(scope());} } else { crate::gimp_exposure::canonical(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?; }
                 } else if crate::gimp_semi_flatten::claims(node) {
                     crate::gimp_semi_flatten::canonical(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
                 } else if crate::gimp_hue_chroma::claims(node) {

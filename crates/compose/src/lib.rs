@@ -110,6 +110,7 @@ mod gimp_vibrance;
 pub use gimp_vibrance::EPOCH as VIBRANCE_EPOCH;
 mod gimp_exposure;
 pub use gimp_exposure::{EPOCH as EXPOSURE_MIXED_EPOCH, Parameters as ExposureParameters, PreparedExposure, parameters as exposure_mixed_parameters};
+pub use gimp_exposure::{LOADED_POINT_EPOCH as EXPOSURE_LOADED_POINT_EPOCH, LOADED_MIXED_EPOCH as EXPOSURE_LOADED_MIXED_EPOCH, LoadedParameters as LoadedExposureParameters, loaded_parameters as loaded_exposure_parameters};
 mod gimp_invert;
 pub use gimp_invert::{GAMMA_EPOCH as INVERT_GAMMA_MIXED_EPOCH, Kind as InvertKind, LINEAR_EPOCH as INVERT_LINEAR_MIXED_EPOCH, PreparedInvert};
 mod gimp_levels;

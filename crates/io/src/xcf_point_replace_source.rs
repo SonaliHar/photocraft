@@ -38,6 +38,8 @@ pub(crate) mod semi_flatten_source;
 pub(crate) mod hue_chroma_source;
 #[path="xcf_vibrance_source.rs"]
 pub(crate) mod vibrance_source;
+#[path="xcf_exposure_loaded_source.rs"]
+pub(crate) mod loaded_exposure_source;
 
 /// Exact source argument validation without allocating a mapped filter stack.
 fn finite_alpha_operation<P>(effect: &photocraft_xcf::Effect<P>) -> Option<photocraft_algo::gimp::alpha_clip_finite::AlphaClipFinite> {
@@ -126,6 +128,7 @@ pub(crate) fn classify_family_hint<P>(file: &XcfFile<P>) -> Option<PointReplaceF
         }
         "gegl:brightness-contrast" => PointReplaceFamily::Brightness,
         "gegl:levels" => PointReplaceFamily::Levels,
+        "gegl:exposure" if file.layers.len()==1 && owner.effects.len()==1 && loaded_exposure_source::envelope(effect) => PointReplaceFamily::LoadedExposure,
         "gegl:exposure" => PointReplaceFamily::Exposure,
         "gegl:color-temperature" => PointReplaceFamily::Temperature,
         "gegl:sepia" => PointReplaceFamily::Sepia,
@@ -156,6 +159,7 @@ pub(crate) fn classify<P: ExactParsedPlane>(
     let Some(owner) = file.layers.first() else { return Ok(None) };
     let Some(effect) = owner.effects.first() else { return Ok(None) };
     let Some(family) = classify_family_hint(file) else { return Ok(None) };
+    if family==PointReplaceFamily::LoadedExposure { return Ok(loaded_exposure_source::qualify(file,control,shared)?.then_some(NeighborhoodDomain::PointReplace(family))); }
     if family==PointReplaceFamily::Vibrance { return Ok(vibrance_source::qualify(file,control,shared)?.then_some(NeighborhoodDomain::PointReplace(family))); }
     if family==PointReplaceFamily::HueChroma { return Ok(hue_chroma_source::qualify(file,control,shared)?.then_some(NeighborhoodDomain::PointReplace(family))); }
     if family==PointReplaceFamily::SemiFlatten { return Ok(semi_flatten_source::qualify(file,control,shared)?.then_some(NeighborhoodDomain::PointReplace(family))); }

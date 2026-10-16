@@ -2533,3 +2533,62 @@ Babl profile bytes. These observations do not recover unique internal formats
 or producer physical padding/default behavior. GIMP observations, ignored
 regression drafts and production compilation do not establish PhotoCraft
 numerical, native, visual, performance or full-stock acceptance.
+
+
+Loaded Exposure black endpoints use two distinct compatibility identities:
+`xcf22-gegl-exposure-loaded-black-zero-wide-v2` for the ordinary Point owner,
+and `xcf22-gegl-exposure-mixed-loaded-black-zero-wide-v2` for mixed filtered-flat
+stacks. Operation/version remain `gegl:exposure` / `1:0`. Exact schema and
+composition epochs are required. Older accepted identities retain their policy.
+
+GIMP 3.2.6 saves public black values +/-0.1 as F32 words `0x3dcccccd` and
+`0xbdcccccd`. Those words promote slightly outside its public double bounds.
+Independent author, same-process reload, fresh-process and repeat observations
+at native F32/650 and F64/750 show that reloading either word resets the effective
+black value to +0. Each reloaded endpoint matches its same-process explicit-zero
+control byte for byte in the observed RGB output roles. The raw stored words,
+native samples and logical zero masks remain intact. Four genuine GObject
+warnings per run and separate effective-ICC date variation remain recorded.
+
+The new loaded-only parameter helper retains both raw words; stored FilterArguments
+retain source order. It interprets exactly those two black words as effective +0.
+Every other word follows the existing strict constructor, including finite stops
+and scale/denominator checks. There is no general clamp or arbitrary invalid-value
+fallback. Incoming edits still use strict promoted-f64 black bounds [-0.1, 0.1],
+so newly requested outward endpoint words refuse. Stops-only and activation-only
+edits preserve retained endpoint words. Controls display the effective value;
+passive painting does not replace it in storage. An explicit black-zero edit is
+a real raw-word change even when it leaves the effective output unchanged.
+
+Ordinary one-root/one-filter sources keep the Point storage owner and a paid
+private Exposure backend. Mixed sources keep their existing topology and owner.
+The new single-Point source policy requires visible full-opacity roots, an
+enabled unit-opacity filter, implicit nonlinear RGB, unit native samples,
+original profile absence, the exact root identity `(0, -1, -1)`, a proven zero
+filter mask, and checked positive full-canvas origin geometry under existing
+limits. Geometry compatibility is inherited explicitly from the existing
+Exposure-origin policy. The older PointStack identity `(0, 2, 1)` retains its
+selection priority and final validation. Normal Exposure sources retain their
+older identities. No fake filter or normalized document bypasses validation.
+Ordinary Point source native padding outside the declared extent, mask defaults
+and full physical mask samples must remain byte-zero. Mixed sources retain
+their existing separate numeric-zero and unit-physical validation policy.
+Both Source and Current Point masks retain the inherited 16 MiB resident-payload
+cap, checked before full sample scans.
+Both new V2 Source recipes require one of the two raw endpoint black words.
+Current documents may retain V2 after deliberate edits to valid zero or inward
+black values.
+
+Both backends retain paid actual owner, profile, mask, native/default and
+parameter preparation, runtime work, same-quota scratch and cancellation.
+Disabled and neutral paths still receive complete proof. The existing wide
+Exposure scalar and enabled-only mixed NL Float handoff remain unchanged.
+Source/native hints keep Point and mixed epochs distinct. Native storage gains
+no field or version for this interpretation rule. Existing complete old/history/
+staged validation, locks, source custody and publication fences still apply.
+
+Ignored regression drafts and production compilation are separate from runtime
+acceptance. PhotoCraft tests and test compilation, numerical comparisons, native
+round trips, GUI checks, corpus and performance gates remain deferred. These
+endpoint observations do not establish generic filter blending, nonzero masks,
+HDR sources, arbitrary profiles/offsets or complete stock-XCF support.

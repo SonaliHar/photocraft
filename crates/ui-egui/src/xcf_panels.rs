@@ -6,6 +6,7 @@ use photocraft_doc::{
     xcf_filters::{ExactNumber, FilterArgument, FilterValue},
 };
 use serde_json::json;
+mod exposure_loaded;
 mod alpha_clip;
 mod alpha_clip_finite;
 mod assigned_box;
@@ -384,6 +385,10 @@ pub(crate) fn filter_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, laye
                 } else {
                     ui.label(tl!("Filter editing is unavailable"));
                 }
+                return;
+            }
+            if document.accounted().is_some_and(|owner|photocraft_engine::xcf_filter_cmds::loaded_exposure_point_edit_candidate(owner,node)) {
+                exposure_loaded::controls(app,ui,&document,revision,node,editable);
                 return;
             }
             if color_rotate {

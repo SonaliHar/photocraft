@@ -183,7 +183,7 @@ impl<L> RootPointPlan<L> {
                 PreparedRootStage{kind:StageKind::Invert(candidate),enabled:node.enabled,_lease:fee}
             } else if crate::gimp_exposure::claims(node) {
                 work(budget,interrupt,512)?;
-                let parameters=crate::gimp_exposure::canonical(node,SampleEncoding::NonlinearProfile,22,extent).map_err(BackedNormalError::Color)?;
+                let parameters=if node.operation.schema_epoch==crate::gimp_exposure::LOADED_MIXED_EPOCH { crate::gimp_exposure::canonical_loaded_mixed(node,SampleEncoding::NonlinearProfile,22,extent).map_err(BackedNormalError::Color)?.effective() } else { crate::gimp_exposure::canonical(node,SampleEncoding::NonlinearProfile,22,extent).map_err(BackedNormalError::Color)? };
                 let (candidate,fee)=crate::gimp_exposure::PreparedExposure::prepare(parameters,std::mem::size_of::<PreparedRootStage<L>>()as u64,interrupt,budget)?;
                 PreparedRootStage{kind:StageKind::Exposure(candidate),enabled:node.enabled,_lease:fee}
             } else if crate::gimp_hue_chroma::claims(node) {

@@ -996,3 +996,7 @@ mod alpha_flat_workflow_tests;
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_lab_flat_workflow_tests.rs"]
 mod lab_flat_workflow_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_commands/exposure_loaded_tests.rs"]
+mod exposure_loaded_tests;

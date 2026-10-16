@@ -57,6 +57,10 @@ pub fn is_current_pure_point_work_candidate(owner: &AccountedDocument, c: &ReadC
                         | ("gegl:component-extract","xcf-22-stock-component-extract-ycbcr-precision-v1")
                         | ("gegl:alpha-clip","xcf22-stock-alpha-clip-precision-v1")
                         | ("gegl:alpha-clip","xcf22-stock-alpha-clip-finite-precision-v1"));
+            // New loaded Point policy is exact and never selects mixed storage.
+            if node.operation.name=="gegl:exposure" && node.operation.stored_version=="1:0"
+                && node.operation.schema_epoch==photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH
+                && compat==Some(photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH){return Ok(true)}
             // Existing positive routes retain their exact prior checks/debits.
             if existing {
                 return Ok(true);

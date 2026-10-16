@@ -62,10 +62,10 @@ pub fn is_current_filtered_flat_candidate(document: &photocraft_doc::Document, c
         for stack in &state.filter_stacks {control.check(1)?;for node in &stack.nodes {
             control.check(1)?;
             control.check(node.operation.schema_epoch.len() as u64)?;
-            if matches!(node.operation.schema_epoch.as_str(),photocraft_compose::EXPOSURE_MIXED_EPOCH|photocraft_compose::INVERT_LINEAR_MIXED_EPOCH|photocraft_compose::INVERT_GAMMA_MIXED_EPOCH){return Ok(true)}
+            if matches!(node.operation.schema_epoch.as_str(),photocraft_compose::EXPOSURE_MIXED_EPOCH|photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH|photocraft_compose::INVERT_LINEAR_MIXED_EPOCH|photocraft_compose::INVERT_GAMMA_MIXED_EPOCH){return Ok(true)}
             if let Some(policy)=&node.composition {
                 control.check(policy.compatibility_epoch.len() as u64)?;
-                if matches!(policy.compatibility_epoch.as_str(),photocraft_compose::EXPOSURE_MIXED_EPOCH|photocraft_compose::INVERT_LINEAR_MIXED_EPOCH|photocraft_compose::INVERT_GAMMA_MIXED_EPOCH){return Ok(true)}
+                if matches!(policy.compatibility_epoch.as_str(),photocraft_compose::EXPOSURE_MIXED_EPOCH|photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH|photocraft_compose::INVERT_LINEAR_MIXED_EPOCH|photocraft_compose::INVERT_GAMMA_MIXED_EPOCH){return Ok(true)}
             }
         }}
         return Ok(false);
@@ -75,7 +75,7 @@ pub fn is_current_filtered_flat_candidate(document: &photocraft_doc::Document, c
 
         for node in &stack.nodes { control.check(1)?;
             for text in [&node.operation.name,&node.operation.schema_epoch] {control.check(text.len() as u64)?;}
-            let epoch=|s:&str|matches!(s,photocraft_compose::SEMI_FLATTEN_EPOCH|photocraft_compose::HUE_CHROMA_EPOCH|photocraft_compose::VIBRANCE_EPOCH|photocraft_compose::EXPOSURE_MIXED_EPOCH|photocraft_compose::INVERT_LINEAR_MIXED_EPOCH|photocraft_compose::INVERT_GAMMA_MIXED_EPOCH);
+            let epoch=|s:&str|matches!(s,photocraft_compose::SEMI_FLATTEN_EPOCH|photocraft_compose::HUE_CHROMA_EPOCH|photocraft_compose::VIBRANCE_EPOCH|photocraft_compose::EXPOSURE_MIXED_EPOCH|photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH|photocraft_compose::INVERT_LINEAR_MIXED_EPOCH|photocraft_compose::INVERT_GAMMA_MIXED_EPOCH);
             if matches!(node.operation.name.as_str(),"gimp:semi-flatten"|"gegl:hue-chroma"|"gegl:vibrance") || epoch(&node.operation.schema_epoch) {return Ok(true)}
             if let Some(p)=&node.composition {control.check(p.compatibility_epoch.len() as u64)?;if epoch(&p.compatibility_epoch){return Ok(true)}}
         }
@@ -101,6 +101,8 @@ pub fn is_current_point_candidate(document: &photocraft_doc::Document, control: 
             control.check(1)?;
             for node in &stack.nodes {
                 control.check(1)?;
+                if node.operation.schema_epoch==photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH{control.check(node.operation.schema_epoch.len() as u64)?;return Ok(true)}
+                if let Some(p)=&node.composition {if p.compatibility_epoch==photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH{control.check(p.compatibility_epoch.len() as u64)?;return Ok(true)}}
                 if node.operation.schema_epoch==photocraft_compose::VIBRANCE_EPOCH || node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::VIBRANCE_EPOCH){return Ok(true);}
                 if node.operation.schema_epoch==photocraft_compose::HUE_CHROMA_EPOCH || node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::HUE_CHROMA_EPOCH){return Ok(true);}
                 if node.operation.schema_epoch==photocraft_compose::SEMI_FLATTEN_EPOCH || node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::SEMI_FLATTEN_EPOCH){return Ok(true);}

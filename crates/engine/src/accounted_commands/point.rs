@@ -375,7 +375,7 @@ impl<'a> Request<'a> {
                 ctl.check(1)?;
                 if !state.history.current()?.shares_state(&state.doc) { return Err(BackingError::Integrity.into()); }
             }
-            EditStorage::ImplicitPoint => {owner.validate_readonly_point_storage(ctl)?;if (semi_flatten_edit_candidate(owner) || crate::xcf_filter_cmds::hue_chroma_owner(owner) || crate::xcf_filter_cmds::vibrance_owner(owner)) && !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into());}},
+            EditStorage::ImplicitPoint => {owner.validate_readonly_point_storage(ctl)?;if (semi_flatten_edit_candidate(owner) || crate::xcf_filter_cmds::hue_chroma_owner(owner) || crate::xcf_filter_cmds::vibrance_owner(owner) || crate::xcf_filter_cmds::loaded_exposure_point_owner(owner)) && !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into());}},
             EditStorage::AssignedBox => {
                 owner.validate_readonly_assigned_point_storage(ctl)?;
                 ctl.check(1)?;
@@ -410,7 +410,7 @@ impl<'a> Request<'a> {
             }
             for candidate in &stack.nodes {
                 ctl.check(8192)?;
-                if !(semi_flatten_edit_candidate(owner) || crate::xcf_filter_cmds::hue_chroma_owner(owner) || crate::xcf_filter_cmds::vibrance_owner(owner)) && (candidate.operation.schema_epoch != STACK_EDITS_EPOCH
+                if !(semi_flatten_edit_candidate(owner) || crate::xcf_filter_cmds::hue_chroma_owner(owner) || crate::xcf_filter_cmds::vibrance_owner(owner) || crate::xcf_filter_cmds::loaded_exposure_point_owner(owner)) && (candidate.operation.schema_epoch != STACK_EDITS_EPOCH
                     || candidate.composition.as_ref().is_none_or(|p| p.compatibility_epoch != STACK_EDITS_EPOCH))
                 {
                     return Err(BackingError::Unsupported.into());
@@ -515,6 +515,13 @@ impl<'a> Request<'a> {
             for (index, argument) in self.fields.arguments.iter().take(self.fields.count).enumerate() {
                 let argument = argument.as_ref().ok_or(BackingError::Integrity)?;
                 ctl.check(4096)?;
+                // New incoming black words remain STRICT even when the loaded
+                // stored endpoint has V2 effective-zero interpretation.
+                if crate::xcf_filter_cmds::loaded_exposure_point_owner(owner) {
+                    let PointArgumentValue::Float32Bits(bits)=argument.value else{return Err(BackingError::Unsupported.into())};
+                    let value=f64::from(f32::from_bits(bits));
+                    if !value.is_finite() || !matches!(argument.name,"exposure"|"black-level") || argument.name=="black-level" && !(-0.1..=0.1).contains(&value){return Err(BackingError::Unsupported.into())}
+                }
                 let stored = node.arguments.iter().find(|v| v.name == argument.name).ok_or(BackingError::Unsupported)?;
                 use photocraft_doc::xcf_filters::{ExactNumber, FilterValue};
                 match (&stored.value, argument.value, argument.domain) {
