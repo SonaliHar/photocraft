@@ -67,9 +67,23 @@ fn dim(ui: &mut egui::Ui, s: &str) {
     ui.label(RichText::new(s).color(t.text_dim));
 }
 
-/// Right-aligned controller and Fade count. Non-Fade controls keep an empty, disabled count
-/// field without changing its saved value. `angle` offers the direction controls.
+/// Whether a dynamic's control has a 0..1 input its own response curve shapes (not Off, not the
+/// direction controls, not Angle Jitter, whose controls set an angle).
+pub(crate) fn takes_curve(control: Control, angle: bool) -> bool {
+    !angle && matches!(control, Control::Fade | Control::PenPressure | Control::PenTilt | Control::StylusWheel | Control::Rotation)
+}
+
+/// egui memory key of the open/closed state of a dynamic's curve editor.
+pub(crate) fn curve_open_id(id: &str) -> egui::Id {
+    egui::Id::new(("brush-curve-open", id))
+}
+
+/// Right-aligned controller and Fade count, with this dynamic's response-curve toggle.
+/// Non-Fade controls keep an empty, disabled count field without changing its saved
+/// value. `angle` offers the direction controls.
 fn control_row(ui: &mut egui::Ui, id: &str, d: &mut Dynamic, angle: bool) {
+    let open_id = curve_open_id(id);
+    let mut open: bool = ui.data(|m| m.get_temp(open_id)).unwrap_or(false);
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let response = if d.control == Control::Fade {
@@ -88,8 +102,18 @@ fn control_row(ui: &mut egui::Ui, id: &str, d: &mut Dynamic, angle: bool) {
             let n = if angle || matches!(d.control, Control::InitialDirection | Control::Direction) { 8 } else { 6 };
             widgets::dropdown(ui, id, &mut d.control, &CONTROLS[..n], 130.0);
             dim(ui, tl!("Control:"));
+            if takes_curve(d.control, angle) && crate::icons::button(ui, "spline", 22.0, open || !d.curve.is_linear(), tl!("Response curve")).clicked() {
+                open = !open;
+            }
         });
     });
+    if open && takes_curve(d.control, angle) {
+        let mut points = d.curve.points();
+        if crate::pressure_curve_ui::edit_points(ui, egui::Id::new(("brush-curve-rect", id)), &mut points) {
+            d.curve = paint::ResponseCurve::new(&points);
+        }
+    }
+    ui.data_mut(|m| m.insert_temp(open_id, open));
     ui.add_space(2.0);
 }
 

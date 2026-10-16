@@ -24,7 +24,7 @@ fn sections_with_boxes_have_flags() {
 
 /// What each section's controls edit, set to non-default values.
 fn edit_section(i: usize, b: &mut BrushSettings) {
-    let dynamic = |jitter: f32, control: Control, minimum: f32| paint::Dynamic { jitter, control, fade_steps: 40, minimum };
+    let dynamic = |jitter: f32, control: Control, minimum: f32| paint::Dynamic { jitter, control, fade_steps: 40, minimum, ..Default::default() };
     match i {
         0 => {
             b.size = 87.0;
@@ -397,6 +397,21 @@ fn brush_mode_dropdown_shows_outside_the_pro_themes() {
     let j = &h.state().session.journal;
     assert_eq!(j.len(), n + 1, "{:?}", &j[n..]);
     assert_eq!(j[n].0, "tools.setBrush");
+}
+
+#[test]
+fn brush_and_eraser_size_fields_keep_sizes_above_2500_px() {
+    // #5708: outside the Pro themes the Size field capped at 2500 px and clamped a bigger brush
+    // (set from the picker or `]`) on the next frame; Photoshop and the engine allow 5000 px.
+    for tool in [crate::state::Tool::Brush, crate::state::Tool::Eraser] {
+        let mut h = options_bar_harness(tool);
+        let n = h.state().session.journal.len();
+        h.state_mut().session.tools.brush.size = 4000.0;
+        h.run_steps(4);
+        assert_eq!(h.state().session.tools.brush.size, 4000.0, "{tool:?}");
+        let j = &h.state().session.journal;
+        assert_eq!(j.len(), n, "showing the bar issues nothing: {:?}", &j[n..]);
+    }
 }
 
 #[test]
@@ -1341,6 +1356,27 @@ fn hand_tool_offers_scale_buttons_and_requests_the_right_view() {
 }
 
 #[test]
+fn a_dynamic_gets_its_own_response_curve() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(0, 1);
+    h.state_mut().run("tools.setBrush", json!({"shapeDynamics": {"enabled": true, "size": {"control": "penPressure"}}})).unwrap();
+    h.run_steps(3);
+    // Only Size has a control with an input to shape; its curve button shows the editor.
+    assert_eq!(h.query_all_by_label("Response curve").count(), 1);
+    h.get_by_label("Response curve").click();
+    h.run_steps(3);
+    h.get_by_label("Soft").click();
+    h.run_steps(3);
+    let (id, p) = last_journal(h.state()).unwrap();
+    assert_eq!(id, "tools.setBrush");
+    let curve: Vec<[f32; 2]> = serde_json::from_value(p["brush"]["shapeDynamics"]["size"]["curve"].clone()).unwrap();
+    assert_eq!(curve, vec![[0.0, 0.0], [0.3, 0.6], [1.0, 1.0]]);
+    let b = &h.state().session.tools.brush;
+    assert_eq!(b.shape_dynamics.size.curve.points(), curve);
+    assert!(b.shape_dynamics.roundness.curve.is_linear() && b.transfer.opacity.curve.is_linear());
+}
+
+#[test]
 fn brush_settings_hamburger_menu_actions() {
     use egui_kittest::kittest::Queryable;
 
@@ -1538,4 +1574,58 @@ fn checkboxes_show_a_pressed_state_from_their_label() {
     h.run();
     assert!(*h.state(), "the release checks it");
     assert_eq!(fill(&h), Some(widgets::check_box_fill(true, false, &t)));
+}
+
+/// The main integration must retain the response editor and the inactive Fade field together.
+#[test]
+fn fade_fields_and_response_curves_coexist_without_losing_either_setting() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    for theme in crate::theme::ThemeKind::ALL {
+        let mut h = harness(0, 1);
+        PhotocraftApp::setup_context(&h.ctx, theme);
+        h.state_mut()
+            .run(
+                "tools.setBrush",
+                json!({"shapeDynamics": {
+                    "enabled": true, "size": {"control": "penPressure", "fadeSteps": 123}
+                }}),
+            )
+            .unwrap();
+        h.run_steps(3);
+        let field = h.query_all_by_label("Fade steps").next().unwrap();
+        assert!(field.accesskit_node().is_disabled());
+        // Text and numeric editors have different inner padding; the adjacent controller
+        // measures the shared row's placement independently of those editor bounds.
+        let controller = h.query_all_by_role(egui::accesskit::Role::ComboBox).next().unwrap().rect();
+        let journal = h.state().session.journal.len();
+        h.get_by_label("Response curve").click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.journal.len(), journal, "opening the editor is view state");
+        h.get_by_label("Soft").click();
+        h.run_steps(3);
+        let curve = vec![[0.0, 0.0], [0.3, 0.6], [1.0, 1.0]];
+        let (id, params) = last_journal(h.state()).unwrap();
+        assert_eq!(id, "tools.setBrush");
+        assert_eq!(params["brush"]["shapeDynamics"]["size"]["curve"], json!(curve));
+
+        for control in ["off", "fade", "penPressure"] {
+            h.state_mut().run("tools.setBrush", json!({"shapeDynamics": {"size": {"control": control}}})).unwrap();
+            h.run_steps(3);
+            let field = h.query_all_by_label("Fade steps").next().unwrap();
+            let current = h.query_all_by_role(egui::accesskit::Role::ComboBox).next().unwrap().rect();
+            assert!(
+                (current.left() - controller.left()).abs() < 0.5 && (current.right() - controller.right()).abs() < 0.5,
+                "{theme:?}/{control}: the Control row remains aligned"
+            );
+            assert_eq!(field.accesskit_node().is_disabled(), control != "fade");
+            if control == "fade" {
+                assert_eq!(field.accesskit_node().numeric_value(), Some(123.0));
+            }
+            let size = &h.state().session.tools.brush.shape_dynamics.size;
+            assert_eq!(size.fade_steps, 123);
+            assert_eq!(size.curve.points(), curve);
+            assert_eq!(h.query_all_by_label("Response curve").count(), usize::from(control != "off"));
+        }
+    }
 }
