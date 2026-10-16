@@ -4,6 +4,8 @@
 use super::*;
 #[path="staged_normal_hierarchy.rs"]
 pub(in crate::xcf_import) mod staged_normal_hierarchy;
+#[path="staged_normal_hierarchy_quantized.rs"]
+pub(in crate::xcf_import) mod staged_normal_hierarchy_quantized;
 #[path="staged_normal_hierarchy_masked.rs"]
 pub(in crate::xcf_import) mod staged_normal_hierarchy_masked;
 use photocraft_raster::staged::{StagedSurfaceBuilder, StagingBudget};
@@ -47,6 +49,7 @@ trait StagePolicy {
 pub(super) enum SelectedStagedFamily {
     Plain,
     NormalHierarchy,
+    PlainQuantizedNormalHierarchy,
     MaskedNormalHierarchy,
     FilteredFlat,
     MaskedFilteredFlat,
@@ -72,6 +75,7 @@ impl std::fmt::Debug for SelectedStagedFamily {
         f.write_str(match self {
             Self::Plain => "Plain",
             Self::NormalHierarchy => "NormalHierarchy",
+            Self::PlainQuantizedNormalHierarchy => "PlainQuantizedNormalHierarchy",
             Self::MaskedNormalHierarchy => "MaskedNormalHierarchy",
             Self::FilteredFlat => "FilteredFlat",
             Self::MaskedFilteredFlat => "MaskedFilteredFlat",
@@ -108,7 +112,7 @@ impl StagePolicy for SourceSelectedPolicy {
         let old=Self::family(file);
         if old==SelectedStagedFamily::IsolatedNormalGroup {
             let budget=shared.ok_or_else(||IoError::Unsupported("hierarchy priority accounting".into()))?;
-            if staged_normal_hierarchy::intrinsic_old_partition(file,ctl,budget)?{return staged_normal_hierarchy_masked::select(file,ctl,budget)}
+            if staged_normal_hierarchy::intrinsic_old_partition(file,ctl,budget)?||staged_normal_hierarchy::modern_plain_old_partition(file,ctl,budget)?{return staged_normal_hierarchy_masked::select(file,ctl,budget)}
         }
 
         if old==SelectedStagedFamily::Point(crate::xcf_filters::PointReplaceFamily::Exposure) {
@@ -523,7 +527,7 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn requires_budgeted_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn requires_budgeted_general_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
     fn effective_profile(file: &XcfFile<Self>, space: photocraft_cms::ColorSpace, ce: photocraft_cms::xcf_color::Encoding, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<photocraft_cms::Profile, IoError> {
-        if P::SOURCE_SELECTED && matches!(P::family_controlled(file,ctl,shared)?,SelectedStagedFamily::NormalHierarchy|SelectedStagedFamily::MaskedNormalHierarchy) {
+        if P::SOURCE_SELECTED && matches!(P::family_controlled(file,ctl,shared)?,SelectedStagedFamily::NormalHierarchy|SelectedStagedFamily::MaskedNormalHierarchy|SelectedStagedFamily::PlainQuantizedNormalHierarchy) {
             return photocraft_cms::xcf_color::effective_profile(None,space,ce).map_err(|e|IoError::Unsupported(format!("hierarchy implicit effective profile: {e}")));
         }
         if matches!(P::family(file), SelectedStagedFamily::Neighborhood(NeighborhoodSourceFamily::BoxGeometryGrayF32 | NeighborhoodSourceFamily::BoxGeometryGrayF64 | NeighborhoodSourceFamily::BoxGeometryGrayLinearF32 | NeighborhoodSourceFamily::BoxGeometryGrayLinearF64 | NeighborhoodSourceFamily::BoxGeometryGrayPerceptualF32 | NeighborhoodSourceFamily::BoxGeometryGrayPerceptualF64 | NeighborhoodSourceFamily::BoxGeometryLinearF32 | NeighborhoodSourceFamily::BoxGeometryLinearF64 | NeighborhoodSourceFamily::BoxGeometryPerceptualF32 | NeighborhoodSourceFamily::BoxGeometryPerceptualF64)) {
@@ -538,8 +542,10 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
         let family = P::family_controlled(file,ctl,shared)?;
         let masked_hierarchy=family==SelectedStagedFamily::MaskedNormalHierarchy;
-        let hierarchy=masked_hierarchy||family==SelectedStagedFamily::NormalHierarchy;
-        if masked_hierarchy{staged_normal_hierarchy_masked::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("masked hierarchy accounting".into()))?)?;}
+        let quantized_hierarchy=family==SelectedStagedFamily::PlainQuantizedNormalHierarchy;
+        let hierarchy=quantized_hierarchy||masked_hierarchy||family==SelectedStagedFamily::NormalHierarchy;
+        if quantized_hierarchy{staged_normal_hierarchy_quantized::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("quantized hierarchy accounting".into()))?)?;}
+        else if masked_hierarchy{staged_normal_hierarchy_masked::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("masked hierarchy accounting".into()))?)?;}
         else if hierarchy{staged_normal_hierarchy::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("hierarchy Source accounting".into()))?)?;}
         let masked_filtered_flat=family==SelectedStagedFamily::MaskedFilteredFlat;
         if masked_filtered_flat{staged_masked_filtered_flat::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("masked mixed source accounting".into()))?)?;}

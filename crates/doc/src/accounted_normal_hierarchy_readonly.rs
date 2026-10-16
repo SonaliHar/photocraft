@@ -20,6 +20,8 @@ mod filter_move;
 mod filter_remove;
 #[path = "accounted_normal_hierarchy_metadata.rs"]
 pub(super) mod metadata;
+#[path = "accounted_normal_hierarchy_plain.rs"]
+mod plain;
 fn refused<T>() -> Result<T, BackingError> {
     Err(BackingError::Unsupported)
 }
@@ -66,7 +68,7 @@ pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &dyn ModelControl, purp
     let index = doc.checked_normal_hierarchy_index_with_reservation(NormalHierarchyLimits::STANDARD, c.sync_control().interrupt, &|n| c.check(n), |n| {
         q.reserve(QuotaKind::Index, n).map_err(|_| BackingError::Quota)
     })?;
-    shape_rows(doc, q, c, purpose, index.rows())
+    shape_rows(doc, q, c, purpose, index.rows(), false)
 }
 fn shape_rows(
     doc: &Document,
@@ -74,11 +76,12 @@ fn shape_rows(
     c: &dyn ModelControl,
     purpose: TopologyPurpose,
     layers: &[crate::normal_hierarchy_index::NormalHierarchyRow<'_>],
+    allow_quantized: bool,
 ) -> Result<(), BackingError> {
     c.check(1)?;
     if !(1..=4096).contains(&layers.len())
         || doc.mode != crate::ColorMode::Rgb
-        || !native_sample(doc.depth)
+        || !(native_sample(doc.depth) || allow_quantized && matches!(doc.depth, crate::SampleType::U8 | crate::SampleType::U16))
         || doc.sample_encoding != Some(crate::SampleEncoding::NonlinearProfile)
         || doc.selection.is_some()
         || doc.selection_channel_id.is_some()
@@ -92,7 +95,8 @@ fn shape_rows(
     }
     let source = doc.source_color_context.as_ref().ok_or(BackingError::Unsupported)?;
     if source.original_icc.is_some()
-        || !matches!((doc.depth, source.source_precision), (crate::SampleType::F32, 650) | (crate::SampleType::F64, 750))
+        || !(matches!((doc.depth, source.source_precision), (crate::SampleType::F32, 650) | (crate::SampleType::F64, 750))
+            || allow_quantized && matches!((doc.depth, source.source_precision), (crate::SampleType::U8, 150) | (crate::SampleType::U16, 250)))
         || doc.icc_profile.as_ref().is_none_or(|v| v.is_empty() || v.len() > 16 << 20)
     {
         return refused();
@@ -469,7 +473,7 @@ fn measured_current(doc: &Document, q: &BackingQuota, c: &dyn ModelControl, purp
     if purpose == TopologyPurpose::Source && (doc.xcf_state.as_ref().is_none_or(|s| s.provenance.format_version != 22) || index.raw_nonempty_count() == 0) {
         return refused();
     }
-    shape_rows(doc, q, c, purpose, index.rows())?;
+    shape_rows(doc, q, c, purpose, index.rows(), purpose == TopologyPurpose::Current)?;
     census_with_mask_policy(doc, true, true, None, q, c, ReadonlyMaskPolicy::FilteredFlat)
 }
 impl AccountedDocument {

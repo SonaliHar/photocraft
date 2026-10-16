@@ -404,3 +404,6 @@ fn changed_copy_fences_and_shared_noop() {
 
 #[path="accounted_normal_hierarchy_mask_tests.rs"]
 mod masked_current_tests;
+
+#[path="accounted_normal_hierarchy_plain_tests.rs"]
+mod plain_quantized_tests;

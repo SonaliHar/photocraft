@@ -2059,3 +2059,42 @@ arithmetic are reused. Nested hierarchy plus masked leaves is a declared bounded
 compatibility extension of separate storage observations, not a producer-authored
 masked-tree output or numerical acceptance claim. Integration contracts remain
 UNRUN and uncompiled; full stock support and final acceptance are unfinished.
+
+
+Plain RGB Normal hierarchy additionally supports exact nonlinear U8/150 and
+U16/250 native roles through a separate Source factory and compiler entry.
+Source versions12/13/22 retain their actual Normal epoch; original ICC is absent
+and current interpretation is the actual retained implicit sRGB profile. Existing
+full-origin canvas, native/default/padding,32 group-frame/4096-layer, empty-group
+and canonical-owner rules remain. Integer admission requires every actual stack
+to have zero nodes and every mask to be absent, before selected index allocation
+and before eligible Source Surface construction. Disabled stored nodes still
+refuse. CURRENT, native13 adoption, metadata/copy/no-op and history repeat this
+predicate. Retained empty stack anchors keep their owners/revisions; emptiness
+does not establish Source provenance or grant filter/pixel mutation.
+
+A private controlled integer visitor validates exact descriptors, byte counts and
+at most64 complete pixels per callback on the original Source/work ledger.
+Existing float visitors, float/masked Source entries, native sample decoding and
+isolated Normal arithmetic remain unchanged. Current native13 storage and host
+routes are runtime-format generic; there is no new field, marker or version floor.
+Portable .pcraft continuation preserves exact native codes and source/profile
+state, including empty anchors. Hierarchy pixel painting remains closed.
+
+Successful old routes keep priority. A separate paid pre-qualifier partition
+recognizes only full-path, full-origin, effect-free modern implicit plain trees
+with raw(0,-1,-1), across the four supported precision pairs. Old fixed-group
+success requires assigned ICC and raw(0,1,1), so these predicates are disjoint.
+No selected failure retries another family. Metadata ineligible for the new plain
+integer route receives no new permission; semantic misses leave old routes
+available, while Work/cancellation still propagate. This preserves ordinary U8
+PointStack imports as well as genuine fixed-group cohorts.
+
+This is an explicit bounded compatibility extension using existing native and
+Normal services. Generated XCF fixtures establish test-input structure, not a
+matching GIMP producer packet or numerical equivalence. The old assigned,
+offset U16 fixed-group packet is a different cohort. New contracts remain UNRUN
+and uncompiled; production compile evidence is separate. Runtime, numerical,
+native/UI/performance and parent/final acceptance remain deferred. Additional
+models/profiles/depths, filter-bearing integer hierarchies and full stock XCF
+support remain unfinished.

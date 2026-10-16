@@ -140,6 +140,7 @@ fn prepay(budget: &photocraft_xcf::Budget<'_>, units: u64) -> Result<(), IoError
 #[derive(Clone, Copy)]
 enum SourcePurpose {
     ByteZero,
+    PlainQuantized,
     Masked,
 }
 /// Only the sealed actual hierarchy Source completion reaches this handoff.
@@ -151,6 +152,15 @@ pub(in crate::xcf_import) fn promote_source<'b, 'a, S: PromotionSource<'b, 'a>>(
     preparation: &mut Option<PreparationHold>,
 ) -> Result<OwnedNormalHierarchyXcfImport, IoError> {
     promote_with_purpose(source, budget, quota, control, preparation, SourcePurpose::ByteZero)
+}
+pub(in crate::xcf_import) fn promote_plain_quantized_source<'b, 'a, S: PromotionSource<'b, 'a>>(
+    source: S,
+    budget: &'b photocraft_xcf::Budget<'a>,
+    quota: BackingQuota,
+    control: &ReadControl<'_>,
+    preparation: &mut Option<PreparationHold>,
+) -> Result<OwnedNormalHierarchyXcfImport, IoError> {
+    promote_with_purpose(source, budget, quota, control, preparation, SourcePurpose::PlainQuantized)
 }
 pub(in crate::xcf_import) fn promote_masked_source<'b, 'a, S: PromotionSource<'b, 'a>>(
     source: S,
@@ -319,7 +329,9 @@ fn promote_with_purpose<'b, 'a, S: PromotionSource<'b, 'a>>(
         poll()?;
         work(units)
     };
-    let document = if masked {
+    let document = if matches!(purpose, SourcePurpose::PlainQuantized) {
+        AccountedDocument::new_readonly_plain_quantized_normal_hierarchy_storage_with_local_work(document, retention.clone(), quota, &read, &local_work)
+    } else if masked {
         AccountedDocument::new_readonly_masked_normal_hierarchy_storage_with_local_work(document, retention.clone(), quota, &read, &local_work)
     } else {
         AccountedDocument::new_readonly_normal_hierarchy_storage_with_local_work(document, retention.clone(), quota, &read, &local_work)

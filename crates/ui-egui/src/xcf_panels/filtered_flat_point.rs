@@ -303,3 +303,7 @@ mod masked_tests;
 #[cfg(all(test,not(target_arch="wasm32")))]
 #[path="normal_hierarchy_tests.rs"]
 mod normal_hierarchy_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="plain_integer_hierarchy_tests.rs"]
+mod plain_integer_hierarchy_tests;

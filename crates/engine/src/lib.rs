@@ -1537,3 +1537,11 @@ mod accounted_masked_normal_hierarchy_tests;
 
 mod accounted_native_stroke;
 pub use accounted_native_stroke::{AccountedNativeStrokeTarget,capture_accounted_native_stroke_target};
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_plain_integer_hierarchy_tests.rs"]
+mod plain_integer_hierarchy_tests;
+
+#[cfg(all(test,not(target_arch="wasm32")))]
+#[path="accounted_plain_quantized_normal_hierarchy_native_tests.rs"]
+mod plain_quantized_normal_hierarchy_native_tests;

@@ -113,11 +113,42 @@ fn classify(p: &CheckedFilterMaskCoverage<'_>) -> Result<FilterMaskCoverageClass
 fn vector_bytes<T>(n: usize) -> Result<u64, E> {
     (n as u64).checked_mul(std::mem::size_of::<T>() as u64).ok_or(E::Length)
 }
+/// Closed integer plain role check, before any selected index allocation.
+/// Float callers incur no new work or role restriction here.
+pub(crate) fn plain_quantized_header(d: &Document, check: &dyn Fn(u64) -> Result<(), E>) -> Result<bool, E> {
+    if !matches!(d.depth, crate::SampleType::U8 | crate::SampleType::U16) {
+        return Ok(false);
+    }
+    check(1)?;
+    if d.mode != crate::ColorMode::Rgb
+        || d.sample_encoding != Some(crate::SampleEncoding::NonlinearProfile)
+        || d.source_color_context.as_ref().is_none_or(|source| {
+            source.original_icc.is_some() || !matches!((d.depth, source.source_precision), (crate::SampleType::U8, 150) | (crate::SampleType::U16, 250))
+        })
+    {
+        return Err(E::Unsupported);
+    }
+    let state = d.xcf_state.as_ref().ok_or(E::Unsupported)?;
+    if state.filter_stacks.len() > 4096 {
+        return Err(E::Length);
+    }
+    if !state.filter_masks.is_empty() {
+        return Err(E::Unsupported);
+    }
+    for stack in &state.filter_stacks {
+        check(1)?;
+        if !stack.nodes.is_empty() {
+            return Err(E::Unsupported);
+        }
+    }
+    Ok(true)
+}
 fn requirements<L: NormalHierarchyIndexLease>(
     d: &Document,
     lim: NormalHierarchyLimits,
     check: &dyn Fn(u64) -> Result<(), E>,
 ) -> Result<NormalHierarchyMaskIndexRequirements, E> {
+    plain_quantized_header(d, check)?;
     // This complete header prepass admits 16/64MiB before any proof allocation.
     let t = tree::requirements::<L>(d, lim, check)?;
     let entry = vector_bytes::<CheckedFilterMaskCoverage<'_>>(t.mask_count)?;

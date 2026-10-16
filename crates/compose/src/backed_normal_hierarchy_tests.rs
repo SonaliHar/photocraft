@@ -487,3 +487,6 @@ fn failed_tree_walks_and_publication_refund_on_same_ledger() {
 
 #[path = "backed_normal_hierarchy_mask_tests.rs"]
 mod masked;
+
+#[path = "backed_normal_hierarchy_integer_tests.rs"]
+mod integer;

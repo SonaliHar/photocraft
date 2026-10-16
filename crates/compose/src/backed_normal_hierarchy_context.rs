@@ -185,6 +185,44 @@ impl<S, L> LeasedNormalHierarchyPipeline<S, L> {
             compile(doc, &index, Purpose::Source, std::mem::size_of::<Self>() as u64, i, &mut SharedBudget(original)).map_err(preparation_error)?;
         Ok(Self { _plan: plan, _source: source, _lease: lease })
     }
+    /// Explicit plain quantized Source role; no filter programme is permitted.
+    pub fn new_plain_quantized_source_budgeted<B: HierarchyPreparationBudget<Lease = L>>(
+        doc: &Document,
+        i: &Interrupt<'_>,
+        b: &mut B,
+        source: S,
+    ) -> Result<Self, CompositionError> {
+        if !SOURCE_RELEASED {
+            return Err(CompositionError::Unsupported("normal hierarchy Source enrollment disabled"));
+        }
+        if !plain_quantized(doc, |n| charge(&mut SharedBudget(&mut *b), i, n)).map_err(preparation_error)? {
+            return Err(CompositionError::Unsupported("plain integer hierarchy Source role"));
+        }
+        header_mode(doc, true).map_err(preparation_error)?;
+        let cell = std::cell::RefCell::new(b);
+        let failed = std::cell::RefCell::new(None);
+        let record = |e: CompositionError| {
+            let cancelled = i.check().is_err();
+            if failed.borrow().is_none() {
+                *failed.borrow_mut() = Some(e);
+            }
+            if cancelled { BackingError::Cancelled } else { BackingError::Work }
+        };
+        let index = doc.checked_normal_hierarchy_index_with_reservation(
+            NormalHierarchyLimits::STANDARD,
+            i,
+            &|n| cell.borrow_mut().consume_preparation_work(n).map_err(&record),
+            &mut |n| cell.borrow_mut().reserve_hierarchy_index(n).map(|lease| SourceIndexLease { _lease: lease, bytes: n }).map_err(&record),
+        );
+        if let Some(e) = failed.into_inner() {
+            return Err(e);
+        }
+        let index = index.map_err(|e| preparation_error(E::Backing(e)))?;
+        let original = cell.into_inner();
+        let (plan, lease) =
+            compile(doc, &index, Purpose::PlainIntegerSource, std::mem::size_of::<Self>() as u64, i, &mut SharedBudget(original)).map_err(preparation_error)?;
+        Ok(Self { _plan: plan, _source: source, _lease: lease })
+    }
     /// Distinct original Source role; only the complete actual-tree coverage token admits masks.
     pub fn new_masked_source_budgeted<B: HierarchyPreparationBudget<Lease = L>>(
         doc: &Document,
@@ -235,10 +273,11 @@ enum Purpose {
     Current,
     MaskedSource,
     MaskedCurrent,
+    PlainIntegerSource,
 }
 impl Purpose {
     fn source_topology(self) -> bool {
-        matches!(self, Self::Source | Self::MaskedSource)
+        matches!(self, Self::Source | Self::MaskedSource | Self::PlainIntegerSource)
     }
     fn allows_mixed_opacity(self) -> bool {
         matches!(self, Self::Current | Self::MaskedCurrent)
@@ -267,6 +306,32 @@ struct Plan<L> {
     max_depth: usize,
 }
 fn header(doc: &Document) -> Result<(), E> {
+    header_mode(doc, false)
+}
+// The conditional depth branch never supplies a PointPlan to integer pixels.
+// Check every actual stack before any selected tree index allocation.
+fn plain_quantized(doc: &Document, mut check: impl FnMut(u64) -> Result<(), E>) -> Result<bool, E> {
+    check(1)?;
+    if !matches!(doc.depth, SampleType::U8 | SampleType::U16) {
+        return Ok(false);
+    }
+    let source = doc.source_color_context.as_ref().ok_or_else(scope)?;
+    if !matches!((doc.depth, source.source_precision), (SampleType::U8, 150) | (SampleType::U16, 250)) {
+        return Err(scope());
+    }
+    let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
+    if state.filter_stacks.len() > 4096 || !state.filter_masks.is_empty() {
+        return Err(scope());
+    }
+    for stack in &state.filter_stacks {
+        check(1)?;
+        if !stack.nodes.is_empty() {
+            return Err(scope());
+        }
+    }
+    Ok(true)
+}
+fn header_mode(doc: &Document, plain_integer: bool) -> Result<(), E> {
     let s = doc.xcf_state.as_ref().ok_or_else(scope)?;
     let source = doc.source_color_context.as_ref().ok_or_else(scope)?;
     crate::gimp_semi_flatten::positive_origin(doc.bounds()).map_err(E::Color)?;
@@ -278,7 +343,8 @@ fn header(doc: &Document) -> Result<(), E> {
         || s.opaque.len() > 4096
         || doc.mode != ColorMode::Rgb
         || doc.sample_encoding != Some(SampleEncoding::NonlinearProfile)
-        || !matches!((doc.depth, source.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750))
+        || !(matches!((doc.depth, source.source_precision), (SampleType::F32, 650) | (SampleType::F64, 750))
+            || plain_integer && matches!((doc.depth, source.source_precision), (SampleType::U8, 150) | (SampleType::U16, 250)))
         || source.original_icc.is_some()
         || s.provenance.format != "xcf"
         || !matches!(s.provenance.format_version, 12 | 13 | 22)
@@ -409,7 +475,15 @@ fn compile<'doc, P: TreeIndex<'doc>, B: PlanBudget>(
     b: &mut B,
 ) -> Result<(Plan<B::Lease>, B::Lease), E> {
     charge(b, i, 1)?;
-    header(doc)?;
+    if matches!(purpose, Purpose::MaskedCurrent | Purpose::PlainIntegerSource) {
+        let plain = plain_quantized(doc, |n| charge(b, i, n))?;
+        if matches!(purpose, Purpose::PlainIntegerSource) && !plain {
+            return Err(scope());
+        }
+        header_mode(doc, plain)?;
+    } else {
+        header(doc)?;
+    }
     let s = doc.xcf_state.as_ref().ok_or_else(scope)?;
     let count = index.rows().len();
     if !index.matches_document(doc) || count == 0 || count > 4096 || index.group_count() == 0 || index.leaf_count() == 0 || index.max_depth() > 32 {
@@ -681,7 +755,8 @@ impl<'a> Context<'a> {
         if limits.max_rows == 0 || limits.max_rows > max.max_rows || limits.max_pixels == 0 || limits.max_pixels > max.max_pixels {
             return Err(scope());
         }
-        header(owner.document())?;
+        let plain = plain_quantized(owner.document(), |n| c.check(n).map_err(E::Backing))?;
+        header_mode(owner.document(), plain)?;
         owner.validate_readonly_normal_hierarchy_current_storage(c).map_err(E::Backing)?;
         let index = owner.checked_readonly_normal_hierarchy_current_index(c).map_err(E::Backing)?;
         let (plan, lease) = compile(
