@@ -162,14 +162,14 @@ type Grid = [[[f64; 2]; 4]; 4];
 
 impl StyleWarp {
     /// Prepares `style` with bend / distortions in percent (-100..100) for `[x0, y0, x1, y1]`.
-    /// `None` for non-presets, an all-zero warp or an empty box.
+    /// `None` for non-presets, an all-zero warp, or bounds/grid values that are empty or non-finite.
     pub fn new(style: WarpStyle, bend: f64, h_distort: f64, v_distort: f64, vertical: bool, bounds: [f64; 4]) -> Option<StyleWarp> {
-        if !style.is_preset() {
+        if !style.is_preset() || !bounds.iter().all(|v| v.is_finite()) {
             return None;
         }
         let [x0, y0, x1, y1] = bounds;
         let (hw, hh) = ((x1 - x0) / 2.0, (y1 - y0) / 2.0);
-        if !(hw > 0.0 && hh > 0.0) {
+        if !(hw > 0.0 && hh > 0.0 && (2.0 * hw).is_finite() && (2.0 * hh).is_finite()) {
             return None;
         }
         let pct = |v: f64| if v.is_finite() { (v / 100.0).clamp(-1.0, 1.0) } else { 0.0 };
@@ -178,6 +178,9 @@ impl StyleWarp {
             return None;
         }
         let grid = preset_grid(style, b, hd, vd, vertical, hh / hw);
+        if !grid.iter().flatten().flatten().all(|v| v.is_finite()) {
+            return None;
+        }
         Some(StyleWarp { grid, o: (x0, y0), size: (2.0 * hw, 2.0 * hh) })
     }
 
@@ -523,8 +526,11 @@ impl BezierMesh {
     }
 
     /// Splits the patch column containing `s` at `s` (a vertical split line). Exact: the surface
-    /// is unchanged. Returns false when `s` is on or too close to an existing boundary.
+    /// is unchanged. Returns false for an invalid mesh or when `s` is too close to a boundary.
     pub fn split_u(&mut self, s: f64) -> bool {
+        if !self.is_valid() {
+            return false;
+        }
         let (pi, a) = Self::locate(&self.us, s);
         if !(0.01..=0.99).contains(&a) {
             return false;
@@ -545,6 +551,9 @@ impl BezierMesh {
 
     /// Splits the patch row containing `t` at `t` (a horizontal split line). Exact.
     pub fn split_v(&mut self, t: f64) -> bool {
+        if !self.is_valid() {
+            return false;
+        }
         self.transpose();
         let ok = self.split_u(t);
         self.transpose();
@@ -555,7 +564,7 @@ impl BezierMesh {
     /// Exact when the patches came from an unedited split; otherwise the outer control points are
     /// kept and the inner handles extrapolated.
     pub fn remove_split_u(&mut self, k: usize) -> bool {
-        if k == 0 || k + 1 >= self.us.len() {
+        if k == 0 || k >= self.us.len().saturating_sub(1) || !self.is_valid() {
             return false;
         }
         let a = (self.us[k] - self.us[k - 1]) / (self.us[k + 1] - self.us[k - 1]);
@@ -579,6 +588,9 @@ impl BezierMesh {
 
     /// Removes interior horizontal boundary `k`.
     pub fn remove_split_v(&mut self, k: usize) -> bool {
+        if k == 0 || k >= self.vs.len().saturating_sub(1) || !self.is_valid() {
+            return false;
+        }
         self.transpose();
         let ok = self.remove_split_u(k);
         self.transpose();
@@ -651,7 +663,7 @@ impl BezierMesh {
         const BORDER_ZONE: f64 = 0.12;
         /// Falloff radius, in the grabbed patch's size.
         const REACH: f64 = 1.8;
-        if base.len() != self.points.len() || !d.iter().all(|v| v.is_finite()) {
+        if base.len() != self.points.len() || !s.is_finite() || !t.is_finite() || !d.iter().all(|v| v.is_finite()) {
             return;
         }
         self.points.copy_from_slice(base);
@@ -1067,6 +1079,61 @@ mod tests {
             }
         }
         worst
+    }
+
+    #[test]
+    fn preset_rejects_nonfinite_or_overflowing_bounds() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for i in 0..4 {
+                let mut bounds = [0.0, 0.0, 100.0, 100.0];
+                bounds[i] = bad;
+                assert!(StyleWarp::new(WarpStyle::Arc, 50.0, 0.0, 0.0, false, bounds).is_none());
+            }
+        }
+        assert!(StyleWarp::new(WarpStyle::Arc, 50.0, 0.0, 0.0, false, [-f64::MAX, 0.0, f64::MAX, 100.0]).is_none());
+    }
+
+    #[test]
+    fn split_removal_rejects_extreme_indices_without_changing_mesh() {
+        let base = BezierMesh::identity(B, 2, 2);
+        for index in [0, 2, 3, usize::MAX - 1, usize::MAX] {
+            let mut mesh = base.clone();
+            assert!(!mesh.remove_split_u(index));
+            assert_eq!(mesh, base);
+            assert!(!mesh.remove_split_v(index));
+            assert_eq!(mesh, base);
+        }
+    }
+
+    #[test]
+    fn splitting_malformed_meshes_does_not_panic_or_mutate() {
+        let valid = BezierMesh::identity(B, 1, 1);
+        let malformed = [
+            BezierMesh { us: vec![], ..valid.clone() },
+            BezierMesh { vs: vec![0.0], ..valid.clone() },
+            BezierMesh { points: vec![], ..valid.clone() },
+            BezierMesh { us: vec![0.0, 0.0, 1.0], ..valid },
+        ];
+        for base in malformed {
+            let mut mesh = base.clone();
+            assert!(!mesh.split_u(0.5));
+            assert_eq!(mesh, base);
+            assert!(!mesh.split_v(0.5));
+            assert_eq!(mesh, base);
+        }
+    }
+
+    #[test]
+    fn pull_rejects_nonfinite_positions_without_changing_mesh() {
+        let base = BezierMesh::identity(B, 2, 2);
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for (s, t) in [(bad, 0.5), (0.5, bad)] {
+                let mut mesh = base.clone();
+                mesh.pull(&base.points, s, t, [10.0, -5.0]);
+                assert_eq!(mesh, base);
+                assert!(mesh.is_valid());
+            }
+        }
     }
 
     #[test]

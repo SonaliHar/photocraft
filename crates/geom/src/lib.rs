@@ -183,18 +183,33 @@ impl Affine {
     }
     pub fn inverse(&self) -> Option<Affine> {
         let det = self.determinant();
-        if det.abs() < 1e-12 {
+        if !self.m.iter().all(|v| v.is_finite()) || !det.is_finite() || det.abs() < 1e-12 {
             return None;
         }
         let [a, b, c, d, e, f] = self.m;
         let inv = 1.0 / det;
-        Some(Affine { m: [d * inv, -b * inv, -c * inv, a * inv, (c * f - d * e) * inv, (b * e - a * f) * inv] })
+        let inverse = Affine { m: [d * inv, -b * inv, -c * inv, a * inv, (c * f - d * e) * inv, (b * e - a * f) * inv] };
+        inverse.m.iter().all(|v| v.is_finite()).then_some(inverse)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inverse_rejects_nonfinite_coefficients_and_results() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for i in 0..6 {
+                let mut transform = Affine::IDENTITY;
+                transform.m[i] = bad;
+                assert!(transform.inverse().is_none(), "coefficient {i}: {bad}");
+            }
+        }
+        let overflow = Affine { m: [1.0, 0.0, 1.0, 1.0, f64::MAX, -f64::MAX] };
+        assert!(overflow.inverse().is_none());
+        assert!(Affine::scale(2.0).inverse().is_some());
+    }
 
     #[test]
     fn rect_basics() {
