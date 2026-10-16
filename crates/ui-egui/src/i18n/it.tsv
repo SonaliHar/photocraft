@@ -4329,3 +4329,20 @@ shape	Appearance	Aspetto
 	This document's layers: {needed} of {budget} for layers	Livelli di questo documento: {needed} su {budget} per i livelli
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	I livelli di questo documento richiedono {needed} ma possono occupare {budget}: i ridisegni dell'intero documento usano la CPU
 	GPU Memory (MB, 0 = Automatic)	Memoria GPU (MB, 0 = Automatico)
+
+# Monitor profile chooser (#575)
+	All displays (default)	Tutti i monitor (predefinito)
+	Applying monitor profiles…	Applicazione dei profili monitor…
+	Choose ICC File…	Scegli file ICC…
+	Currently applied:	Attualmente applicato:
+	Disconnected display	Monitor scollegato
+	Display:	Monitor:
+	Displays without a unique identity use the default.	I monitor senza un identificatore univoco usano il valore predefinito.
+	Monitor Profiles…	Profili monitor…
+	Profile search reached its limit.	La ricerca dei profili ha raggiunto il limite.
+	Profile:	Profilo:
+	Reading profiles…	Lettura dei profili…
+	Reconnect this display to change its profile. Use default removes the saved choice.	Ricollega questo monitor per modificarne il profilo. «Usa predefinito» rimuove la scelta salvata.
+	Refresh	Aggiorna
+	Search covers standard profile folders. Other profiles can be chosen as ICC files.	La ricerca comprende le cartelle standard dei profili. Altri profili possono essere scelti come file ICC.
+	Use default	Usa predefinito

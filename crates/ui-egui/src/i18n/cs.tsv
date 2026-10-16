@@ -3816,3 +3816,20 @@ navigator	Zoom	Zvětšení
 	This document's layers: {needed} of {budget} for layers	Vrstvy tohoto dokumentu: {needed} z {budget} pro vrstvy
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Vrstvy tohoto dokumentu potřebují {needed}, ale mohou zabrat {budget}: překreslení celého dokumentu probíhá na CPU
 	GPU Memory (MB, 0 = Automatic)	Paměť GPU (MB, 0 = Automaticky)
+
+# Monitor profile chooser (#575)
+	All displays (default)	Všechny monitory (výchozí)
+	Applying monitor profiles…	Používání profilů monitorů…
+	Choose ICC File…	Vybrat soubor ICC…
+	Currently applied:	Aktuálně použitý profil:
+	Disconnected display	Odpojený monitor
+	Display:	Monitor:
+	Displays without a unique identity use the default.	Monitory bez jednoznačné identity používají výchozí nastavení.
+	Monitor Profiles…	Profily monitorů…
+	Profile search reached its limit.	Hledání profilů dosáhlo limitu.
+	Profile:	Profil:
+	Reading profiles…	Načítání profilů…
+	Reconnect this display to change its profile. Use default removes the saved choice.	Chcete-li změnit profil tohoto monitoru, znovu jej připojte. Volba „Použít výchozí“ odstraní uložený výběr.
+	Refresh	Obnovit
+	Search covers standard profile folders. Other profiles can be chosen as ICC files.	Prohledávají se standardní složky s profily. Jiné profily lze vybrat jako soubory ICC.
+	Use default	Použít výchozí

@@ -3178,3 +3178,20 @@ curves	Smooth	Сгладить
 	This document's layers: {needed} of {budget} for layers	Слои этого документа: {needed} из {budget} для слоёв
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Слоям этого документа нужно {needed}, но занимать они могут {budget}: весь документ перерисовывается на CPU
 	GPU Memory (MB, 0 = Automatic)	Память GPU (МБ, 0 = автоматически)
+
+# Monitor profile chooser (#575)
+	All displays (default)	Все мониторы (по умолчанию)
+	Applying monitor profiles…	Применение профилей мониторов…
+	Choose ICC File…	Выбрать файл ICC…
+	Currently applied:	Сейчас применяется:
+	Disconnected display	Отключённый монитор
+	Display:	Монитор:
+	Displays without a unique identity use the default.	Мониторы без уникального идентификатора используют настройку по умолчанию.
+	Monitor Profiles…	Профили мониторов…
+	Profile search reached its limit.	Достигнут предел поиска профилей.
+	Profile:	Профиль:
+	Reading profiles…	Чтение профилей…
+	Reconnect this display to change its profile. Use default removes the saved choice.	Подключите этот монитор снова, чтобы изменить его профиль. «По умолчанию» удаляет сохранённый выбор.
+	Refresh	Обновить
+	Search covers standard profile folders. Other profiles can be chosen as ICC files.	Поиск охватывает стандартные папки профилей. Другие профили можно выбрать в виде файлов ICC.
+	Use default	По умолчанию

@@ -3806,3 +3806,20 @@ curves	Smooth	Wygładź
 	This document's layers: {needed} of {budget} for layers	Warstwy tego dokumentu: {needed} z {budget} na warstwy
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Warstwy tego dokumentu potrzebują {needed}, ale mogą zająć {budget}: odświeżanie całego dokumentu używa CPU
 	GPU Memory (MB, 0 = Automatic)	Pamięć GPU (MB, 0 = Automatycznie)
+
+# Monitor profile chooser (#575)
+	All displays (default)	Wszystkie monitory (domyślne)
+	Applying monitor profiles…	Stosowanie profili monitorów…
+	Choose ICC File…	Wybierz plik ICC…
+	Currently applied:	Aktualnie zastosowany:
+	Disconnected display	Odłączony monitor
+	Display:	Monitor:
+	Displays without a unique identity use the default.	Monitory bez unikalnego identyfikatora używają ustawienia domyślnego.
+	Monitor Profiles…	Profile monitorów…
+	Profile search reached its limit.	Wyszukiwanie profili osiągnęło limit.
+	Profile:	Profil:
+	Reading profiles…	Odczytywanie profili…
+	Reconnect this display to change its profile. Use default removes the saved choice.	Podłącz ponownie ten monitor, aby zmienić jego profil. Opcja „Użyj domyślnego” usuwa zapisany wybór.
+	Refresh	Odśwież
+	Search covers standard profile folders. Other profiles can be chosen as ICC files.	Wyszukiwanie obejmuje standardowe foldery profili. Inne profile można wybrać jako pliki ICC.
+	Use default	Użyj domyślnego

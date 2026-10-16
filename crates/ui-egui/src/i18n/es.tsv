@@ -4170,3 +4170,20 @@ navigator	Zoom	Zoom
 	This document's layers: {needed} of {budget} for layers	Capas de este documento: {needed} de {budget} para capas
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Las capas de este documento necesitan {needed} pero pueden ocupar {budget}: los redibujados de todo el documento usan la CPU
 	GPU Memory (MB, 0 = Automatic)	Memoria de GPU (MB, 0 = Automático)
+
+# Monitor profile chooser (#575)
+	All displays (default)	Todas las pantallas (predeterminado)
+	Applying monitor profiles…	Aplicando perfiles de monitor…
+	Choose ICC File…	Elegir archivo ICC…
+	Currently applied:	Aplicado actualmente:
+	Disconnected display	Pantalla desconectada
+	Display:	Pantalla:
+	Displays without a unique identity use the default.	Las pantallas sin un identificador único usan el valor predeterminado.
+	Monitor Profiles…	Perfiles de monitor…
+	Profile search reached its limit.	La búsqueda de perfiles alcanzó su límite.
+	Profile:	Perfil:
+	Reading profiles…	Leyendo perfiles…
+	Reconnect this display to change its profile. Use default removes the saved choice.	Vuelva a conectar esta pantalla para cambiar su perfil. «Usar predeterminado» elimina la selección guardada.
+	Refresh	Actualizar
+	Search covers standard profile folders. Other profiles can be chosen as ICC files.	La búsqueda abarca las carpetas habituales de perfiles. Se pueden elegir otros perfiles como archivos ICC.
+	Use default	Usar predeterminado

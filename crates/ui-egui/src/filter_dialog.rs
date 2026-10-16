@@ -653,6 +653,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         crate::select_mask_view::controls(ui, f);
     }
     for p in parse_spec(&spec) {
+        if cmd == "edit.colorSettings" && p.key == "monitorProfile" {
+            continue;
+        }
         match p.kind {
             Kind::Range { min, max, default } => {
                 let mut v = f.get(&p.key).and_then(Value::as_f64).unwrap_or(default as f64) as f32;
@@ -857,7 +860,14 @@ fn random_seed(entropy: u64, current: i64) -> i64 {
 pub fn params_of(f: &Map<String, Value>) -> Value {
     // A document picker left at "None" (-1) means "not given".
     let unset = |k: &str, v: &Value| k == "mapDocument" && v.as_i64() == Some(-1);
-    Value::Object(f.iter().filter(|(k, v)| !k.starts_with("__") && !unset(k, v)).map(|(k, v)| (k.clone(), v.clone())).collect())
+    Value::Object(
+        f.iter()
+            .filter(|(k, v)| {
+                !k.starts_with("__") && !unset(k, v) && !(f.get("__command").and_then(Value::as_str) == Some("edit.colorSettings") && *k == "monitorProfile")
+            })
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+    )
 }
 
 /// Compute a preview document: run `command` with `params` on the proxy (scaled) copy of `doc`.

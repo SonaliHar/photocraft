@@ -3210,3 +3210,20 @@ curves	Smooth	Glätten
 	This document's layers: {needed} of {budget} for layers	Ebenen dieses Dokuments: {needed} von {budget} für Ebenen
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Die Ebenen dieses Dokuments brauchen {needed}, dürfen aber {budget} belegen: Das ganze Dokument wird auf der CPU neu gezeichnet
 	GPU Memory (MB, 0 = Automatic)	GPU-Speicher (MB, 0 = Automatisch)
+
+# Monitor profile chooser (#575)
+	All displays (default)	Alle Monitore (Standard)
+	Applying monitor profiles…	Monitorprofile werden angewendet…
+	Choose ICC File…	ICC-Datei wählen…
+	Currently applied:	Aktuell angewendet:
+	Disconnected display	Nicht verbundener Monitor
+	Display:	Monitor:
+	Displays without a unique identity use the default.	Monitore ohne eindeutige Kennung verwenden den Standard.
+	Monitor Profiles…	Monitorprofile…
+	Profile search reached its limit.	Die Profilsuche hat ihr Limit erreicht.
+	Profile:	Profil:
+	Reading profiles…	Profile werden gelesen…
+	Reconnect this display to change its profile. Use default removes the saved choice.	Verbinden Sie diesen Monitor erneut, um sein Profil zu ändern. „Standard verwenden“ entfernt die gespeicherte Auswahl.
+	Refresh	Aktualisieren
+	Search covers standard profile folders. Other profiles can be chosen as ICC files.	Die Suche umfasst die üblichen Profilordner. Andere Profile können als ICC-Dateien ausgewählt werden.
+	Use default	Standard verwenden
