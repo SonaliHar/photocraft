@@ -80,8 +80,7 @@ mod tests {
 
     #[test]
     fn duplicate_saved_ids_are_not_resolved_by_first_position() {
-        let mut state = XcfState::default();
-        state.item_sets = vec![set(7), set(7)];
+        let mut state = XcfState { item_sets: vec![set(7), set(7)], ..Default::default() };
         let before = state.clone();
         assert!(set_index(&state, ItemSetId(7), "test").is_err());
         assert_eq!(state, before);

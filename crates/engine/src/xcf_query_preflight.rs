@@ -11,10 +11,16 @@ fn bad(command: &str, message: &str) -> EngineError {
 fn object<'a>(command: &str, params: &'a Value, keys: &[&str]) -> Result<Option<&'a Map<String, Value>>> {
     // Dispatch treats null as {}. Borrow that empty envelope without copying a
     // possibly hostile value or allocating an empty map.
-    if params.is_null() { return Ok(None); }
+    if params.is_null() {
+        return Ok(None);
+    }
     let object = params.as_object().ok_or_else(|| bad(command, "query parameters must be an object or null"))?;
-    if object.len() > keys.len() { return Err(bad(command, "too many query fields")); }
-    if object.keys().any(|key| !keys.contains(&key.as_str())) { return Err(bad(command, "unknown query field")); }
+    if object.len() > keys.len() {
+        return Err(bad(command, "too many query fields"));
+    }
+    if object.keys().any(|key| !keys.contains(&key.as_str())) {
+        return Err(bad(command, "unknown query field"));
+    }
     Ok(Some(object))
 }
 
@@ -30,9 +36,13 @@ fn identity(command: &str, value: Option<&Value>) -> Result<()> {
 }
 
 fn integer(command: &str, value: Option<&Value>, maximum: u64, positive: bool) -> Result<()> {
-    let Some(value) = value else { return Ok(()); };
+    let Some(value) = value else {
+        return Ok(());
+    };
     let number = value.as_u64().ok_or_else(|| bad(command, "query pagination must be an unsigned integer"))?;
-    if number > maximum || (positive && number == 0) { return Err(bad(command, "query pagination is outside its supported range")); }
+    if number > maximum || (positive && number == 0) {
+        return Err(bad(command, "query pagination is outside its supported range"));
+    }
     Ok(())
 }
 
@@ -62,7 +72,9 @@ pub(crate) fn dispatch_preflight(command: &str, params: &Value) -> Result<bool> 
         "xcf.composition.inspect" => identity(command, field("layerId"))?,
         "xcf.filter.inspect" => identity(command, field("filterId"))?,
         "xcf.resource.inspect" => {
-            if let Some(resource) = field("resource") { identity(command, Some(resource))?; }
+            if let Some(resource) = field("resource") {
+                identity(command, Some(resource))?;
+            }
         }
         _ => {}
     }
@@ -77,15 +89,17 @@ mod tests {
     #[test]
     fn known_query_empty_and_existing_legal_envelopes_are_preserved() {
         for command in ["xcf.assess", "xcf.inspect", "xcf.resource.inspect"] {
-            assert_eq!(dispatch_preflight(command, &Value::Null).unwrap(), true);
-            assert_eq!(dispatch_preflight(command, &json!({})).unwrap(), true);
+            assert!(dispatch_preflight(command, &Value::Null).unwrap());
+            assert!(dispatch_preflight(command, &json!({})).unwrap());
         }
         for (command, params) in [
             ("xcf.inspect", json!({"offset":100000,"limit":128})),
             ("xcf.composition.inspect", json!({"layerId":"18446744073709551615"})),
             ("xcf.filter.inspect", json!({"filterId":"9007199254740993"})),
             ("xcf.resource.inspect", json!({"resource":"1"})),
-        ] { assert!(dispatch_preflight(command, &params).unwrap()); }
+        ] {
+            assert!(dispatch_preflight(command, &params).unwrap());
+        }
     }
 
     #[test]
@@ -103,14 +117,16 @@ mod tests {
             ("xcf.composition.inspect", json!({"layerId":"18446744073709551616"})),
             ("xcf.resource.inspect", json!({"resource":[{"nested":"1"}]})),
             ("xcf.resource.inspect", json!({"resource":"1".repeat(10000)})),
-        ] { assert!(matches!(dispatch_preflight(command,&params),Err(EngineError::BadParams {..}))); }
+        ] {
+            assert!(matches!(dispatch_preflight(command, &params), Err(EngineError::BadParams { .. })));
+        }
     }
 
     #[test]
     fn unrelated_queries_and_edits_are_not_given_an_xcf_global_whitelist() {
         let hostile = json!({"unbounded":{"fields":[1,2,3]}});
-        for command in ["xcf.future.inspect","xcf.link.recover","xcf.itemSet.setMembers","document.pixel.inspect"] {
-            assert!(!dispatch_preflight(command,&hostile).unwrap());
+        for command in ["xcf.future.inspect", "xcf.link.recover", "xcf.itemSet.setMembers", "document.pixel.inspect"] {
+            assert!(!dispatch_preflight(command, &hostile).unwrap());
         }
     }
 }

@@ -6,6 +6,10 @@ use serde_json::Value;
 const ID: &str = "xcf.assess";
 #[cfg(test)]
 #[path = "../../io/tests/common/xcf.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod fixture;
 fn bad(message: &str) -> EngineError {
     EngineError::BadParams { cmd: ID.into(), msg: message.into() }

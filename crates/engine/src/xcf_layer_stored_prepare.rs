@@ -927,16 +927,17 @@ mod tests {
     #[test]
     fn quota_receipt_does_not_reset_refund_or_double_charge() {
         let work = Work { used: AtomicU64::new(0), exceeded: AtomicBool::new(false), limit: 100 };
-        let mut upper = Prepaid::reserve(&work, 75).unwrap();
-        work.charge(10).unwrap();
-        let mut exact = upper.take_exact(60).unwrap();
-        exact.consume(32).unwrap();
-        exact.consume(28).unwrap();
-        exact.finish().unwrap();
-        assert_eq!(work.remaining(), 15);
-        assert_eq!(upper.remaining, 15);
-        assert!(upper.take_exact(16).is_err());
-        drop(upper);
+        {
+            let mut upper = Prepaid::reserve(&work, 75).unwrap();
+            work.charge(10).unwrap();
+            let mut exact = upper.take_exact(60).unwrap();
+            exact.consume(32).unwrap();
+            exact.consume(28).unwrap();
+            exact.finish().unwrap();
+            assert_eq!(work.remaining(), 15);
+            assert_eq!(upper.remaining, 15);
+            assert!(upper.take_exact(16).is_err());
+        }
         assert_eq!(work.remaining(), 15);
         assert!(work.charge(16).is_err());
         assert!(add(u64::MAX, 1).is_err());

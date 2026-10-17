@@ -68,6 +68,7 @@ fn estimated_owner_work(count: u64, tiles: u64, channels: u64) -> Result<u64> {
     // Explicit sync plus Session precommit sync: two independent checks.
     let direct =
         crate::xcf_editing::direct_indexed_sync_work(usize::try_from(count).map_err(|_| bad("budget"))?, usize::try_from(tiles).map_err(|_| bad("budget"))?)?;
+    let direct = direct.checked_mul(2).ok_or_else(|| bad("budget"))?;
     count
         .checked_mul(24)
         .and_then(|n| n.checked_add(direct))
@@ -274,12 +275,18 @@ mod tests {
         let raster = EditableIndexedRaster::try_new(bounds, indices.clone(), Some(alpha.clone()), colors.clone()).unwrap();
         let surface = crate::xcf_editing::expanded(&raster, PixelFormat::RGBA8, Some(1)).unwrap();
         let mut layer = Layer::new("Duplicate ordinal", LayerContent::Raster(surface.clone()));
-        layer.indexed_source = Some(IndexedSource::new(indices, Some(alpha), colors.clone(), bounds, &surface).unwrap());
+        // Immutable source fingerprint uses the stored alpha, before current palette transparency.
+        let original_surface = crate::xcf_editing::expanded(&raster, PixelFormat::RGBA8, None).unwrap();
+        layer.indexed_source = Some(IndexedSource::new(indices, Some(alpha), colors.clone(), bounds, &original_surface).unwrap());
         let owner = layer.id;
         let mut doc = Document::new("Palette exact", Size::new(4, 4), ColorMode::Indexed, SampleType::U8);
         doc.layers = vec![layer];
         doc.color_table = Some(ColorTable { colors, transparent: Some(1) });
-        doc.xcf_state = Some(XcfState { editable_indexed: vec![EditableIndexedLayer { owner, raster }], ..Default::default() });
+        let mut state = XcfState::default();
+        state.reconcile_layers(&doc).unwrap();
+        state.items.iter_mut().find(|item| item.item == photocraft_doc::item_identity::ItemRef::Layer(owner)).unwrap().raster_bounds = Some(bounds);
+        state.editable_indexed.push(EditableIndexedLayer { owner, raster });
+        doc.xcf_state = Some(state);
         let mut session = Session::new();
         session.add_document(doc, None).unwrap();
         session

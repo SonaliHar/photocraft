@@ -506,10 +506,10 @@ fn prepare_input<B: PreparationBudget>(
     {
         return Err(bad("channel preparation input or lower-only limits"));
     }
-    if let Some(opacity) = opacity_config {
-        if opacity.domain != config.domain || opacity.precision != config.precision || opacity.output != config.output {
-            return Err(bad("paired Gaussian and opacity domain, precision, or ROI differ"));
-        }
+    if let Some(opacity) = opacity_config
+        && (opacity.domain != config.domain || opacity.precision != config.precision || opacity.output != config.output)
+    {
+        return Err(bad("paired Gaussian and opacity domain, precision, or ROI differ"));
     }
     let derived_index_reservation = if opacity_config.is_some() { mul(DERIVED_INDEX_RESERVATION, 2)? } else { DERIVED_INDEX_RESERVATION };
     let current = session.active().ok_or(EngineError::NoDocument)?;
@@ -1005,7 +1005,8 @@ mod tests {
         let revision = session.active().unwrap().revision;
         let source = Surface::try_with_default_bytes(PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false), &0_f64.to_le_bytes()).unwrap();
         let node = node_fixture();
-        let mut budget = Budget::default();
+        let proof_work = Work { used: AtomicU64::new(0), exceeded: AtomicBool::new(false), limit: Limits::default().work_units };
+        let mut budget = LocalBudget { held: 0, limit: Limits::default().resident_bytes, work: &proof_work };
         let output = gaussian::prepare(
             gaussian::Original { surface: &source, bounds: config().output, node: &node, mask: None, opaque: &[] },
             config(),

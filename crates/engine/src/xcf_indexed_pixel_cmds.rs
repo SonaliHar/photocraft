@@ -255,6 +255,7 @@ fn estimated_target_work(count: u64, tiles: u64, tile_bytes: u64) -> Result<u64>
     // Explicit sync plus Session precommit sync: two independent checks.
     let direct =
         crate::xcf_editing::direct_indexed_sync_work(usize::try_from(count).map_err(|_| bad("budget"))?, usize::try_from(tiles).map_err(|_| bad("budget"))?)?;
+    let direct = direct.checked_mul(2).ok_or_else(|| bad("budget"))?;
     count
         .checked_mul(24)
         .and_then(|n| n.checked_add(direct))

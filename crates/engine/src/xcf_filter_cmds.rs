@@ -120,28 +120,41 @@ pub fn scalar_edit_candidate(node: &FilterNode) -> bool {
 }
 /// Bounded metadata hint for activation controls only. Group parameter editing
 /// remains separate; the registered operation performs actual renderer admission.
-pub fn activation_edit_candidate(document:&Document,node:&FilterNode)->bool {
-    let Some(state)=document.xcf_state.as_ref()else{return false};
-    if state.filter_stacks.len()>10_000||state.items.len()>10_000{return false;}
-    let mut total=0usize;let mut found=None;
+pub fn activation_edit_candidate(document: &Document, node: &FilterNode) -> bool {
+    let Some(state) = document.xcf_state.as_ref() else { return false };
+    if state.filter_stacks.len() > 10_000 || state.items.len() > 10_000 {
+        return false;
+    }
+    let mut total = 0usize;
+    let mut found = None;
     for stack in &state.filter_stacks {
-        let Some(next)=total.checked_add(stack.nodes.len()).filter(|count|*count<=10_000)else{return false};total=next;
+        let Some(next) = total.checked_add(stack.nodes.len()).filter(|count| *count <= 10_000) else { return false };
+        total = next;
         for current in &stack.nodes {
-            if current.id==node.id {
-                if found.is_some()||!std::ptr::eq(current,node){return false;}
-                found=Some(stack);
+            if current.id == node.id {
+                if found.is_some() || !std::ptr::eq(current, node) {
+                    return false;
+                }
+                found = Some(stack);
             }
         }
     }
-    let Some(stack)=found else{return false};
-    let ItemRef::Layer(owner)=stack.owner else{return false};
-    let Ok(locks)=crate::xcf_item_locks::effective_layer_locks(document,owner)else{return false};
-    if locks.native.all||locks.native.pixels||locks.imported.content||locks.imported.visibility{return false;}
-    let Some(layer)=document.layer(owner)else{return false};
+    let Some(stack) = found else { return false };
+    let ItemRef::Layer(owner) = stack.owner else { return false };
+    let Ok(locks) = crate::xcf_item_locks::effective_layer_locks(document, owner) else { return false };
+    if locks.native.all || locks.native.pixels || locks.imported.content || locks.imported.visibility {
+        return false;
+    }
+    let Some(layer) = document.layer(owner) else { return false };
     match &layer.content {
-        LayerContent::Raster(_)=>scalar_edit_candidate(node),
-        LayerContent::Group(_)=>stack.nodes.len()==1&&node.operation.name=="gegl:gaussian-blur"&&node.operation.stored_version=="0:0"&&node.operation.schema_epoch=="xcf22-isolated-small-auto-v1",
-        _=>false,
+        LayerContent::Raster(_) => scalar_edit_candidate(node),
+        LayerContent::Group(_) => {
+            stack.nodes.len() == 1
+                && node.operation.name == "gegl:gaussian-blur"
+                && node.operation.stored_version == "0:0"
+                && node.operation.schema_epoch == "xcf22-isolated-small-auto-v1"
+        }
+        _ => false,
     }
 }
 fn reference(item: ItemRef) -> Value {
@@ -166,21 +179,13 @@ fn inspect(s: &mut Session, params: &Value) -> Result<Value> {
 /// Shared bounded metadata response only. The resident caller validates its
 /// complete XCF state first; accounted callers must separately validate their
 /// actual closed storage owner and prepay all response/copy allocations.
-pub(crate) fn build_inspect_reply(
-    id: FilterId,
-    stack: &photocraft_doc::xcf_filters::FilterStack,
-    node: &FilterNode,
-) -> Result<Value> {
+pub(crate) fn build_inspect_reply(id: FilterId, stack: &photocraft_doc::xcf_filters::FilterStack, node: &FilterNode) -> Result<Value> {
     build_inspect_reply_with_point_colors(id, stack, node, false)
 }
 /// Exact bounded Point storage metadata only. Its paid caller must validate the
 /// real owner, ten-argument shape and response fees first. Color words convey
 /// neither an evaluator qualification nor permission to replace an argument.
-pub(crate) fn build_point_storage_inspect_reply(
-    id: FilterId,
-    stack: &photocraft_doc::xcf_filters::FilterStack,
-    node: &FilterNode,
-) -> Result<Value> {
+pub(crate) fn build_point_storage_inspect_reply(id: FilterId, stack: &photocraft_doc::xcf_filters::FilterStack, node: &FilterNode) -> Result<Value> {
     build_inspect_reply_with_point_colors(id, stack, node, true)
 }
 fn build_inspect_reply_with_point_colors(
@@ -470,7 +475,9 @@ fn config_wire(operation: &str, input: &FilterValue) -> Option<Value> {
 /// caller MUST first check its closed bounded wire and reserve a genuine same-
 /// quota temporary envelope, then census/reconcile returned actual capacities
 /// before model/renderer work. This helper itself grants no storage authority.
-pub(crate) fn paid_point_patches(params:&Value,operation:&str)->Result<Vec<FilterArgument>> { patches(params,operation) }
+pub(crate) fn paid_point_patches(params: &Value, operation: &str) -> Result<Vec<FilterArgument>> {
+    patches(params, operation)
+}
 fn patches(params: &Value, operation: &str) -> Result<Vec<FilterArgument>> {
     let Some(input) = params.get("arguments") else {
         return Ok(Vec::new());
@@ -632,182 +639,373 @@ fn validate_current_pipeline_font_input(
 }
 // Borrowed closed wire census before dispatcher JSON/model copying. This is
 // schema/size admission; operation-specific value domains remain staged below.
-fn set_wire(value:&Value,depth:usize,nodes:&mut usize,bytes:&mut usize)->Result<()> {
-    if depth>16 {return Err(bad(SET,"filter wire depth limit"));}
-    *nodes=nodes.checked_add(1).filter(|n|*n<=8192).ok_or_else(||bad(SET,"filter wire node limit"))?;
-    let amount=match value {Value::String(text)=>text.len().checked_mul(6).and_then(|n|n.checked_add(2)),Value::Object(object)=>{
-        if object.len()>8 {return Err(bad(SET,"filter wire record limit"));}
-        Some(2)
-    },Value::Array(values)=>{if values.len()>256 {return Err(bad(SET,"filter wire array limit"));}Some(values.len()+2)},_=>Some(32)}.ok_or_else(||bad(SET,"filter wire size overflow"))?;
-    *bytes=bytes.checked_add(amount).filter(|n|*n<=256<<10).ok_or_else(||bad(SET,"filter wire byte limit"))?;
+fn set_wire(value: &Value, depth: usize, nodes: &mut usize, bytes: &mut usize) -> Result<()> {
+    if depth > 16 {
+        return Err(bad(SET, "filter wire depth limit"));
+    }
+    *nodes = nodes.checked_add(1).filter(|n| *n <= 8192).ok_or_else(|| bad(SET, "filter wire node limit"))?;
+    let amount = match value {
+        Value::String(text) => text.len().checked_mul(6).and_then(|n| n.checked_add(2)),
+        Value::Object(object) => {
+            if object.len() > 8 {
+                return Err(bad(SET, "filter wire record limit"));
+            }
+            Some(2)
+        }
+        Value::Array(values) => {
+            if values.len() > 256 {
+                return Err(bad(SET, "filter wire array limit"));
+            }
+            Some(values.len() + 2)
+        }
+        _ => Some(32),
+    }
+    .ok_or_else(|| bad(SET, "filter wire size overflow"))?;
+    *bytes = bytes.checked_add(amount).filter(|n| *n <= 256 << 10).ok_or_else(|| bad(SET, "filter wire byte limit"))?;
     match value {
-        Value::Array(values)=>for value in values {set_wire(value,depth+1,nodes,bytes)?;},
-        Value::Object(object)=>for (key,value) in object {
-            if key.len()>128 {return Err(bad(SET,"filter wire key limit"));}
-            *bytes=bytes.checked_add(key.len().checked_mul(6).ok_or_else(||bad(SET,"filter wire size overflow"))?).filter(|n|*n<=256<<10).ok_or_else(||bad(SET,"filter wire byte limit"))?;
-            set_wire(value,depth+1,nodes,bytes)?;
-        },_=>{}
+        Value::Array(values) => {
+            for value in values {
+                set_wire(value, depth + 1, nodes, bytes)?;
+            }
+        }
+        Value::Object(object) => {
+            for (key, value) in object {
+                if key.len() > 128 {
+                    return Err(bad(SET, "filter wire key limit"));
+                }
+                *bytes = bytes
+                    .checked_add(key.len().checked_mul(6).ok_or_else(|| bad(SET, "filter wire size overflow"))?)
+                    .filter(|n| *n <= 256 << 10)
+                    .ok_or_else(|| bad(SET, "filter wire byte limit"))?;
+                set_wire(value, depth + 1, nodes, bytes)?;
+            }
+        }
+        _ => {}
     }
     Ok(())
 }
-pub(crate) fn vibrance_node(node:&photocraft_doc::xcf_filters::FilterNode)->bool{
-    node.operation.name=="gegl:vibrance" && node.operation.stored_version=="0:0" && node.operation.schema_epoch==photocraft_compose::VIBRANCE_EPOCH && node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::VIBRANCE_EPOCH)
+pub(crate) fn vibrance_node(node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
+    node.operation.name == "gegl:vibrance"
+        && node.operation.stored_version == "0:0"
+        && node.operation.schema_epoch == photocraft_compose::VIBRANCE_EPOCH
+        && node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == photocraft_compose::VIBRANCE_EPOCH)
 }
-pub(crate) fn vibrance_owner(owner:&photocraft_doc::accounted_document::AccountedDocument)->bool{
-    owner.is_readonly_point_storage() && owner.document().xcf_state.as_ref().is_some_and(|state|matches!(state.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[node] if vibrance_node(node))))
+pub(crate) fn vibrance_owner(owner: &photocraft_doc::accounted_document::AccountedDocument) -> bool {
+    owner.is_readonly_point_storage()
+        && owner
+            .document()
+            .xcf_state
+            .as_ref()
+            .is_some_and(|state| matches!(state.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[node] if vibrance_node(node))))
 }
-pub(crate) fn hue_chroma_node(node:&photocraft_doc::xcf_filters::FilterNode)->bool{
-    node.operation.name=="gegl:hue-chroma" && node.operation.stored_version=="0:0" && node.operation.schema_epoch==photocraft_compose::HUE_CHROMA_EPOCH && node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::HUE_CHROMA_EPOCH)
+pub(crate) fn hue_chroma_node(node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
+    node.operation.name == "gegl:hue-chroma"
+        && node.operation.stored_version == "0:0"
+        && node.operation.schema_epoch == photocraft_compose::HUE_CHROMA_EPOCH
+        && node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == photocraft_compose::HUE_CHROMA_EPOCH)
 }
-pub(crate) fn hue_chroma_owner(owner:&photocraft_doc::accounted_document::AccountedDocument)->bool{
-    owner.is_readonly_point_storage() && owner.document().xcf_state.as_ref().is_some_and(|state|matches!(state.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[node] if hue_chroma_node(node))))
+pub(crate) fn hue_chroma_owner(owner: &photocraft_doc::accounted_document::AccountedDocument) -> bool {
+    owner.is_readonly_point_storage()
+        && owner
+            .document()
+            .xcf_state
+            .as_ref()
+            .is_some_and(|state| matches!(state.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[node] if hue_chroma_node(node))))
 }
-pub(crate) fn masked_scalar_point_node_kind(node:&FilterNode)->Option<photocraft_compose::MaskedScalarKind>{
+pub(crate) fn masked_scalar_point_node_kind(node: &FilterNode) -> Option<photocraft_compose::MaskedScalarKind> {
     use photocraft_compose::MaskedScalarKind as K;
-    if node.operation.stored_version!="0:0"{return None}
-    let kind=match node.operation.name.as_str(){"gegl:invert-linear"=>K::InvertLinear,"gegl:invert-gamma"=>K::InvertGamma,"gegl:brightness-contrast"=>K::BrightnessContrast,"gegl:levels"=>K::GeglLevels,_=>return None};
-    (node.operation.schema_epoch==kind.epoch() && node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==kind.epoch()) && photocraft_compose::masked_scalar_parameters(kind,&node.arguments).is_ok()).then_some(kind)
+    if node.operation.stored_version != "0:0" {
+        return None;
+    }
+    let kind = match node.operation.name.as_str() {
+        "gegl:invert-linear" => K::InvertLinear,
+        "gegl:invert-gamma" => K::InvertGamma,
+        "gegl:brightness-contrast" => K::BrightnessContrast,
+        "gegl:levels" => K::GeglLevels,
+        _ => return None,
+    };
+    (node.operation.schema_epoch == kind.epoch()
+        && node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == kind.epoch())
+        && photocraft_compose::masked_scalar_parameters(kind, &node.arguments).is_ok())
+    .then_some(kind)
 }
-pub(crate) fn masked_scalar_point_owner(owner:&photocraft_doc::accounted_document::AccountedDocument)->bool{
-    let d=owner.document();owner.is_readonly_point_storage() && d.layers.len()==1 && d.mode==photocraft_doc::ColorMode::Rgb && d.sample_encoding==Some(photocraft_doc::SampleEncoding::NonlinearProfile)
+pub(crate) fn masked_scalar_point_owner(owner: &photocraft_doc::accounted_document::AccountedDocument) -> bool {
+    let d = owner.document();
+    owner.is_readonly_point_storage() && d.layers.len()==1 && d.mode==photocraft_doc::ColorMode::Rgb && d.sample_encoding==Some(photocraft_doc::SampleEncoding::NonlinearProfile)
         && d.source_color_context.as_ref().is_some_and(|c|c.original_icc.is_none()&&matches!((d.depth,c.source_precision),(photocraft_color::SampleType::F32,650)|(photocraft_color::SampleType::F64,750)))
         && d.xcf_state.as_ref().is_some_and(|s|matches!(s.filter_stacks.as_slice(),[stack] if d.layers.first().is_some_and(|l|stack.owner==ItemRef::Layer(l.id))&&matches!(stack.nodes.as_slice(),[node] if masked_scalar_point_node_kind(node).is_some())))
 }
 /// Cheap actual-owner/retained-node hint; full native/mask/OLD/STAGED proof is mandatory.
-pub fn masked_scalar_point_edit_kind(owner:&photocraft_doc::accounted_document::AccountedDocument,node:&FilterNode)->Option<photocraft_compose::MaskedScalarKind>{
-    (masked_scalar_point_owner(owner) && owner.document().xcf_state.as_ref().is_some_and(|s|matches!(s.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[actual] if std::ptr::eq(actual,node))))).then(||masked_scalar_point_node_kind(node)).flatten()
+pub fn masked_scalar_point_edit_kind(
+    owner: &photocraft_doc::accounted_document::AccountedDocument,
+    node: &FilterNode,
+) -> Option<photocraft_compose::MaskedScalarKind> {
+    (masked_scalar_point_owner(owner)
+        && owner
+            .document()
+            .xcf_state
+            .as_ref()
+            .is_some_and(|s| matches!(s.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[actual] if std::ptr::eq(actual,node)))))
+    .then(|| masked_scalar_point_node_kind(node))
+    .flatten()
 }
-pub(crate) fn masked_exposure_point_node(node:&FilterNode)->bool {
-    node.operation.name=="gegl:exposure" && node.operation.stored_version=="1:0"
-        && node.operation.schema_epoch==photocraft_compose::EXPOSURE_MASKED_EPOCH
-        && node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::EXPOSURE_MASKED_EPOCH)
+pub(crate) fn masked_exposure_point_node(node: &FilterNode) -> bool {
+    node.operation.name == "gegl:exposure"
+        && node.operation.stored_version == "1:0"
+        && node.operation.schema_epoch == photocraft_compose::EXPOSURE_MASKED_EPOCH
+        && node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == photocraft_compose::EXPOSURE_MASKED_EPOCH)
 }
-pub(crate) fn masked_exposure_point_owner(owner:&photocraft_doc::accounted_document::AccountedDocument)->bool {
-    let d=owner.document();
+pub(crate) fn masked_exposure_point_owner(owner: &photocraft_doc::accounted_document::AccountedDocument) -> bool {
+    let d = owner.document();
     owner.is_readonly_point_storage() && d.layers.len()==1 && d.mode==photocraft_doc::ColorMode::Rgb
         && d.sample_encoding==Some(photocraft_doc::SampleEncoding::NonlinearProfile)
         && d.source_color_context.as_ref().is_some_and(|c|c.original_icc.is_none() && matches!((d.depth,c.source_precision),(photocraft_color::SampleType::F32,650)|(photocraft_color::SampleType::F64,750)))
         && d.xcf_state.as_ref().is_some_and(|s|matches!(s.filter_stacks.as_slice(),[stack] if d.layers.first().is_some_and(|l|stack.owner==ItemRef::Layer(l.id)) && matches!(stack.nodes.as_slice(),[node] if masked_exposure_point_node(node))))
 }
 /// Exact actual-owner/node hint; complete OLD and STAGED programs remain authority.
-pub fn masked_exposure_point_edit_candidate(owner:&photocraft_doc::accounted_document::AccountedDocument,node:&FilterNode)->bool {
-    masked_exposure_point_owner(owner) && owner.document().xcf_state.as_ref().is_some_and(|s|matches!(s.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[actual] if std::ptr::eq(actual,node))))
+pub fn masked_exposure_point_edit_candidate(owner: &photocraft_doc::accounted_document::AccountedDocument, node: &FilterNode) -> bool {
+    masked_exposure_point_owner(owner)
+        && owner
+            .document()
+            .xcf_state
+            .as_ref()
+            .is_some_and(|s| matches!(s.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[actual] if std::ptr::eq(actual,node))))
 }
-pub(crate) fn loaded_exposure_point_node(node:&FilterNode)->bool {
-    node.operation.name=="gegl:exposure" && node.operation.stored_version=="1:0"
-        && node.operation.schema_epoch==photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH
-        && node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH)
+pub(crate) fn loaded_exposure_point_node(node: &FilterNode) -> bool {
+    node.operation.name == "gegl:exposure"
+        && node.operation.stored_version == "1:0"
+        && node.operation.schema_epoch == photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH
+        && node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH)
 }
-pub(crate) fn loaded_exposure_point_owner(owner:&photocraft_doc::accounted_document::AccountedDocument)->bool {
+pub(crate) fn loaded_exposure_point_owner(owner: &photocraft_doc::accounted_document::AccountedDocument) -> bool {
     owner.is_readonly_point_storage() && owner.document().layers.len()==1
         && owner.document().xcf_state.as_ref().is_some_and(|s|matches!(s.filter_stacks.as_slice(),[stack] if owner.document().layers.first().is_some_and(|l|stack.owner==ItemRef::Layer(l.id)) && matches!(stack.nodes.as_slice(),[node] if loaded_exposure_point_node(node))))
 }
 /// Exact retained-node UI hint only. Complete paid CURRENT proof remains mandatory.
-pub fn loaded_exposure_point_edit_candidate(owner:&photocraft_doc::accounted_document::AccountedDocument,node:&FilterNode)->bool {
-    loaded_exposure_point_owner(owner) && owner.document().xcf_state.as_ref().is_some_and(|s|matches!(s.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[actual] if std::ptr::eq(actual,node))))
+pub fn loaded_exposure_point_edit_candidate(owner: &photocraft_doc::accounted_document::AccountedDocument, node: &FilterNode) -> bool {
+    loaded_exposure_point_owner(owner)
+        && owner
+            .document()
+            .xcf_state
+            .as_ref()
+            .is_some_and(|s| matches!(s.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[actual] if std::ptr::eq(actual,node))))
 }
-pub(crate) fn semi_flatten_literal_node(node:&photocraft_doc::xcf_filters::FilterNode)->bool{
-    node.operation.name=="gimp:semi-flatten" && node.operation.stored_version=="0:0" && node.operation.schema_epoch==photocraft_compose::SEMI_FLATTEN_EPOCH && node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::SEMI_FLATTEN_EPOCH)
+pub(crate) fn semi_flatten_literal_node(node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
+    node.operation.name == "gimp:semi-flatten"
+        && node.operation.stored_version == "0:0"
+        && node.operation.schema_epoch == photocraft_compose::SEMI_FLATTEN_EPOCH
+        && node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == photocraft_compose::SEMI_FLATTEN_EPOCH)
 }
-pub(crate) fn semi_flatten_literal_owner(owner:&photocraft_doc::accounted_document::AccountedDocument)->bool{
-    owner.is_readonly_point_storage() && owner.document().xcf_state.as_ref().is_some_and(|state|matches!(state.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[node] if semi_flatten_literal_node(node))))
+pub(crate) fn semi_flatten_literal_owner(owner: &photocraft_doc::accounted_document::AccountedDocument) -> bool {
+    owner.is_readonly_point_storage()
+        && owner
+            .document()
+            .xcf_state
+            .as_ref()
+            .is_some_and(|state| matches!(state.filter_stacks.as_slice(),[stack] if matches!(stack.nodes.as_slice(),[node] if semi_flatten_literal_node(node))))
 }
-fn borrowed_value(input:&Value,structured:bool,literal:bool)->Result<()> {
-    let outer=object(SET,input,&["Number","Bool","Enum","Color","Config","Curve"])?;
-    if outer.len()!=1 {return Err(bad(SET,"one exact typed value required"));}
-    if let Some(config)=outer.get("Config") {
-        if !structured {return Err(bad(SET,"structured operation is inspection-only"));}
-        let entries=config.as_array().filter(|entries|entries.len()<=5).ok_or_else(||bad(SET,"closed configuration record limit"))?;
-        for (index,entry) in entries.iter().enumerate() {
-            let fields=object(SET,entry,&["name","value"])?;
-            if fields.len()!=2 {return Err(bad(SET,"configuration entry requires name/value"));}
-            let name=fields.get("name").and_then(Value::as_str).filter(|name|!name.is_empty() && name.len()<=128 && !name.contains('\0')).ok_or_else(||bad(SET,"bounded configuration name required"))?;
-            if entries.iter().take(index).any(|entry|entry.get("name").and_then(Value::as_str)==Some(name)) {return Err(bad(SET,"duplicate configuration name"));}
-            borrowed_value(fields.get("value").ok_or_else(||bad(SET,"configuration value missing"))?,true,false)?;
+fn borrowed_value(input: &Value, structured: bool, literal: bool) -> Result<()> {
+    let outer = object(SET, input, &["Number", "Bool", "Enum", "Color", "Config", "Curve"])?;
+    if outer.len() != 1 {
+        return Err(bad(SET, "one exact typed value required"));
+    }
+    if let Some(config) = outer.get("Config") {
+        if !structured {
+            return Err(bad(SET, "structured operation is inspection-only"));
+        }
+        let entries = config.as_array().filter(|entries| entries.len() <= 5).ok_or_else(|| bad(SET, "closed configuration record limit"))?;
+        for (index, entry) in entries.iter().enumerate() {
+            let fields = object(SET, entry, &["name", "value"])?;
+            if fields.len() != 2 {
+                return Err(bad(SET, "configuration entry requires name/value"));
+            }
+            let name = fields
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty() && name.len() <= 128 && !name.contains('\0'))
+                .ok_or_else(|| bad(SET, "bounded configuration name required"))?;
+            if entries.iter().take(index).any(|entry| entry.get("name").and_then(Value::as_str) == Some(name)) {
+                return Err(bad(SET, "duplicate configuration name"));
+            }
+            borrowed_value(fields.get("value").ok_or_else(|| bad(SET, "configuration value missing"))?, true, false)?;
         }
         return Ok(());
     }
-    if let Some(curve)=outer.get("Curve") {
-        if !structured {return Err(bad(SET,"curve requires closed config"));}
-        let fields=object(SET,curve,&["free","points_f64_bits","point_types","samples_f64_bits"])?;
-        if fields.len()!=4 || fields.get("free").and_then(Value::as_bool)!=Some(true)
+    if let Some(curve) = outer.get("Curve") {
+        if !structured {
+            return Err(bad(SET, "curve requires closed config"));
+        }
+        let fields = object(SET, curve, &["free", "points_f64_bits", "point_types", "samples_f64_bits"])?;
+        if fields.len() != 4
+            || fields.get("free").and_then(Value::as_bool) != Some(true)
             || !fields.get("points_f64_bits").and_then(Value::as_array).is_some_and(Vec::is_empty)
-            || !fields.get("point_types").and_then(Value::as_array).is_some_and(Vec::is_empty) {return Err(bad(SET,"only FREE256 curves editable"));}
-        let samples=fields.get("samples_f64_bits").and_then(Value::as_array).filter(|samples|samples.len()==256).ok_or_else(||bad(SET,"FREE256 samples required"))?;
-        for sample in samples {if !(0.0..=1.0).contains(&f64::from_bits(bits64(sample)?)) {return Err(bad(SET,"curve sample range"));}}
-        return Ok(());
-    }
-    if let Some(number)=outer.get("Number") {
-        let fields=object(SET,number,&["Float32Bits","Float64Bits","Signed"])?;
-        if fields.len()!=1 {return Err(bad(SET,"one exact numeric type required"));}
-        if let Some(value)=fields.get("Float64Bits") {bits64(value)?;return Ok(());}
-        if let Some(value)=fields.get("Float32Bits") {
-            let bits=value.as_u64().and_then(|bits|u32::try_from(bits).ok()).ok_or_else(||bad(SET,"exact Float32Bits required"))?;
-            if !f32::from_bits(bits).is_finite() {return Err(bad(SET,"nonfinite parameter bits"));}return Ok(());
+            || !fields.get("point_types").and_then(Value::as_array).is_some_and(Vec::is_empty)
+        {
+            return Err(bad(SET, "only FREE256 curves editable"));
         }
-        let fields=object(SET,fields.get("Signed").ok_or_else(||bad(SET,"numeric type required"))?,&["width","value"])?;
-        if fields.len()!=2 || fields.get("width").and_then(Value::as_u64)!=Some(32)
-            || fields.get("value").and_then(Value::as_i64).and_then(|value|i32::try_from(value).ok()).is_none() {return Err(bad(SET,"signed32 value required"));}
+        let samples = fields
+            .get("samples_f64_bits")
+            .and_then(Value::as_array)
+            .filter(|samples| samples.len() == 256)
+            .ok_or_else(|| bad(SET, "FREE256 samples required"))?;
+        for sample in samples {
+            if !(0.0..=1.0).contains(&f64::from_bits(bits64(sample)?)) {
+                return Err(bad(SET, "curve sample range"));
+            }
+        }
         return Ok(());
     }
-    if let Some(value)=outer.get("Bool") {if !value.is_boolean() {return Err(bad(SET,"Bool requires boolean"));}return Ok(());}
-    if let Some(value)=outer.get("Enum") {
-        let fields=object(SET,value,&["domain","value"])?;
-        if fields.len()!=2 || !fields.get("domain").and_then(Value::as_str).is_some_and(|text|!text.is_empty() && text.len()<=256 && !text.contains('\0'))
-            || fields.get("value").and_then(Value::as_i64).and_then(|value|i32::try_from(value).ok()).is_none() {return Err(bad(SET,"exact bounded enum required"));}
+    if let Some(number) = outer.get("Number") {
+        let fields = object(SET, number, &["Float32Bits", "Float64Bits", "Signed"])?;
+        if fields.len() != 1 {
+            return Err(bad(SET, "one exact numeric type required"));
+        }
+        if let Some(value) = fields.get("Float64Bits") {
+            bits64(value)?;
+            return Ok(());
+        }
+        if let Some(value) = fields.get("Float32Bits") {
+            let bits = value.as_u64().and_then(|bits| u32::try_from(bits).ok()).ok_or_else(|| bad(SET, "exact Float32Bits required"))?;
+            if !f32::from_bits(bits).is_finite() {
+                return Err(bad(SET, "nonfinite parameter bits"));
+            }
+            return Ok(());
+        }
+        let fields = object(SET, fields.get("Signed").ok_or_else(|| bad(SET, "numeric type required"))?, &["width", "value"])?;
+        if fields.len() != 2
+            || fields.get("width").and_then(Value::as_u64) != Some(32)
+            || fields.get("value").and_then(Value::as_i64).and_then(|value| i32::try_from(value).ok()).is_none()
+        {
+            return Err(bad(SET, "signed32 value required"));
+        }
         return Ok(());
     }
-    let color=object(SET,outer.get("Color").ok_or_else(||bad(SET,"typed scalar required"))?,&["components","encoding","profile"])?;
-    if color.len()!=3 || (!matches!(color.get("encoding").and_then(Value::as_str),Some("nonlinear_profile")) && !(literal && color.get("encoding").and_then(Value::as_str)==Some("linear"))) || !color.get("profile").is_some_and(Value::is_null) {return Err(bad(SET,"literal Color encoding/profile"));}
-    let components=color.get("components").and_then(Value::as_array).filter(|values|values.len()==4).ok_or_else(||bad(SET,"four Color components required"))?;
+    if let Some(value) = outer.get("Bool") {
+        if !value.is_boolean() {
+            return Err(bad(SET, "Bool requires boolean"));
+        }
+        return Ok(());
+    }
+    if let Some(value) = outer.get("Enum") {
+        let fields = object(SET, value, &["domain", "value"])?;
+        if fields.len() != 2
+            || !fields.get("domain").and_then(Value::as_str).is_some_and(|text| !text.is_empty() && text.len() <= 256 && !text.contains('\0'))
+            || fields.get("value").and_then(Value::as_i64).and_then(|value| i32::try_from(value).ok()).is_none()
+        {
+            return Err(bad(SET, "exact bounded enum required"));
+        }
+        return Ok(());
+    }
+    let color = object(SET, outer.get("Color").ok_or_else(|| bad(SET, "typed scalar required"))?, &["components", "encoding", "profile"])?;
+    if color.len() != 3
+        || (!matches!(color.get("encoding").and_then(Value::as_str), Some("nonlinear_profile"))
+            && !(literal && color.get("encoding").and_then(Value::as_str) == Some("linear")))
+        || !color.get("profile").is_some_and(Value::is_null)
+    {
+        return Err(bad(SET, "literal Color encoding/profile"));
+    }
+    let components =
+        color.get("components").and_then(Value::as_array).filter(|values| values.len() == 4).ok_or_else(|| bad(SET, "four Color components required"))?;
     for value in components {
-        let fields=object(SET,value,&["Float32Bits"])?;
-        let bits=fields.get("Float32Bits").and_then(Value::as_u64).and_then(|bits|u32::try_from(bits).ok()).ok_or_else(||bad(SET,"Color Float32Bits required"))?;
-        if fields.len()!=1 || !f32::from_bits(bits).is_finite() || !(0.0..=1.0).contains(&f32::from_bits(bits)) {return Err(bad(SET,"Color component range"));}
+        let fields = object(SET, value, &["Float32Bits"])?;
+        let bits = fields
+            .get("Float32Bits")
+            .and_then(Value::as_u64)
+            .and_then(|bits| u32::try_from(bits).ok())
+            .ok_or_else(|| bad(SET, "Color Float32Bits required"))?;
+        if fields.len() != 1 || !f32::from_bits(bits).is_finite() || !(0.0..=1.0).contains(&f32::from_bits(bits)) {
+            return Err(bad(SET, "Color component range"));
+        }
     }
     Ok(())
 }
 /// Root dispatch calls before normalization, any JSON clone or implicit float drop.
-pub(crate) fn pre_dispatch_set_change(session:&Session,cmd:&str,params:&Value,background:bool)->Result<()> {
-    if !matches!(cmd,SET|ENABLE) {return Err(bad(cmd,"not a SET/ENABLE lane"));}
-    let active=session.active().ok_or(EngineError::NoDocument)?;
-    if params.as_object().is_some_and(|object|object.contains_key("coalesce")) || session.coalesce_request.is_some() {return Err(bad(cmd,"coalescing refused"));}
-    if active.floating.is_some() || active.doc.xcf_state.as_ref().is_some_and(|state|state.floating.is_some()) {return Err(bad(cmd,"floating preview/attachment refused"));}
-    if background || session.command_is_background() || session.command_has_pending_job() || session.has_jobs() || session.color_restrict.is_some() || active.revision==u64::MAX {return Err(bad(cmd,"synchronous context/revision required"));}
-    object(cmd,params,if cmd==ENABLE {&["filterId","enabled"]} else {&["filterId","enabled","arguments","opacityF64Bits"]})?;
-    id(cmd,params)?;
-    if let Some(enabled)=params.get("enabled") {if !enabled.is_boolean() {return Err(bad(cmd,"enabled must be boolean"));}}
-    else if cmd==ENABLE {return Err(bad(cmd,"enabled required"));}
-    if let Some(opacity)=params.get("opacityF64Bits") {if !(0.0..=1.0).contains(&f64::from_bits(bits64(opacity)?)) {return Err(bad(cmd,"opacity outside 0..1"));}}
-    set_wire(params,0,&mut 0,&mut 0)?;
-    if let Some(arguments)=params.get("arguments") {
-        let arguments=arguments.as_array().filter(|values|values.len()<=64).ok_or_else(||bad(cmd,"at most64 patches required"))?;
-        for (index,argument) in arguments.iter().enumerate() {
-            let fields=object(cmd,argument,&["name","value"])?;
-            let name=fields.get("name").and_then(Value::as_str).filter(|text|!text.is_empty() && text.len()<=128 && !text.contains('\0')).ok_or_else(||bad(cmd,"bounded argument name required"))?;
-            if fields.len()!=2 || arguments.iter().take(index).any(|argument|argument.get("name").and_then(Value::as_str)==Some(name)) {return Err(bad(cmd,"duplicate/invalid patch"));}
-            borrowed_value(fields.get("value").ok_or_else(||bad(cmd,"argument value required"))?,name=="config",name=="color" && active.doc.accounted().is_some_and(semi_flatten_literal_owner))?;
+pub(crate) fn pre_dispatch_set_change(session: &Session, cmd: &str, params: &Value, background: bool) -> Result<()> {
+    if !matches!(cmd, SET | ENABLE) {
+        return Err(bad(cmd, "not a SET/ENABLE lane"));
+    }
+    let active = session.active().ok_or(EngineError::NoDocument)?;
+    if params.as_object().is_some_and(|object| object.contains_key("coalesce")) || session.coalesce_request.is_some() {
+        return Err(bad(cmd, "coalescing refused"));
+    }
+    if active.floating.is_some() || active.doc.xcf_state.as_ref().is_some_and(|state| state.floating.is_some()) {
+        return Err(bad(cmd, "floating preview/attachment refused"));
+    }
+    if background
+        || session.command_is_background()
+        || session.command_has_pending_job()
+        || session.has_jobs()
+        || session.color_restrict.is_some()
+        || active.revision == u64::MAX
+    {
+        return Err(bad(cmd, "synchronous context/revision required"));
+    }
+    object(cmd, params, if cmd == ENABLE { &["filterId", "enabled"] } else { &["filterId", "enabled", "arguments", "opacityF64Bits"] })?;
+    id(cmd, params)?;
+    if let Some(enabled) = params.get("enabled") {
+        if !enabled.is_boolean() {
+            return Err(bad(cmd, "enabled must be boolean"));
+        }
+    } else if cmd == ENABLE {
+        return Err(bad(cmd, "enabled required"));
+    }
+    if let Some(opacity) = params.get("opacityF64Bits")
+        && !(0.0..=1.0).contains(&f64::from_bits(bits64(opacity)?))
+    {
+        return Err(bad(cmd, "opacity outside 0..1"));
+    }
+    set_wire(params, 0, &mut 0, &mut 0)?;
+    if let Some(arguments) = params.get("arguments") {
+        let arguments = arguments.as_array().filter(|values| values.len() <= 64).ok_or_else(|| bad(cmd, "at most64 patches required"))?;
+        for (index, argument) in arguments.iter().enumerate() {
+            let fields = object(cmd, argument, &["name", "value"])?;
+            let name = fields
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|text| !text.is_empty() && text.len() <= 128 && !text.contains('\0'))
+                .ok_or_else(|| bad(cmd, "bounded argument name required"))?;
+            if fields.len() != 2 || arguments.iter().take(index).any(|argument| argument.get("name").and_then(Value::as_str) == Some(name)) {
+                return Err(bad(cmd, "duplicate/invalid patch"));
+            }
+            borrowed_value(
+                fields.get("value").ok_or_else(|| bad(cmd, "argument value required"))?,
+                name == "config",
+                name == "color" && active.doc.accounted().is_some_and(semi_flatten_literal_owner),
+            )?;
         }
     }
-    if cmd==SET && params.get("enabled").is_none() && params.get("opacityF64Bits").is_none()
-        && params.get("arguments").and_then(Value::as_array).is_none_or(Vec::is_empty) {return Err(bad(cmd,"an activation or patch required"));}
+    if cmd == SET
+        && params.get("enabled").is_none()
+        && params.get("opacityF64Bits").is_none()
+        && params.get("arguments").and_then(Value::as_array).is_none_or(Vec::is_empty)
+    {
+        return Err(bad(cmd, "an activation or patch required"));
+    }
     Ok(())
 }
-fn set_clone_headroom(snapshot:&crate::DocumentSnapshot,control:&Interrupt<'_>)->Result<()> {
+fn set_clone_headroom(snapshot: &crate::DocumentSnapshot, control: &Interrupt<'_>) -> Result<()> {
     // Existing native structural/payload limits count input without encoding a
     // document copy. Raster sparse-map clone cost remains a separate envelope.
-    photocraft_io::retained_native_input_bytes(snapshot,photocraft_io::NativeSaveLimits::default().preparation,control)
-        .map_err(|error|if control.cancelled() {EngineError::Cancelled} else {bad(SET,format!("filter retained input headroom: {error}"))})?;
-    let footprint=snapshot.resident_raster_footprint_with(control)?;
-    if footprint.clone_metadata_bytes.checked_mul(3).and_then(|n|n.checked_add(footprint.retained_bytes))
-        .is_none_or(|n|n>photocraft_raster::MAX_CHECKED_RASTER_BYTES) {return Err(bad(SET,"filter raster COW headroom"));}
-    control.check().map_err(|_|EngineError::Cancelled)
+    photocraft_io::retained_native_input_bytes(snapshot, photocraft_io::NativeSaveLimits::default().preparation, control)
+        .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(SET, format!("filter retained input headroom: {error}")) })?;
+    let footprint = snapshot.resident_raster_footprint_with(control)?;
+    if footprint
+        .clone_metadata_bytes
+        .checked_mul(3)
+        .and_then(|n| n.checked_add(footprint.retained_bytes))
+        .is_none_or(|n| n > photocraft_raster::MAX_CHECKED_RASTER_BYTES)
+    {
+        return Err(bad(SET, "filter raster COW headroom"));
+    }
+    control.check().map_err(|_| EngineError::Cancelled)
 }
-fn final_set_context(session:&Session,snapshot:&crate::DocumentSnapshot,revision:u64,params:&Value,control:&Interrupt<'_>)->Result<()> {
-    control.check().map_err(|_|EngineError::Cancelled)?;
-    pre_dispatch_set_change(session,SET,params,false)?;
-    let active=session.active().ok_or(EngineError::NoDocument)?;
-    if active.revision!=revision || !active.doc.shares_state(snapshot) {return Err(bad(SET,"filter target changed before commit"));}
+fn final_set_context(session: &Session, snapshot: &crate::DocumentSnapshot, revision: u64, params: &Value, control: &Interrupt<'_>) -> Result<()> {
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    pre_dispatch_set_change(session, SET, params, false)?;
+    let active = session.active().ok_or(EngineError::NoDocument)?;
+    if active.revision != revision || !active.doc.shares_state(snapshot) {
+        return Err(bad(SET, "filter target changed before commit"));
+    }
     Ok(())
 }
 fn set(s: &mut Session, params: &Value) -> Result<Value> {
@@ -816,7 +1014,7 @@ fn set(s: &mut Session, params: &Value) -> Result<Value> {
 /// Checked staging and a final Session publication cancellation fence.
 pub fn set_with_interrupt(s: &mut Session, params: &Value, control: &Interrupt<'_>) -> Result<Value> {
     control.check().map_err(|_| EngineError::Cancelled)?;
-    pre_dispatch_set_change(s,SET,params,false)?;
+    pre_dispatch_set_change(s, SET, params, false)?;
     object(SET, params, &["filterId", "enabled", "arguments", "opacityF64Bits"])?;
     let id = id(SET, params)?;
     let enabled = params.get("enabled").map(|value| value.as_bool().ok_or_else(|| bad(SET, "enabled requires a boolean"))).transpose()?;
@@ -830,22 +1028,22 @@ pub fn set_with_interrupt(s: &mut Session, params: &Value, control: &Interrupt<'
     let revision = s.active().ok_or(EngineError::NoDocument)?.revision;
     snapshot.validate_resident().map_err(|error| bad(SET, format!("filter edits require resident editable storage: {error}")))?;
     let document: &Document = &snapshot;
-    document.validate_xcf_state_with(control).map_err(|e| if control.cancelled() {EngineError::Cancelled} else {bad(SET,e.to_string())})?;
-    set_clone_headroom(&snapshot,control)?;
+    document.validate_xcf_state_with(control).map_err(|e| if control.cancelled() { EngineError::Cancelled } else { bad(SET, e.to_string()) })?;
+    set_clone_headroom(&snapshot, control)?;
     let state = document.xcf_state.as_ref().ok_or_else(|| bad(SET, "missing imported filter state"))?;
     let stack = state.filter_stacks.iter().find(|stack| stack.nodes.iter().any(|node| node.id == id)).ok_or_else(|| bad(SET, "unknown filterId"))?;
     let node = stack.nodes.iter().find(|node| node.id == id).ok_or_else(|| bad(SET, "unknown filterId"))?;
-    if let ItemRef::Layer(owner) = stack.owner {
-        if document.layer(owner).is_some_and(|layer| matches!(layer.content, LayerContent::Group(_))) {
-            return group_activation::set(s, params, &snapshot, revision, id, control);
-        }
+    if let ItemRef::Layer(owner) = stack.owner
+        && document.layer(owner).is_some_and(|layer| matches!(layer.content, LayerContent::Group(_)))
+    {
+        return group_activation::set(s, params, &snapshot, revision, id, control);
     }
     let patches = patches(params, &node.operation.name)?;
     if enabled.is_none() && opacity.is_none() && patches.is_empty() {
         return Err(bad(SET, "an activation or parameter patch is required"));
     }
     for patch in &patches {
-        control.check().map_err(|_|EngineError::Cancelled)?;
+        control.check().map_err(|_| EngineError::Cancelled)?;
         let original =
             node.arguments.iter().find(|argument| argument.name == patch.name).ok_or_else(|| bad(SET, format!("unknown stored parameter {}", patch.name)))?;
         if !same_parameter_type(node, &patch.name, &original.value, &patch.value) {
@@ -875,7 +1073,7 @@ pub fn set_with_interrupt(s: &mut Session, params: &Value, control: &Interrupt<'
             // This closed consumer validates disabled native input and schema.
             // Its identity path must not execute division that was not requested.
             validate_current_pipeline_with_interrupt(document, control)?;
-            final_set_context(s,&snapshot,revision,params,control)?;
+            final_set_context(s, &snapshot, revision, params, control)?;
             return Ok(json!({"filterId":id.0.to_string(),"updated":false}));
         }
         let mut active = document.clone();
@@ -887,13 +1085,13 @@ pub fn set_with_interrupt(s: &mut Session, params: &Value, control: &Interrupt<'
             .ok_or_else(|| bad(SET, "missing staged filter"))?;
         active_node.enabled = true;
         validate_current_pipeline_with_interrupt(&active, control)?;
-        final_set_context(s,&snapshot,revision,params,control)?;
+        final_set_context(s, &snapshot, revision, params, control)?;
         return Ok(json!({"filterId":id.0.to_string(),"updated":false}));
     }
-    final_set_context(s,&snapshot,revision,params,control)?;
+    final_set_context(s, &snapshot, revision, params, control)?;
     let mut updated = false;
     s.edit_with_interrupt("Edit GIMP Stock Filter", control, |doc, _| {
-        doc.validate_xcf_state_with(control).map_err(|e|if control.cancelled() {EngineError::Cancelled} else {bad(SET,e.to_string())})?;
+        doc.validate_xcf_state_with(control).map_err(|e| if control.cancelled() { EngineError::Cancelled } else { bad(SET, e.to_string()) })?;
         let state = doc.xcf_state.as_ref().ok_or_else(|| bad(SET, "missing imported filter state"))?;
         let stack = state.filter_stacks.iter().find(|stack| stack.nodes.iter().any(|node| node.id == id)).ok_or_else(|| bad(SET, "unknown filterId"))?;
         let ItemRef::Layer(owner) = stack.owner else {
@@ -917,7 +1115,7 @@ pub fn set_with_interrupt(s: &mut Session, params: &Value, control: &Interrupt<'
         let node = stack.nodes.iter_mut().find(|node| node.id == id).ok_or_else(|| bad(SET, "unknown filterId"))?;
         let previous = node.clone();
         for patch in &patches {
-            control.check().map_err(|_|EngineError::Cancelled)?;
+            control.check().map_err(|_| EngineError::Cancelled)?;
             let argument = node
                 .arguments
                 .iter_mut()
@@ -961,7 +1159,7 @@ fn enable(s: &mut Session, params: &Value) -> Result<Value> {
     enable_with_interrupt(s, params, &Interrupt::NONE)
 }
 pub fn enable_with_interrupt(s: &mut Session, params: &Value, control: &Interrupt<'_>) -> Result<Value> {
-    pre_dispatch_set_change(s,ENABLE,params,false)?;
+    pre_dispatch_set_change(s, ENABLE, params, false)?;
     object(ENABLE, params, &["filterId", "enabled"])?;
     let enabled = params.get("enabled").and_then(Value::as_bool).ok_or_else(|| bad(ENABLE, "enabled must be a boolean"))?;
     let id = id(ENABLE, params)?;
@@ -983,7 +1181,9 @@ pub fn pre_dispatch_stack_change_with_background(s: &Session, cmd: &str, params:
     if !matches!(cmd, REMOVE | MOVE) {
         return Err(bad(cmd, "not a filter stack command"));
     }
-    if background { return Err(bad(cmd, "filter stack edit requires synchronous context")); }
+    if background {
+        return Err(bad(cmd, "filter stack edit requires synchronous context"));
+    }
     object(cmd, params, if cmd == REMOVE { &["filterId"] } else { &["filterId", "index"] })?;
     id(cmd, params)?;
     if cmd == MOVE {
@@ -998,7 +1198,9 @@ pub(crate) fn pre_dispatch_point_move(s: &Session, cmd: &str, params: &Value, ba
     if cmd != MOVE || !s.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_point_storage()) {
         return Err(bad(cmd, "Point move requires actual Point storage"));
     }
-    if background { return Err(bad(cmd, "filter stack edit requires synchronous context")); }
+    if background {
+        return Err(bad(cmd, "filter stack edit requires synchronous context"));
+    }
     object(cmd, params, &["filterId", "index"])?;
     id(cmd, params)?;
     params.get("index").and_then(Value::as_u64).filter(|index| *index < 1024).ok_or_else(|| bad(cmd, "index must be a bounded owner-local integer"))?;
@@ -1011,7 +1213,9 @@ pub(crate) fn pre_dispatch_point_remove(s: &Session, cmd: &str, params: &Value, 
     if cmd != REMOVE || !s.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_point_storage()) {
         return Err(bad(cmd, "Point removal requires actual Point storage"));
     }
-    if background { return Err(bad(cmd, "filter stack edit requires synchronous context")); }
+    if background {
+        return Err(bad(cmd, "filter stack edit requires synchronous context"));
+    }
     object(cmd, params, &["filterId"])?;
     id(cmd, params)?;
     stack_context_for(s, cmd, true)
@@ -1026,15 +1230,15 @@ fn stack_context_for(s: &Session, cmd: &str, point: bool) -> Result<()> {
         return Err(bad(cmd, "filter stack edit requires synchronous uncoalesced context without jobs"));
     }
     let active = s.active().ok_or(EngineError::NoDocument)?;
-    if s.documents().len() > 1024 { return Err(bad(cmd, "filter stack document census limit")); }
+    if s.documents().len() > 1024 {
+        return Err(bad(cmd, "filter stack document census limit"));
+    }
     if s.documents().iter().any(|document| document.floating.is_some() || document.doc.xcf_state.as_ref().is_some_and(|state| state.floating.is_some())) {
         return Err(bad(cmd, "filter stack edit refuses an existing floating selection or imported attachment"));
     }
-    if active.revision == u64::MAX || if point {
-        active.doc.accounted().is_none_or(|owner| !owner.is_readonly_point_storage())
-    } else {
-        active.doc.accounted().is_some()
-    } {
+    if active.revision == u64::MAX
+        || if point { active.doc.accounted().is_none_or(|owner| !owner.is_readonly_point_storage()) } else { active.doc.accounted().is_some() }
+    {
         return Err(bad(cmd, "resident document and revision headroom required"));
     }
     Ok(())
@@ -1077,7 +1281,9 @@ fn stack_change(s: &mut Session, params: &Value, remove: bool, control: &Interru
     for stack in &state.filter_stacks {
         control.check().map_err(|_| EngineError::Cancelled)?;
         nodes = nodes.checked_add(stack.nodes.len()).filter(|count| *count <= 10_000).ok_or_else(|| bad(cmd, "filter node census limit"))?;
-        if stack.nodes.len() > 1024 { return Err(bad(cmd, "owner filter stack limit")); }
+        if stack.nodes.len() > 1024 {
+            return Err(bad(cmd, "owner filter stack limit"));
+        }
     }
     document.validate_xcf_state_with(control).map_err(|e| if control.cancelled() { EngineError::Cancelled } else { bad(cmd, e.to_string()) })?;
     crate::xcf_filter_insert_cmds::headroom(document, control)
@@ -1261,17 +1467,26 @@ mod tests {
     fn stack_transport_background_and_inactive_floating_refuse_without_normalizing() {
         let mut session = Session::new();
         let params = json!({"filterId":"1","index":0});
-        assert!(pre_dispatch_stack_change_with_background(&session,MOVE,&params,true).unwrap_err().to_string().contains("synchronous"));
-        let document = photocraft_doc::Document::new("Own inactive",photocraft_doc::Size::new(1,1),photocraft_doc::ColorMode::Rgb,photocraft_doc::SampleType::U8);
-        session.add_document(document,None).unwrap();
+        assert!(pre_dispatch_stack_change_with_background(&session, MOVE, &params, true).unwrap_err().to_string().contains("synchronous"));
+        let document =
+            photocraft_doc::Document::new("Own inactive", photocraft_doc::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        session.add_document(document, None).unwrap();
         session.active_mut().unwrap().doc.try_resident_mut().unwrap().xcf_state = Some(photocraft_doc::XcfState {
-            floating:Some(photocraft_doc::xcf_editing::FloatingAttachment {layer:photocraft_doc::LayerId(99),target:ItemRef::Layer(photocraft_doc::LayerId(100))}),
+            floating: Some(photocraft_doc::xcf_editing::FloatingAttachment {
+                layer: photocraft_doc::LayerId(99),
+                target: ItemRef::Layer(photocraft_doc::LayerId(100)),
+            }),
             ..Default::default()
         });
         let inactive = session.active().unwrap().doc.clone();
-        session.add_document(photocraft_doc::Document::new("Own current",photocraft_doc::Size::new(1,1),photocraft_doc::ColorMode::Rgb,photocraft_doc::SampleType::U8),None).unwrap();
+        session
+            .add_document(
+                photocraft_doc::Document::new("Own current", photocraft_doc::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8),
+                None,
+            )
+            .unwrap();
         let current = session.active().unwrap().doc.clone();
-        assert!(pre_dispatch_stack_change(&session,MOVE,&params).unwrap_err().to_string().contains("floating"));
+        assert!(pre_dispatch_stack_change(&session, MOVE, &params).unwrap_err().to_string().contains("floating"));
         assert!(session.documents().first().unwrap().doc.shares_state(&inactive));
         assert!(session.active().unwrap().doc.shares_state(&current));
         assert!(session.journal.is_empty());
@@ -1279,40 +1494,67 @@ mod tests {
 
     #[test]
     fn disabled_unknown_descriptor_order_and_removal_do_not_require_activation() {
-        use photocraft_doc::{ColorMode,Document,Layer,SampleEncoding,SampleType,Size,XcfState};
-        use photocraft_doc::import_compositing::{GimpComposition,GimpOperator,GimpSpace,ResolvedGimpComposition};
-        use photocraft_doc::xcf_filters::{FilterStack,OperationIdentity};
-        let mut document = Document::new("Own inert descriptors",Size::new(2,1),ColorMode::Rgb,SampleType::F64);
+        use photocraft_doc::import_compositing::{GimpComposition, GimpOperator, GimpSpace, ResolvedGimpComposition};
+        use photocraft_doc::xcf_filters::{FilterStack, OperationIdentity};
+        use photocraft_doc::{ColorMode, Document, Layer, SampleEncoding, SampleType, Size, XcfState};
+        let mut document = Document::new("Own inert descriptors", Size::new(2, 1), ColorMode::Rgb, SampleType::F64);
         document.sample_encoding = Some(SampleEncoding::Linear);
         document.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
-        let mut layer = Layer::raster("Own raster",document.pixel_format());
-        layer.surface_mut().unwrap().try_write_region_f64(document.bounds(),&[0.25,0.5,0.75,1.0,0.125,0.25,0.5,1.0]).unwrap();
-        let owner = layer.id; document.layers.push(layer);
-        let mut state = XcfState::default(); state.provenance.format_version=22;
+        let mut layer = Layer::raster("Own raster", document.pixel_format());
+        layer.surface_mut().unwrap().try_write_region_f64(document.bounds(), &[0.25, 0.5, 0.75, 1.0, 0.125, 0.25, 0.5, 1.0]).unwrap();
+        let owner = layer.id;
+        document.layers.push(layer);
+        let mut state = XcfState::default();
+        state.provenance.format_version = 22;
         state.reconcile_layers(&document).unwrap();
-        let item = state.items.iter_mut().find(|item|item.item==ItemRef::Layer(owner)).unwrap();
-        item.raster_bounds=Some(document.bounds());
-        item.composition=Some(GimpComposition {compatibility_epoch:"own-current-filter-policy".into(),source_mode:28,legacy:false,stored_blend_space:1,stored_composite_space:1,stored_operator:1,pass_through:false,
-            resolved:Some(ResolvedGimpComposition {blend_space:GimpSpace::LinearRgb,composite_space:GimpSpace::LinearRgb,operator:GimpOperator::Union})});
-        let node = |id| FilterNode {id:FilterId(id),operation:OperationIdentity {name:"own:unqualified".into(),stored_version:"0:0".into(),schema_epoch:"own-retained-metadata".into()},
-            source_display_name:Some("Own source label".into()),source_icon:Some("Own icon".into()),arguments:Vec::new(),enabled:false,opacity_f64_bits:1f64.to_bits(),source_clipping:None,source_region:None,mask:None,auxiliary:Vec::new(),composition:None};
-        state.filter_stacks.push(FilterStack {owner:ItemRef::Layer(owner),revision:3,nodes:vec![node(1),node(2)]});
-        document.xcf_state=Some(state);
-        let mut session=Session::new(); session.add_document(document,None).unwrap();
-        let before=session.active().unwrap().doc.clone();
-        let native=photocraft_format::save_to_bytes(&before,&Default::default()).unwrap();
-        let noop=move_with_interrupt(&mut session,&json!({"filterId":"1","index":0}),&Interrupt::NONE).unwrap();
-        assert_eq!(noop["updated"],false); assert_eq!(session.active().unwrap().history.past_len(),0);
-        move_with_interrupt(&mut session,&json!({"filterId":"1","index":1}),&Interrupt::NONE).unwrap();
-        let moved=session.active().unwrap().doc.clone();
-        assert_eq!(moved.layers,before.layers);
-        assert_eq!(moved.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[1],before.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0]);
-        session.execute("edit.undo",json!({})).unwrap();
-        assert_eq!(photocraft_format::save_to_bytes(&session.active().unwrap().doc,&Default::default()).unwrap(),native);
-        remove_with_interrupt(&mut session,&json!({"filterId":"1"}),&Interrupt::NONE).unwrap();
-        assert_eq!(session.active().unwrap().doc.xcf_state.as_ref().unwrap().filter_stacks[0].nodes,vec![before.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[1].clone()]);
-        session.execute("edit.undo",json!({})).unwrap();
-        assert_eq!(photocraft_format::save_to_bytes(&session.active().unwrap().doc,&Default::default()).unwrap(),native);
+        let item = state.items.iter_mut().find(|item| item.item == ItemRef::Layer(owner)).unwrap();
+        item.raster_bounds = Some(document.bounds());
+        item.composition = Some(GimpComposition {
+            compatibility_epoch: "own-current-filter-policy".into(),
+            source_mode: 28,
+            legacy: false,
+            stored_blend_space: 1,
+            stored_composite_space: 1,
+            stored_operator: 1,
+            pass_through: false,
+            resolved: Some(ResolvedGimpComposition { blend_space: GimpSpace::LinearRgb, composite_space: GimpSpace::LinearRgb, operator: GimpOperator::Union }),
+        });
+        let node = |id| FilterNode {
+            id: FilterId(id),
+            operation: OperationIdentity { name: "own:unqualified".into(), stored_version: "0:0".into(), schema_epoch: "own-retained-metadata".into() },
+            source_display_name: Some("Own source label".into()),
+            source_icon: Some("Own icon".into()),
+            arguments: Vec::new(),
+            enabled: false,
+            opacity_f64_bits: 1f64.to_bits(),
+            source_clipping: None,
+            source_region: None,
+            mask: None,
+            auxiliary: Vec::new(),
+            composition: None,
+        };
+        state.filter_stacks.push(FilterStack { owner: ItemRef::Layer(owner), revision: 3, nodes: vec![node(1), node(2)] });
+        document.xcf_state = Some(state);
+        let mut session = Session::new();
+        session.add_document(document, None).unwrap();
+        let before = session.active().unwrap().doc.clone();
+        let native = photocraft_format::save_to_bytes(&before, &Default::default()).unwrap();
+        let noop = move_with_interrupt(&mut session, &json!({"filterId":"1","index":0}), &Interrupt::NONE).unwrap();
+        assert_eq!(noop["updated"], false);
+        assert_eq!(session.active().unwrap().history.past_len(), 0);
+        move_with_interrupt(&mut session, &json!({"filterId":"1","index":1}), &Interrupt::NONE).unwrap();
+        let moved = session.active().unwrap().doc.clone();
+        assert_eq!(moved.layers, before.layers);
+        assert_eq!(moved.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[1], before.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0]);
+        session.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(photocraft_format::save_to_bytes(&session.active().unwrap().doc, &Default::default()).unwrap(), native);
+        remove_with_interrupt(&mut session, &json!({"filterId":"1"}), &Interrupt::NONE).unwrap();
+        assert_eq!(
+            session.active().unwrap().doc.xcf_state.as_ref().unwrap().filter_stacks[0].nodes,
+            vec![before.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[1].clone()]
+        );
+        session.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(photocraft_format::save_to_bytes(&session.active().unwrap().doc, &Default::default()).unwrap(), native);
     }
 
     #[test]
@@ -1438,31 +1680,34 @@ mod set_admission_tests {
     use super::*;
     #[test]
     fn set_wire_refuses_unknown_nested_and_oversized_patch_before_dispatch() {
-        let mut session=Session::new();
-        session.execute("file.new",json!({"width":2,"height":2})).unwrap();
-        for params in [json!({"filterId":"1","enabled":"true"}),json!({"filterId":"01","enabled":true}),
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width":2,"height":2})).unwrap();
+        for params in [
+            json!({"filterId":"1","enabled":"true"}),
+            json!({"filterId":"01","enabled":true}),
             json!({"filterId":"1","arguments":[{"name":"threshold","value":{"Number":{"Float32Bits":2143289344u32}}}]}),
             json!({"filterId":"1","arguments":[{"name":"threshold","value":{"Resource":"inert"}}]}),
-            json!({"filterId":"1","arguments":[{"name":"a","value":{"Bool":true}},{"name":"a","value":{"Bool":false}}]})] {
-            let before=session.active().unwrap().doc.clone();
-            assert!(pre_dispatch_set_change(&session,SET,&params,false).is_err());
+            json!({"filterId":"1","arguments":[{"name":"a","value":{"Bool":true}},{"name":"a","value":{"Bool":false}}]}),
+        ] {
+            let before = session.active().unwrap().doc.clone();
+            assert!(pre_dispatch_set_change(&session, SET, &params, false).is_err());
             assert!(session.active().unwrap().doc.shares_state(&before));
         }
-        let args=vec![json!({"name":"a","value":{"Bool":true}});65];
-        assert!(pre_dispatch_set_change(&session,SET,&json!({"filterId":"1","arguments":args}),false).is_err());
+        let args = vec![json!({"name":"a","value":{"Bool":true}}); 65];
+        assert!(pre_dispatch_set_change(&session, SET, &json!({"filterId":"1","arguments":args}), false).is_err());
     }
     #[test]
     fn enable_admission_rejects_background_coalesce_and_overflow_before_edit() {
-        let mut session=Session::new();
-        session.execute("file.new",json!({"width":2,"height":2})).unwrap();
-        let params=json!({"filterId":"1","enabled":false});
-        let before=session.active().unwrap().doc.clone();
-        assert!(pre_dispatch_set_change(&session,ENABLE,&params,true).is_err());
-        session.coalesce_request=Some("Own retained coalesce".into());
-        assert!(pre_dispatch_set_change(&session,ENABLE,&params,false).is_err());
-        session.coalesce_request=None;
-        session.active_mut().unwrap().revision=u64::MAX;
-        assert!(pre_dispatch_set_change(&session,ENABLE,&params,false).is_err());
+        let mut session = Session::new();
+        session.execute("file.new", json!({"width":2,"height":2})).unwrap();
+        let params = json!({"filterId":"1","enabled":false});
+        let before = session.active().unwrap().doc.clone();
+        assert!(pre_dispatch_set_change(&session, ENABLE, &params, true).is_err());
+        session.coalesce_request = Some("Own retained coalesce".into());
+        assert!(pre_dispatch_set_change(&session, ENABLE, &params, false).is_err());
+        session.coalesce_request = None;
+        session.active_mut().unwrap().revision = u64::MAX;
+        assert!(pre_dispatch_set_change(&session, ENABLE, &params, false).is_err());
         assert!(session.active().unwrap().doc.shares_state(&before));
     }
 }

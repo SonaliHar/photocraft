@@ -17,15 +17,19 @@ use photocraft_text::xcf::runtime_font_input::{self as runtime_font, PreparedRun
 fn bundled_font(ctl: &Interrupt<'_>) -> Result<PreparedRuntimeFont<'static>> {
     runtime_font::prepare_with_charge(
         runtime_font::RuntimeInput { bytes: &photocraft_text::fonts::INTER_REGULAR, identity: runtime_font::FaceIdentity::inter_regular() },
-        runtime_font::Limits::default(), ctl,
+        runtime_font::Limits::default(),
+        ctl,
         &mut |n| if n <= 8 << 20 { Ok(()) } else { Err(photocraft_text::xcf::TextSourceError::Budget) },
         &mut |n| if n <= 1_000_000 { Ok(()) } else { Err(photocraft_text::xcf::TextSourceError::Budget) },
-    ).map_err(|e| text_error(e, ctl))
+    )
+    .map_err(|e| text_error(e, ctl))
 }
 fn font_charge(font: &PreparedRuntimeFont<'_>, ctl: &Interrupt<'_>) -> Result<u64> {
     ctl.check().map_err(|_| EngineError::Cancelled)?;
     let req = font.requirements();
-    if req.peak_bytes > 8 << 20 || req.work_units > 1_000_000 { return Err(bad("exact font operation admission")); }
+    if req.peak_bytes > 8 << 20 || req.work_units > 1_000_000 {
+        return Err(bad("exact font operation admission"));
+    }
     Ok(req.peak_bytes)
 }
 
@@ -42,7 +46,13 @@ fn qualified_index(doc: &Document, owner: LayerId, ctl: &Interrupt<'_>, require_
     let font = bundled_font(ctl)?;
     qualified_index_with_font(doc, owner, ctl, require_editable, &font)
 }
-fn qualified_index_with_font(doc: &Document, owner: LayerId, ctl: &Interrupt<'_>, require_editable: bool, font: &PreparedRuntimeFont<'_>) -> Result<(usize, usize, [i32; 2])> {
+fn qualified_index_with_font(
+    doc: &Document,
+    owner: LayerId,
+    ctl: &Interrupt<'_>,
+    require_editable: bool,
+    font: &PreparedRuntimeFont<'_>,
+) -> Result<(usize, usize, [i32; 2])> {
     font_charge(font, ctl)?;
     let (idx, rid, origin) = source_index(doc, owner, ctl, require_editable)?;
     let state = doc.xcf_state.as_ref().ok_or_else(|| bad("missing source state"))?;
@@ -230,9 +240,7 @@ fn update(doc: &mut Document, owner: LayerId, edit: &Edit<'_>, font: &PreparedRu
         Edit::Position(next) => photocraft_text::xcf::set_rectilinear_origin(item, resource, origin, *next, font, limit, ctl, &mut charge),
         Edit::Spacing(spacing) => photocraft_text::xcf::set_rectilinear_letter_spacing(item, resource, origin, *spacing, font, limit, ctl, &mut charge),
         Edit::Color(color) => photocraft_text::xcf::set_rectilinear_color(item, resource, origin, *color, font, limit, ctl, &mut charge),
-        Edit::Content(content) => {
-            set_scaled_rectilinear_content(item, resource, ScaledText { content, origin, size_px: size }, font, limit, ctl, &mut charge)
-        }
+        Edit::Content(content) => set_scaled_rectilinear_content(item, resource, ScaledText { content, origin, size_px: size }, font, limit, ctl, &mut charge),
         Edit::Size(size_px) => {
             if mode != photocraft_text::xcf::RectilinearAntialias::AreaCoverage {
                 return Err(bad("font size editing requires qualified AA text"));
@@ -248,10 +256,18 @@ fn apply(s: &mut Session, owner: LayerId, edit: Edit<'_>, supplied: Option<&Prep
     let state = doc.xcf_state.as_ref().ok_or_else(|| bad("missing source state"))?;
     photocraft_text::xcf::qualify_placed_layout_colored_rectilinear_source(
         state.source_items.get(idx).ok_or_else(|| bad("missing text source"))?,
-        state.resources.get(rid).ok_or_else(|| bad("missing exact font"))?, origin, ctl,
-    ).map_err(|e| text_error(e, ctl))?;
+        state.resources.get(rid).ok_or_else(|| bad("missing exact font"))?,
+        origin,
+        ctl,
+    )
+    .map_err(|e| text_error(e, ctl))?;
     let fallback;
-    let font = if let Some(font) = supplied { font } else { fallback = bundled_font(ctl)?; &fallback };
+    let font = if let Some(font) = supplied {
+        font
+    } else {
+        fallback = bundled_font(ctl)?;
+        &fallback
+    };
     let mut held = font_charge(font, ctl)?;
     let mut proposed = (**doc).clone();
     let changed = update(&mut proposed, owner, &edit, font, &mut held, ctl)?;
@@ -269,6 +285,11 @@ fn apply(s: &mut Session, owner: LayerId, edit: Edit<'_>, supplied: Option<&Prep
             Edit::Spacing(_) => "Edit GIMP Text Letter Spacing",
             Edit::LineSpacing(_) => "Edit GIMP Text Line Spacing",
         };
+        // Proposal preparation is a completed resident phase. Its temporary
+        // shaping allocations and model must be gone before the commit phase
+        // reuses the same resident ceiling; the operation control is unchanged.
+        drop(proposed);
+        held = font_charge(font, ctl)?;
         s.edit_with_runtime_font_with_interrupt(label, font, ctl, |doc, _| {
             update(doc, owner, &edit, font, &mut held, ctl)?;
             Ok(())
@@ -485,7 +506,14 @@ pub fn underline_edit_candidate(doc: &Document, owner: LayerId) -> bool {
     source_index(doc, owner, &Interrupt::NONE, true).is_ok() && current_underline_ranges(doc, owner).is_some()
 }
 
-fn update_underline(doc: &mut Document, owner: LayerId, ranges: &[[usize; 2]], font: &PreparedRuntimeFont<'_>, used: &mut u64, ctl: &Interrupt<'_>) -> Result<bool> {
+fn update_underline(
+    doc: &mut Document,
+    owner: LayerId,
+    ranges: &[[usize; 2]],
+    font: &PreparedRuntimeFont<'_>,
+    used: &mut u64,
+    ctl: &Interrupt<'_>,
+) -> Result<bool> {
     let (idx, rid, origin) = source_index(doc, owner, ctl, true)?;
     let state = doc.xcf_state.as_ref().ok_or_else(|| bad("missing source state"))?;
     let item = state.source_items.get(idx).ok_or_else(|| bad("missing text source"))?;
@@ -530,7 +558,12 @@ fn set_underline_with_font_input(s: &mut Session, p: &Value, font: Option<&Prepa
         let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
         source_index(doc, owner, ctl, true)?;
         let fallback;
-        let font = if let Some(font) = font { font } else { fallback = bundled_font(ctl)?; &fallback };
+        let font = if let Some(font) = font {
+            font
+        } else {
+            fallback = bundled_font(ctl)?;
+            &fallback
+        };
         let mut used = font_charge(font, ctl)?;
         let mut proposed = (**doc).clone();
         let updated = update_underline(&mut proposed, owner, ranges, font, &mut used, ctl)?;
@@ -540,6 +573,8 @@ fn set_underline_with_font_input(s: &mut Session, p: &Value, font: Option<&Prepa
             if ctl.cancelled() {
                 return Err(EngineError::Cancelled);
             }
+            drop(proposed);
+            used = font_charge(font, ctl)?;
             s.edit_with_runtime_font_with_interrupt("Edit GIMP Text Underline", font, ctl, |doc, _| {
                 update_underline(doc, owner, ranges, font, &mut used, ctl)?;
                 Ok(())
@@ -640,7 +675,8 @@ mod runtime_font_tests {
     #[test]
     fn malformed_edit_is_rejected_before_missing_document_or_font() {
         let mut session = Session::new();
-        for params in [json!({"layerId":"0","content":"I"}), json!({"layerId":"1","content":""}), json!({"layerId":"1","content":"I","fontPath":"never-read"})] {
+        for params in [json!({"layerId":"0","content":"I"}), json!({"layerId":"1","content":""}), json!({"layerId":"1","content":"I","fontPath":"never-read"})]
+        {
             assert!(matches!(set_content_with_interrupt(&mut session, &params, &Interrupt::NONE), Err(EngineError::BadParams { .. })));
         }
         assert!(matches!(set_content_with_interrupt(&mut session, &json!({"layerId":"1","content":"I"}), &Interrupt::NONE), Err(EngineError::NoDocument)));
@@ -648,7 +684,14 @@ mod runtime_font_tests {
     #[test]
     fn prepared_external_authority_reuses_exact_bytes_and_cancellation() {
         let owned = photocraft_text::fonts::INTER_REGULAR.to_vec();
-        let font = runtime_font::prepare_with_charge(runtime_font::RuntimeInput { bytes: &owned, identity: runtime_font::FaceIdentity::inter_regular() }, runtime_font::Limits::default(), &Interrupt::NONE, &mut |_| Ok(()), &mut |_| Ok(())).unwrap();
+        let font = runtime_font::prepare_with_charge(
+            runtime_font::RuntimeInput { bytes: &owned, identity: runtime_font::FaceIdentity::inter_regular() },
+            runtime_font::Limits::default(),
+            &Interrupt::NONE,
+            &mut |_| Ok(()),
+            &mut |_| Ok(()),
+        )
+        .unwrap();
         let mut session = Session::new();
         let params = json!({"layerId":"1","content":"I"});
         assert!(matches!(set_content_with_runtime_font(&mut session, &params, &font, &Interrupt::NONE), Err(EngineError::NoDocument)));
