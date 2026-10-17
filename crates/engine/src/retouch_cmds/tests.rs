@@ -2054,3 +2054,33 @@ fn periodic_clone_interior_matches_ordinary_brush_masks_and_transparency() {
         }
     }
 }
+
+/// The reduced clone source: what Sample reads, rendered to a bounded size whatever the
+/// document's size. "Current Layer" is the layer's own pixels (its opacity and masks don't
+/// apply, as the stamp reads them); the size budget is refused before anything is rendered.
+#[test]
+fn clone_source_reduced_renders_the_sample_mode_within_its_budget() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 400, "height": 200})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.edit("paint", |doc, a| {
+        let l = doc.layer_mut(a.unwrap()).unwrap();
+        l.surface_mut().unwrap().fill_rect(Rect::new(0, 0, 200, 200), &[1.0, 0.0, 0.0, 1.0]);
+        l.opacity = 0.5;
+        Ok(())
+    })
+    .unwrap();
+    let px = |b: &photocraft_compose::Buffer, x: usize, y: usize| b.px[y * b.rect.width() as usize + x];
+    let current = super::clone_source_reduced(&s, "current", 40, 20).unwrap();
+    assert_eq!(current.rect, Rect::new(0, 0, 40, 20));
+    let red = px(&current, 10, 10);
+    assert!(red[0] > 0.99 && red[3] > 0.99, "the layer's own pixels at full opacity: {red:?}");
+    assert_eq!(px(&current, 30, 10)[3], 0.0, "nothing where the layer has no pixels");
+    let all = super::clone_source_reduced(&s, "all", 40, 20).unwrap();
+    let mixed = px(&all, 10, 10);
+    assert!((mixed[0] - 1.0).abs() < 0.01 && (mixed[1] - 0.5).abs() < 0.02, "the composite: the layer at 50 % over the white Background: {mixed:?}");
+    assert!(px(&all, 30, 10)[1] > 0.99, "the Background shows through");
+    assert!(super::clone_source_reduced(&s, "all", super::REDUCED_SOURCE_MAX_SIDE + 1, 1).is_err(), "past the budget: refused");
+    assert!(super::clone_source_reduced(&s, "all", 128, 128).is_ok() == (128 * 128 <= super::REDUCED_SOURCE_MAX_PIXELS));
+    assert!(super::clone_source_reduced(&s, "all", 0, 20).is_err());
+}
