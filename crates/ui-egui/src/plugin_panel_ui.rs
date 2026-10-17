@@ -272,7 +272,13 @@ fn window(ctx: &egui::Context, t: &Tokens, panel: &PanelDraw, index: usize, canv
 fn at_panel_width(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     let rect = ui.available_rect_before_wrap();
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
-    child.set_clip_rect(child.clip_rect().intersect(rect));
+    // Clip the tree to the panel's width, and only to it. Inside a scroll area `rect` is the
+    // viewport translated up by the scroll offset, so intersecting the whole rect with the clip
+    // (its vertical range included) emptied the clip as soon as the body was scrolled — every
+    // widget was culled and the panel's body went blank below the first viewport height. The width
+    // is what this pins down; the vertical clip must stay the scroll area's own.
+    let clip = child.clip_rect();
+    child.set_clip_rect(clip.intersect(egui::Rect::from_x_y_ranges(rect.x_range(), clip.y_range())));
     add(&mut child);
     let used = child.min_rect();
     ui.allocate_rect(egui::Rect::from_min_size(rect.min, vec2(rect.width(), used.height())), Sense::hover());

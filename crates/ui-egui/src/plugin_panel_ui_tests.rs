@@ -526,3 +526,34 @@ fn a_panels_widgets_are_drawn_inside_the_panel() {
     let extent = body_extent(lettering_page(), 400.0);
     assert!(extent <= 400.5, "the tree is drawn {extent} px wide in a 400 px panel");
 }
+
+#[test]
+fn the_body_stays_painted_while_it_is_scrolled() {
+    // Clicking the body's scroll bar near its bottom scrolls there with a single click, which is how
+    // the control channel drives a panel (it has no wheel). The body draws its tree inside a rect the
+    // scroll area translates up by the scroll offset; clipping the tree to that whole rect, as well
+    // as to the panel width, emptied the clip the moment the body was scrolled — every widget was
+    // culled and the panel went blank under its header, with the scroll bar still drawn.
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    let panel = test_panel("test.bar", tall_page(60));
+    let mut shapes = Vec::new();
+    for _ in 0..4 {
+        let input = egui::RawInput { screen_rect: Some(canvas()), ..Default::default() };
+        shapes = draw_panel(&ctx, &panel, input, true);
+    }
+    let window = panel_window_rect(&ctx, "test.bar").expect("the panel's window is drawn");
+    let at = pos2(window.right() - 6.0, window.bottom() - 20.0);
+    // Hover first, so the bar is laid out and there to hit; then press and release on its trough
+    // near the bottom, which puts the end of the page there.
+    for pressed in [None, Some(true), Some(false)] {
+        let mut input = egui::RawInput { screen_rect: Some(canvas()), ..Default::default() };
+        input.events.push(match pressed {
+            None => egui::Event::PointerMoved(at),
+            Some(pressed) => egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() },
+        });
+        shapes = draw_panel(&ctx, &panel, input, false);
+    }
+    let last = painted_y(&shapes, "Row 59").expect("the end of the page is painted after the scroll");
+    assert!(last > window.top() + 40.0 && last < window.bottom(), "and it is inside the window: {last} in {window:?}");
+}
