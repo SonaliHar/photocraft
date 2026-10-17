@@ -1,31 +1,42 @@
 //! Implementation drafts: execution is deferred until the implementation pass ends.
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{
-    Document,
-    accounted_document::AccountedDocument,
-    accounted_selection::{AccountedSelection, CoverageDomain},
-};
+use photocraft_doc::accounted_selection::{AccountedSelection, CoverageDomain};
 use photocraft_engine::{Session, accounted_commands::PreparedAccountedCommand, accounted_selection_session::AccountedSelectionTarget};
-use photocraft_geom::{Rect, Size};
+use photocraft_geom::Rect;
 use photocraft_raster::{
     Interrupt,
     backing::{
         BackingError, ReadControl,
-        quota::{BackingQuota, QuotaKind, QuotaLimits, QuotaUsage},
+        quota::{BackingQuota, QuotaLimits, QuotaUsage},
     },
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
+#[path = "../../xcf/tests/common/mod.rs"]
+mod xcf;
 fn control() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
 }
 fn session() -> (Session, BackingQuota) {
     let quota = BackingQuota::new(QuotaLimits { resident: 32 << 20, index: 4 << 20, scratch: 8 << 20 });
-    let retained_model = quota.reserve(QuotaKind::Resident, 65536).unwrap();
-    let doc = Document::new("own paid selection draft", Size::new(4, 4), ColorMode::Rgb, SampleType::U32);
-    let owner = AccountedDocument::from_owned(doc, Arc::new(retained_model), quota.clone(), &control()).unwrap();
+    // A real same-quota native source supplies the required raster owner;
+    // an empty raw Document is not valid accounted storage.
+    let raw = 0x80000001u32.to_be_bytes().repeat(4 * 4 * 4);
+    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+        .unwrap()
+        .lowered(&[("residentBytes", 16 << 20), ("indexBytes", 2 << 20), ("scratchBytes", 0)])
+        .unwrap();
+    let input = photocraft_io::import_owned_staged_plain_bytes_in_quota(
+        "selection.xcf",
+        Arc::new(xcf::image_custom(13, 350, 0, 4, 4, &raw, &Default::default())),
+        &Default::default(),
+        &limits,
+        quota.clone(),
+        &control(),
+    )
+    .unwrap();
     let mut session = Session::new();
-    session.add_accounted_document(owner, None, &control()).unwrap();
+    session.add_owned_plain_xcf_import(&input, "selection.xcf", None, &control()).unwrap();
     (session, quota)
 }
 fn selection(quota: &BackingQuota) -> (AccountedSelection, Vec<u8>) {
@@ -116,10 +127,13 @@ fn matching_counters_cannot_replace_captured_model_or_diverge_from_history() {
     let (mut session, quota) = session();
     let target = AccountedSelectionTarget::capture(&session).unwrap();
     let (selected, _) = selection(&quota);
-    let mut replacement = Document::new("own replacement model", Size::new(4, 4), ColorMode::Rgb, SampleType::U32);
-    replacement.id = target.document;
-    let retained = quota.reserve(QuotaKind::Resident, 65536).unwrap();
-    let owner = AccountedDocument::from_owned(replacement, Arc::new(retained), quota.clone(), &control()).unwrap();
+    let current = &session.active().unwrap().doc;
+    let owner = current
+        .accounted()
+        .unwrap()
+        .try_edit(photocraft_doc::accounted_document::AccountedEdit::LayerName { layer: current.layers[0].id, name: "replacement model" }, &control())
+        .unwrap();
+    assert_eq!(owner.document().id, target.document);
     let replaced = photocraft_engine::DocumentSnapshot::from_accounted(owner).unwrap();
     session.active_mut().unwrap().doc = replaced.clone();
     assert!(session.replace_accounted_selection(target, "Old capture", Some(&selected), &control()).is_err());

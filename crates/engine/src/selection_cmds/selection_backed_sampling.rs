@@ -1,11 +1,11 @@
 //! Read-only original-point sampling and owned coverage for a closed backing domain.
 //! This does not activate accounted document selection edits or source rendering.
 #[cfg(test)]
-#[path = "selection_backed_sampling_tests.rs"]
-mod tests;
-#[cfg(test)]
 #[path = "selection_backed_exact_tests.rs"]
 mod exact_tests;
+#[cfg(test)]
+#[path = "selection_backed_sampling_tests.rs"]
+mod tests;
 use super::*;
 use crate::channel_cmds::ChannelView;
 use photocraft_doc::{Layer, LayerContent, SampleEncoding, WorkingProfileInterpretation};
@@ -32,9 +32,9 @@ fn exact_plan<'t>(
     let resident_bytes = usize::try_from(held).map_err(|_| failure("exact CMS held bytes"))?.min(default.resident_bytes);
     let preparation = photocraft_cms::Transform::RGB_LAB_F32_PREPARATION_WORK;
     owner.work.consume(preparation, control, parent)?;
-    let plan = transform.prepare_rgb_lab_f32_with_control(
-        photocraft_cms::control::Limits { resident_bytes, work_units: preparation }, &|| control.cancelled(),
-    ).map_err(cms_error)?;
+    let plan = transform
+        .prepare_rgb_lab_f32_with_control(photocraft_cms::control::Limits { resident_bytes, work_units: preparation }, &|| control.cancelled())
+        .map_err(cms_error)?;
     Ok((plan, photocraft_cms::control::Limits { resident_bytes, ..default }))
 }
 struct Work {
@@ -476,7 +476,10 @@ fn prepare_captured(captured: CapturedBackedColorRange, control: &Interrupt<'_>,
             if !sample_source.bounds().contains(x, y) || !backed.operative_bounds().contains(x, y) {
                 return Err(failure("backed sample outside explicit canvas/native extent"));
             }
-            if super::super::mode(p) == sel::SelectionMode::Replace && sample_source.selection.is_some() && !(previous(&sample_source, x, y, control)? > 0.0) {
+            if super::super::mode(p) == sel::SelectionMode::Replace
+                && sample_source.selection.is_some()
+                && previous(&sample_source, x, y, control)?.partial_cmp(&0.0) != Some(std::cmp::Ordering::Greater)
+            {
                 return Err(failure("sample point outside active selection"));
             }
             let mut raw = [0u8; 40];
@@ -511,6 +514,8 @@ pub(in crate::selection_cmds) fn charge_preview(
 ) -> Result<()> {
     query.backed.as_ref().ok_or_else(|| failure("preview work requires a backed prepared query"))?.work.consume(units, control, parent)
 }
+// Keep the explicit authority, borrowed payload and original-control proof inputs together.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::selection_cmds) fn owned_coverage(
     query: &ColorRangeSamples,
     px: &[[f32; 4]],

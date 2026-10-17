@@ -1,6 +1,8 @@
 //! Deferred actual guarded programme pixel-selection consumers. Sources are
 //! genuine; expected/native buffers below are external harness allocations.
 use super::*;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_programme_selection_native_test_support.rs"]
 mod f;
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
@@ -80,15 +82,19 @@ fn guarded_selection_consumers_preserve_programmes_and_history() {
             s.execute("edit.clear", json!({"layer":id.0})).unwrap();
             let cleared = f::raw(&s.active().unwrap().doc, id);
             assert_ne!(cleared, raw);
-            if depth==1{
+            if depth == 1 {
                 // Fractional native Clear preserves RGB while computed alpha
                 // is nonzero. Actual zero-alpha/results canonicalize the whole
                 // pixel, before encoding; this is not an encoded-zero test.
-                for (before,after) in raw.chunks_exact(32).zip(cleared.chunks_exact(32)){
-                    let alpha=f64::from_ne_bytes(before[24..32].try_into().unwrap());
-                    let expected=alpha*(1.0-(0.5+2f64.powi(-24)));
-                    if expected==0.0{assert!(after.iter().all(|v|*v==0));}
-                    else{assert_eq!(&before[..24],&after[..24]);assert_eq!(&after[24..32],&expected.to_ne_bytes());}
+                for (before, after) in raw.as_chunks::<32>().0.iter().zip(cleared.as_chunks::<32>().0.iter()) {
+                    let alpha = f64::from_ne_bytes(before[24..32].try_into().unwrap());
+                    let expected = alpha * (1.0 - (0.5 + 2f64.powi(-24)));
+                    if expected == 0.0 {
+                        assert!(after.iter().all(|v| *v == 0));
+                    } else {
+                        assert_eq!(&before[..24], &after[..24]);
+                        assert_eq!(&after[24..32], &expected.to_ne_bytes());
+                    }
                 }
             }
             assert_eq!(s.active().unwrap().revision, revision + 1);

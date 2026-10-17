@@ -294,10 +294,10 @@ fn prepare(doc: &Document, points: &[(f32, f32)], o: Options, cmd: &str, ctl: &I
         }
         // Only one private tile is cloned; output's growing map is never restaged.
         let mut replacement = Surface::try_with_default_bytes(plan.format, output.default_bytes()).map_err(|e| failure(cmd, ctl, e))?;
-        if plan.retain {
-            if let Some(tile) = output.tile(coordinate) {
-                replacement.put_tiles(std::iter::once((coordinate, std::sync::Arc::clone(tile))));
-            }
+        if plan.retain
+            && let Some(tile) = output.tile(coordinate)
+        {
+            replacement.put_tiles(std::iter::once((coordinate, std::sync::Arc::clone(tile))));
         }
         replacement.try_write_interleaved_with(part, &raw, ctl).map_err(|e| failure(cmd, ctl, e))?;
         poll(ctl)?;

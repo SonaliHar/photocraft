@@ -28,6 +28,10 @@ fn decimal(value: &Value) -> Result<u64> {
     text.parse().map_err(|_| bad("identity overflow"))
 }
 fn parameters_for(session: &Session, p: &Value, needs_selection: bool) -> Result<()> {
+    parameters_for_phase(session, p, needs_selection, false)
+}
+// Only the synchronous pre-floating hook may defer an ordinary live preview drop.
+fn parameters_for_phase(session: &Session, p: &Value, needs_selection: bool, before_ordinary_drop: bool) -> Result<()> {
     if !p.is_null() {
         let object = p
             .as_object()
@@ -41,8 +45,17 @@ fn parameters_for(session: &Session, p: &Value, needs_selection: bool) -> Result
         (Some(id), Some(rev)) if decimal(id)? == state.doc.id.0 && decimal(rev)? == state.revision => {}
         _ => return Err(bad("captured selection target changed")),
     }
+    let may_drop_ordinary = before_ordinary_drop
+        && p.get("documentId").is_none()
+        && p.get("expectedRevision").is_none()
+        && state.doc.resident_arc().is_some()
+        && state.doc.accounted().is_none()
+        && state.doc.xcf_state.is_none()
+        && !state.source_read_only
+        && state.source.as_ref().is_none_or(|source| !source.origin.is_read_only())
+        && crate::float_cmds::floating(state).is_some();
     if state.revision == u64::MAX
-        || state.floating.is_some()
+        || (state.floating.is_some() && !may_drop_ordinary)
         || state.coalesce.is_some()
         || state.doc.xcf_state.as_ref().is_some_and(|s| s.floating.is_some())
         || session.coalesce_request.is_some()
@@ -62,6 +75,18 @@ fn parameters(session: &Session, p: &Value) -> Result<()> {
 }
 pub(crate) fn dispatch_preflight(session: &Session, p: &Value, _background: bool) -> Result<()> {
     parameters(session, p)
+}
+/// Jobs-only validation before the existing implicit ordinary floating drop.
+/// Workers, captured requests and every actual runner keep the strict entrypoints.
+pub(crate) fn dispatch_preflight_before_floating_drop(session: &Session, p: &Value, background: bool) -> Result<()> {
+    parameters_for_phase(session, p, true, !background)
+}
+pub(crate) fn storage_dispatch_preflight_before_floating_drop(session: &Session, command: &str, p: &Value, background: bool) -> Result<()> {
+    match command {
+        "select.all" => parameters_for_phase(session, p, false, !background),
+        "select.deselect" => parameters_for_phase(session, p, true, !background),
+        _ => Err(bad("unsupported storage command")),
+    }
 }
 fn canvas(doc: &Document) -> Result<Rect> {
     if doc.size.width == 0 || doc.size.height == 0 || doc.size.width > 300000 || doc.size.height > 300000 {
@@ -104,10 +129,8 @@ pub(crate) fn selection_write_authority_metadata(doc: &Document, ctl: &Interrupt
         let mut found = None;
         for item in &state.items {
             poll(ctl)?;
-            if item.item == reference {
-                if found.replace(item).is_some() {
-                    return Err(bad("ambiguous selection owner"));
-                }
+            if item.item == reference && found.replace(item).is_some() {
+                return Err(bad("ambiguous selection owner"));
             }
         }
         let item = found.ok_or_else(|| bad("missing selection owner"))?;
@@ -235,6 +258,13 @@ fn clear_authority(doc: &Document, ctl: &Interrupt<'_>) -> Result<()> {
         doc.validate_xcf_state_with(ctl).map_err(|e| error(ctl, e))?;
     }
     poll(ctl)
+}
+/// Clear only current coverage, retaining saved channels and canonical identities.
+/// Call within the caller's private model transaction on its original control.
+pub(crate) fn clear_current_selection(doc: &mut Document, control: &Interrupt<'_>) -> Result<()> {
+    clear_authority(doc, control)?;
+    doc.selection = None;
+    clear_authority(doc, control)
 }
 struct Prepaid {
     bytes: u64,
@@ -438,15 +468,13 @@ fn run_action(session: &mut Session, p: &Value, action: Action) -> Result<Value>
             ctx.stage(0.95, 1.0, label, |ctl| {
                 poll(ctl)?;
                 session.edit_with_interrupt(label, ctl, move |doc, _| {
-                    if matches!(action, Action::Deselect) {
-                        clear_authority(doc, ctl)?;
-                    } else {
+                    if !matches!(action, Action::Deselect) {
                         authority(doc, ctl)?;
                     }
-                    doc.selection = selection;
                     if matches!(action, Action::Deselect) {
-                        clear_authority(doc, ctl)?;
+                        clear_current_selection(doc, ctl)?;
                     } else {
+                        doc.selection = selection;
                         authority(doc, ctl)?;
                     }
                     poll(ctl)

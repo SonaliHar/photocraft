@@ -129,12 +129,11 @@ fn route(s: &Session, r: Request, c: &Interrupt<'_>) -> Result<Route> {
         return Err(bad("shown Gray owner changed"));
     }
     crate::selection_sample_policy::sampled_pixels(s, ID, r.all, c)?;
-    if !r.all {
-        if let Some(id) = st.active_layer {
-            if st.doc.layer(id).and_then(|l| l.surface()).is_some() {
-                return Ok(Route::Layer(id));
-            }
-        }
+    if !r.all
+        && let Some(id) = st.active_layer
+        && st.doc.layer(id).and_then(|l| l.surface()).is_some()
+    {
+        return Ok(Route::Layer(id));
     }
     if st.doc.xcf_state.is_some() {
         return Err(bad("canonical imported merged sampler is not qualified by ordinary compositor"));
@@ -361,6 +360,9 @@ mod tests {
         s.add_document(Document::new("Wand draft", photocraft_geom::Size::new(2, 2), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8), None)
             .unwrap();
         let id = s.active().unwrap().doc.id.0;
-        assert!(dispatch_preflight(&s, &json!({"documentId":id.to_string(),"expectedRevision":"1"}), false).is_err());
+        let revision = s.active().unwrap().revision;
+        assert!(dispatch_preflight(&s, &json!({"documentId":id.to_string(),"expectedRevision":revision.to_string()}), false).is_ok());
+        let stale_revision = revision.checked_add(1).unwrap();
+        assert!(dispatch_preflight(&s, &json!({"documentId":id.to_string(),"expectedRevision":stale_revision.to_string()}), false).is_err());
     }
 }

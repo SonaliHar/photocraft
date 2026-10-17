@@ -359,10 +359,10 @@ fn request(s: &Session, p: &Value) -> Result<Request> {
     let prior = source_mask(&st.doc, st.active_layer, target_mask, &Interrupt::NONE)?;
     // Guard precisely the prior coverage owner and requested sampling owner before
     // even the legacy other-output/brush route can interpret a wide raw word.
-    if let Some(m) = prior {
-        if m.format().mode != ColorMode::Grayscale || m.format().alpha || matches!(m.format().sample, SampleType::U32 | SampleType::F64) {
-            return Err(bad(ID, "native prior coverage interpretation unsupported"));
-        }
+    if let Some(m) = prior
+        && (m.format().mode != ColorMode::Grayscale || m.format().alpha || matches!(m.format().sample, SampleType::U32 | SampleType::F64))
+    {
+        return Err(bad(ID, "native prior coverage interpretation unsupported"));
     }
     if prior.is_some() && (params.radius > 0.0 || brush_adds) {
         crate::selection_sample_policy::sampled_pixels(s, ID, all, &Interrupt::NONE)?;
@@ -381,12 +381,11 @@ fn request(s: &Session, p: &Value) -> Result<Request> {
     {
         return Err(bad(ID, "native mask output replacement unsupported"));
     }
-    if output != "selection" || decontaminate {
-        if matches!(st.doc.depth, SampleType::U32 | SampleType::F64)
-            || find_surface(&st.doc, st.active_layer, &Interrupt::NONE)?.is_some_and(|v| matches!(v.format().sample, SampleType::U32 | SampleType::F64))
-        {
-            return Err(bad(ID, "native Refine output interpretation unsupported"));
-        }
+    if (output != "selection" || decontaminate)
+        && (matches!(st.doc.depth, SampleType::U32 | SampleType::F64)
+            || find_surface(&st.doc, st.active_layer, &Interrupt::NONE)?.is_some_and(|v| matches!(v.format().sample, SampleType::U32 | SampleType::F64)))
+    {
+        return Err(bad(ID, "native Refine output interpretation unsupported"));
     }
     if output == "selection" && !decontaminate {
         crate::selection_sample_policy::existing_selection(s, ID, &Interrupt::NONE)?;
@@ -830,6 +829,8 @@ fn insert_above(doc: &mut Document, id: LayerId, layer: Layer, c: &Interrupt<'_>
     siblings.insert(index, layer);
     poll(c)
 }
+// Keep the prepaid inline representation; boxing introduces a separate heap owner and quota lifetime.
+#[allow(clippy::large_enum_variant)]
 enum Publication {
     Existing(Document, Option<LayerId>),
     NewDocument(DocState, LayerId),

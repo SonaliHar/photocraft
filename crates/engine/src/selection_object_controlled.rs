@@ -493,9 +493,9 @@ mod tests {
         let mut d = Document::new("Object", Size::new(80, 64), ColorMode::Rgb, SampleType::U16);
         let mut l = Layer::raster("Pixels", d.pixel_format());
         let mut v = Vec::new();
-        for y in 0..64 {
-            for x in 0..80 {
-                let c = if (x as i32 - 40).pow(2) + (y as i32 - 32).pow(2) < 18 * 18 { [0.9, 0.1, 0.1, 1.] } else { [0.1, 0.3, 0.8, 1.] };
+        for y in 0_i32..64 {
+            for x in 0_i32..80 {
+                let c = if (x - 40).pow(2) + (y - 32).pow(2) < 18 * 18 { [0.9, 0.1, 0.1, 1.] } else { [0.1, 0.3, 0.8, 1.] };
                 v.extend_from_slice(&c);
             }
         }

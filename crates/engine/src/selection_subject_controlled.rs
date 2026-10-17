@@ -439,9 +439,9 @@ mod tests {
         let mut d = Document::new("Subject", Size::new(80, 64), ColorMode::Rgb, SampleType::U16);
         let mut l = Layer::raster("Pixels", d.pixel_format());
         let mut v = Vec::new();
-        for y in 0..64 {
-            for x in 0..80 {
-                let c = if !flat && (x as i32 - 40).pow(2) + (y as i32 - 32).pow(2) < 16 * 16 { [0.9, 0.15, 0.1, 1.] } else { [0.1, 0.35, 0.8, 1.] };
+        for y in 0_i32..64 {
+            for x in 0_i32..80 {
+                let c = if !flat && (x - 40).pow(2) + (y - 32).pow(2) < 16 * 16 { [0.9, 0.15, 0.1, 1.] } else { [0.1, 0.35, 0.8, 1.] };
                 v.extend_from_slice(&c);
             }
         }
@@ -461,8 +461,7 @@ mod tests {
             prepare(&before, s.active().unwrap().active_layer, Request { all: false, mode: SelectionMode::Replace }, &snapshot, &Interrupt::NONE).unwrap();
         assert_eq!(prepared.selection, sel::combine_region(before.selection.as_ref(), expected.as_ref(), SelectionMode::Replace));
         assert!(
-            s.subject_cache.capture_controlled().lookup_controlled(&before, s.active().unwrap().active_layer, &Interrupt::NONE, &mut |_| Ok(())).unwrap().1
-                == false
+            !s.subject_cache.capture_controlled().lookup_controlled(&before, s.active().unwrap().active_layer, &Interrupt::NONE, &mut |_| Ok(())).unwrap().1
         );
         s.execute(ID, json!({"sampleAllLayers":false})).unwrap();
         let after = s.active().unwrap().doc.clone();

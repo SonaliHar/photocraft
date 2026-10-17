@@ -147,9 +147,13 @@ fn with_context_conversion(
         let value = if let Some((plan, limits)) = exact {
             let cancel = || control.cancelled();
             let required = plan.requirements_rgb(1, limits, &cancel).map_err(cms_error)?;
-            let encoded = plan.eval_rgb_with_control(c.map(|v| v.clamp(0., 1.)), photocraft_cms::control::Limits { work_units: required.work_units, ..limits }, &cancel).map_err(cms_error)?;
+            let encoded = plan
+                .eval_rgb_with_control(c.map(|v| v.clamp(0., 1.)), photocraft_cms::control::Limits { work_units: required.work_units, ..limits }, &cancel)
+                .map_err(cms_error)?;
             super::decode_lab(encoded)
-        } else { super::colour_to_lab(&to_lab, c) };
+        } else {
+            super::colour_to_lab(&to_lab, c)
+        };
         Ok(q(value))
     };
     let foreground = || -> Result<sel::LabRange> {
@@ -171,11 +175,17 @@ fn with_context_conversion(
                 range = Some(range.map_or(sel::LabRange::point(c), |r| r.grow(&c)));
             }
         } else if let Some(x) = mi.next() {
-            let previous = match range { Some(range) => range, None => foreground()? };
+            let previous = match range {
+                Some(range) => range,
+                None => foreground()?,
+            };
             range = Some(previous.subtract(&colour_to_lab(x.color)?, fuzz(40.0)));
         }
     }
-    let range = match range { Some(range) => range, None => foreground()? };
+    let range = match range {
+        Some(range) => range,
+        None => foreground()?,
+    };
     poll(control)?;
     Ok(ColorRangeSamples { to_lab, range, grid, fuzziness: fuzz(40.0), localized, plus_at, backed: context.backed.clone() })
 }
@@ -381,7 +391,7 @@ fn closed_sampling(doc: &Document, active: Option<LayerId>, all: bool, control: 
     photocraft_doc::resident_structure::visit_layers_with(doc, control, |layer| {
         if layer.mask.is_some()
             || layer.vector_mask.is_some()
-            || layer.effects != Default::default()
+            || layer.effects != (photocraft_doc::Effects { enabled: layer.effects.enabled, ..Default::default() })
             || layer.fill_cache.is_some()
             || layer.video.is_some()
             || layer.import_compositing.is_some()
@@ -604,7 +614,10 @@ fn query_document(doc: &Document, active: Option<LayerId>, context: &QueryContex
                 if !area.contains(x, y) {
                     return Err(failure("sample point outside canvas"));
                 }
-                if super::mode(p) == sel::SelectionMode::Replace && doc.selection.is_some() && !(previous(doc, x, y, control)? > 0.) {
+                if super::mode(p) == sel::SelectionMode::Replace
+                    && doc.selection.is_some()
+                    && previous(doc, x, y, control)?.partial_cmp(&0.) != Some(std::cmp::Ordering::Greater)
+                {
                     return Err(failure("sample point outside active selection"));
                 }
                 let direct = if !all_layers(p) { active.and_then(|id| doc.layer(id)).and_then(|l| l.surface()) } else { None };
@@ -647,13 +660,15 @@ type ExactLab<'a, 't> = (&'a photocraft_cms::transform::PreparedRgbLabF32<'t>, p
 // Preserve the existing 512/pixel non-CMS allowance and localization work.
 // Only the old 512/pixel CMS portion is replaced by the actual prepared recipe.
 fn coverage_work(query: &ColorRangeSamples, pixels: usize, exact: Option<ExactLab<'_, '_>>, control: &Interrupt<'_>) -> Result<(u64, u64)> {
-    let cms_pixel = if let Some((plan, limits)) = exact {
-        plan.requirements_rgba(1, limits, &|| control.cancelled()).map_err(cms_error)?.work_units
-    } else { 512 };
+    let cms_pixel =
+        if let Some((plan, limits)) = exact { plan.requirements_rgba(1, limits, &|| control.cancelled()).map_err(cms_error)?.work_units } else { 512 };
     let count = u64::try_from(pixels).map_err(|_| failure("query pixel count"))?;
     let cms = count.checked_mul(cms_pixel).ok_or_else(|| failure("query CMS work"))?;
-    let non_cms = (active_localized_points(query) as u64).checked_mul(48).and_then(|n| n.checked_add(512))
-        .and_then(|n| count.checked_mul(n)).ok_or_else(|| failure("query non-CMS work"))?;
+    let non_cms = (active_localized_points(query) as u64)
+        .checked_mul(48)
+        .and_then(|n| n.checked_add(512))
+        .and_then(|n| count.checked_mul(n))
+        .ok_or_else(|| failure("query non-CMS work"))?;
     Ok((cms.checked_add(non_cms).ok_or_else(|| failure("query total work"))?, cms))
 }
 fn coverage_inner(
@@ -696,7 +711,9 @@ fn coverage_inner_conversion(
         .filter(|n| *n <= limits.resident_bytes)
         .ok_or_else(|| failure("query Lab/mask residency limit"))?;
     let (total_work, cms_work) = coverage_work(query, px.len(), exact, control)?;
-    if total_work > limits.work_units { return Err(failure("query CMS/sample work limit")); }
+    if total_work > limits.work_units {
+        return Err(failure("query CMS/sample work limit"));
+    }
     let mut lab = reserve(px.len())?;
     for start in (0..px.len()).step_by(4096) {
         poll(control)?;
@@ -712,7 +729,8 @@ fn coverage_inner_conversion(
         if let Some((plan, limits)) = exact {
             let cancel = || control.cancelled();
             let required = plan.requirements_rgba(source.len(), limits, &cancel).map_err(cms_error)?;
-            plan.convert_rgba_with_control(&source, output, photocraft_cms::control::Limits { work_units: required.work_units, ..limits }, &cancel).map_err(cms_error)?;
+            plan.convert_rgba_with_control(&source, output, photocraft_cms::control::Limits { work_units: required.work_units, ..limits }, &cancel)
+                .map_err(cms_error)?;
         } else {
             query.to_lab.convert_f32(source.as_flattened(), 4, output.as_flattened_mut(), 4, true);
         }
@@ -750,6 +768,8 @@ fn coverage_inner_conversion(
 fn cms_error(e: photocraft_cms::control::Error) -> EngineError {
     if matches!(e, photocraft_cms::control::Error::Cancelled) { EngineError::Cancelled } else { failure(e) }
 }
+// Keep the prepaid inline representation; boxing introduces a separate heap owner and quota lifetime.
+#[allow(clippy::large_enum_variant)]
 enum CompositeProfile {
     Shared(std::sync::Arc<photocraft_cms::Profile>),
     SharedPrepared { profile: std::sync::Arc<photocraft_cms::Profile>, source_bytes: usize, source_work: u64 },
@@ -891,7 +911,7 @@ fn shortcut_curve(curve: &photocraft_cms::curve::Curve, interpretation: photocra
             poll(control)?;
             let v = i as f32 / 32.;
             let difference = (curve.eval(v) - reference.eval(v)).abs();
-            if !(difference < 0.0001) {
+            if difference.partial_cmp(&0.0001) != Some(std::cmp::Ordering::Less) {
                 return Ok((false, 33 * 128));
             }
         }
@@ -915,7 +935,7 @@ fn shortcut_curve(curve: &photocraft_cms::curve::Curve, interpretation: photocra
                 if i % 256 == 0 {
                     poll(control)?;
                 }
-                if !((*v as f64 - i as f64 / (t.len() - 1) as f64).abs() < 1. / 65535.) {
+                if (*v as f64 - i as f64 / (t.len() - 1) as f64).abs().partial_cmp(&(1. / 65535.)) != Some(std::cmp::Ordering::Less) {
                     return Ok((false, t.len() as u64));
                 }
             }
@@ -932,7 +952,7 @@ fn shortcut_curve(curve: &photocraft_cms::curve::Curve, interpretation: photocra
                 if i % 256 == 0 {
                     poll(control)?;
                 }
-                if !((*v - i as f64 / (t.len() - 1) as f64).abs() < 1. / 65535.) {
+                if (*v - i as f64 / (t.len() - 1) as f64).abs().partial_cmp(&(1. / 65535.)) != Some(std::cmp::Ordering::Less) {
                     return Ok((false, t.len() as u64));
                 }
             }
@@ -1612,6 +1632,47 @@ mod tests {
     use photocraft_color::{ColorMode, SampleType};
     use photocraft_doc::{Layer, Size};
     #[test]
+    fn ordinary_empty_effects_enable_state_is_neutral_but_items_refuse_atomically() {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut previous = None;
+            for enabled in [true, false] {
+                let mut doc = Document::new("Neutral range", Size::new(2, 1), ColorMode::Rgb, depth);
+                let mut layer = Layer::raster("Pixels", doc.pixel_format());
+                assert!(layer.effects.enabled);
+                layer.effects.enabled = enabled;
+                layer.surface_mut().unwrap().write_region(doc.bounds(), &[1., 0., 0., 1., 0., 0., 1., 1.]);
+                doc.layers.push(layer);
+                let mut session = Session::new();
+                session.add_document(doc, None).unwrap();
+                let before = session.active().unwrap().doc.clone();
+                session.execute(CMD, json!({"points":[[0,0]],"fuzziness":0.,"sampleAllLayers":true})).unwrap();
+                let selected = session.active().unwrap().doc.selection.as_ref().unwrap().try_read_interleaved(before.bounds()).unwrap();
+                assert_eq!(session.active().unwrap().doc.layers, before.layers);
+                if let Some(previous) = previous {
+                    assert_eq!(selected, previous);
+                }
+                previous = Some(selected);
+                assert!(session.undo());
+                assert_eq!(*session.active().unwrap().doc, *before);
+                let mut unsupported = (*before).clone();
+                unsupported.layers[0].effects.items.push(photocraft_doc::Effect::ColorOverlay {
+                    common: photocraft_doc::FxCommon::new(photocraft_color::BlendMode::Normal, 1.),
+                    color: photocraft_color::Color::rgb(0., 1., 0.),
+                });
+                let mut rejected = Session::new();
+                rejected.add_document(unsupported, None).unwrap();
+                let old = rejected.active().unwrap().doc.clone();
+                let revision = rejected.active().unwrap().revision;
+                let journal = rejected.journal.clone();
+                assert!(rejected.execute(CMD, json!({"points":[[0,0]],"sampleAllLayers":true})).is_err());
+                assert!(rejected.active().unwrap().doc.shares_state(&old));
+                assert_eq!(rejected.active().unwrap().revision, revision);
+                assert_eq!(rejected.journal, journal);
+                assert!(!rejected.active().unwrap().history.can_undo());
+            }
+        }
+    }
+    #[test]
     fn checked_query_matches_legacy_grid_and_localization() {
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
             let mut doc = Document::new("Range", Size::new(2, 2), ColorMode::Rgb, depth);
@@ -1649,7 +1710,7 @@ mod tests {
                 }
                 if mode == sel::SelectionMode::Replace {
                     for (v, p) in mask.iter_mut().zip(sel::mask_from_surface(doc.selection.as_ref(), doc.bounds())) {
-                        *v = v.min(p);
+                        *v = f32::min(*v, p);
                     }
                 }
                 let old = sel::combine(doc.selection.as_ref(), &mask, doc.bounds(), mode);

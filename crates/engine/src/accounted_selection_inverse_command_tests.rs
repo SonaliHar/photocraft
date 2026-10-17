@@ -17,7 +17,6 @@ fn legacy(sample: SampleType) -> Session {
         SampleType::U32 => (350, 0x40000001u32.to_be_bytes().to_vec()),
         SampleType::F32 => (650, 0.25f32.to_be_bytes().to_vec()),
         SampleType::F64 => (750, (0.25 + 2f64.powi(-48)).to_be_bytes().to_vec()),
-        _ => panic!("five native samples"),
     };
     let mut pixel = word.repeat(3);
     pixel.extend_from_slice(&word);
@@ -27,7 +26,10 @@ fn legacy(sample: SampleType) -> Session {
         "inverse.xcf",
         std::sync::Arc::new(xcf::image_custom(13, precision, 0, 3, 2, &raw, &Default::default())),
         &Default::default(),
-        &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+        &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 64 << 20), ("indexBytes", 16 << 20), ("scratchBytes", 0)])
+            .unwrap(),
         q,
         &f::ctl(),
     )
@@ -49,7 +51,6 @@ fn words(sample: SampleType) -> Vec<Vec<u8>> {
         SampleType::U32 => [0, 1, 0x7fffffff, 0x80000001, u32::MAX - 1, u32::MAX].into_iter().map(|v| v.to_ne_bytes().to_vec()).collect(),
         SampleType::F32 => [-0.0f32, 0.0, 0.25, 0.50000006, 0.75, 1.0].into_iter().map(|v| v.to_ne_bytes().to_vec()).collect(),
         SampleType::F64 => [-0.0f64, 0.0, 0.25 + 2f64.powi(-48), 0.5 + 2f64.powi(-45), 0.75, 1.0].into_iter().map(|v| v.to_ne_bytes().to_vec()).collect(),
-        _ => panic!("sample"),
     }
 }
 fn inverse(sample: SampleType, w: &[u8]) -> Vec<u8> {
@@ -59,7 +60,6 @@ fn inverse(sample: SampleType, w: &[u8]) -> Vec<u8> {
         SampleType::U32 => (u32::MAX - u32::from_ne_bytes(w.try_into().unwrap())).to_ne_bytes().to_vec(),
         SampleType::F32 => (1.0f32 - f32::from_ne_bytes(w.try_into().unwrap())).to_ne_bytes().to_vec(),
         SampleType::F64 => (1.0f64 - f64::from_ne_bytes(w.try_into().unwrap())).to_ne_bytes().to_vec(),
-        _ => panic!("sample"),
     }
 }
 fn install(s: &mut Session, sample: SampleType) -> Vec<Vec<u8>> {

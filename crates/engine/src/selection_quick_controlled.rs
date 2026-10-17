@@ -276,44 +276,44 @@ fn prepare(doc: &Document, active: Option<LayerId>, r: Request, points: &Vec<(f3
         &before_window,
     )
     .map_err(|e| error(ID, c, e))?;
-    if r.enhance {
-        if let Some(found) = region.as_ref() {
-            let rr = photocraft_algo::matting::refine_requirements(found.bbox, canvas, &ENHANCE).map_err(|e| error(ID, c, e))?;
-            let (extra, render_work) = if direct.is_none() {
-                let area = Rect::new(0, 0, rr.window_width as i32, rr.window_height as i32);
-                let b = photocraft_compose::ordinary_render_requirements(doc, area, c).map_err(|e| error(ID, c, e))?;
-                (
-                    (b.scratch_bytes as u64).checked_add(b.preparation_reserve_bytes as u64).ok_or_else(|| bad(ID, "enhance render resident"))?,
-                    b.work_units
-                        .checked_mul(u64::from(rr.bbox.width()).div_ceil(256) * u64::from(rr.bbox.height()).div_ceil(256))
-                        .ok_or_else(|| bad(ID, "enhance render work"))?,
-                )
-            } else {
-                (0, 0)
-            };
-            let bytes = rr
-                .peak_resident_bytes
-                .checked_add(found.mask.capacity() as u64)
-                .and_then(|v| v.checked_add(extra))
-                .filter(|v| *v <= available)
-                .ok_or_else(|| bad(ID, "enhance aggregate resident limit"))?;
-            let _ = bytes;
-            let work = rr.work_units.checked_add(render_work).filter(|v| *v <= remaining.get()).ok_or_else(|| bad(ID, "enhance aggregate work limit"))?;
-            remaining.set(remaining.get() - work);
-            region = photocraft_algo::matting::refine_mask_with_interrupt(
-                &sampler,
-                &|area| {
-                    c.check().map_err(|_| E::Cancelled)?;
-                    read_region(found, area, c)
-                },
-                found.bbox,
-                canvas,
-                &ENHANCE,
-                photocraft_algo::matting::MattingLimits::default(),
-                c,
+    if r.enhance
+        && let Some(found) = region.as_ref()
+    {
+        let rr = photocraft_algo::matting::refine_requirements(found.bbox, canvas, &ENHANCE).map_err(|e| error(ID, c, e))?;
+        let (extra, render_work) = if direct.is_none() {
+            let area = Rect::new(0, 0, rr.window_width as i32, rr.window_height as i32);
+            let b = photocraft_compose::ordinary_render_requirements(doc, area, c).map_err(|e| error(ID, c, e))?;
+            (
+                (b.scratch_bytes as u64).checked_add(b.preparation_reserve_bytes as u64).ok_or_else(|| bad(ID, "enhance render resident"))?,
+                b.work_units
+                    .checked_mul(u64::from(rr.bbox.width()).div_ceil(256) * u64::from(rr.bbox.height()).div_ceil(256))
+                    .ok_or_else(|| bad(ID, "enhance render work"))?,
             )
-            .map_err(|e| error(ID, c, e))?;
-        }
+        } else {
+            (0, 0)
+        };
+        let bytes = rr
+            .peak_resident_bytes
+            .checked_add(found.mask.capacity() as u64)
+            .and_then(|v| v.checked_add(extra))
+            .filter(|v| *v <= available)
+            .ok_or_else(|| bad(ID, "enhance aggregate resident limit"))?;
+        let _ = bytes;
+        let work = rr.work_units.checked_add(render_work).filter(|v| *v <= remaining.get()).ok_or_else(|| bad(ID, "enhance aggregate work limit"))?;
+        remaining.set(remaining.get() - work);
+        region = photocraft_algo::matting::refine_mask_with_interrupt(
+            &sampler,
+            &|area| {
+                c.check().map_err(|_| E::Cancelled)?;
+                read_region(found, area, c)
+            },
+            found.bbox,
+            canvas,
+            &ENHANCE,
+            photocraft_algo::matting::MattingLimits::default(),
+            c,
+        )
+        .map_err(|e| error(ID, c, e))?;
     }
     let Some(region) = region else {
         return Ok(Prepared { selection: None, response: json!({"selected":doc.selection.is_some(),"changed":false}), change: false });
@@ -513,11 +513,10 @@ mod tests {
             for mode in [SelectionMode::Add, SelectionMode::Subtract, SelectionMode::Replace] {
                 let sampler = photocraft_algo::segment::SurfaceSampler(d.layers[0].surface().unwrap());
                 let mut region = quick::quick_select(&sampler, d.bounds(), &pts, 12., quick::WORK_PX).unwrap();
-                if enhance {
-                    if let Some(r) = &region {
-                        region =
-                            photocraft_algo::matting::refine_mask(&sampler, &photocraft_algo::matting::region_reader(r), r.bbox, d.bounds(), &ENHANCE).unwrap();
-                    }
+                if enhance && let Some(r) = &region {
+                    let refined =
+                        photocraft_algo::matting::refine_mask(&sampler, &photocraft_algo::matting::region_reader(r), r.bbox, d.bounds(), &ENHANCE).unwrap();
+                    region = refined;
                 }
                 let expected = region.as_ref().map(|r| sel::combine_region(d.selection.as_ref(), Some(r), mode));
                 let got = prepare(&d, active, Request { size: 12., all: false, enhance, mode }, &pts, &Interrupt::NONE).unwrap();
@@ -534,10 +533,10 @@ mod tests {
     fn late_worker_cancel_and_stale_pair_leave_document_and_history_unchanged() {
         let d = doc();
         let pts = vec![(24., 20.)];
-        let calls = std::cell::Cell::new(0usize);
+        let calls = std::sync::atomic::AtomicUsize::new(0usize);
         let cancelled = || {
-            calls.set(calls.get() + 1);
-            calls.get() > 100
+            calls.store(calls.load(std::sync::atomic::Ordering::Relaxed) + 1, std::sync::atomic::Ordering::Relaxed);
+            calls.load(std::sync::atomic::Ordering::Relaxed) > 100
         };
         assert!(matches!(
             prepare(

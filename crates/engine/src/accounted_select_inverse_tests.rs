@@ -50,7 +50,6 @@ fn native_bands_cross_tiles_keep_depth_and_sparse_empty() {
             SampleType::U32 => u32::MAX.to_ne_bytes().to_vec(),
             SampleType::F32 => 1f32.to_ne_bytes().to_vec(),
             SampleType::F64 => 1f64.to_ne_bytes().to_vec(),
-            _ => unreachable!(),
         };
         let mut b = AccountedNativeSelectionBandBuilder::new(format, area, &q, &ctl()).unwrap();
         b.push_band(Rect::new(0, 0, 257, 1), &input.repeat(257), &ctl()).unwrap();

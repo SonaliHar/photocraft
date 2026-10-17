@@ -148,11 +148,12 @@ fn admission(doc: &Document, active: Option<LayerId>, r: Request, cmd: &str, ctl
     let req = grow::requirements(width, height, r.contiguous).map_err(|e| error(cmd, ctl, e))?;
     let area = doc.bounds();
     crate::selection_inverse_controlled::selection_write_authority_metadata(doc, ctl)?;
-    if let Some(selection) = &doc.selection {
-        if selection.format().mode != ColorMode::Grayscale || selection.format().alpha || matches!(selection.format().sample, SampleType::U32 | SampleType::F64)
-        {
-            return Err(bad(cmd, "narrow Gray coverage required"));
-        }
+    if let Some(selection) = &doc.selection
+        && (selection.format().mode != ColorMode::Grayscale
+            || selection.format().alpha
+            || matches!(selection.format().sample, SampleType::U32 | SampleType::F64))
+    {
+        return Err(bad(cmd, "narrow Gray coverage required"));
     }
     let direct = if r.all { None } else { find_surface(doc, active, ctl)? };
     if direct.is_none() && doc.xcf_state.is_some() {

@@ -92,16 +92,15 @@ fn route(s: &Session, r: Request, c: &Interrupt<'_>) -> Result<Route> {
     poll(c)?;
     crate::selection_sample_policy::sampled_pixels(s, ID, r.all, c)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    if !r.all {
-        if let Some(id) = st.active_layer {
-            if let Some(layer) = st.doc.layer(id) {
-                if matches!(layer.content, photocraft_doc::LayerContent::BackedRaster(_)) {
-                    return Err(bad("active backed layer needs an accounted sampler"));
-                }
-                if layer.surface().is_some() {
-                    return Ok(Route::Layer(id));
-                }
-            }
+    if !r.all
+        && let Some(id) = st.active_layer
+        && let Some(layer) = st.doc.layer(id)
+    {
+        if matches!(layer.content, photocraft_doc::LayerContent::BackedRaster(_)) {
+            return Err(bad("active backed layer needs an accounted sampler"));
+        }
+        if layer.surface().is_some() {
+            return Ok(Route::Layer(id));
         }
     }
     if st.doc.xcf_state.is_some() {
@@ -376,7 +375,10 @@ mod tests {
         let mut s = session();
         let before = s.active().unwrap().doc.clone();
         let id = before.id.0;
-        assert!(dispatch_preflight(&s, &json!({"documentId":id.to_string(),"expectedRevision":"1"}), false).is_err());
+        let revision = s.active().unwrap().revision;
+        assert!(dispatch_preflight(&s, &json!({"documentId":id.to_string(),"expectedRevision":revision.to_string()}), false).is_ok());
+        let stale_revision = revision.checked_add(1).unwrap();
+        assert!(dispatch_preflight(&s, &json!({"documentId":id.to_string(),"expectedRevision":stale_revision.to_string()}), false).is_err());
         assert!(before.shares_state(&s.active().unwrap().doc));
         s.active_mut().unwrap().doc.try_resident_mut().unwrap().selection =
             Some(Surface::new(photocraft_color::PixelFormat::new(photocraft_doc::ColorMode::Grayscale, photocraft_doc::SampleType::F64, false)));

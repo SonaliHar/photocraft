@@ -114,6 +114,8 @@ impl StagingBudget for Budget {
     }
 }
 /// Canvas-only output and zero default retain the existing Modify geometry policy.
+// Keep the explicit authority, borrowed payload and original-control proof inputs together.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn output(
     source: &Surface,
     bounds: Rect,

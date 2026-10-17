@@ -29,7 +29,12 @@ pub fn color_range_gamut_preview(session: &Session, proxy: &Document, control: &
 }
 /// Derive a named-preset preview with the command's same combination and
 /// inversion rules, without creating a scratch session or history entry.
-pub fn color_range_named_preview(session: &Session, proxy: &Document, params: &Value, control: &photocraft_raster::Interrupt<'_>) -> Result<Option<photocraft_raster::Surface>> {
+pub fn color_range_named_preview(
+    session: &Session,
+    proxy: &Document,
+    params: &Value,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Option<photocraft_raster::Surface>> {
     color_range_controlled::named_preview(session, proxy, params, control)
 }
 
@@ -99,17 +104,6 @@ fn set_selection(s: &mut Session, label: &str, area: Rect, mask: Vec<f32>, m: Se
 fn current_mask(doc: &Document) -> (Rect, Vec<f32>) {
     let area = doc.bounds();
     (area, sel::mask_from_surface(doc.selection.as_ref(), area))
-}
-
-/// Grayscale the canvas is actually showing, as opaque RGBA, when that is not the colour
-/// composite: a gray layer-mask view, or â€” with every colour channel hidden â€” the first
-/// visible alpha, Quick Mask, or the active layer's mask. The Magic Wand selects from this
-/// so a white alpha stays one region instead of breaking up along the RGB underneath.
-#[cfg(test)]
-fn shown_gray(s: &Session) -> Result<Option<(Rect, Vec<[u8; 4]>)>> {
-    let Some(surface) = crate::selection_sample_policy::shown_gray_surface(s, "select.magicWand", &photocraft_raster::Interrupt::NONE)? else { return Ok(None) };
-    let area = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
-    Ok(Some((area, sel::rgba8_image(surface, area))))
 }
 
 /// 8-bit RGBA of the active layer (or the composite with `all_layers`) over the canvas.
@@ -188,7 +182,7 @@ fn pixels_to_lab(t: &photocraft_cms::Transform, px: &[[f32; 4]]) -> Vec<[f32; 4]
 
 /// Prepared Sampled Colors query shared by the command and its interactive preview.
 /// Samples always come from the original document; reducing an image must not change them.
-pub use color_range_controlled::backed::{ColorRangeCoverage, BackedColorRangePixels, CapturedBackedColorRange};
+pub use color_range_controlled::backed::{BackedColorRangePixels, CapturedBackedColorRange, ColorRangeCoverage};
 pub struct ColorRangeSamples {
     to_lab: std::sync::Arc<photocraft_cms::Transform>,
     range: sel::LabRange,
@@ -218,84 +212,72 @@ impl BackedColorRangeSamples {
     pub fn backed_pixels_with_read_control(&self, rect: Rect, control: &photocraft_raster::backing::ReadControl<'_>) -> Result<BackedColorRangePixels> {
         color_range_controlled::backed::original_pixels(&self.query, rect, control.interrupt, Some(control))
     }
-    pub fn coverage_backed_pixels_with_read_control(&self, pixels: &BackedColorRangePixels, limits: photocraft_algo::selection::ColorRangeLimits, control: &photocraft_raster::backing::ReadControl<'_>) -> Result<ColorRangeCoverage> {
+    pub fn coverage_backed_pixels_with_read_control(
+        &self,
+        pixels: &BackedColorRangePixels,
+        limits: photocraft_algo::selection::ColorRangeLimits,
+        control: &photocraft_raster::backing::ReadControl<'_>,
+    ) -> Result<ColorRangeCoverage> {
         color_range_controlled::backed::paired_coverage(&self.query, pixels, limits, control.interrupt, Some(control))
     }
     /// Backed-query output retains its source, CMS preparation and quota leases.
-    pub fn coverage_owned_with_interrupt(&self,px:&[[f32;4]],width:usize,scale:f32,origin:[f32;2],limits:photocraft_algo::selection::ColorRangeLimits,control:&photocraft_raster::Interrupt<'_>)->Result<ColorRangeCoverage> {
-        color_range_controlled::backed::owned_coverage(&self.query,px,width,scale,origin,limits,control,None)
+    pub fn coverage_owned_with_interrupt(
+        &self,
+        px: &[[f32; 4]],
+        width: usize,
+        scale: f32,
+        origin: [f32; 2],
+        limits: photocraft_algo::selection::ColorRangeLimits,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<ColorRangeCoverage> {
+        color_range_controlled::backed::owned_coverage(&self.query, px, width, scale, origin, limits, control, None)
     }
     /// Only backed prepared queries carry an original target witness.
-    pub fn backed_source_is_current(&self,s:&Session)->Option<bool> {
-        self.query.backed.as_ref().map(|owner|owner.matches(s))
+    pub fn backed_source_is_current(&self, s: &Session) -> Option<bool> {
+        self.query.backed.as_ref().map(|owner| owner.matches(s))
     }
     /// Price bounded preview preparation on the same cumulative backed-query owner.
-    pub fn charge_backed_preview_work(&self,units:u64,control:&photocraft_raster::Interrupt<'_>)->Result<()> {
-        color_range_controlled::backed::charge_preview(&self.query,units,control,None)
+    pub fn charge_backed_preview_work(&self, units: u64, control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
+        color_range_controlled::backed::charge_preview(&self.query, units, control, None)
     }
     /// Exact original-coordinate native input; no proxy resampling or merged fallback.
-    pub fn backed_pixels_with_interrupt(&self,rect:Rect,control:&photocraft_raster::Interrupt<'_>)->Result<BackedColorRangePixels> {
-        color_range_controlled::backed::original_pixels(&self.query,rect,control,None)
+    pub fn backed_pixels_with_interrupt(&self, rect: Rect, control: &photocraft_raster::Interrupt<'_>) -> Result<BackedColorRangePixels> {
+        color_range_controlled::backed::original_pixels(&self.query, rect, control, None)
     }
-    pub fn coverage_backed_pixels_with_interrupt(&self,pixels:&BackedColorRangePixels,limits:photocraft_algo::selection::ColorRangeLimits,control:&photocraft_raster::Interrupt<'_>)->Result<ColorRangeCoverage> {
-        color_range_controlled::backed::paired_coverage(&self.query,pixels,limits,control,None)
+    pub fn coverage_backed_pixels_with_interrupt(
+        &self,
+        pixels: &BackedColorRangePixels,
+        limits: photocraft_algo::selection::ColorRangeLimits,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<ColorRangeCoverage> {
+        color_range_controlled::backed::paired_coverage(&self.query, pixels, limits, control, None)
     }
-
 }
 
 impl ColorRangeSamples {
     /// Prepare the query without allocating a full-resolution composite. Point samples use
     /// exactly the same compositor/profile as the final selection.
     pub fn new(s: &Session, p: &Value) -> Result<Self> {
-        let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-        let area = doc.bounds();
-        let bad = |msg: String| EngineError::BadParams { cmd: "select.colorRange".into(), msg };
-        let sample = |key: &str| -> Result<Vec<sel::RangeSample>> {
-            let Some(pts) = p.get(key) else { return Ok(Vec::new()) };
-            let pts = pts.as_array().ok_or_else(|| bad(format!("`{key}` must be [[x, y], …]")))?;
-            let mut samples = Vec::new();
-            for point in pts {
-                let q = point.as_array().and_then(|v| match v.as_slice() {
-                    [x, y] => Some((x.as_f64()?, y.as_f64()?)),
-                    _ => None,
-                });
-                let Some((x, y)) = q.filter(|(x, y)| x.is_finite() && y.is_finite()) else {
-                    return Err(bad(format!("bad point {point} in `{key}` (want [x, y])")));
-                };
-                let (x, y) = (x.floor() as i32, y.floor() as i32);
-                if !area.contains(x, y) {
-                    return Err(bad(format!("point [{x}, {y}] in `{key}` is outside the canvas")));
-                }
-                let r = Rect::from_xywh(x, y, 1, 1);
-                let pixel = if !b(p, "sampleAllLayers", true) {
-                    s.active().and_then(|d| d.active_layer.and_then(|id| d.doc.layer(id))).and_then(|l| l.surface()).map(|surf| {
-                        let mut px = [[0.0; 4]];
-                        surf.read_rgba_into(r, &mut px);
-                        px[0]
-                    })
-                } else {
-                    None
-                };
-                let px = match pixel {
-                    Some(px) => px,
-                    None => photocraft_compose::render(doc, r).px.first().copied().unwrap_or([0.0; 4]),
-                };
-                samples.push(sel::RangeSample { color: [px[0], px[1], px[2]], at: Some(((x - area.x0) as f32, (y - area.y0) as f32)) });
-            }
-            Ok(samples)
-        };
-        Self::with_samples(s, p, area, &sample("points")?, &sample("subtractPoints")?)
+        Self::new_with_interrupt(s, p, &photocraft_raster::Interrupt::NONE)
     }
     /// Original-document samples and unchanged Lab profile policy, with bounded preparation.
-    pub fn new_with_interrupt(s:&Session,p:&Value,control:&photocraft_raster::Interrupt<'_>)->Result<Self> {
-        color_range_controlled::new_query(s,p,control)
+    pub fn new_with_interrupt(s: &Session, p: &Value, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+        color_range_controlled::new_query(s, p, control)
     }
-    fn with_samples(s:&Session,p:&Value,area:Rect,plus:&[sel::RangeSample],minus:&[sel::RangeSample])->Result<Self> {
-        color_range_controlled::with_samples(s,p,area,plus,minus,&photocraft_raster::Interrupt::NONE)
+    fn with_samples(s: &Session, p: &Value, area: Rect, plus: &[sel::RangeSample], minus: &[sel::RangeSample]) -> Result<Self> {
+        color_range_controlled::with_samples(s, p, area, plus, minus, &photocraft_raster::Interrupt::NONE)
     }
     /// Checked native-preview/worker API. Scale/origin retain original-document coordinates.
-    pub fn coverage_with_interrupt(&self,px:&[[f32;4]],width:usize,scale:f32,origin:[f32;2],limits:photocraft_algo::selection::ColorRangeLimits,control:&photocraft_raster::Interrupt<'_>)->Result<Vec<f32>> {
-        color_range_controlled::coverage(self,px,width,scale,origin,limits,control)
+    pub fn coverage_with_interrupt(
+        &self,
+        px: &[[f32; 4]],
+        width: usize,
+        scale: f32,
+        origin: [f32; 2],
+        limits: photocraft_algo::selection::ColorRangeLimits,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Vec<f32>> {
+        color_range_controlled::coverage(self, px, width, scale, origin, limits, control)
     }
     /// Coverage of a composite rectangle. `scale` is the original document pixels represented
     /// by one input pixel; `origin` is in original document pixels (for a visible canvas crop).
@@ -405,75 +387,6 @@ fn color_range(s: &mut Session, p: &Value) -> Result<Value> {
     set_selection(s, "Color Range", area, mask, selection_mode)
 }
 
-fn modify(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
-    // The dialogs' ranges (Photoshop's limits); anything else is refused, never clamped silently.
-    let (min, max): (f32, f32) = match op {
-        "border" => (1.0, 200.0),
-        "feather" => (0.1, 1000.0),
-        _ => (1.0, 500.0),
-    };
-    let r = f(p, "radius", 1.0);
-    // Below the dialog's minimum (a negative or zero radius, #993) or above its maximum is
-    // refused: a clamp to 0 left the selection alone (Expand, Contract) or cleared it (Border)
-    // while reporting success.
-    if !(min..=max).contains(&r) {
-        return Err(EngineError::BadParams { cmd: format!("select.modify.{op}"), msg: format!("radius must be a number in {min}..{max}") });
-    }
-    // Photoshop's "Apply effect at canvas bounds": when on, the canvas edge is a selection edge
-    // (Select All then Contract shrinks from the edges); when off, the selection is taken to
-    // continue past the canvas. Border has no such option: its band always follows the canvas edge,
-    // or a Select All would border to nothing.
-    let at_bounds = op == "border" || b(p, "applyAtCanvasBounds", false);
-    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    let area = doc.bounds();
-    if area.size().area() > MAX_MODIFY_PIXELS as u64 {
-        return Err(EngineError::BadParams { cmd: format!("select.modify.{op}"), msg: "the selection is too large to modify".into() });
-    }
-    let (_, m) = current_mask(doc);
-    let (w, h) = (area.width() as usize, area.height() as usize);
-    // Feather reaches 3σ = 3 r (σ = r, as in Photoshop); the others reach r. A margin past that
-    // keeps the canvas edge out of reach. A selection clear of the canvas edge needs none: both
-    // readings agree there.
-    let reach = if op == "feather" { r * 3.0 } else { r };
-    let pad = if touches_edge(&m, w, h) { reach.ceil() as usize + 2 } else { 0 };
-    let grown = |n: usize| pad.checked_mul(2).and_then(|p| n.checked_add(p));
-    let (Some(pw), Some(ph)) = (grown(w), grown(h)) else {
-        return Err(EngineError::BadParams { cmd: format!("select.modify.{op}"), msg: "the selection is too large to modify".into() });
-    };
-    if pw.checked_mul(ph).is_none_or(|n| n > MAX_MODIFY_PIXELS) {
-        return Err(EngineError::BadParams { cmd: format!("select.modify.{op}"), msg: "the selection is too large to modify".into() });
-    }
-    // Unpadded (the usual case) the mask is used as it is: two serial full-canvas copies were
-    // most of a 24 MP Feather or Smooth (#211).
-    let padded = if pad == 0 { m } else { pad_mask(&m, w, h, pad, at_bounds) };
-    let out = match op {
-        "expand" => sel::expand(&padded, pw, ph, r),
-        "contract" => sel::contract(&padded, pw, ph, r),
-        "border" => sel::border(&padded, pw, ph, r),
-        "smooth" => sel::smooth(&padded, pw, ph, r),
-        _ => sel::feather(&padded, pw, ph, r),
-    };
-    let out = if pad == 0 { out } else { crop_mask(&out, pw, pad, w, h) };
-    let label = match op {
-        "expand" => "Expand Selection",
-        "contract" => "Contract Selection",
-        "border" => "Border Selection",
-        "smooth" => "Smooth Selection",
-        _ => "Feather Selection",
-    };
-    set_selection(s, label, area, out, SelectionMode::Replace)
-}
-
-/// The largest padded mask Modify works on (a 300000 × 300000 canvas is 9e10 pixels; this caps a
-/// padded copy at ~4 GB of f32, beyond which the edit is refused rather than aborting on allocation).
-const MAX_MODIFY_PIXELS: usize = 1 << 30;
-
-/// Whether any pixel on the outermost rows or columns of `m` (`w`×`h`) is selected.
-fn touches_edge(m: &[f32], w: usize, h: usize) -> bool {
-    let sel = |x: usize, y: usize| m.get(y * w + x).is_some_and(|v| *v > 0.0);
-    (0..w).any(|x| sel(x, 0) || sel(x, h.saturating_sub(1))) || (0..h).any(|y| sel(0, y) || sel(w.saturating_sub(1), y))
-}
-
 /// `m` (`w`×`h`) with a `pad`-pixel margin: unselected when `outside_empty`, else the nearest
 /// edge pixel repeated (the selection continues past the canvas).
 #[cfg(test)]
@@ -550,7 +463,9 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             color_range
         ),
-        spec!("select.modify.border", "Border…", ["Select", "Modify"], r##"{"radius":1..200=1}"##, has_selection, |s, p| crate::selection_morphology_controlled::run(s, "select.modify.border", p)),
+        spec!("select.modify.border", "Border…", ["Select", "Modify"], r##"{"radius":1..200=1}"##, has_selection, |s, p| {
+            crate::selection_morphology_controlled::run(s, "select.modify.border", p)
+        }),
         spec!("select.modify.smooth", "Smooth…", ["Select", "Modify"], r##"{"radius":1..500=1,"applyAtCanvasBounds":bool=false}"##, has_selection, |s, p| {
             crate::selection_smooth_controlled::run(s, p)
         }),
@@ -573,10 +488,22 @@ pub fn specs() -> Vec<CommandSpec> {
             has_selection,
             crate::selection_modify_controlled::run_feather
         ),
-        spec!("select.grow", "Grow", ["Select"], r##"{"tolerance":0..255=32,"sampleAllLayers":bool=false,"documentId":decimal-string?,"expectedRevision":decimal-string? (captured pair)}"##, has_selection, |s, p| grow_similar(s, p, true)),
-        spec!("select.similar", "Similar", ["Select"], r##"{"tolerance":0..255=32,"sampleAllLayers":bool=false,"documentId":decimal-string?,"expectedRevision":decimal-string? (captured pair)}"##, has_selection, |s, p| grow_similar(
-            s, p, false
-        )),
+        spec!(
+            "select.grow",
+            "Grow",
+            ["Select"],
+            r##"{"tolerance":0..255=32,"sampleAllLayers":bool=false,"documentId":decimal-string?,"expectedRevision":decimal-string? (captured pair)}"##,
+            has_selection,
+            |s, p| grow_similar(s, p, true)
+        ),
+        spec!(
+            "select.similar",
+            "Similar",
+            ["Select"],
+            r##"{"tolerance":0..255=32,"sampleAllLayers":bool=false,"documentId":decimal-string?,"expectedRevision":decimal-string? (captured pair)}"##,
+            has_selection,
+            |s, p| grow_similar(s, p, false)
+        ),
         spec!(
             "select.lasso",
             "Lasso",
@@ -590,8 +517,8 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests {
-    use photocraft_raster::Surface;
     use super::*;
+    use photocraft_raster::Surface;
 
     fn session() -> Session {
         let mut s = Session::new();
@@ -651,7 +578,8 @@ mod tests {
                 photocraft_color::SampleType::U8,
             ),
             None,
-        );
+        )
+        .unwrap();
         for all_layers in [false, true] {
             assert!(sample_pixels(&s, all_layers).unwrap_err().to_string().contains("too large to sample"));
         }
@@ -663,13 +591,18 @@ mod tests {
         let mut s = session();
         s.execute("select.rect", json!({"x": 5, "y": 5, "width": 4, "height": 4})).unwrap();
         let before = s.active().unwrap().doc.clone();
-        let history = s.active().unwrap().history.entries();
+        let control = crate::read_control_none();
+        let history = s.active().unwrap().history.entries(&control).unwrap();
+        let cursor = s.active().unwrap().history.past_len();
+        let can_redo = s.active().unwrap().history.can_redo();
         crate::allocation::fail_next_for_test();
         let result = s.execute("select.similar", json!({"sampleAllLayers": false}));
         let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
         assert!(result.is_err());
         assert_eq!(*s.active().unwrap().doc, *before);
-        assert_eq!(s.active().unwrap().history.entries(), history);
+        assert_eq!(s.active().unwrap().history.entries(&control).unwrap().values(), history.values());
+        assert_eq!(s.active().unwrap().history.past_len(), cursor);
+        assert_eq!(s.active().unwrap().history.can_redo(), can_redo);
     }
 
     #[test]
@@ -684,7 +617,7 @@ mod tests {
         let mut selection = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
         selection.write_pixel(0, 0, &[1.0]);
         doc.selection = Some(selection);
-        s.add_document(doc, None);
+        s.add_document(doc, None).unwrap();
         let before = s.active().unwrap().doc.clone();
         for op in ["expand", "contract", "border", "smooth", "feather"] {
             let error = s.execute(&format!("select.modify.{op}"), json!({"radius": 1})).unwrap_err();

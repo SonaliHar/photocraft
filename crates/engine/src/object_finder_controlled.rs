@@ -155,7 +155,7 @@ fn admission(target: &FinderTarget, cache_bytes: u64, cache_work: u64, hit: bool
         let strip_h =
             if req.step == 1 { req.window.height() as usize } else { (64usize.div_ceil(req.step).max(1) * req.step).min(req.window.height() as usize) }.max(1);
         let strip = Rect::from_xywh(req.window.x0, req.window.y0, req.window.width().max(1), strip_h as u32);
-        let halo = Rect::from_xywh(req.window.x0, req.window.y0, req.window.width().min(216).max(1), req.window.height().min(216).max(1));
+        let halo = Rect::from_xywh(req.window.x0, req.window.y0, req.window.width().clamp(1, 216), req.window.height().clamp(1, 216));
         let a = photocraft_compose::ordinary_render_requirements(doc, strip, control).map_err(|e| map_error(control, e))?;
         let b = photocraft_compose::ordinary_render_requirements(doc, halo, control).map_err(|e| map_error(control, e))?;
         render_bytes = (a.scratch_bytes as u64)

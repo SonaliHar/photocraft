@@ -142,4 +142,8 @@ pub(crate) fn run_captured(session: &mut Session, params: &Value, target: Accoun
 
 #[cfg(test)]
 #[path = "accounted_select_inverse_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unreachable, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod tests;

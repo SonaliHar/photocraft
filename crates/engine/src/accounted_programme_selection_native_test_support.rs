@@ -41,7 +41,10 @@ pub fn load(case: Case, depth: usize) -> Input {
         "selection-programme-source.xcf",
         std::sync::Arc::new(bytes),
         &Default::default(),
-        &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+        &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap(),
         quota,
         &ctl(),
     )

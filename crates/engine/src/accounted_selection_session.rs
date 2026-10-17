@@ -15,16 +15,26 @@ pub struct AccountedSelectionTarget {
 }
 impl AccountedSelectionTarget {
     /// Capture a paid immutable accounted selection context using the original operation control.
-    pub fn capture_with_control(session:&Session,c:&ReadControl<'_>)->Result<Self>{
-        let mut target=Self::capture(session)?;
-        target.programme=Some(std::sync::Arc::new(programme::ProgrammeSelectionCapture::prepare(session,c)?));
+    pub fn capture_with_control(session: &Session, c: &ReadControl<'_>) -> Result<Self> {
+        let mut target = Self::capture(session)?;
+        target.programme = Some(std::sync::Arc::new(programme::ProgrammeSelectionCapture::prepare(session, c)?));
         Ok(target)
     }
-    pub fn validate_with_control(&self,session:&Session,c:&ReadControl<'_>)->Result<()>{
+    pub fn validate_with_control(&self, session: &Session, c: &ReadControl<'_>) -> Result<()> {
         c.check(1)?;
-        let state=session.active().ok_or(EngineError::NoDocument)?;
-        if state.doc.id!=self.document||state.revision!=self.revision||state.view_revision!=self.view_revision||!self.snapshot.is_current(&state.doc){return Err(BackingError::Integrity.into())}
-        if let Some(capture)=&self.programme{capture.validate(session,c)?;}else if state.doc.accounted().is_some_and(|o|crate::accounted_programme_current::kind(o).is_some()){return Err(BackingError::Unsupported.into())}
+        let state = session.active().ok_or(EngineError::NoDocument)?;
+        if state.doc.id != self.document
+            || state.revision != self.revision
+            || state.view_revision != self.view_revision
+            || !self.snapshot.is_current(&state.doc)
+        {
+            return Err(BackingError::Integrity.into());
+        }
+        if let Some(capture) = &self.programme {
+            capture.validate(session, c)?;
+        } else if state.doc.accounted().is_some_and(|o| crate::accounted_programme_current::kind(o).is_some()) {
+            return Err(BackingError::Unsupported.into());
+        }
         Ok(())
     }
     pub fn capture(session: &Session) -> Result<Self> {
@@ -46,7 +56,9 @@ impl Session {
         control: &ReadControl<'_>,
     ) -> Result<()> {
         control.check(1)?;
-        if target.programme.is_some()||self.active().and_then(|s|s.doc.accounted()).is_some_and(|o|crate::accounted_programme_current::kind(o).is_some()){target.validate_with_control(self,control)?;}
+        if target.programme.is_some() || self.active().and_then(|s| s.doc.accounted()).is_some_and(|o| crate::accounted_programme_current::kind(o).is_some()) {
+            target.validate_with_control(self, control)?;
+        }
         if self.active_job().is_some()
             || self.command_has_job_on(target.document)
             || self.command_has_pending_job()
@@ -75,14 +87,16 @@ impl Session {
         }
         let mut history = state.history.clone();
         history.set_current_layers_borrowed(view.target(), control)?;
-        let snapshot = if target.programme.as_ref().is_some_and(|capture|capture.is_programme()){
-            let owner=state.doc.accounted().ok_or(BackingError::Integrity)?;
-            let kind=crate::accounted_programme_current::kind(owner).ok_or(BackingError::Unsupported)?;
-            crate::accounted_programme_current::validate(owner,kind,control)?;
-            let staged=owner.try_replace_programme_selection(selection,control)?;
-            crate::accounted_programme_current::validate(&staged,kind,control)?;
-            history.try_commit_prepared_accounted(owner,staged,label,view.target(),control)?
-        }else{history.try_commit_accounted_selection(selection, label, view.target(), control)?};
+        let snapshot = if target.programme.as_ref().is_some_and(|capture| capture.is_programme()) {
+            let owner = state.doc.accounted().ok_or(BackingError::Integrity)?;
+            let kind = crate::accounted_programme_current::kind(owner).ok_or(BackingError::Unsupported)?;
+            crate::accounted_programme_current::validate(owner, kind, control)?;
+            let staged = owner.try_replace_programme_selection(selection, control)?;
+            crate::accounted_programme_current::validate(&staged, kind, control)?;
+            history.try_commit_prepared_accounted(owner, staged, label, view.target(), control)?
+        } else {
+            history.try_commit_accounted_selection(selection, label, view.target(), control)?
+        };
         if snapshot.shares_state(&state.doc) {
             control.check(1)?;
             return Ok(());
@@ -102,16 +116,30 @@ impl Session {
     }
 }
 
-impl std::fmt::Debug for AccountedSelectionTarget{
- fn fmt(&self,f:&mut std::fmt::Formatter<'_>)->std::fmt::Result{f.debug_struct("AccountedSelectionTarget").field("document",&self.document).field("revision",&self.revision).field("view_revision",&self.view_revision).finish_non_exhaustive()}
+impl std::fmt::Debug for AccountedSelectionTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AccountedSelectionTarget")
+            .field("document", &self.document)
+            .field("revision", &self.revision)
+            .field("view_revision", &self.view_revision)
+            .finish_non_exhaustive()
+    }
 }
-#[path="accounted_programme_selection.rs"]
+#[path = "accounted_programme_selection.rs"]
 mod programme;
 
-#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
-#[path="accounted_programme_selection_tests.rs"]
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_programme_selection_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod tests;
 
-#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
-#[path="accounted_selection_inverse_command_tests.rs"]
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_selection_inverse_command_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod inverse_tests;

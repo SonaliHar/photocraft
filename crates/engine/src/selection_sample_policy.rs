@@ -123,15 +123,13 @@ pub(crate) fn existing_selection(session: &Session, cmd: &str, ctl: &Interrupt<'
 pub(crate) fn sampled_pixels(session: &Session, cmd: &str, all_layers: bool, ctl: &Interrupt<'_>) -> Result<()> {
     poll(ctl)?;
     let state = session.active().ok_or(EngineError::NoDocument)?;
-    if !all_layers {
-        if let Some(layer) = find_layer(&state.doc, state.active_layer, ctl)? {
-            if matches!(layer.content, photocraft_doc::LayerContent::BackedRaster(_)) {
-                return Err(bad(cmd, "active-backed-pixel-sampling-unsupported"));
-            }
-            if let Some(pixels) = layer.surface() {
-                surface(pixels, cmd)?;
-                return poll(ctl);
-            }
+    if !all_layers && let Some(layer) = find_layer(&state.doc, state.active_layer, ctl)? {
+        if matches!(layer.content, photocraft_doc::LayerContent::BackedRaster(_)) {
+            return Err(bad(cmd, "active-backed-pixel-sampling-unsupported"));
+        }
+        if let Some(pixels) = layer.surface() {
+            surface(pixels, cmd)?;
+            return poll(ctl);
         }
     }
     composite(&state.doc, cmd, ctl)

@@ -61,10 +61,10 @@ fn plan(session: &Session, params: &Value, op: &str) -> Result<Plan> {
     let resolution = document.physical_resolution.as_ref().unwrap_or(&legacy);
     // Borrow custom unit fields; never clone an unbounded definition to parse a
     // signed position. Shared converter remains the only coordinate arithmetic.
-    if let PhysicalUnit::Custom(unit) = &resolution.unit {
-        if [&unit.name, &unit.symbol, &unit.abbreviation].iter().any(|value| value.len() > 4096) {
-            return Err(error("custom guide unit metadata limit"));
-        }
+    if let PhysicalUnit::Custom(unit) = &resolution.unit
+        && [&unit.name, &unit.symbol, &unit.abbreviation].iter().any(|value| value.len() > 4096)
+    {
+        return Err(error("custom guide unit metadata limit"));
     }
     let fixed = match params.get("unit") {
         None | Some(Value::String(_)) if params.get("unit").is_none_or(|value| value.as_str() == Some("px")) => Some(PhysicalUnit::Pixel),
@@ -87,7 +87,8 @@ fn plan(session: &Session, params: &Value, op: &str) -> Result<Plan> {
                 if text.len() > 256 || text.contains('\0') {
                     return Err(error("position length limit"));
                 }
-                let (number, suffix) = crate::prefs::Unit::parse_length(text).ok_or_else(|| error("position must be a number with px, in, cm, mm, pt, pc or %"))?;
+                let (number, suffix) =
+                    crate::prefs::Unit::parse_length(text).ok_or_else(|| error("position must be a number with px, in, cm, mm, pt, pc or %"))?;
                 let dpi = if vertical { resolution.x_dpi } else { resolution.y_dpi };
                 let extent = if vertical { document.size.width } else { document.size.height };
                 suffix.unwrap_or(crate::prefs::Unit::Pixels).to_px(number, dpi, f64::from(extent), session.prefs().units_and_rulers.point_size.per_inch())
@@ -199,15 +200,13 @@ fn guides(document: &Document, plan: Plan, op: &str, control: &Interrupt<'_>) ->
         vertical: copied(&document.guides.vertical, op, plan.vertical, plan, control)?,
         colors: copied_colors(&document.guides.colors, control)?,
     };
-    if op == "move" {
-        if let Some(from) =
+    if op == "move"
+        && let Some(from) =
             plan.index.and_then(|index| if plan.vertical { document.guides.vertical.get(index) } else { document.guides.horizontal.get(index) }).copied()
-        {
-            if let (Some(to), Some(rgb)) = (plan.position, document.guides.color(plan.vertical, from)) {
-                result.colors.try_reserve(1).map_err(|_| error("guide color allocation denied"))?;
-                result.set_color(plan.vertical, to, Some(rgb));
-            }
-        }
+        && let (Some(to), Some(rgb)) = (plan.position, document.guides.color(plan.vertical, from))
+    {
+        result.colors.try_reserve(1).map_err(|_| error("guide color allocation denied"))?;
+        result.set_color(plan.vertical, to, Some(rgb));
     }
     if op == "new" && plan.color.is_some() {
         result.colors.try_reserve(1).map_err(|_| error("guide color allocation denied"))?;
@@ -268,6 +267,22 @@ pub(crate) fn run(session: &mut Session, params: &Value, op: &str) -> Result<Val
             })
         },
     )
+}
+
+fn copied_colors(values: &[photocraft_doc::GuideColor], control: &Interrupt<'_>) -> Result<Vec<photocraft_doc::GuideColor>> {
+    if values.len() > 100_000 {
+        return Err(error("guide color metadata limit"));
+    }
+    let mut output = Vec::new();
+    output.try_reserve_exact(values.len()).map_err(|_| error("guide color allocation denied"))?;
+    for value in values {
+        poll(control)?;
+        if !value.position.is_finite() {
+            return Err(error("nonfinite guide color position"));
+        }
+        output.push(*value);
+    }
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -373,31 +388,15 @@ mod tests {
     fn upstream_string_units_use_physical_axes_and_bounded_percent() {
         let mut session = Session::new();
         session.execute("file.new", json!({"width":400,"height":200})).unwrap();
-        session.edit("Axes", |doc, _| {
-            doc.set_physical_resolution(PhysicalResolution { x_dpi:144.0, y_dpi:288.0, unit:PhysicalUnit::Inch }).map_err(error)?;
-            Ok(())
-        }).unwrap();
-        assert_eq!(plan(&session,&json!({"orientation":"vertical","position":"1 in"}),"new").unwrap().position,Some(144.0));
-        assert_eq!(plan(&session,&json!({"orientation":"horizontal","position":"1 in"}),"new").unwrap().position,Some(288.0));
-        assert_eq!(plan(&session,&json!({"orientation":"vertical","position":"50%"}),"new").unwrap().position,Some(200.0));
-        assert!(plan(&session,&json!({"position":"x".repeat(257)}),"new").is_err());
+        session
+            .edit("Axes", |doc, _| {
+                doc.set_physical_resolution(PhysicalResolution { x_dpi: 144.0, y_dpi: 288.0, unit: PhysicalUnit::Inch }).map_err(error)?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(plan(&session, &json!({"orientation":"vertical","position":"1 in"}), "new").unwrap().position, Some(144.0));
+        assert_eq!(plan(&session, &json!({"orientation":"horizontal","position":"1 in"}), "new").unwrap().position, Some(288.0));
+        assert_eq!(plan(&session, &json!({"orientation":"vertical","position":"50%"}), "new").unwrap().position, Some(200.0));
+        assert!(plan(&session, &json!({"position":"x".repeat(257)}), "new").is_err());
     }
-}
-
-fn copied_colors(values: &[photocraft_doc::GuideColor], control: &Interrupt<'_>) -> Result<Vec<photocraft_doc::GuideColor>> {
-    if values.len() > 100_000 {
-        return Err(error("guide color metadata limit"));
-    }
-    let mut output = Vec::new();
-    output.try_reserve_exact(values.len()).map_err(|_| error("guide color allocation denied"))?;
-    for value in values {
-        poll(control)?;
-        if !value.position.is_finite() {
-            return Err(error("nonfinite guide color position"));
-        }
-        output.push(*value);
-    }
-    Ok(output)
-
-
 }

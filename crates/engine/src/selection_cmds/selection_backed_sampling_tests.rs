@@ -35,7 +35,7 @@ fn fixture(resident: u64, cancel: Option<Arc<AtomicBool>>, fault: bool) -> (Sess
     fixture_profile(resident, cancel, fault, true)
 }
 fn fixture_profile(resident: u64, cancel: Option<Arc<AtomicBool>>, fault: bool, assigned: bool) -> (Session, Document, BackingQuota, Arc<AtomicUsize>) {
-    let raw = [0.23456789f32, 0.5, 0.7, 1.0, 0.8, 0.125, 0.3, 0.5];
+    let raw = [0.234_567_9_f32, 0.5, 0.7, 1.0, 0.8, 0.125, 0.3, 0.5];
     let mut doc = Document::new("explicit current", Size::new(2, 1), ColorMode::Rgb, SampleType::F32);
     if assigned {
         doc.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
@@ -188,26 +188,34 @@ fn only_active_localization_debits_point_distance_work_on_the_same_counter() {
     let mut query =
         BackedColorRangeSamples::new_with_read_control(&session, &json!({"sampleAllLayers":false,"points":[[0,0],[0,0]],"fuzziness":40}), &ctl).unwrap();
     let pixels = query.backed_pixels_with_read_control(Rect::new(0, 0, 2, 1), &ctl).unwrap();
-    let lower = sel::ColorRangeLimits { work_units: 2 * 1024, ..Default::default() };
+    // Reference preparation is external test accounting; actual coverage must
+    // pay its own preparation on the retained parent every time.
+    let base_work = {
+        let plan = query.query.to_lab.prepare_rgb_lab_f32_with_control(Default::default(), &|| false).unwrap();
+        coverage_work(&query.query, 2, Some((&plan, Default::default())), &Interrupt::NONE).unwrap().0
+    };
+    let preparation = photocraft_cms::Transform::RGB_LAB_F32_PREPARATION_WORK;
+    let lower = sel::ColorRangeLimits { work_units: base_work, ..Default::default() };
     let before = total.load(Ordering::Relaxed);
     let actual = query.coverage_backed_pixels_with_read_control(&pixels, lower, &ctl).unwrap();
-    assert_eq!(total.load(Ordering::Relaxed) - before, 2 * 1024);
+    assert_eq!(total.load(Ordering::Relaxed) - before, base_work + preparation);
     let expected = coverage_inner(&query.query, pixels.pixels(), 2, 1., [0., 0.], Default::default(), &Interrupt::NONE).unwrap();
     assert_eq!(actual.values(), expected);
     query.query.localized = Some(1.);
     let before = total.load(Ordering::Relaxed);
     assert!(query.coverage_backed_pixels_with_read_control(&pixels, lower, &ctl).is_err());
-    assert_eq!(total.load(Ordering::Relaxed), before);
-    let localized_work = 2 * (1024 + 2 * 48);
+    assert_eq!(total.load(Ordering::Relaxed) - before, preparation);
+    let before = total.load(Ordering::Relaxed);
+    let localized_work = base_work + 2 * 2 * 48;
     let higher = sel::ColorRangeLimits { work_units: localized_work, ..Default::default() };
     query.coverage_backed_pixels_with_read_control(&pixels, higher, &ctl).unwrap();
-    assert_eq!(total.load(Ordering::Relaxed) - before, localized_work);
+    assert_eq!(total.load(Ordering::Relaxed) - before, localized_work + preparation);
     assert_eq!(total.load(Ordering::Relaxed), query.query.backed.as_ref().unwrap().work.used.load(Ordering::Relaxed));
     query.query.plus_at.clear();
     assert_eq!(active_localized_points(&query.query), 0);
     let before = total.load(Ordering::Relaxed);
     query.coverage_backed_pixels_with_read_control(&pixels, lower, &ctl).unwrap();
-    assert_eq!(total.load(Ordering::Relaxed) - before, 2 * 1024);
+    assert_eq!(total.load(Ordering::Relaxed) - before, base_work + preparation);
     let cancelled = || true;
     let cancelled_ctl = ReadControl { interrupt: &Interrupt::cancel_only(&cancelled), work: &charge };
     let before = total.load(Ordering::Relaxed);
