@@ -693,22 +693,25 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                         _ => shown.trim_start_matches('#').to_ascii_uppercase(),
                     },
                 };
-                let r = crate::widgets::text_field_ex(ui, id, &mut h, "", 64.0, true, Some(6));
+                let r = crate::widgets::text_field_ex(ui, id, &mut h, "", 64.0, true, Some(7));
                 if let Some(c) = pasted {
                     edit = Some((c, Keep::Nothing));
                 }
                 if r.gained_focus() {
                     crate::field_tab::select_all(ui.ctx(), id, &h);
                 }
+                if r.changed() {
+                    if h.starts_with('#') {
+                        h = h.trim_start_matches('#').to_string();
+                    }
+                    if let Some(c) = parse_hex(&h) {
+                        edit = Some((c, Keep::Nothing));
+                    }
+                }
                 if r.has_focus() {
                     ui.data_mut(|d| d.insert_temp(id, h.clone()));
                 } else {
                     ui.data_mut(|d| d.remove::<String>(id));
-                }
-                if r.changed()
-                    && let Some(c) = parse_hex(&h)
-                {
-                    edit = Some((c, Keep::Nothing));
                 }
             });
         });
@@ -931,6 +934,18 @@ mod tests {
     }
 
     #[test]
+    fn hex_field_typing_leading_hash_updates_color() {
+        let mut h = picker("#000000");
+        h.get_by_role(Role::TextInput).click();
+        h.run_steps(1);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(1);
+        type_keys(&mut h, "#336699");
+        assert_eq!(color(&h), "#336699", "typing 7 characters with leading hash updates color");
+        assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("336699"));
+    }
+
+    #[test]
     fn color_picker_opens_with_hex_focused_and_selected() {
         let mut h = picker("#336699");
         let hex_field = h.get_by_role(Role::TextInput);
@@ -1142,6 +1157,14 @@ mod tests {
         // Six bytes, three characters: the byte range 0..2 splits "é", which used to panic.
         assert_eq!(parse_hex("aé€"), None);
         assert_eq!(parse_hex("#ff880"), None);
+    }
+
+    #[test]
+    fn parse_hex_strips_leading_hash_and_parses_case_insensitively() {
+        assert_eq!(parse_hex("#336699"), parse_hex("336699"));
+        assert_eq!(parse_hex("#ffffff"), Some([1.0, 1.0, 1.0]));
+        assert_eq!(parse_hex("#000000"), Some([0.0, 0.0, 0.0]));
+        assert_eq!(parse_hex("AABBCC"), parse_hex("#aabbcc"));
     }
 
     #[test]

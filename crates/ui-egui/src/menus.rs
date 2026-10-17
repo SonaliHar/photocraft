@@ -13,7 +13,9 @@ pub(crate) fn modal_allows(app: &PhotocraftApp, id: &str) -> bool {
     if app.camera_raw.is_some() || crate::crop_ui::blocks(app, id) {
         return false;
     }
-    (app.ui.dialogs.is_empty() && app.discard.is_none()) || crate::shortcuts::NAV_COMMANDS.contains(&id)
+    (app.ui.dialogs.is_empty() && app.discard.is_none())
+        || crate::shortcuts::NAV_COMMANDS.contains(&id)
+        || matches!(id, "edit.copy" | "edit.cut" | "edit.paste" | "select.all")
 }
 
 /// Top-level menus in Photoshop order.
@@ -492,6 +494,26 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             crate::type_tool::select_all(app);
             Ok(Value::Null)
         }
+        // While a modal dialog is open, clipboard and select all commands route to the focused
+        // text field in egui rather than executing against the background document (#5904).
+        "edit.cut" if !app.ui.dialogs.is_empty() || app.discard.is_some() => {
+            ctx.input_mut(|i| i.events.push(egui::Event::Cut));
+            Ok(Value::Null)
+        }
+        "edit.copy" if !app.ui.dialogs.is_empty() || app.discard.is_some() => {
+            ctx.input_mut(|i| i.events.push(egui::Event::Copy));
+            Ok(Value::Null)
+        }
+        "edit.paste" if !app.ui.dialogs.is_empty() || app.discard.is_some() => {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            Ok(Value::Null)
+        }
+        "select.all" if !app.ui.dialogs.is_empty() || app.discard.is_some() => {
+            ctx.input_mut(|i| {
+                i.events.push(egui::Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
+            });
+            Ok(Value::Null)
+        }
         "edit.paste" if params.as_object().is_none_or(|o| o.is_empty()) => {
             // Photoshop: paste in place when the copied area is visible, else centred in the view;
             // images from other apps are always centred.
@@ -718,6 +740,8 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         "view.rulers" | "view.show.grid" | "view.show.guides" | "view.snap" | "view.lockGuides" => true,
         "edit.cut" | "edit.copy" if app.ui.text_edit.is_some() => crate::type_tool::selected_range(app).is_some(),
         "edit.paste" | "select.all" if app.ui.text_edit.is_some() => true,
+        // While a dialog is open, clipboard commands are enabled for the dialog's fields (#5904).
+        "edit.cut" | "edit.copy" | "edit.paste" | "select.all" if !app.ui.dialogs.is_empty() || app.discard.is_some() => true,
         // An image copied in another app can only be seen by reading the OS clipboard, which happens
         // on an explicit paste: with a clipboard service these stay enabled. Paste and New from
         // Clipboard need no document (with none open, Paste makes one); Paste in Place does.
@@ -1574,6 +1598,50 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modal_dialog_allows_clipboard_and_navigation_commands() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        assert!(modal_allows(&app, "edit.copy"));
+        assert!(modal_allows(&app, "image.canvasSize"));
+        app.ui.open_dialog(crate::state::DialogKind::NewDocument, Default::default());
+        assert!(!modal_allows(&app, "image.canvasSize"));
+        assert!(!modal_allows(&app, "layer.new"));
+        assert!(modal_allows(&app, "view.zoomIn"));
+        assert!(modal_allows(&app, "view.fitOnScreen"));
+        assert!(modal_allows(&app, "edit.copy"));
+        assert!(modal_allows(&app, "edit.cut"));
+        assert!(modal_allows(&app, "edit.paste"));
+        assert!(modal_allows(&app, "select.all"));
+    }
+
+    #[test]
+    fn modal_dialog_clipboard_commands_route_to_egui_and_keep_document_unchanged() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 100, "height": 100, "background": "transparent"})).unwrap();
+        let rev_before = app.session.active().unwrap().revision;
+        let layers_before = app.session.active().unwrap().doc.layers.len();
+
+        // Open a modal dialog
+        app.ui.open_dialog(crate::state::DialogKind::NewDocument, Default::default());
+
+        // In menus::is_enabled(), clipboard commands are enabled for dialogs
+        assert!(is_enabled(&app, "edit.copy"));
+        assert!(is_enabled(&app, "edit.cut"));
+        assert!(is_enabled(&app, "edit.paste"));
+        assert!(is_enabled(&app, "select.all"));
+
+        // In menus::invoke(), clipboard commands route to egui without modifying the document
+        invoke(&mut app, &ctx, "edit.paste", json!({})).unwrap();
+        invoke(&mut app, &ctx, "edit.cut", json!({})).unwrap();
+        invoke(&mut app, &ctx, "edit.copy", json!({})).unwrap();
+        invoke(&mut app, &ctx, "select.all", json!({})).unwrap();
+
+        let active = app.session.active().unwrap();
+        assert_eq!(active.revision, rev_before, "document revision must remain unchanged");
+        assert_eq!(active.doc.layers.len(), layers_before, "layer count must remain unchanged");
+    }
 
     #[test]
     fn sync_with_system_menu_keeps_saved_slots_and_its_checkmark_across_palettes() {
