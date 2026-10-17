@@ -69,6 +69,11 @@ unsafe_code = "forbid"
 dbg_macro = "warn"
 todo = "warn"
 
+# wgpu-hal 30.0.1 stretches DX12 swap-chain images in restored Windows windows.
+# Keep the one-line presentation fix local until a released wgpu-hal includes it.
+[patch.crates-io]
+wgpu-hal = { path = "vendor/wgpu-hal" }
+
 [profile.dev.package."*"]
 opt-level = 2
 
