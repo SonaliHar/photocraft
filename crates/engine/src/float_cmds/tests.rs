@@ -155,7 +155,7 @@ fn float_with_the_mask_target_moves_the_mask_not_the_layer() {
     s.edit("mask", |doc, _| {
         let l = doc.layer_mut(id).unwrap();
         let mut m = photocraft_doc::LayerMask::reveal_all();
-        m.surface.fill_rect(Rect::new(10, 10, 30, 30), &[0.0]);
+        std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(10, 10, 30, 30), &[0.0]);
         l.mask = Some(m);
         Ok(())
     })
@@ -175,7 +175,7 @@ fn cutting_an_untouched_part_of_the_mask_moves_it_and_leaves_the_background_colo
     let (mut s, id) = session();
     s.edit("mask", |doc, _| {
         let mut m = photocraft_doc::LayerMask::hide_all();
-        m.surface.fill_rect(Rect::new(50, 10, 70, 30), &[1.0]);
+        std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(50, 10, 70, 30), &[1.0]);
         doc.layer_mut(id).unwrap().mask = Some(m);
         Ok(())
     })
@@ -188,4 +188,66 @@ fn cutting_an_untouched_part_of_the_mask_moves_it_and_leaves_the_background_colo
     assert_eq!(mask_at(&s, 55, 12), 0.0, "the untouched black moved");
     assert!((mask_at(&s, 12, 12) - 0.5).abs() < 0.01, "the hole takes the background colour");
     assert_eq!(mask_at(&s, 40, 12), 0.0);
+}
+
+/// Early ordinary synchronous dispatch may let the existing hook drop its live preview.
+#[test]
+fn ordinary_selection_commands_drop_a_live_float_before_strict_execution() {
+    for command in ["select.inverse", "select.all", "select.deselect"] {
+        let (mut s, id) = session();
+        s.execute("select.float", json!({"dx":20,"dy":0})).unwrap();
+        s.execute(command, json!({})).unwrap();
+        let st = s.active().unwrap();
+        assert!(floating(st).is_none(), "{command}");
+        assert_eq!(alpha(&st.doc, id, 12, 12), 0.0, "{command}: old patch dropped");
+        assert_eq!(alpha(&st.doc, id, 35, 20), 1.0, "{command}: new patch dropped");
+        match command {
+            "select.deselect" => assert!(st.doc.selection.is_none()),
+            "select.all" => assert_eq!(st.doc.selection.as_ref().unwrap().content_bounds(), st.doc.bounds()),
+            _ => {
+                let selection = st.doc.selection.as_ref().unwrap();
+                assert_eq!(selection.sample_channel(35, 20, 0), 0.0);
+                assert_eq!(selection.sample_channel(0, 0, 0), 1.0);
+            }
+        }
+    }
+}
+#[test]
+fn captured_and_worker_selection_refusals_preserve_the_floating_identity() {
+    for command in ["select.inverse", "select.all", "select.deselect"] {
+        let (mut s, _) = session();
+        s.execute("select.float", json!({"dx":20,"dy":0})).unwrap();
+        let st = s.active().unwrap();
+        let old = st.doc.clone();
+        let revision = st.revision;
+        let source = st.source.clone();
+        let past = st.history.past_len();
+        let floating = st.floating.as_ref().unwrap().clone();
+        let captured = json!({"documentId":old.id.0.to_string(),"expectedRevision":revision.to_string()});
+        for params in [captured, json!({"documentId":old.id.0.to_string()}), json!({"unknown":true})] {
+            assert!(s.execute(command, params).is_err(), "{command}: captured/malformed cannot implicitly drop");
+            let st = s.active().unwrap();
+            assert!(st.doc.shares_state(&old));
+            assert_eq!(st.revision, revision);
+            assert_eq!(st.source, source);
+            assert_eq!(st.history.past_len(), past);
+            let now = st.floating.as_ref().unwrap();
+            assert_eq!((now.layer, now.offset, now.revision), (floating.layer, floating.offset, floating.revision));
+            assert!(std::sync::Arc::ptr_eq(&now.parts, &floating.parts));
+        }
+        let strict = if command == "select.inverse" {
+            crate::selection_inverse_controlled::dispatch_preflight(&s, &json!({}), false)
+        } else {
+            crate::selection_inverse_controlled::storage_dispatch_preflight(&s, command, &json!({}), false)
+        };
+        assert!(strict.is_err(), "{command}: direct entry remains strict");
+        let worker = if command == "select.inverse" {
+            crate::selection_inverse_controlled::dispatch_preflight_before_floating_drop(&s, &json!({}), true)
+        } else {
+            crate::selection_inverse_controlled::storage_dispatch_preflight_before_floating_drop(&s, command, &json!({}), true)
+        };
+        assert!(worker.is_err(), "{command}: worker entry remains strict");
+        assert!(s.active().unwrap().doc.shares_state(&old));
+        assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().floating.as_ref().unwrap().parts, &floating.parts));
+    }
 }

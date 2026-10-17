@@ -174,11 +174,14 @@ fn wide_mask_inversion_keeps_precise_default_and_alpha() {
     doc.layers.push(layer);
     let mut session = Session::new();
     session.open_document(doc, None).unwrap();
+    let original = session.active().unwrap().doc.clone();
     session.execute("image.adjustments.invert", json!({"target":"mask"})).unwrap();
     let mask = &session.active().unwrap().doc.layers[0].mask.as_ref().unwrap().surface;
     let expected: Vec<_> = [0.5 - f64::EPSILON, -0.0].into_iter().flat_map(f64::to_ne_bytes).collect();
     assert_eq!(mask.default_bytes(), expected);
     assert_eq!(mask.try_read_interleaved(Rect::new(500, 500, 501, 501)).unwrap(), expected);
+    assert!(session.undo());
+    assert_eq!(session.active().unwrap().doc, original);
 }
 
 #[test]

@@ -116,6 +116,8 @@ fn named_set_commands_keep_identity_rules_members_native_and_undo() {
     let target = original.layers[0].id;
     let mut session = session(original.clone());
     session.execute("xcf.itemSet.rename", json!({"setId":701,"name":"Own renamed set Ω"})).unwrap();
+    assert_eq!(session.execute("xcf.itemSet.rename", json!({"setId":"701","name":"Own renamed set Ω"})).unwrap()["updated"], false);
+    assert_eq!(session.active().unwrap().history.past_len(), 1, "canonical string selects the same saved set without another edit");
     let renamed = (*session.active().unwrap().doc).clone();
     assert_eq!(renamed.xcf_state.as_ref().unwrap().item_sets[0].id, ItemSetId(701));
     assert_eq!(renamed.xcf_state.as_ref().unwrap().item_sets[0].members, original.xcf_state.as_ref().unwrap().item_sets[0].members);
@@ -136,7 +138,7 @@ fn invalid_relationship_parameters_or_search_members_are_atomic() {
     let original = original();
     for (command, params) in [
         ("xcf.itemSet.rename", json!({"setId":701,"name":""})),
-        ("xcf.itemSet.rename", json!({"setId":"701","name":"Own"})),
+        ("xcf.itemSet.rename", json!({"setId":"0701","name":"Own"})),
         ("xcf.itemSet.delete", json!({"setId":999})),
         ("xcf.itemSet.setMembers", json!({"setId":702,"members":[]})),
         ("xcf.itemSet.setMembers", json!({"setId":701,"members":[{"Layer":999}]})),

@@ -31,7 +31,9 @@ fn compare(root: &std::path::Path, name: &str, doc: &photocraft_doc::Document) {
     assert_eq!(actual.len(), reference.len());
     assert!(actual.iter().zip(reference).map(|(a, b)| a.abs_diff(b)).max().unwrap() <= 2, "{name}");
     let saved = photocraft_io::export(doc, "text.pcraft", &Default::default()).unwrap();
-    assert_eq!(photocraft_io::import("text.pcraft", &saved.bytes).unwrap().document, *doc);
+    let mut native_expected = doc.clone();
+    native_expected.name = "text.pcraft".into();
+    assert_eq!(photocraft_io::import("text.pcraft", &saved.bytes).unwrap().document, native_expected);
 }
 #[test]
 #[ignore = "requires independent exact-font multiline sources"]

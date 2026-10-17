@@ -209,7 +209,7 @@ fn image_previews_preference_controls_the_psd_thumbnail() {
         file.resources.iter().any(|r| r.id == photocraft_psd::resources::ids::THUMBNAIL)
     };
     for (ask, expect) in [(Ask::Always, true), (Ask::Never, false), (Ask::Ask, true)] {
-        s.edit_prefs(|p| p.file_handling.image_previews = ask);
+        s.edit_prefs(|p| p.file_handling.image_previews = ask).unwrap();
         let out = join(&dir, &format!("{ask:?}.psd"));
         s.execute("file.saveACopy", json!({"path": out})).unwrap();
         assert_eq!(has_thumbnail(&out), expect, "{ask:?}");
@@ -229,7 +229,7 @@ fn maximize_compatibility_preference_controls_the_psd_merged_image() {
     s.execute("layer.new.layer", json!({})).unwrap();
     let real_merged = |path: &str| photocraft_psd::PsdFile::from_bytes(&std::fs::read(path).unwrap()).unwrap().has_real_merged_data();
     for (ask, expect) in [(Ask::Always, true), (Ask::Never, false), (Ask::Ask, true)] {
-        s.edit_prefs(|p| p.file_handling.maximize_psd_compatibility = ask);
+        s.edit_prefs(|p| p.file_handling.maximize_psd_compatibility = ask).unwrap();
         for ext in ["psd", "psb"] {
             let out = join(&dir, &format!("{ask:?}.{ext}"));
             s.execute("file.saveACopy", json!({"path": out})).unwrap();
@@ -416,7 +416,7 @@ fn file_info_reads_camera_data_from_jpeg_and_psd_exif() {
         let (bytes, _) = encode(doc(&s), name, None).unwrap();
         let back = photocraft_io::import(name, &bytes).unwrap().document;
         let mut t = Session::new();
-        t.add_document(back, None);
+        t.add_document(back, None).unwrap();
         assert_eq!(t.execute("file.fileInfo", json!({})).unwrap()["camera"], want, "{name}");
         // Editing the description fields leaves the read-only camera data alone.
         let edited = t.execute("file.fileInfo", json!({"title": "Pier", "camera": {"make": "ignored"}})).unwrap();
@@ -966,7 +966,7 @@ fn batch_naming_serial_keeps_same_named_inputs_and_their_pixels() {
     assert_eq!(result["files"], json!([join(&out, "photo_007.png"), join(&out, "photo_008.png")]));
     for (name, expected) in [("photo_007.png", [1.0, 0.0, 0.0, 1.0]), ("photo_008.png", [0.0, 0.0, 1.0, 1.0])] {
         let saved = photocraft_io::import(name, &std::fs::read(join(&out, name)).unwrap()).unwrap().document;
-        let pixel = photocraft_compose::render(&saved, Rect::new(1, 1, 2, 2)).px[0];
+        let pixel = photocraft_compose::render(&saved, Rect::new(1, 1, 2, 2)).unwrap().px[0];
         assert_eq!(pixel, expected, "{name}");
     }
 }
@@ -1025,13 +1025,17 @@ fn batch_reports_inputs_that_share_an_output_name() {
 fn native_save_copy_keeps_document_and_history_exact() {
     let mut s = session(3, 2, 16);
     let before = s.active().unwrap().doc.clone();
+    let source = s.active().unwrap().source.clone();
     let past = s.active().unwrap().history.past_len();
     let dir = tmp("controlled-native");
     let path = join(&dir, "copy.pcraft");
     s.execute("file.saveACopy", json!({"path":path})).unwrap();
     let loaded = photocraft_format::load_from_bytes(&std::fs::read(path).unwrap()).unwrap();
-    assert_eq!(loaded, *before);
+    let mut expected_saved = (*before).clone();
+    expected_saved.name = "copy.pcraft".into();
+    assert_eq!(loaded, expected_saved);
     assert_eq!(*s.active().unwrap().doc, *before);
+    assert_eq!(s.active().unwrap().source, source);
     assert_eq!(s.active().unwrap().history.past_len(), past);
 }
 #[test]
@@ -1112,7 +1116,7 @@ fn batch_include_all_subfolders() {
     let o = out.replace('\\', "/");
     assert_eq!(files, vec![format!("{o}/a.png"), format!("{o}/sub/b.png"), format!("{o}/sub/deeper/a.png"), format!("{o}/z/a.png")]);
     let deep = photocraft_io::import("a.png", &std::fs::read(join(&out, "sub/deeper/a.png")).unwrap()).unwrap().document;
-    let px = photocraft_compose::render(&deep, Rect::new(1, 1, 2, 2)).px[0];
+    let px = photocraft_compose::render(&deep, Rect::new(1, 1, 2, 2)).unwrap().px[0];
     assert!(px[0] > 0.99 && px[1] > 0.99 && px[2] < 0.01, "blue inverted to yellow: {px:?}");
     std::fs::remove_dir_all(&out).unwrap();
     // A naming template applies within each kept subfolder (output outside the input folder).
@@ -1260,7 +1264,7 @@ fn batch_naming_still_reports_collisions_instead_of_overwriting() {
     assert_eq!(result["errors"].as_array().unwrap().len(), 1, "{result}");
     assert!(result["errors"][0]["error"].as_str().unwrap().contains("not written"));
     let saved = photocraft_io::import("constant.png", &std::fs::read(join(&out, "constant.png")).unwrap()).unwrap().document;
-    assert_eq!(photocraft_compose::render(&saved, Rect::new(1, 1, 2, 2)).px[0], [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(photocraft_compose::render(&saved, Rect::new(1, 1, 2, 2)).unwrap().px[0], [1.0, 0.0, 0.0, 1.0]);
 }
 #[test]
 fn batch_naming_rejects_outputs_that_replace_inputs_before_processing() {

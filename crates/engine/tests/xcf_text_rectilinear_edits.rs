@@ -45,7 +45,9 @@ fn registered_rectilinear_shapes_and_kerning_native_history() {
         assert_ne!(before.source_items[0].source, after.source_items[0].source);
         let encoded = photocraft_io::export(&edited, "text.pcraft", &Default::default()).unwrap();
         let reopened = photocraft_io::import("text.pcraft", &encoded.bytes).unwrap().document;
-        assert_eq!(reopened, edited);
+        let mut expected_native = edited.clone();
+        expected_native.name = "text.pcraft".into();
+        assert_eq!(reopened, expected_native);
         assert_eq!(projection(&reopened), expected);
         for unqualified in ["O", "A", "iiiiiiiii", "        "] {
             let before = (*s.active().unwrap().doc).clone();

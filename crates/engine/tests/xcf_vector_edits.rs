@@ -29,7 +29,9 @@ fn current_path_command_matches_gimp_edit_and_undo_native() {
     assert_eq!(edited.layers, doc.layers);
     assert_eq!(edited.xcf_state.as_ref().unwrap().source_items, doc.xcf_state.as_ref().unwrap().source_items);
     let saved = photocraft_io::export(&edited, "edited.pcraft", &Default::default()).unwrap();
-    assert_eq!(photocraft_io::import("edited.pcraft", &saved.bytes).unwrap().document, edited);
+    let mut native_expected = edited.clone();
+    native_expected.name = "edited.pcraft".into();
+    assert_eq!(photocraft_io::import("edited.pcraft", &saved.bytes).unwrap().document, native_expected);
     session.execute("edit.undo", json!({})).unwrap();
     assert_eq!(*session.active().unwrap().doc, doc);
     session.execute("edit.redo", json!({})).unwrap();
@@ -78,7 +80,9 @@ fn current_hole_command_matches_gimp_edit_and_undo_native() {
     assert_eq!(edited.layers, doc.layers);
     assert_eq!(edited.xcf_state, doc.xcf_state);
     let saved = photocraft_io::export(&edited, "hole.pcraft", &Default::default()).unwrap();
-    assert_eq!(photocraft_io::import("hole.pcraft", &saved.bytes).unwrap().document, edited);
+    let mut native_expected = edited.clone();
+    native_expected.name = "hole.pcraft".into();
+    assert_eq!(photocraft_io::import("hole.pcraft", &saved.bytes).unwrap().document, native_expected);
     session.execute("edit.undo", json!({})).unwrap();
     assert_eq!(*session.active().unwrap().doc, doc);
     session.execute("edit.redo", json!({})).unwrap();
@@ -103,7 +107,9 @@ fn same_winding_hole_command_matches_gimp_edit_and_undo_native() {
     assert_eq!(edited.xcf_state, doc.xcf_state);
     let saved = photocraft_io::export(&edited, "same-winding.pcraft", &Default::default()).unwrap();
     let reopened = photocraft_io::import("same-winding.pcraft", &saved.bytes).unwrap().document;
-    assert_eq!(reopened, edited);
+    let mut native_expected = edited.clone();
+    native_expected.name = "same-winding.pcraft".into();
+    assert_eq!(reopened, native_expected);
     assert_eq!(projection(&reopened), expected);
     session.execute("edit.undo", json!({})).unwrap();
     assert_eq!(*session.active().unwrap().doc, doc);

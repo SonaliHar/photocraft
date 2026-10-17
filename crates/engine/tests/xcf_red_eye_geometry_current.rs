@@ -58,7 +58,7 @@ fn actual_owner_geometry_hostiles_locks_and_cancellation_are_atomic() {
         session.add_document(source.clone(), None).unwrap();
         session
             .edit("Cancelled redo witness", |doc, _| {
-                doc.name.push_str(" redo");
+                doc.layers[0].name.push_str(" redo");
                 Ok(())
             })
             .unwrap();
@@ -195,7 +195,7 @@ fn assert_atomic_refusal(doc: Document, command: &str, params: serde_json::Value
     let mut session = Session::new();
     session.add_document(doc.clone(), None)?;
     session.edit("Synthetic redo witness", |doc, _| {
-        doc.name.push_str(" redo");
+        doc.layers[0].name.push_str(" redo");
         Ok(())
     })?;
     let redo = session.active().ok_or("redo document")?.doc.clone();

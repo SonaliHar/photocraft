@@ -153,7 +153,7 @@ fn a_panic_in_a_command_becomes_an_error_and_the_document_is_unchanged() {
     assert!(msg.contains("internal error"), "{msg}");
     assert!(msg.contains("test.panic"), "{msg}");
     let st = s.active().unwrap();
-    assert!(Arc::ptr_eq(&st.doc, &doc_before), "the document snapshot was not replaced");
+    assert!(st.doc.shares_state(&doc_before), "the document snapshot was not replaced");
     assert_eq!((st.revision, st.history.past_len()), (rev, steps));
     // The session still works.
     s.execute("filter.blur.gaussianBlur", json!({"radius": 1})).unwrap();

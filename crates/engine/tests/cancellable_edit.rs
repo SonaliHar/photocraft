@@ -52,12 +52,13 @@ fn successful_controlled_edit_retains_native_history_behavior() {
     let before = session.active().unwrap().doc.clone();
     session
         .edit_with_interrupt("Rename", &Interrupt::NONE, |doc, _| {
-            doc.name = "After".into();
+            doc.layers.first_mut().unwrap().name = "After".into();
             Ok(())
         })
         .unwrap();
     let after = session.active().unwrap().doc.clone();
-    assert_eq!(after.name, "After");
+    // Document titles retain current save identity across undo; layer names are model edits.
+    assert_eq!(after.layers[0].name, "After");
     assert_eq!(session.active().unwrap().history.past_len(), 1);
     assert!(session.undo());
     assert_eq!(session.active().unwrap().doc, before);

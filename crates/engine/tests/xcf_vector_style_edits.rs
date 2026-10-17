@@ -355,7 +355,9 @@ mod originals {
             photocraft_doc::xcf_filters::FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Float32Bits(u32::from_str_radix(target, 16).unwrap()));
         assert_eq!(edited.xcf_state.as_ref().unwrap(), &expected_state);
         let native = photocraft_io::export(&edited, "stroke.pcraft", &Default::default()).unwrap();
-        assert_eq!(photocraft_io::import("stroke.pcraft", &native.bytes).unwrap().document, edited);
+        let mut native_expected = edited.clone();
+        native_expected.name = "stroke.pcraft".into();
+        assert_eq!(photocraft_io::import("stroke.pcraft", &native.bytes).unwrap().document, native_expected);
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(*s.active().unwrap().doc, moved);
         s.execute("edit.redo", json!({})).unwrap();

@@ -43,7 +43,9 @@ fn registered_size_edit_independent_projection_native_undo_and_atomic_denial() {
     assert_eq!(before.source_items[0].cache.as_ref().unwrap().height, 20);
     let bytes = photocraft_io::export(&edited, "text.pcraft", &Default::default()).unwrap().bytes;
     let reopened = photocraft_io::import("text.pcraft", &bytes).unwrap().document;
-    assert_eq!(reopened, edited);
+    let mut expected_native = edited.clone();
+    expected_native.name = "text.pcraft".into();
+    assert_eq!(reopened, expected_native);
     assert_eq!(projection(&reopened), projection(&edited));
     assert_eq!(s.active().unwrap().history.past_len(), 1);
     assert_eq!(s.execute("xcf.text.fontSize.set", json!({"layerId":owner.0.to_string(),"sizePx":24})).unwrap()["updated"], false);

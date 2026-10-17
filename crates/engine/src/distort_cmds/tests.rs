@@ -136,7 +136,7 @@ fn masked_session(depth: u64, stripes: &[(i32, i32)]) -> Session {
     s.edit("mask", |doc, active| {
         let m = doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap();
         for &(x0, x1) in stripes {
-            m.surface.fill_rect(Rect::new(x0, 10, x1, 40), &[0.0]);
+            std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(x0, 10, x1, 40), &[0.0]);
         }
         Ok(())
     })
@@ -325,8 +325,8 @@ fn perspective_with_a_selection_moves_only_the_selected_part_of_a_linked_mask() 
         s.execute("layer.layerMask.revealAll", json!({})).unwrap();
         s.edit("mask", |doc, active| {
             let m = doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap();
-            m.surface.fill_rect(Rect::new(12, 10, 16, 40), &[0.0]);
-            m.surface.fill_rect(Rect::new(40, 10, 44, 40), &[0.0]);
+            std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(12, 10, 16, 40), &[0.0]);
+            std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(40, 10, 44, 40), &[0.0]);
             Ok(())
         })
         .unwrap();

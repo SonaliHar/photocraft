@@ -60,7 +60,7 @@ fn open_photo(w: u32, h: u32) -> Res<Session> {
     let jpeg = photocraft_codecs::encode(&img, photocraft_codecs::Format::Jpeg, &Default::default()).map_err(|e| e.to_string())?;
     let doc = photocraft_io::import("photo.jpg", &jpeg).map_err(|e| e.to_string())?.document;
     let mut s = Session::new();
-    s.open_document(doc, Some("photo.jpg".into()));
+    s.open_document(doc, Some("photo.jpg".into())).map_err(|e| e.to_string())?;
     Ok(s)
 }
 

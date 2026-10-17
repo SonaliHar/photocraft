@@ -1,6 +1,8 @@
 //! UNRUN synthetic current-model imported sampling regressions, not source qualification.
 use super::*;
+use crate::Session;
 use crate::selection_cmds::BackedColorRangeSamples;
+use photocraft_color::ColorMode;
 use photocraft_color::PixelFormat;
 use photocraft_doc::{
     BackedLayer, Document, Layer, SampleEncoding, SourceColorContext, XcfState,

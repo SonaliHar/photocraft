@@ -207,9 +207,8 @@ fn analytic_class_current_assign_and_convert_match_independent_controls() {
         let assigning = row["operation"]["action"] == "assign";
         let mut session = Session::new();
         session.open_document(original.clone(), None).unwrap();
-        session
-            .execute(if assigning { "edit.assignProfile" } else { "edit.convertToProfile" }, json!({"profile":profile_file,"intent":"relative","bpc":false}))
-            .unwrap();
+        let parameters = if assigning { json!({"profile":profile_file}) } else { json!({"profile":profile_file,"intent":"relative","bpc":false}) };
+        session.execute(if assigning { "edit.assignProfile" } else { "edit.convertToProfile" }, parameters).unwrap();
         let edited = (*session.active().unwrap().doc).clone();
         assert_eq!(edited.icc_profile.as_deref().unwrap().as_slice(), profile.as_slice());
         assert_eq!(edited.source_color_context, original.source_color_context);

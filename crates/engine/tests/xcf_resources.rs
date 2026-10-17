@@ -59,8 +59,12 @@ fn exact_decimal_ids_and_inert_native_reopen_preserve_status_and_evidence() {
 fn malformed_unknown_duplicate_and_unverified_fail_without_history() {
     let mut s = session(vec![resource(1)]);
     let before = s.active().unwrap().doc.clone();
+    // Registered read-only XCF queries normalize null to the empty request.
+    assert_eq!(s.execute("xcf.resource.inspect", Value::Null).unwrap(), s.execute("xcf.resource.inspect", json!({})).unwrap());
+    assert!(s.active().unwrap().doc.shares_state(&before));
+    assert!(!s.active().unwrap().history.can_undo());
     for params in [
-        Value::Null,
+        json!("invalid"),
         json!([]),
         json!({"resource":1}),
         json!({"resource":1.0}),

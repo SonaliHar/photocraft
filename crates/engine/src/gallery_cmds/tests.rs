@@ -144,7 +144,7 @@ fn gallery_is_a_smart_filter_on_smart_objects() {
 fn unknown_choice_names_are_bad_params_without_editing() {
     let mut s = session(8, "rgb");
     let before = pixels(&s);
-    let history = s.active().unwrap().history.entries();
+    let history = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>();
     let mut checked = 0;
     for f in GalleryFilter::ALL.iter().copied() {
         for prm in f.params() {
@@ -158,7 +158,7 @@ fn unknown_choice_names_are_bad_params_without_editing() {
                 assert!(matches!(s.execute("filter.filterGallery", stack), Err(EngineError::BadParams { .. })), "{id}.{}", prm.key);
             }
             assert_eq!(pixels(&s), before);
-            assert_eq!(s.active().unwrap().history.entries(), history);
+            assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>(), history);
             // Every listed name (any case) and an index still run.
             for v in names.iter().map(|n| json!(n.to_uppercase())).chain([json!(names.len() - 1)]) {
                 s.execute(id, json!({prm.key: v})).unwrap();

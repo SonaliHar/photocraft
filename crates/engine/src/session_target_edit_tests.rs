@@ -2,7 +2,6 @@
 use super::*;
 use photocraft_raster::Interrupt;
 use serde_json::json;
-use std::cell::Cell;
 
 fn two_documents() -> Session {
     let mut session = Session::new();
@@ -17,17 +16,26 @@ fn target_commit_keeps_focus_and_source_and_creates_destination_undo() {
     let source = session.documents()[1].doc.clone();
     let target = session.documents()[0].doc.clone();
     let revision = session.documents()[0].revision;
-    session.edit_document_with_interrupt(0, "Rename target", &Interrupt::NONE, |document, _| {
-        document.name = "changed target".into();
-        Ok(())
-    }).unwrap();
+    session
+        .edit_document_with_interrupt(0, "Rename target", &Interrupt::NONE, |document, _| {
+            document.layers[0].name = "changed target layer".into();
+            Ok(())
+        })
+        .unwrap();
     assert_eq!(session.active_index(), Some(1));
     assert!(session.documents()[1].doc.shares_state(&source));
     assert_eq!(session.documents()[0].revision, revision + 1);
-    assert_eq!(session.documents()[0].doc.name, "changed target");
+    assert_eq!(session.documents()[0].doc.name, target.name);
+    let mut expected = (*target).clone();
+    expected.layers[0].name = "changed target layer".into();
+    assert_eq!(*session.documents()[0].doc, expected);
+    let changed = session.documents()[0].doc.clone();
     assert!(session.set_active(0));
     assert!(session.undo());
     assert!(session.active().unwrap().doc.shares_state(&target));
+    assert!(session.redo());
+    assert!(session.active().unwrap().doc.shares_state(&changed));
+    assert!(session.documents()[1].doc.shares_state(&source));
 }
 
 #[test]
@@ -37,12 +45,12 @@ fn failed_or_late_cancelled_target_commit_preserves_both_documents_and_focus() {
         let target = session.documents()[0].doc.clone();
         let source = session.documents()[1].doc.clone();
         let revision = session.documents()[0].revision;
-        let edited = Cell::new(false);
-        let signal = || cancel && edited.get();
+        let edited = std::sync::atomic::AtomicBool::new(false);
+        let signal = || cancel && edited.load(std::sync::atomic::Ordering::Relaxed);
         let control = Interrupt::cancel_only(&signal);
         let result: Result<()> = session.edit_document_with_interrupt(0, "Private target", &control, |document, _| {
             document.name = "discard this private stage".into();
-            edited.set(true);
+            edited.store(true, std::sync::atomic::Ordering::Relaxed);
             if cancel { Ok(()) } else { Err(EngineError::Other("synthetic refusal".into())) }
         });
         assert!(result.is_err());
@@ -59,13 +67,13 @@ fn exhausted_revision_refuses_before_callback_without_overflow() {
     let mut session = two_documents();
     session.docs.get_mut(0).unwrap().revision = u64::MAX;
     let target = session.documents()[0].doc.clone();
-    let called = Cell::new(false);
+    let called = std::sync::atomic::AtomicBool::new(false);
     let result: Result<()> = session.edit_document_with_interrupt(0, "No revision", &Interrupt::NONE, |_, _| {
-        called.set(true);
+        called.store(true, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     });
     assert!(result.is_err());
-    assert!(!called.get());
+    assert!(!called.load(std::sync::atomic::Ordering::Relaxed));
     assert!(session.documents()[0].doc.shares_state(&target));
     assert_eq!(session.active_index(), Some(1));
 }
@@ -91,13 +99,24 @@ fn prepared_selection_is_recorded_and_restored_with_document_history() {
     let prior_active = session.active().unwrap().active_layer;
     let prior_selected = session.active().unwrap().selected_layers.clone();
     let target = session.active().unwrap().doc.layers[0].id;
-    session.edit_with_layer_target_with_interrupt("Prepared selection", &Interrupt::NONE,
-        LayerTarget { active:Some(target), selected:vec![target] }, Some(target), |document, _| {
-            document.name = "prepared selection document".into();
-            Ok(())
-        }).unwrap();
+    session
+        .edit_with_layer_target_with_interrupt(
+            "Prepared selection",
+            &Interrupt::NONE,
+            LayerTarget { active: Some(target), selected: vec![target] },
+            Some(target),
+            |document, _| {
+                document.layers[0].name = "prepared selection layer".into();
+                Ok(())
+            },
+        )
+        .unwrap();
     assert_eq!(session.active().unwrap().selected_layers, vec![target]);
     assert_eq!(session.active().unwrap().active_layer, Some(target));
+    let mut expected = (*before).clone();
+    expected.layers[0].name = "prepared selection layer".into();
+    assert_eq!(*session.active().unwrap().doc, expected);
+    let after = session.active().unwrap().doc.clone();
     assert!(session.undo());
     assert!(session.active().unwrap().doc.shares_state(&before));
     assert_eq!(session.active().unwrap().active_layer, prior_active);
@@ -105,11 +124,12 @@ fn prepared_selection_is_recorded_and_restored_with_document_history() {
     assert!(session.redo());
     assert_eq!(session.active().unwrap().selected_layers, vec![target]);
     assert_eq!(session.active().unwrap().layer_anchor, Some(target));
+    assert!(session.active().unwrap().doc.shares_state(&after));
 }
 
 #[test]
 fn invalid_or_cancelled_prepared_selection_does_not_publish_document_or_view() {
-    for cancel in [false,true] {
+    for cancel in [false, true] {
         let mut session = two_documents();
         let before = session.active().unwrap().doc.clone();
         let selected = session.active().unwrap().selected_layers.clone();
@@ -117,15 +137,20 @@ fn invalid_or_cancelled_prepared_selection_does_not_publish_document_or_view() {
         let anchor = session.active().unwrap().layer_anchor;
         let revision = session.active().unwrap().revision;
         let target = if cancel { active.unwrap() } else { LayerId(u64::MAX) };
-        let edited = Cell::new(false);
-        let signal = || cancel && edited.get();
+        let edited = std::sync::atomic::AtomicBool::new(false);
+        let signal = || cancel && edited.load(std::sync::atomic::Ordering::Relaxed);
         let control = Interrupt::cancel_only(&signal);
-        let outcome = session.edit_with_layer_target_with_interrupt("Discard target", &control,
-            LayerTarget { active:Some(target),selected:vec![target] }, Some(target), |document,_| {
+        let outcome = session.edit_with_layer_target_with_interrupt(
+            "Discard target",
+            &control,
+            LayerTarget { active: Some(target), selected: vec![target] },
+            Some(target),
+            |document, _| {
                 document.name = "discard".into();
-                edited.set(true);
+                edited.store(true, std::sync::atomic::Ordering::Relaxed);
                 Ok(())
-            });
+            },
+        );
         assert!(outcome.is_err());
         assert!(session.active().unwrap().doc.shares_state(&before));
         assert_eq!(session.active().unwrap().selected_layers, selected);

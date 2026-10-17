@@ -5,6 +5,8 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../../xcf/tests/common/mod.rs"]
 mod xcf;
 fn control() -> ReadControl<'static> {

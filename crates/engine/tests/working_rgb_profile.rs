@@ -96,7 +96,7 @@ fn display_and_copy(s: &mut Session, depth: SampleType) {
     let mut layer = Layer::raster("Incoming", source.pixel_format());
     layer.surface_mut().unwrap().fill_rect(source.bounds(), &[0.35, 0.65, 0.45, 0.75]);
     source.layers.push(layer);
-    s.add_document(source, None);
+    s.add_document(source, None).unwrap();
     let source_before = s.documents()[1].doc.clone();
     s.execute("layer.copyToDocument", json!({"document": 0})).expect("an untagged or new document must accept a converted layer");
     assert_eq!(s.documents()[0].doc.depth, depth);
@@ -113,7 +113,7 @@ fn legacy_untagged_workflow(source: bool, destination: bool) {
             let mut s = legacy_session(&file, intent);
             let doc = Document::with_background("Untagged image", Size::new(8, 6), ColorMode::Rgb, depth, Color::rgba(0.35, 0.65, 0.45, 0.75));
             assert!(doc.icc_profile.is_none());
-            s.open_document(doc, None);
+            s.open_document(doc, None).unwrap();
             display_and_copy(&mut s, depth);
             assert_eq!(s.color.working(ColorMode::Rgb).content_hash(), Builtin::Srgb.profile().content_hash());
             assert!(s.documents()[0].doc.icc_profile.is_none(), "the default working fallback keeps untagged documents untagged");
@@ -136,12 +136,15 @@ fn legacy_one_way_working_spaces_keep_new_document_controls_usable() {
     for (source, destination) in [(true, false), (false, true)] {
         let file = ProfileFile::new(directional_profile(source, destination));
         for intent in Intent::ALL {
-            for depth in SampleType::ALL {
+            // file.new exposes its existing three depth controls; imported
+            // native-wide profile coverage is exercised separately above.
+            for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
                 let mut s = legacy_session(&file, intent);
                 let bits = match depth {
                     SampleType::U8 => 8,
                     SampleType::U16 => 16,
                     SampleType::F32 => 32,
+                    _ => panic!("closed file.new depth controls"),
                 };
                 s.execute("file.new", json!({"width": 8, "height": 6, "depth": bits, "background": "transparent"})).unwrap();
                 display_and_copy(&mut s, depth);

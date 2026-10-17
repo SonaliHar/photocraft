@@ -138,7 +138,7 @@ fn animated_gif_keeps_transparency() {
     // Each frame has a transparent index and is cleared before the next (disposal 2).
     let packed: Vec<u8> = gif.windows(4).filter(|w| w[..3] == [0x21, 0xF9, 0x04]).map(|w| w[3]).collect();
     assert_eq!(packed, [0x09, 0x09]);
-    let px = photocraft_compose::flatten(&photocraft_io::import("t.gif", &gif).unwrap().document).px;
+    let px = photocraft_compose::flatten(&photocraft_io::import("t.gif", &gif).unwrap().document).unwrap().px;
     assert_eq!(px[0][3], 0.0, "the corner stays transparent");
     assert_eq!(px[3 * 8 + 3], [1.0, 0.0, 0.0, 1.0], "the square stays red");
 }
@@ -506,7 +506,7 @@ fn render_video_rejects_a_loaded_timeline_past_the_frame_cap() {
     doc.timeline = Some(Timeline::new(usize::MAX, 30.0));
     {
         let st = s.active_mut().unwrap();
-        st.doc = std::sync::Arc::new(doc);
+        st.doc = crate::DocumentSnapshot::from_resident(std::sync::Arc::new(doc)).unwrap();
         st.revision += 1;
     }
     let err = s.execute("file.export.renderVideo", json!({"dir": tmpdir("overlong"), "format": "gif"})).unwrap_err();
@@ -519,4 +519,24 @@ fn render_video_rejects_gif_frames_too_large_to_stage() {
     s.execute("file.new", json!({"width": 9000, "height": 8000})).unwrap();
     let err = s.execute("file.export.renderVideo", json!({"dir": tmpdir("large-gif"), "format": "gif"})).unwrap_err();
     assert!(err.to_string().contains("too large"), "{err}");
+}
+
+#[test]
+fn malformed_gif_and_misnamed_native_file_keep_footage_policy_explicit() {
+    let dir = tmpdir("footage-policy");
+    let bad = format!("{dir}/broken.gif");
+    // Recognizable GIF header, deliberately missing the color table/image data.
+    std::fs::write(&bad, b"GIF89a\x02\x00\x02\x00\x80\x00\x00").unwrap();
+    assert!(load_frames(&bad, photocraft_color::PixelFormat::RGBA8).is_err());
+    let mut doc = photocraft_doc::Document::new("Native", photocraft_doc::Size::new(2, 2), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let mut layer = photocraft_doc::Layer::raster("Pixel", photocraft_color::PixelFormat::RGBA8);
+    layer.surface_mut().unwrap().write_region(doc.bounds(), &[1.0, 0.0, 0.0, 1.0].repeat(4));
+    doc.layers.push(layer);
+    doc.channels.push(photocraft_doc::AlphaChannel::new("Alpha 1", Surface::new(photocraft_color::PixelFormat::GRAY8)));
+    let misleading = format!("{dir}/native.tga");
+    std::fs::write(&misleading, photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap()).unwrap();
+    let loaded = load_frames(&misleading, photocraft_color::PixelFormat::RGBA8).unwrap();
+    assert_eq!(loaded.frames.len(), 1);
+    assert_eq!(loaded.frames[0].pixel(0, 0), vec![1.0, 0.0, 0.0, 1.0]);
+    let _ = std::fs::remove_dir_all(dir);
 }

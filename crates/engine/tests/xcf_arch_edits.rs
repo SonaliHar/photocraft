@@ -35,7 +35,9 @@ fn registered_arch_translation_native_undo_preserves_original_evidence() {
         assert_eq!(s.active().unwrap().history.past_len(), 1);
         let encoded = photocraft_io::export(&edited, "arch.pcraft", &Default::default()).unwrap();
         let reopened = photocraft_io::import("arch.pcraft", &encoded.bytes).unwrap().document;
-        assert_eq!(edited, reopened);
+        let mut expected_native = edited.clone();
+        expected_native.name = "arch.pcraft".into();
+        assert_eq!(expected_native, reopened);
         assert_eq!(projection(&reopened), expected);
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(*s.active().unwrap().doc, doc);

@@ -49,8 +49,8 @@ fn late_composition_cancellation_preserves_document_and_existing_redo() {
     let mut s = session(before.clone());
     s.execute("xcf.composition.set", p.clone()).unwrap();
     s.execute("edit.undo", json!({})).unwrap();
-    let calls = std::cell::Cell::new(0usize);
-    let cancel = || { let next = calls.get() + 1; calls.set(next); next >= 12 };
+    let calls = std::sync::atomic::AtomicUsize::new(0);
+    let cancel = || calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1 >= 12;
     let control = photocraft_raster::Interrupt::cancel_only(&cancel);
     assert!(photocraft_engine::xcf_composition_cmds::set_with_interrupt(&mut s, &p, &control).is_err());
     assert_eq!(*s.active().unwrap().doc, before);
@@ -70,8 +70,13 @@ fn composition_refusal_preserves_even_a_stale_floating_preview() {
     let preview = active.floating.clone().unwrap();
     let revision = active.revision;
     let layer = active.active_layer.unwrap();
-    let error = s.execute("xcf.composition.set", json!({"layerId":layer.0.to_string(),"sourceMode":30,"legacy":false,
-        "blendSpace":"profile-rgb","compositeSpace":"profile-rgb","operator":"union"})).unwrap_err();
+    let error = s
+        .execute(
+            "xcf.composition.set",
+            json!({"layerId":layer.0.to_string(),"sourceMode":30,"legacy":false,
+        "blendSpace":"profile-rgb","compositeSpace":"profile-rgb","operator":"union"}),
+        )
+        .unwrap_err();
     assert!(error.to_string().contains("floating"));
     let after = s.active().unwrap();
     assert_eq!(after.doc, before);
@@ -100,8 +105,12 @@ fn captured_composition_rejects_stale_or_malformed_pairs_without_history() {
         (Some("18446744073709551616".into()), Some(revision.to_string())),
     ] {
         let mut request = base.clone();
-        if let Some(id) = id { request["documentId"] = json!(id); }
-        if let Some(rev) = rev { request["expectedRevision"] = json!(rev); }
+        if let Some(id) = id {
+            request["documentId"] = json!(id);
+        }
+        if let Some(rev) = rev {
+            request["expectedRevision"] = json!(rev);
+        }
         assert!(s.execute("xcf.composition.set", request).is_err());
         let active = s.active().unwrap();
         assert_eq!(active.doc, before);

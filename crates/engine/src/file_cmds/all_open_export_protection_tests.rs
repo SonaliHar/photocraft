@@ -95,7 +95,8 @@ fn ordinary_existing_layer_export_destination_keeps_upstream_replace_behavior() 
     let mut session = Session::new();
     session.add_document(active_document(), None).unwrap();
     let result = layers_to_files(&mut session, &directory.params()).unwrap();
-    assert_eq!(result["files"], json!([output.to_str().unwrap()]));
+    let files: Vec<std::path::PathBuf> = result["files"].as_array().unwrap().iter().map(|path| std::path::PathBuf::from(path.as_str().unwrap())).collect();
+    assert_eq!(files, vec![output.clone()]);
     assert!(std::fs::read(output).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"));
     assert!(!session.active().unwrap().history.can_undo());
 }

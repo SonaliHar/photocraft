@@ -16,15 +16,15 @@ fn layer(s: &Session, id: u64) -> photocraft_doc::Layer {
 }
 
 fn last_step(s: &Session) -> String {
-    s.active().unwrap().history.entries().last().cloned().unwrap_or_default()
+    s.active().unwrap().history.entry_labels().last().unwrap().to_owned()
 }
 
 #[test]
 fn one_change_reaches_every_listed_layer_in_one_step() {
     let (mut s, ids) = doc();
-    let steps = s.active().unwrap().history.entries().len();
+    let steps = s.active().unwrap().history.entry_labels().count();
     s.execute("layer.setProps", json!({"layers": [ids[0], ids[2]], "opacity": 0.4})).unwrap();
-    assert_eq!(s.active().unwrap().history.entries().len(), steps + 1, "one step");
+    assert_eq!(s.active().unwrap().history.entry_labels().count(), steps + 1, "one step");
     assert_eq!(last_step(&s), "Opacity Change");
     assert_eq!((layer(&s, ids[0]).opacity, layer(&s, ids[1]).opacity, layer(&s, ids[2]).opacity), (0.4, 1.0, 0.4));
     s.execute("layer.setProps", json!({"layers": ids, "blend": "Multiply"})).unwrap();

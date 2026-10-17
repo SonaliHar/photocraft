@@ -59,7 +59,7 @@ fn fixture(mode: ColorMode, depth: SampleType, resolved: bool) -> (Session, Laye
         internal: false,
         locator: Some("inert/original-locator".into()),
         content_hash: Some(digest.clone()),
-        owned_bytes: resolved.then(||png.into()),
+        owned_bytes: resolved.then(|| png.into()),
         resolution: resolved.then_some(ResourceResolution { fidelity: ResourceFidelity::Exact, payload_hash: digest }),
     });
     state.source_items.push(SourceItem {
@@ -81,21 +81,22 @@ fn enabled(session: &Session) -> bool {
 // Draft for the source-payload-sharing wave; execution is deferred to the batch gate.
 #[test]
 fn metadata_history_shares_immutable_source_cache_and_owned_material() {
-    let (mut session,_,_)=fixture(ColorMode::Rgb,SampleType::U16,true);
-    let before=session.active().unwrap().doc.clone();
-    let state=before.xcf_state.as_ref().unwrap();
-    let original_cache=state.source_items.first().unwrap().cache.as_ref().unwrap().bytes.clone();
-    let original_material=state.resources.first().unwrap().owned_bytes.as_ref().unwrap().clone();
-    session.edit("Own metadata only",|document,_| {document.name="Own metadata successor".into();Ok(())}).unwrap();
-    let state=session.active().unwrap().doc.xcf_state.as_ref().unwrap();
-    assert!(std::sync::Arc::ptr_eq(&original_cache,&state.source_items.first().unwrap().cache.as_ref().unwrap().bytes));
-    assert!(std::sync::Arc::ptr_eq(&original_material,state.resources.first().unwrap().owned_bytes.as_ref().unwrap()));
-    let mut private=(*session.active().unwrap().doc).clone();
-    let private_cache=&mut private.xcf_state.as_mut().unwrap().source_items.first_mut().unwrap().cache.as_mut().unwrap().bytes;
-    std::sync::Arc::make_mut(private_cache)[0]^=1;
-    assert_ne!(private_cache.as_slice(),original_cache.as_slice());
-    assert_eq!(before.xcf_state.as_ref().unwrap().source_items.first().unwrap().cache.as_ref().unwrap().bytes.as_slice(),original_cache.as_slice());
-    assert!(session.undo());assert_eq!(session.active().unwrap().doc,before);
+    let (mut session, owner, _) = fixture(ColorMode::Rgb, SampleType::U16, true);
+    let before = session.active().unwrap().doc.clone();
+    let state = before.xcf_state.as_ref().unwrap();
+    let original_cache = state.source_items.first().unwrap().cache.as_ref().unwrap().bytes.clone();
+    let original_material = state.resources.first().unwrap().owned_bytes.as_ref().unwrap().clone();
+    session.execute("layer.renameLayer", json!({"layer":owner.0,"name":"Own metadata successor"})).unwrap();
+    let state = session.active().unwrap().doc.xcf_state.as_ref().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&original_cache, &state.source_items.first().unwrap().cache.as_ref().unwrap().bytes));
+    assert!(std::sync::Arc::ptr_eq(&original_material, state.resources.first().unwrap().owned_bytes.as_ref().unwrap()));
+    let mut private = (*session.active().unwrap().doc).clone();
+    let private_cache = &mut private.xcf_state.as_mut().unwrap().source_items.first_mut().unwrap().cache.as_mut().unwrap().bytes;
+    std::sync::Arc::make_mut(private_cache)[0] ^= 1;
+    assert_ne!(private_cache.as_slice(), original_cache.as_slice());
+    assert_eq!(before.xcf_state.as_ref().unwrap().source_items.first().unwrap().cache.as_ref().unwrap().bytes.as_slice(), original_cache.as_slice());
+    assert!(session.undo());
+    assert_eq!(session.active().unwrap().doc, before);
 }
 fn bits(matrix: [f64; 9]) -> Value {
     json!(matrix.map(|value| format!("{:016x}", value.to_bits())))

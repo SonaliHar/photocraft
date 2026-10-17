@@ -50,7 +50,9 @@ fn registered_spacing_history_native_and_preserved_source_evidence() {
         assert_eq!(state.opaque, original.opaque);
         assert_eq!(state.source_items[0].cache, original.source_items[0].cache);
         let saved = photocraft_io::export(&edited, "text.pcraft", &Default::default()).unwrap();
-        assert_eq!(photocraft_io::import("text.pcraft", &saved.bytes).unwrap().document, edited);
+        let mut expected_native = edited.clone();
+        expected_native.name = "text.pcraft".into();
+        assert_eq!(photocraft_io::import("text.pcraft", &saved.bytes).unwrap().document, expected_native);
         assert_eq!(session.execute("xcf.text.letterSpacing.set", params).unwrap()["updated"], false);
         assert_eq!(session.active().unwrap().history.past_len(), 1);
         session.execute("edit.undo", json!({})).unwrap();
@@ -151,7 +153,9 @@ fn registered_zero_spacing_all48_transitions_native_history_and_current_geometry
                 assert_eq!(state.opaque, evidence.opaque);
                 assert_eq!(state.source_items[0].cache, evidence.source_items[0].cache);
                 let saved = photocraft_io::export(&edited, "zero.pcraft", &Default::default()).unwrap();
-                assert_eq!(photocraft_io::import("zero.pcraft", &saved.bytes).unwrap().document, edited);
+                let mut expected_native = edited.clone();
+                expected_native.name = "zero.pcraft".into();
+                assert_eq!(photocraft_io::import("zero.pcraft", &saved.bytes).unwrap().document, expected_native);
                 assert_eq!(session.execute("xcf.text.letterSpacing.set", p).unwrap()["updated"], false);
                 assert_eq!(session.active().unwrap().history.past_len(), 1);
                 session.execute("edit.undo", json!({})).unwrap();

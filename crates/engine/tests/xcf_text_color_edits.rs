@@ -59,7 +59,9 @@ fn registered_color_edit_native_projection_history_and_immutable_cache() {
         let reference = std::fs::read(root.join(format!("{name}-edit.projection.bin"))).unwrap();
         assert!(actual.iter().zip(reference).map(|(a, b)| a.abs_diff(b)).max().unwrap() <= 2);
         let saved = photocraft_io::export(&edited, "text.pcraft", &Default::default()).unwrap();
-        assert_eq!(photocraft_io::import("text.pcraft", &saved.bytes).unwrap().document, edited);
+        let mut native_expected = edited.clone();
+        native_expected.name = "text.pcraft".into();
+        assert_eq!(photocraft_io::import("text.pcraft", &saved.bytes).unwrap().document, native_expected);
         assert_eq!(s.execute("xcf.text.color.set", params).unwrap()["changed"], false);
         assert_eq!(s.active().unwrap().history.past_len(), 1);
         s.execute("edit.undo", json!({})).unwrap();

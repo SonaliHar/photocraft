@@ -15,7 +15,7 @@ fn successful_save_identity_is_not_undone_or_redone() {
         s.execute("layer.new.layer", json!({})).unwrap();
         let original = s.active().unwrap().doc.clone();
         let revision = s.active().unwrap().revision;
-        s.active_mut().unwrap().saved_to("C:\\作品\\My picture.PSD".into());
+        s.active_mut().unwrap().saved_to("C:\\作品\\My picture.PSD".into()).unwrap();
         let saved = s.active().unwrap();
         assert_eq!(saved.doc.name, "My picture.PSD");
         assert_eq!(saved.doc.id, original.id);
@@ -23,11 +23,11 @@ fn successful_save_identity_is_not_undone_or_redone() {
         assert!(!saved.is_dirty());
         assert_eq!(original.name, "Untitled-1", "the exported snapshot remains immutable");
         let snapshot = saved.doc.clone();
-        s.active_mut().unwrap().saved_to("C:\\作品\\My picture.PSD".into());
-        assert!(Arc::ptr_eq(&s.active().unwrap().doc, &snapshot), "saving the same name does not invalidate snapshots or jobs");
+        s.active_mut().unwrap().saved_to("C:\\作品\\My picture.PSD".into()).unwrap();
+        assert!(s.active().unwrap().doc.shares_state(&snapshot), "saving the same name does not invalidate snapshots or jobs");
         assert!(s.undo());
         assert_eq!(s.active().unwrap().doc.name, "My picture.PSD");
-        s.active_mut().unwrap().saved_to("renamed.psb".into());
+        s.active_mut().unwrap().saved_to("renamed.psb".into()).unwrap();
         assert!(s.redo());
         assert_eq!(s.active().unwrap().doc.name, "renamed.psb");
         assert_eq!(s.active().unwrap().path.as_deref(), Some("renamed.psb"));
@@ -99,7 +99,7 @@ fn file_new_takes_whole_floats_and_survives_odd_sizes() {
 fn file_new_rejects_invalid_fields_without_changing_the_session() {
     let mut s = session_with_doc();
     let original = s.active().unwrap().doc.clone();
-    let history = s.active().unwrap().history.entries();
+    let history = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>();
     for (key, values) in [
         ("width", vec![json!(0), json!(-1), json!(300001), json!("32"), json!(null)]),
         ("height", vec![json!(0), json!(-1), json!(1e30), json!(true)]),
@@ -118,8 +118,8 @@ fn file_new_rejects_invalid_fields_without_changing_the_session() {
             assert!(error.contains("file.new") && error.contains(key), "{error}");
             assert_eq!(s.documents().len(), 1);
             assert_eq!(s.active_index(), Some(0));
-            assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &original));
-            assert_eq!(s.active().unwrap().history.entries(), history);
+            assert!(s.active().unwrap().doc.shares_state(&original));
+            assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>(), history);
         }
     }
 }
@@ -130,11 +130,11 @@ fn invalid_file_new_leaves_a_floating_selection_uncommitted() {
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
     s.execute("select.float", json!({"dx": 8})).unwrap();
     let original = s.active().unwrap().doc.clone();
-    let history = s.active().unwrap().history.entries();
+    let history = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>();
     assert!(s.execute("file.new", json!({"depth": 12})).is_err());
     assert!(crate::float_cmds::floating(s.active().unwrap()).is_some());
-    assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &original));
-    assert_eq!(s.active().unwrap().history.entries(), history);
+    assert!(s.active().unwrap().doc.shares_state(&original));
+    assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>(), history);
     assert_eq!(s.documents().len(), 1);
 }
 
@@ -262,7 +262,7 @@ fn new_adjustment_and_fill_layers_have_white_masks_without_a_selection() {
         ] {
             let mut s = Session::new();
             s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth})).unwrap();
-            let history = s.active().unwrap().history.entries().len();
+            let history = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
             let layer = LayerId(s.execute(id, params).unwrap()["layer"].as_u64().unwrap());
             let d = s.active().unwrap();
             let mask = d.doc.layer(layer).unwrap().mask.as_ref().unwrap_or_else(|| panic!("{id} at {depth}-bit: no mask"));
@@ -271,7 +271,7 @@ fn new_adjustment_and_fill_layers_have_white_masks_without_a_selection() {
             for (x, y) in [(0, 0), (63, 47), (-1, -1), (300_000, 300_000)] {
                 assert_eq!(mask.value(x, y), 1.0, "{id}: the default mask reveals all pixels");
             }
-            assert_eq!(d.history.entries().len(), history + 1, "the mask belongs to the layer's one history step");
+            assert_eq!(d.history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), history + 1, "the mask belongs to the layer's one history step");
             s.execute("edit.undo", json!({})).unwrap();
             assert!(s.active().unwrap().doc.layer(layer).is_none());
             s.execute("edit.redo", json!({})).unwrap();
@@ -1281,13 +1281,13 @@ fn all_lock_blocks_painting_a_mask_but_pixels_lock_does_not() {
     .unwrap();
 
     s.execute("layer.setProps", json!({"locks": {"all": true}})).unwrap();
-    let history_steps = s.active().unwrap().history.entries().len();
+    let history_steps = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
     let err = s.execute("paint.stroke", json!({"points": [[5, 5]], "size": 4, "hardness": 1.0, "color": "#000000", "target": "mask"})).unwrap_err();
     assert_eq!(err.to_string(), "Could not complete your request because the layer \"Layer 1\" is locked");
     let state = s.active().unwrap();
     let mask = &state.doc.layer(id).unwrap().mask.as_ref().unwrap().surface;
     assert!(mask.pixel(5, 5)[0] > 0.99, "rejected stroke leaves the mask reveal-all");
-    assert_eq!(state.history.entries().len(), history_steps, "rejected stroke adds no Brush Tool history step");
+    assert_eq!(state.history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), history_steps, "rejected stroke adds no Brush Tool history step");
 
     s.execute("layer.setProps", json!({"locks": {"all": false, "pixels": true}})).unwrap();
     s.execute("paint.stroke", json!({"points": [[5, 5]], "size": 4, "hardness": 1.0, "color": "#000000", "target": "mask"})).unwrap();

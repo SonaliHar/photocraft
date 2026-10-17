@@ -19,7 +19,7 @@ fn presets_validate_atomically_and_leave_document_paths_and_history_untouched() 
         let p = s.active().unwrap().symmetry.as_ref().unwrap().preset().unwrap();
         assert_eq!(p.center, [40.5, 30.5]);
         assert_eq!(p.rotation, 0.0);
-        assert_eq!(crate::inspect::document(s.active().unwrap())["symmetry"]["mode"], mode.id());
+        assert_eq!(crate::inspect::document(s.active().unwrap()).unwrap()["symmetry"]["mode"], mode.id());
         assert_eq!(s.active().unwrap().doc, before);
         assert_eq!((s.active().unwrap().history.past_len(), s.active().unwrap().revision), (history, revision));
     }
@@ -48,7 +48,7 @@ fn presets_validate_atomically_and_leave_document_paths_and_history_untouched() 
     s.execute("paint.symmetryFromPath", json!({"name":"work"})).unwrap();
     assert_eq!(s.active().unwrap().symmetry.as_ref().unwrap().path_source(), Some("work"));
     s.execute("paint.symmetryDisable", json!({})).unwrap();
-    assert!(crate::inspect::document(s.active().unwrap())["symmetry"].is_null());
+    assert!(crate::inspect::document(s.active().unwrap()).unwrap()["symmetry"].is_null());
     s.execute("paint.setSymmetry", json!({"mode":"vertical"})).unwrap();
     s.execute("file.new", json!({"width":10,"height":20})).unwrap();
     assert!(s.active().unwrap().symmetry.is_none());

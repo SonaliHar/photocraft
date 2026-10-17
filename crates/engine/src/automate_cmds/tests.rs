@@ -300,7 +300,7 @@ fn stacked_smart_object_holds_the_loaded_layers_at_its_top_level() {
         Ok(())
     })
     .unwrap();
-    let source = photocraft_compose::flatten(&s.active().unwrap().doc);
+    let source = photocraft_compose::flatten(&s.active().unwrap().doc).unwrap();
     let files: Vec<String> = (0..3)
         .map(|i| {
             let path = format!("{dir}/img{i}.png");
@@ -317,7 +317,7 @@ fn stacked_smart_object_holds_the_loaded_layers_at_its_top_level() {
         let inner = crate::smart_cmds::decode_source(file_name, bytes).unwrap();
         let names: Vec<&str> = inner.layers.iter().map(|l| l.name.as_str()).collect();
         assert_eq!(names, ["img0.png", "img1.png", "img2.png"], "align {align}");
-        assert_eq!(photocraft_compose::flatten(d).px, source.px, "align {align}");
+        assert_eq!(photocraft_compose::flatten(d).unwrap().px, source.px, "align {align}");
     }
 }
 
@@ -423,7 +423,7 @@ fn load_files_into_stack_aligns_before_the_smart_object() {
     let st = s.active().unwrap();
     assert_eq!(st.doc.layers.len(), 2, "loose layers");
     assert!(st.doc.layers.iter().all(|l| matches!(l.content, LayerContent::Raster(_))));
-    assert_eq!(st.selected_layers().len(), 2, "Auto-Align ran on them all");
+    assert_eq!(st.selected_layers().unwrap().len(), 2, "Auto-Align ran on them all");
     let mut s = Session::new();
     s.execute("file.scripts.loadFilesIntoStack", json!({"paths": files, "align": true, "createSmartObject": true})).unwrap();
     let d = &s.active().unwrap().doc;

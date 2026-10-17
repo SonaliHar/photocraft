@@ -79,7 +79,9 @@ fn picking_and_frame_follow_current_origin_through_native_reopen_and_undo() {
         assert_eq!(edited.xcf_state.as_ref().unwrap().source_items[0].cache, before.source_items[0].cache);
         let native = photocraft_io::export(edited, "position.pcraft", &Default::default()).unwrap();
         let restored = photocraft_io::import("position.pcraft", &native.bytes).unwrap().document;
-        assert_eq!(restored, **edited);
+        let mut expected_native = (**edited).clone();
+        expected_native.name = "position.pcraft".into();
+        assert_eq!(restored, expected_native);
         assert_eq!(photocraft_engine::transform_cmds::transform_bounds(&restored, &restored.layers[0]), frame);
         // Sample independent alpha across the canvas and explicitly include
         // a displaced glyph beyond the old frame and transparent layout space.

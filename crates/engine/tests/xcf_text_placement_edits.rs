@@ -61,7 +61,9 @@ fn registered_placement_eight_moved_controls_native_history_and_immutable_source
             let delta = actual.iter().zip(&expected).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
             assert!(delta <= 2, "{name}-{suffix}: {delta}/255");
             let native = photocraft_io::export(&edited, "placed.pcraft", &Default::default()).unwrap();
-            assert_eq!(photocraft_io::import("placed.pcraft", &native.bytes).unwrap().document, edited);
+            let mut expected_native = edited.clone();
+            expected_native.name = "placed.pcraft".into();
+            assert_eq!(photocraft_io::import("placed.pcraft", &native.bytes).unwrap().document, expected_native);
             assert_eq!(session.execute("xcf.text.position.set", params).unwrap()["updated"], false);
             assert_eq!(session.active().unwrap().history.past_len(), 1);
             session.execute("edit.undo", json!({})).unwrap();
@@ -147,7 +149,9 @@ fn content_size_color_spacing_preserve_current_origin_and_immutable_cache() {
         assert_eq!(state.resources, source.resources);
         assert_eq!(current.layers, doc.layers);
         let saved = photocraft_io::export(current, "moved.pcraft", &Default::default()).unwrap();
-        assert_eq!(photocraft_io::import("moved.pcraft", &saved.bytes).unwrap().document, **current);
+        let mut expected_native = (**current).clone();
+        expected_native.name = "moved.pcraft".into();
+        assert_eq!(photocraft_io::import("moved.pcraft", &saved.bytes).unwrap().document, expected_native);
     }
     for _ in 0..5 {
         session.execute("edit.undo", json!({})).unwrap();

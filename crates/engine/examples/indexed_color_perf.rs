@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let path = std::env::args().nth(1).ok_or("provide a local image path")?;
     let bytes = photocraft_format::read::read_file(std::path::Path::new(&path))?;
     let doc = photocraft_io::import(&path, &bytes)?.document;
-    let px = photocraft_compose::flatten(&doc).px;
+    let px = photocraft_compose::flatten(&doc)?.px;
     println!("{}", json!({"width":doc.size.width,"height":doc.size.height,"preview_factor":1}));
     for count in [8usize, 16, 32, 64, 128, 256] {
         for run in 0..4 {
@@ -45,12 +45,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             let diffusion_ms = elapsed(start);
             std::hint::black_box(indices);
             let start = Instant::now();
-            let proxy = photocraft_compose::proxy::proxy_document(&doc, 1);
+            let proxy = photocraft_compose::proxy::proxy_document(&doc, 1)?;
             let mut session = Session::new();
-            session.add_document(proxy, None);
+            session.add_document(proxy, None)?;
             session.execute("image.mode.indexedColor", json!({"colors":count}))?;
             let result = session.active().ok_or("preview has no document")?;
-            let composed = photocraft_compose::flatten(&result.doc);
+            let composed = photocraft_compose::flatten(&result.doc)?;
             let preview_ms = elapsed(start);
             println!(
                 "{}",

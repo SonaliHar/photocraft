@@ -408,7 +408,7 @@ fn smart_session() -> Session {
 }
 
 fn flatten(s: &Session) -> Vec<[f32; 4]> {
-    photocraft_compose::flatten(doc(s)).px
+    photocraft_compose::flatten(doc(s)).unwrap().px
 }
 
 fn max_diff(a: &[[f32; 4]], b: &[[f32; 4]]) -> f32 {

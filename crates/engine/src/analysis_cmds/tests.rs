@@ -42,7 +42,7 @@ fn failed_compound_restores_layer_target_history_and_journal() {
 
     assert!(error.to_string().contains("synthetic second step failed"));
     let st = s.active().unwrap();
-    assert!(Arc::ptr_eq(&prior_doc, &st.doc), "the original document is restored");
+    assert!(prior_doc.shares_state(&st.doc), "the original document is restored");
     assert_eq!(st.history.past_len(), prior_history, "no undo step remains");
     assert_eq!(s.journal.len(), prior_journal, "no rolled-back command is journaled");
     assert_eq!(st.active_layer, Some(selected));
@@ -70,7 +70,7 @@ fn failed_compound_preserves_a_clean_document() {
     })
     .unwrap_err();
     assert!(error.to_string().contains("synthetic second step failed"));
-    assert!(Arc::ptr_eq(&prior_doc, &d(&s)));
+    assert!(prior_doc.shares_state(&d(&s)));
     assert!(!s.active().unwrap().is_dirty(), "a rolled-back edit does not need saving");
 }
 

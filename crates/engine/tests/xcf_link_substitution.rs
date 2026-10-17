@@ -293,7 +293,7 @@ fn typed_target_edit_then_undo_stays_stale_even_when_snapshot_returns() {
     let target = capture_target(&s, owner, resource).unwrap();
     let old = s.active().unwrap().doc.clone();
     s.edit("Later picker edit", |d, _| {
-        d.name = "Later picker edit".into();
+        d.layer_mut(owner).unwrap().name = "Later picker edit".into();
         Ok(())
     })
     .unwrap();
@@ -515,7 +515,7 @@ fn picker_request_bridge_validates_opaque_target_and_bounds_without_edit() {
     assert_eq!(pmax["payloadHex"].as_str().unwrap().len(), 16 << 20);
     drop(pmax);
     s.edit("Picker stale", |d, _| {
-        d.name = "Stale picker".into();
+        d.layer_mut(owner).unwrap().name = "Stale picker".into();
         Ok(())
     })
     .unwrap();

@@ -140,7 +140,7 @@ fn load_selection_from_a_vector_mask() {
 #[test]
 fn backslash_command_toggles_the_overlay() {
     let (mut s, masked, bg) = session();
-    let steps = s.active().unwrap().history.entries().len();
+    let steps = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
     assert!(s.is_enabled(OVERLAY_ID));
     assert_eq!(s.execute(OVERLAY_ID, json!({})).unwrap()["mode"], "overlay");
     assert_eq!(view(&s), json!({"layer": masked, "mode": "overlay"}));
@@ -151,7 +151,7 @@ fn backslash_command_toggles_the_overlay() {
     assert_eq!(s.execute(OVERLAY_ID, json!({"mode": "gray"})).unwrap()["mode"], "overlay", "`mode` is ignored");
     s.execute(OVERLAY_ID, json!({})).unwrap();
     let st = s.active().unwrap();
-    assert_eq!(st.history.entries().len(), steps, "not a history step");
+    assert_eq!(st.history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), steps, "not a history step");
     assert!(!st.is_dirty());
     // No mask on the active layer, bad params, no document: errors, nothing changes.
     s.execute("layer.select", json!({"layer": bg})).unwrap();

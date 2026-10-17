@@ -59,7 +59,9 @@ fn registered_underline_ranges_render_native_undo_and_source_preservation() {
         assert_eq!(state.opaque, original.opaque);
         assert_eq!(state.source_items[0].cache, original.source_items[0].cache);
         let saved = photocraft_io::export(&current, "text.pcraft", &Default::default()).unwrap();
-        assert_eq!(photocraft_io::import("text.pcraft", &saved.bytes).unwrap().document, current);
+        let mut expected_native = current.clone();
+        expected_native.name = "text.pcraft".into();
+        assert_eq!(photocraft_io::import("text.pcraft", &saved.bytes).unwrap().document, expected_native);
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(*s.active().unwrap().doc, doc);
         s.execute("edit.redo", json!({})).unwrap();

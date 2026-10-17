@@ -11,7 +11,7 @@ fn layer(s: &Session, id: u64) -> &Layer {
 
 fn composite(s: &Session) -> photocraft_compose::Buffer {
     let d = doc(s);
-    photocraft_compose::render(d, d.bounds())
+    photocraft_compose::render(d, d.bounds()).unwrap()
 }
 
 fn max_diff(a: &photocraft_compose::Buffer, b: &photocraft_compose::Buffer) -> f32 {

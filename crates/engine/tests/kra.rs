@@ -25,11 +25,11 @@ fn krita_documents_open_read_only_and_stay_editable() {
 
     // Krita's merged image is the composite (the corpus files carry no ICC profile, so both
     // sides are sRGB); crates/io/tests/krita_corpus.rs compares every file.
-    let ours = photocraft_compose::flatten(&session.active().unwrap().doc);
+    let ours = photocraft_compose::flatten(&session.active().unwrap().doc).unwrap();
     let zip_bytes = std::fs::read(&path).unwrap();
     let zip = photocraft_format::zip::ZipReader::new(&zip_bytes).unwrap();
     let merged = photocraft_io::import("m.png", &zip.read_by_name("mergedimage.png", 1 << 28).unwrap()).unwrap().document;
-    let theirs = photocraft_compose::flatten(&merged);
+    let theirs = photocraft_compose::flatten(&merged).unwrap();
     let worst = ours.px.iter().zip(&theirs.px).map(|(a, b)| (0..4).map(|c| (a[c] * a[3] - b[c] * b[3]).abs()).fold(0.0f32, f32::max)).fold(0.0, f32::max);
     assert!(worst <= 3.0 / 255.0, "{}", worst * 255.0);
 

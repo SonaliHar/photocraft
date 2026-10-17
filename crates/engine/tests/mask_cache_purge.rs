@@ -18,7 +18,7 @@ fn purge_all_is_enabled_by_cached_masks_and_releases_them_at_every_depth() {
         let mut input = Surface::with_default(PixelFormat { mode: ColorMode::Grayscale, sample, alpha: false }, &[1.0]);
         input.fill_rect(Rect::new(8, 8, 24, 24), &[0.0]);
         let mut layer = Layer::raster("mask", PixelFormat::RGBA8);
-        layer.mask = Some(LayerMask { surface: input, feather: 2.0, ..LayerMask::reveal_all() });
+        layer.mask = Some(LayerMask { surface: input.into(), feather: 2.0, ..LayerMask::reveal_all() });
         let before = masks::combined_mask(&layer, canvas).unwrap();
         let accounted = masks::cache_bytes();
         assert!(accounted > 0, "{sample:?}");

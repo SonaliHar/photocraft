@@ -96,7 +96,10 @@ fn explicit_upload_command_is_undoable_and_bad_parameters_are_atomic() {
     let result = s.execute("xcf.resource.upload", json!({"resource":"1","payloadHex":"4f776e00ff","policy":"substitute"})).unwrap();
     assert_eq!(result["byteIdentity"], "Substituted");
     assert_eq!(result["activated"], false);
-    assert_eq!(s.active().unwrap().doc.xcf_state.as_ref().unwrap().resources[0].owned_bytes.as_ref().map(|bytes|bytes.as_slice()), Some(b"Own\0\xff".as_slice()));
+    assert_eq!(
+        s.active().unwrap().doc.xcf_state.as_ref().unwrap().resources[0].owned_bytes.as_ref().map(|bytes| bytes.as_slice()),
+        Some(b"Own\0\xff".as_slice())
+    );
     assert!(!s.journal.iter().any(|(id, _)| id == "xcf.resource.upload"));
     s.execute("edit.undo", json!({})).unwrap();
     assert!(s.active().unwrap().doc.shares_state(&before));
@@ -115,14 +118,15 @@ fn uppercase_exact_hash_retains_original_text_identity_and_native_undo() {
     let mut session = Session::new();
     session.open_document(document, None).unwrap();
     let before = session.active().unwrap().doc.clone();
-    let fidelity = recover_authorized_bytes(
-        &mut session, ResourceId(1), input(b"Own uppercase identity payload"),
-        RecoveryPolicy::Exact, &Interrupt::NONE,
-    ).unwrap();
+    let fidelity =
+        recover_authorized_bytes(&mut session, ResourceId(1), input(b"Own uppercase identity payload"), RecoveryPolicy::Exact, &Interrupt::NONE).unwrap();
     assert_eq!(fidelity, ResourceFidelity::Exact);
     let after = session.active().unwrap().doc.clone();
-    assert_eq!(after.xcf_state.as_ref().unwrap().resources.get(0).unwrap().content_hash.as_deref(), Some(original_hash.as_str()));
-    assert_eq!(after.xcf_state.as_ref().unwrap().resources.get(0).unwrap().owned_bytes.as_ref().map(|bytes|bytes.as_slice()), Some(b"Own uppercase identity payload".as_slice()));
+    assert_eq!(after.xcf_state.as_ref().unwrap().resources.first().unwrap().content_hash.as_deref(), Some(original_hash.as_str()));
+    assert_eq!(
+        after.xcf_state.as_ref().unwrap().resources.first().unwrap().owned_bytes.as_ref().map(|bytes| bytes.as_slice()),
+        Some(b"Own uppercase identity payload".as_slice())
+    );
     after.validate_xcf_state().unwrap();
     let bytes = photocraft_format::save_to_bytes(&after, &Default::default()).unwrap();
     assert_eq!(photocraft_format::load_from_bytes(&bytes).unwrap(), *after);

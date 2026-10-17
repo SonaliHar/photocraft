@@ -364,7 +364,7 @@ fn export_data_sets_rejects_collisions_before_writing() {
         let mut s = visibility_export_session(&names);
         let before = s.active().unwrap().doc.clone();
         let revision = s.active().unwrap().revision;
-        let history = s.active().unwrap().history.entries();
+        let history = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>();
         let past = s.active().unwrap().history.past_len();
         let redo = s.active().unwrap().history.can_redo();
         let dir = tmp(&format!("collision-{label}"));
@@ -383,9 +383,9 @@ fn export_data_sets_rejects_collisions_before_writing() {
         assert!(s.execute("file.export.dataSetsAsFiles", json!({"dir": absent, "naming": naming})).is_err());
         assert!(!std::path::Path::new(&absent).exists());
         let after = s.active().unwrap();
-        assert!(Arc::ptr_eq(&before, &after.doc));
+        assert!(before.shares_state(&after.doc));
         assert_eq!(after.revision, revision);
-        assert_eq!(after.history.entries(), history);
+        assert_eq!(after.history.entry_labels().map(str::to_owned).collect::<Vec<_>>(), history);
         assert_eq!(after.history.past_len(), past);
         assert_eq!(after.history.can_redo(), redo);
         std::fs::remove_dir_all(dir).unwrap();
@@ -402,7 +402,7 @@ fn export_data_sets_unique_paths_preserve_variations_and_document() {
         let mut s = visibility_export_session(&names);
         let before = s.active().unwrap().doc.clone();
         let revision = s.active().unwrap().revision;
-        let history = s.active().unwrap().history.entries();
+        let history = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>();
         let past = s.active().unwrap().history.past_len();
         let redo = s.active().unwrap().history.can_redo();
         let dir = tmp(&format!("unique-{label}"));
@@ -412,13 +412,13 @@ fn export_data_sets_unique_paths_preserve_variations_and_document() {
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), paths.len());
         for (i, path) in paths.iter().enumerate() {
             let exported = photocraft_io::import(path, &std::fs::read(path).unwrap()).unwrap().document;
-            let pixel = photocraft_compose::render(&exported, Rect::new(0, 0, 1, 1)).px[0];
+            let pixel = photocraft_compose::render(&exported, Rect::new(0, 0, 1, 1)).unwrap().px[0];
             assert_eq!(pixel, if i == 0 { [1.0; 4] } else { [0.0; 4] });
         }
         let after = s.active().unwrap();
-        assert!(Arc::ptr_eq(&before, &after.doc));
+        assert!(before.shares_state(&after.doc));
         assert_eq!(after.revision, revision);
-        assert_eq!(after.history.entries(), history);
+        assert_eq!(after.history.entry_labels().map(str::to_owned).collect::<Vec<_>>(), history);
         assert_eq!(after.history.past_len(), past);
         assert_eq!(after.history.can_redo(), redo);
         std::fs::remove_dir_all(dir).unwrap();

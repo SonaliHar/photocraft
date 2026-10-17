@@ -46,6 +46,8 @@ fn ordinary_clipboard_nonunit_alpha_is_rejected_atomically() {
             bounds: area,
             color: ClipColorContext { mode: ColorMode::Rgb, icc_profile: None, sample_encoding: None, interpretation: WorkingProfileInterpretation::Icc },
             composition: Vec::new(),
+            layers: None,
+            resolution: None,
         });
         for command in ["edit.paste", "file.newFromClipboard"] {
             assert!(session.execute(command, json!({})).is_err());

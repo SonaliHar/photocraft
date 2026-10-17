@@ -43,7 +43,9 @@ fn registered_content_edit_native_undo_cache_and_font_identity() {
     assert_ne!(before.source_items[0].source, after.source_items[0].source);
     let encoded = photocraft_io::export(&edited, "text.pcraft", &Default::default()).unwrap();
     let reopened = photocraft_io::import("text.pcraft", &encoded.bytes).unwrap().document;
-    assert_eq!(reopened, edited);
+    let mut expected_native = edited.clone();
+    expected_native.name = "text.pcraft".into();
+    assert_eq!(reopened, expected_native);
     assert_eq!(projection(&reopened), expected);
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(*s.active().unwrap().doc, doc);
