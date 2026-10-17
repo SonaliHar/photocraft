@@ -22,41 +22,156 @@ fn texture_side(ctx: &egui::Context) -> u32 {
     u32::try_from(ctx.input(|i| i.max_texture_side)).unwrap_or(MAX_TEXTURE).clamp(1, MAX_TEXTURE)
 }
 
-/// Pixel budget of one Clone Source overlay sample: past it the overlay is sampled at a stride
-/// (a reduced image, as a zoomed-out view shows anyway) instead of being skipped.
+/// Pixel budget of one Clone Source overlay: the texels uploaded, the full-resolution sample
+/// behind them and the tip's coverage. Past it the overlay comes from a reduced image of the
+/// source ([`ReducedSource`], as a zoomed-out view shows anyway) and the tip is rasterized at
+/// that reduction, so nothing here grows with the document or the brush.
+#[cfg(not(test))]
 const CLONE_OVERLAY_BUDGET: u64 = 4 * 1024 * 1024;
+/// Tests reach the reduced path with small documents and tips.
+#[cfg(test)]
+const CLONE_OVERLAY_BUDGET: u64 = 256 * 256;
+
+/// The clone source rendered reduced by `k` over the document's bounds
+/// (`retouch_cmds::clone_source_reduced`), kept while the document and what the stamp samples
+/// are the same.
+struct ReducedSource {
+    key: String,
+    k: u32,
+    /// Document pixel of the buffer's (0, 0).
+    origin: [i32; 2],
+    buf: photocraft_compose::Buffer,
+}
+
+impl ReducedSource {
+    /// Straight RGBA at document point `(x, y)` (full-resolution px), bilinear between the reduced
+    /// pixels (premultiplied, so transparent ones don't tint their neighbours); transparent outside.
+    fn at(&self, x: f64, y: f64) -> [f32; 4] {
+        let k = f64::from(self.k);
+        let (fx, fy) = ((x - f64::from(self.origin[0])) / k - 0.5, (y - f64::from(self.origin[1])) / k - 0.5);
+        let (x0, y0) = (fx.floor() as i32, fy.floor() as i32);
+        let (tx, ty) = ((fx - f64::from(x0)) as f32, (fy - f64::from(y0)) as f32);
+        let (w, h) = (self.buf.rect.width() as i32, self.buf.rect.height() as i32);
+        let fetch = |x: i32, y: i32| -> [f32; 4] {
+            if x < 0 || y < 0 || x >= w || y >= h {
+                return [0.0; 4];
+            }
+            let p = self.buf.px.get((y * w + x) as usize).copied().unwrap_or([0.0; 4]);
+            let a = p[3].clamp(0.0, 1.0);
+            [p[0] * a, p[1] * a, p[2] * a, a]
+        };
+        let (q00, q10, q01, q11) = (fetch(x0, y0), fetch(x0 + 1, y0), fetch(x0, y0 + 1), fetch(x0 + 1, y0 + 1));
+        let mut out = [0.0f32; 4];
+        for c in 0..4 {
+            let top = q00[c] + (q10[c] - q00[c]) * tx;
+            let bot = q01[c] + (q11[c] - q01[c]) * tx;
+            out[c] = top + (bot - top) * ty;
+        }
+        let a = out[3];
+        if a > 1e-6 {
+            for c in out.iter_mut().take(3) {
+                *c /= a;
+            }
+            out
+        } else {
+            [0.0; 4]
+        }
+    }
+
+    /// The reduced destination rectangle `dst` (reduced px, `k` document px per texel) sampled
+    /// through `map` at its texels' centres.
+    fn sample(&self, dst: DRect, map: &photocraft_engine::presets::clone_source::Mapping) -> photocraft_compose::Buffer {
+        let k = f64::from(self.k);
+        let w = dst.width() as usize;
+        let px = (0..w * dst.height() as usize)
+            .map(|i| {
+                let (x, y) = ((f64::from(dst.x0) + (i % w) as f64 + 0.5) * k, (f64::from(dst.y0) + (i / w) as f64 + 0.5) * k);
+                let (sx, sy) = map.map(x, y);
+                self.at(sx, sy)
+            })
+            .collect();
+        photocraft_compose::Buffer { rect: dst, px }
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct ClonePreviewCache {
     key: String,
     /// The uploaded overlay and the document rectangle it covers.
     texture: Option<(egui::TextureHandle, DRect)>,
-    /// The stroke-ready brush the tip mask is rasterized with, rebuilt when the brush changes;
-    /// `generation` counts rebuilds so the cache key follows the tip without hashing a bitmap.
+    /// The stroke-ready brush the tip is rasterized with, rebuilt when the brush changes;
+    /// `generation` counts rebuilds so the cache keys follow the tip without hashing a bitmap.
     brush: Option<(photocraft_paint::brush::BrushSettings, photocraft_paint::BrushContext)>,
     generation: u64,
+    /// The tip's coverage over its reduced box (`k` document px per sample), kept while the tip,
+    /// its position and the reduction are the same.
+    footprint: Option<(String, Vec<f32>)>,
+    /// How many times the tip was rasterized (tests).
+    pub(crate) footprint_builds: u64,
+    /// The reduced sources in use (the stamp's, and the composite under the brush for the
+    /// overlay's blend modes).
+    reduced: Vec<ReducedSource>,
 }
 
 impl ClonePreviewCache {
-    /// The tip's footprint at `at` (Photoshop clips the overlay to the brush tip, soft edge
-    /// included): coverage over the rectangle the tip reaches, from the stroke rasterizer, so the
-    /// overlay shows exactly what a dab there would paint — hardness, shape, angle, roundness
-    /// and flips alike.
-    fn footprint(&mut self, brush: &photocraft_paint::brush::BrushSettings, at: [f64; 2]) -> photocraft_paint::retouch::Footprint {
+    /// The stroke-ready brush, rebuilt when the brush changed.
+    fn brush_context(&mut self, brush: &photocraft_paint::brush::BrushSettings) -> Option<&photocraft_paint::BrushContext> {
         let bounded = brush.bounded_for_render();
-        let ctx = match &mut self.brush {
-            Some((b, ctx)) if *b == bounded => &*ctx,
-            slot => {
-                self.generation += 1;
-                &slot.insert((bounded.clone(), photocraft_paint::BrushContext::new(&bounded))).1
-            }
-        };
+        if self.brush.as_ref().is_none_or(|(b, _)| *b != bounded) {
+            self.generation += 1;
+            self.brush = Some((bounded.clone(), photocraft_paint::BrushContext::new(&bounded)));
+        }
+        self.brush.as_ref().map(|(_, ctx)| ctx)
+    }
+
+    /// The dab the overlay previews at `at`: the brush's tip as a stroke would place it there.
+    fn dab(brush: &photocraft_paint::brush::BrushSettings, at: [f64; 2]) -> photocraft_paint::Dab {
+        let bounded = brush.bounded_for_render();
         let mut dab = photocraft_paint::Dab::round(photocraft_geom::Point::new(at[0], at[1]), bounded.size / 2.0, 1.0);
         dab.angle = bounded.angle.to_radians();
         dab.roundness = bounded.roundness.clamp(0.01, 1.0);
         dab.flip_x = bounded.flip_x;
         dab.flip_y = bounded.flip_y;
-        ctx.footprint(&dab, 0)
+        dab
+    }
+
+    /// Coverage of the tip `dab` over `reduced` (its box in reduced px, `k` document px per
+    /// sample), from the stroke rasterizer at that reduction: `reduced.width() × reduced.height()`
+    /// values, never more than the overlay's budget. Rasterized only when the tip, its position
+    /// or the reduction changed.
+    fn coverage(&mut self, dab: &photocraft_paint::Dab, k: u32, reduced: DRect) -> &[f32] {
+        let key = format!("{}:{:?}:{}:{}:{reduced:?}", self.generation, dab.center, dab.radius.to_bits(), k);
+        if self.footprint.as_ref().is_none_or(|(fk, _)| *fk != key) {
+            let kf = f64::from(k);
+            let mut small = *dab;
+            small.center = photocraft_geom::Point::new(dab.center.x / kf, dab.center.y / kf);
+            small.radius = dab.radius / k as f32;
+            let mut cov = Vec::new();
+            if let Some((_, ctx)) = &self.brush {
+                ctx.rasterize(&small, false, reduced, &mut cov);
+            }
+            cov.resize(reduced.width() as usize * reduced.height() as usize, 0.0);
+            self.footprint_builds += 1;
+            self.footprint = Some((key, cov));
+        }
+        match &self.footprint {
+            Some((_, cov)) => cov,
+            None => &[],
+        }
+    }
+
+    /// The source reduced by `k` over `bounds` for what `sample` reads, built once per `key`.
+    fn reduced_source(&mut self, session: &photocraft_engine::Session, sample: &str, key: String, k: u32, bounds: DRect) -> Option<&ReducedSource> {
+        if let Some(i) = self.reduced.iter().position(|r| r.key == key) {
+            return self.reduced.get(i);
+        }
+        let (w, h) = (bounds.width().div_ceil(k.max(1)), bounds.height().div_ceil(k.max(1)));
+        let buf = photocraft_engine::retouch_cmds::clone_source_reduced(session, sample, w, h).ok()?;
+        if self.reduced.len() >= 2 {
+            self.reduced.remove(0);
+        }
+        self.reduced.push(ReducedSource { key, k, origin: [bounds.x0, bounds.y0], buf });
+        self.reduced.last()
     }
 }
 
@@ -89,6 +204,14 @@ fn box_reduce(buf: &photocraft_compose::Buffer, k: u32) -> photocraft_compose::B
     photocraft_compose::Buffer { rect: DRect::new(0, 0, rw as i32, rh as i32), px }
 }
 
+/// `rect` grown to whole blocks of `k` on the document's grid (the canvas's mip levels are
+/// aligned the same way), so a reduced overlay's blocks sit on the canvas's.
+fn snap_to_blocks(rect: DRect, k: u32) -> DRect {
+    let ki = k.max(1) as i32;
+    let up = |v: i32| v.div_euclid(ki) * ki + ki * i32::from(v.rem_euclid(ki) != 0);
+    DRect::new(rect.x0.div_euclid(ki) * ki, rect.y0.div_euclid(ki) * ki, up(rect.x1), up(rect.y1))
+}
+
 /// A transient source image beneath the brush outline; never part of the document render.
 ///
 /// Measured on Photoshop 25.4 (2026-10-17): with Clipped on, the overlay is the source composited
@@ -97,6 +220,11 @@ fn box_reduce(buf: &photocraft_compose::Buffer, k: u32) -> photocraft_compose::B
 /// display path as the canvas: pixel-exact at 100 %, crisp pixel squares zoomed in, box-averaged
 /// zoomed out. Clipped off shows the whole source over the view. The overlay stays while
 /// painting unless Auto Hide is on.
+///
+/// Nothing here grows past [`CLONE_OVERLAY_BUDGET`]: the box is known before any pixel is read
+/// or rasterized, its reduction `k` follows the view and the budget, the pixels come at full
+/// resolution (box-averaged to `k`, as the canvas shows them) only within the budget and from
+/// the reduced source past it, and the tip is rasterized at that reduction, once per position.
 fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, at: [f64; 2], output: Option<u32>) {
     use photocraft_engine::presets::clone_source::{Mapping, overlay_blend, transform_matrix};
     let overlay = app.session.presets.clone.overlay.clone();
@@ -125,48 +253,31 @@ fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &Vie
     let sample = app.ui.tool_options.clone_sample.clone();
     let ppp = painter.ctx().pixels_per_point();
     let cache = app.clone_preview.get_or_insert_with(Default::default);
-    // Clipped: the tip's footprint. Otherwise the part of the document on screen.
-    let (rect, cov) = if overlay.clipped {
-        let fp = cache.footprint(&brush, at);
-        (fp.rect, Some(fp.cov))
+    // The box, before any pixel is read or rasterized: the tip's reach (Clipped), or the part of
+    // the document on screen.
+    let (rect0, dab) = if overlay.clipped {
+        let dab = ClonePreviewCache::dab(&brush, at);
+        let Some(ctx) = cache.brush_context(&brush) else { return };
+        (ctx.dab_rect(&dab, false), Some(dab))
     } else {
         (visible_doc_rect(xf).intersect(&doc_bounds), None)
     };
-    if rect.is_empty() {
+    if rect0.is_empty() {
         return;
     }
-    let area = u64::from(rect.width()) * u64::from(rect.height());
     // One texel per screen pixel at most (the canvas shows no more zoomed out), and within the
-    // sampling budget: `k` document pixels per texel.
+    // budget: `k` document pixels per texel, in blocks on the document's grid.
+    let area0 = u64::from(rect0.width()) * u64::from(rect0.height());
     let screen_px = f64::from(xf.zoom) * f64::from(if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 });
     let k_view = if screen_px.is_finite() && screen_px > 0.0 { (1.0 / screen_px).ceil().clamp(1.0, 4096.0) as u32 } else { 1 };
-    let k_budget = (area as f64 / CLONE_OVERLAY_BUDGET as f64).sqrt().ceil().clamp(1.0, 4096.0) as u32;
+    let k_budget = (area0 as f64 / CLONE_OVERLAY_BUDGET as f64).sqrt().ceil().clamp(1.0, 4096.0) as u32;
     let k = k_view.max(k_budget);
-    // A reduced overlay averages blocks of `k` document pixels aligned to the document's grid (as
-    // the canvas's mip levels are), so its blocks sit on the canvas's.
-    let (rect, cov) = if k > 1 {
-        let ki = k as i32;
-        let snapped = DRect::new(
-            rect.x0.div_euclid(ki) * ki,
-            rect.y0.div_euclid(ki) * ki,
-            rect.x1.div_euclid(ki) * ki + ki * i32::from(rect.x1.rem_euclid(ki) != 0),
-            rect.y1.div_euclid(ki) * ki + ki * i32::from(rect.y1.rem_euclid(ki) != 0),
-        );
-        let cov = cov.map(|c| {
-            let (w, sw) = (rect.width() as usize, snapped.width() as usize);
-            let mut out = vec![0.0f32; sw * snapped.height() as usize];
-            for y in rect.y0..rect.y1 {
-                let src = (y - rect.y0) as usize * w;
-                let dst = (y - snapped.y0) as usize * sw + (rect.x0 - snapped.x0) as usize;
-                out[dst..dst + w].copy_from_slice(&c[src..src + w]);
-            }
-            out
-        });
-        (snapped, cov)
-    } else {
-        (rect, cov)
-    };
-    let area = u64::from(rect.width()) * u64::from(rect.height());
+    let rect = snap_to_blocks(rect0, k);
+    let ki = k as i32;
+    let reduced = DRect::new(rect.x0 / ki, rect.y0 / ki, rect.x1 / ki, rect.y1 / ki);
+    if reduced.is_empty() {
+        return;
+    }
     let key = format!(
         "{doc_id:?}:{revision}:{active_layer:?}:{rect:?}:{map:?}:{sample}:{display_key}:{}:{}:{wrap}:{}:{k}:{}:{:?}",
         overlay.invert,
@@ -176,20 +287,44 @@ fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &Vie
         overlay.clipped.then(|| at.map(f64::to_bits)),
     );
     if cache.key != key {
-        // Full-resolution sample (box-averaged when the view is reduced, exactly as the canvas),
-        // or past the budget a sample at a stride of `k` document pixels (the block centres).
-        let full = area <= CLONE_OVERLAY_BUDGET;
-        let (sample_rect, sample_map, here) = if full {
-            (rect, map, Mapping { source: (0.0, 0.0), anchor: (0.0, 0.0), m: [1.0, 0.0, 0.0, 1.0] })
-        } else {
-            let kf = f64::from(k);
-            let reduced = DRect::new(0, 0, rect.width().div_ceil(k) as i32, rect.height().div_ceil(k) as i32);
-            let origin = (f64::from(rect.x0), f64::from(rect.y0));
-            let strided = Mapping { source: map.map(origin.0, origin.1), anchor: (0.0, 0.0), m: map.m.map(|v| v * kf) };
-            (reduced, strided, Mapping { source: origin, anchor: (0.0, 0.0), m: [kf, 0.0, 0.0, kf] })
-        };
-        let Ok(mut buf) = photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, sample_rect, &sample_map, &sample, wrap) else {
-            return;
+        let under_map = Mapping { source: (0.0, 0.0), anchor: (0.0, 0.0), m: [1.0, 0.0, 0.0, 1.0] };
+        // The pixels at full resolution (box-averaged to `k`, exactly as the canvas) within the
+        // budget: the engine's own guard bounds the source it reads.
+        let full = (u64::from(rect.width()) * u64::from(rect.height()) <= CLONE_OVERLAY_BUDGET)
+            .then(|| photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, rect, &map, &sample, wrap).ok())
+            .flatten()
+            .and_then(|mut buf| {
+                // Darken, Lighten and Difference mix the source with the image under the brush
+                // (the composite, whatever Sample reads), so Difference turns black where they
+                // line up.
+                if overlay.blend != "normal" {
+                    let under = photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, rect, &under_map, "all", wrap).ok()?;
+                    for (px, d) in buf.px.iter_mut().zip(&under.px) {
+                        *px = overlay_blend(&overlay.blend, *px, *d);
+                    }
+                }
+                Some(if k > 1 { box_reduce(&buf, k) } else { buf })
+            });
+        let mut buf = match full {
+            Some(buf) => buf,
+            None => {
+                // Past the budget: the reduced source, bounded whatever the document's size. Pattern
+                // Preview's periodic source has no reduction.
+                if wrap {
+                    return;
+                }
+                let rkey = |what: &str| format!("{doc_id:?}:{revision}:{active_layer:?}:{what}:{k}");
+                let Some(src) = cache.reduced_source(&app.session, &sample, rkey(&sample), k, doc_bounds) else { return };
+                let mut buf = src.sample(reduced, &map);
+                if overlay.blend != "normal" {
+                    let Some(under) = cache.reduced_source(&app.session, "all", rkey("all"), k, doc_bounds) else { return };
+                    let under = under.sample(reduced, &under_map);
+                    for (px, d) in buf.px.iter_mut().zip(&under.px) {
+                        *px = overlay_blend(&overlay.blend, *px, *d);
+                    }
+                }
+                buf
+            }
         };
         if overlay.invert {
             for px in &mut buf.px {
@@ -198,42 +333,20 @@ fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &Vie
                 }
             }
         }
-        // Darken, Lighten and Difference mix the source with the image under the brush (the
-        // composite, whatever Sample reads), so Difference turns black where they line up.
-        if overlay.blend != "normal" {
-            let Ok(under) = photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, sample_rect, &here, "all", wrap) else {
-                return;
-            };
-            for (px, d) in buf.px.iter_mut().zip(&under.px) {
-                *px = overlay_blend(&overlay.blend, *px, *d);
+        // The tip's coverage at the same reduction.
+        if let Some(dab) = &dab {
+            for (px, c) in buf.px.iter_mut().zip(cache.coverage(dab, k, reduced)) {
+                px[3] *= c.clamp(0.0, 1.0);
             }
         }
-        if let Some(cov) = &cov {
-            if full {
-                for (px, c) in buf.px.iter_mut().zip(cov) {
-                    px[3] *= c.clamp(0.0, 1.0);
-                }
-            } else {
-                // The stride sample: each texel takes the coverage at its block's centre.
-                let (w, h, rw) = (rect.width() as usize, rect.height() as usize, sample_rect.width() as usize);
-                let ku = k as usize;
-                for (i, px) in buf.px.iter_mut().enumerate() {
-                    let (x, y) = (((i % rw) * ku + ku / 2).min(w - 1), ((i / rw) * ku + ku / 2).min(h - 1));
-                    px[3] *= cov.get(y * w + x).copied().unwrap_or(0.0).clamp(0.0, 1.0);
-                }
-            }
-        }
-        let reduced = if full && k > 1 { box_reduce(&buf, k) } else { buf };
-        let image = display_image(display.as_deref(), &reduced);
-        // The texture covers whole blocks of `k`: a partial last block extends the rectangle.
-        let covered = DRect::new(rect.x0, rect.y0, rect.x0 + (reduced.rect.width() * k) as i32, rect.y0 + (reduced.rect.height() * k) as i32);
+        let image = display_image(display.as_deref(), &buf);
         let options = canvas_texture_options(k);
         match cache.texture.as_mut() {
             Some((t, r)) => {
                 t.set(image, options);
-                *r = covered;
+                *r = rect;
             }
-            None => cache.texture = Some((painter.ctx().load_texture("clone-preview", image, options), covered)),
+            None => cache.texture = Some((painter.ctx().load_texture("clone-preview", image, options), rect)),
         }
         cache.key = key;
     }
@@ -7313,6 +7426,78 @@ mod tests {
         app.session.presets.clone.overlay.auto_hide = true;
         let (_, shapes) = clone_overlay_draw(&mut app, &ctx, &clone_overlay_view(1.0), [34.0, 34.0]);
         assert!(shapes.iter().all(|s| !matches!(s, egui::Shape::Mesh(_))), "Auto Hide hides it while painting");
+    }
+
+    /// Past the overlay's budget (tests: 256 × 256 texels), the overlay comes from the reduced
+    /// source instead of disappearing: the default clone mapping over a 300 × 300 document seen
+    /// at 25 % is drawn, from a texture within the budget, with the source's own pixels.
+    #[test]
+    fn clone_overlay_past_its_budget_comes_from_a_reduced_source() {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 300, "height": 300})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.session
+            .edit("paint", |doc, a| {
+                let s = doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap();
+                s.fill_rect(DRect::new(0, 0, 150, 300), &[1.0, 0.0, 0.0, 1.0]);
+                s.fill_rect(DRect::new(150, 0, 300, 300), &[0.0, 0.0, 1.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.run("cloneSource.set", json!({"source": [150, 150]})).unwrap();
+        app.run("cloneSource.overlay", json!({"clipped": false})).unwrap();
+        app.ui.tool = Tool::CloneStamp;
+        app.session.tools.brush.size = 20.0;
+        // 100 × 100 points at 25 %: the whole 300 × 300 document is on screen (90 000 px > the budget).
+        let xf = ViewXform {
+            rect: Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0)),
+            zoom: 0.25,
+            center: [150.0, 150.0],
+            flip: false,
+            rotation: 0.0,
+            aspect: 1.0,
+        };
+        let (image, shapes) = clone_overlay_draw(&mut app, &ctx, &xf, [150.0, 150.0]);
+        assert!(shapes.iter().any(|s| matches!(s, egui::Shape::Mesh(_))), "the overlay is drawn");
+        let covered = app.clone_preview.as_ref().unwrap().texture.as_ref().unwrap().1;
+        assert_eq!(covered, DRect::new(0, 0, 300, 300), "{covered:?}");
+        let (image, _) = image.expect("the overlay uploads a texture");
+        assert!((image.width() * image.height()) as u64 <= CLONE_OVERLAY_BUDGET, "{:?} within the budget", image.size);
+        assert_eq!(image.width() as u32 * 4, covered.width(), "four document pixels per texel: {:?}", image.size);
+        // The source under the pointer (identity offset): red on the left, blue on the right.
+        let texel = |x: usize, y: usize| image.pixels[y * image.width() + x];
+        assert_eq!(texel(10, 37), Color32::from_rgb(255, 0, 0), "{:?}", texel(10, 37));
+        assert_eq!(texel(65, 37), Color32::from_rgb(0, 0, 255), "{:?}", texel(65, 37));
+        assert!(app.clone_preview.as_ref().is_some_and(|c| !c.reduced.is_empty()), "built from the reduced source");
+    }
+
+    /// A tip larger than the budget is rasterized at the overlay's reduction, bounded, and only
+    /// once per position: repeated draws with nothing changed rebuild neither the coverage nor
+    /// the texture.
+    #[test]
+    fn clone_overlay_rasterizes_a_large_tip_once_and_bounded() {
+        let ctx = egui::Context::default();
+        let mut app = clone_overlay_app(0.0);
+        app.session.tools.brush.size = 400.0;
+        let xf = clone_overlay_view(1.0);
+        let (image, shapes) = clone_overlay_draw(&mut app, &ctx, &xf, [32.0, 32.0]);
+        assert!(shapes.iter().any(|s| matches!(s, egui::Shape::Mesh(_))), "the overlay is drawn");
+        let cache = app.clone_preview.as_ref().unwrap();
+        let covered = cache.texture.as_ref().unwrap().1;
+        assert!(covered.contains(32, 32) && covered.width() >= 400, "the tip's reach: {covered:?}");
+        let (image, _) = image.expect("the overlay uploads a texture");
+        assert!((image.width() * image.height()) as u64 <= CLONE_OVERLAY_BUDGET, "{:?} within the budget", image.size);
+        let cov = cache.footprint.as_ref().map(|(_, c)| c.len()).unwrap_or(0);
+        assert!(cov > 0 && cov as u64 <= CLONE_OVERLAY_BUDGET, "the coverage is rasterized reduced: {cov} samples");
+        assert_eq!(cache.footprint_builds, 1);
+        let centre = image.pixels[(image.height() / 2) * image.width() + image.width() / 2].a();
+        assert!(centre > 200, "the source shows under the tip's centre: {centre}");
+        let (again, _) = clone_overlay_draw(&mut app, &ctx, &xf, [32.0, 32.0]);
+        assert!(again.is_none(), "nothing changed: no new texture");
+        assert_eq!(app.clone_preview.as_ref().unwrap().footprint_builds, 1, "nothing changed: the tip is not rasterized again");
+        clone_overlay_draw(&mut app, &ctx, &xf, [40.0, 32.0]);
+        assert_eq!(app.clone_preview.as_ref().unwrap().footprint_builds, 2, "a new position rasterizes the tip once more");
     }
 
     #[test]

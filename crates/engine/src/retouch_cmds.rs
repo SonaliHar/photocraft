@@ -162,23 +162,69 @@ fn sample_layers(p: &Value, cmd: &str) -> Result<SampleLayers> {
     }
 }
 
-/// Composite pixels of `rect` in `fmt` (native channels): the whole document, or the target layer
-/// and everything below it.
-pub(crate) fn composite_region(pre: &Document, id: Option<LayerId>, which: SampleLayers, rect: Rect, fmt: PixelFormat) -> Region {
+/// The document `which` reads, for a compositor render: the whole document; the target layer and
+/// everything below it; or the target layer alone as its pixels are (full opacity, Normal, no
+/// style, no masks, unclipped, its groups likewise), which the compositor then shows as
+/// [`Region::read`] of the layer would.
+fn source_document(pre: &Document, id: Option<LayerId>, which: SampleLayers) -> Document {
     let mut doc = pre.clone();
-    if which == SampleLayers::CurrentAndBelow
-        && let Some(id) = id
-    {
-        // Hide everything composited after (above) the target in the bottom-to-top walk.
-        let walk: Vec<(Vec<usize>, LayerId)> = pre.walk().into_iter().map(|(p, _, l)| (p, l.id)).collect();
-        if let Some(pos) = walk.iter().position(|(_, l)| *l == id) {
-            for (path, _) in &walk[pos + 1..] {
-                if let Some(l) = doc.layer_at_mut(path) {
-                    l.visible = false;
+    let Some(id) = id else { return doc };
+    let walk: Vec<(Vec<usize>, LayerId)> = pre.walk().into_iter().map(|(p, _, l)| (p, l.id)).collect();
+    match which {
+        SampleLayers::All => {}
+        SampleLayers::CurrentAndBelow => {
+            // Hide everything composited after (above) the target in the bottom-to-top walk.
+            if let Some(pos) = walk.iter().position(|(_, l)| *l == id) {
+                for (path, _) in &walk[pos + 1..] {
+                    if let Some(l) = doc.layer_at_mut(path) {
+                        l.visible = false;
+                    }
                 }
             }
         }
+        SampleLayers::Current => {
+            let target = walk.iter().find(|(_, l)| *l == id).map(|(p, _)| p.clone()).unwrap_or_default();
+            for (path, _) in &walk {
+                let on_the_way = path.len() <= target.len() && target.starts_with(path);
+                let Some(l) = doc.layer_at_mut(path) else { continue };
+                if !on_the_way {
+                    l.visible = false;
+                    continue;
+                }
+                l.visible = true;
+                l.opacity = 1.0;
+                l.fill_opacity = 1.0;
+                l.blend = if path.len() == target.len() { photocraft_color::BlendMode::Normal } else { photocraft_color::BlendMode::PassThrough };
+                l.effects.enabled = false;
+                l.clipped = false;
+                l.mask = None;
+                l.vector_mask = None;
+            }
+        }
     }
+    doc
+}
+
+/// The clone source reduced to `w × h` pixels over the document's bounds: what `sampleLayer` reads
+/// (the active layer's own pixels, the composite up to it, or the whole composite), rendered by
+/// the compositor's reduction (`render_reduced`, in bands) so memory is bounded by `w × h` whatever
+/// the document's size. The Clone Source overlay samples it when the full-resolution overlay would
+/// pass its budget (a zoomed-out view, a very large tip).
+pub fn clone_source_reduced(s: &Session, sample_layer: &str, w: u32, h: u32) -> Result<photocraft_compose::Buffer> {
+    if w == 0 || h == 0 || w > 4096 || h > 4096 || u64::from(w) * u64::from(h) > 4 * 1024 * 1024 {
+        return Err(bad("clone.preview", "reduced source exceeds its budget"));
+    }
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let id = d.active_layer.ok_or_else(|| bad("clone.preview", "no active layer"))?;
+    d.doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad("clone.preview", "no pixel surface"))?;
+    let which = sample_layers(&json!({"sampleLayer": sample_layer}), "clone.preview")?;
+    Ok(photocraft_compose::render_reduced(&source_document(&d.doc, Some(id), which), w, h))
+}
+
+/// Composite pixels of `rect` in `fmt` (native channels): the whole document, or the target layer
+/// and everything below it.
+pub(crate) fn composite_region(pre: &Document, id: Option<LayerId>, which: SampleLayers, rect: Rect, fmt: PixelFormat) -> Region {
+    let doc = source_document(pre, id, which);
     let buf = photocraft_compose::render(&doc, rect);
     let n = fmt.channels();
     let mut out = Region::new(rect, n);
