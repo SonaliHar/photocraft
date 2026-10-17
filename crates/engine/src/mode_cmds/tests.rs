@@ -120,24 +120,60 @@ fn rotate_arbitrary_rotates_grouped_locked_children_and_preserves_lock() {
     s.execute("edit.undo", json!({})).unwrap();
     s.execute("image.imageRotation.90cw", json!({})).unwrap();
     let d_cw = doc(&s);
-    assert_eq!(photocraft_compose::flatten(&d_arb).px, photocraft_compose::flatten(d_cw).px);
+    assert_eq!(photocraft_compose::flatten(&d_arb).unwrap().px, photocraft_compose::flatten(d_cw).unwrap().px);
 }
 
 #[test]
 fn flattened_mode_pixels_match_the_allocating_conversion_at_every_channel_count() {
-    let px = [[0.0, 0.25, 0.75, 0.0], [0.9, 0.3, 0.2, 0.2], [0.1, 0.7, 0.4, 0.7], [1.0; 4]];
-    for mode in [ColorMode::Indexed, ColorMode::Bitmap, ColorMode::Duotone] {
-        let mut document = Document::with_background("mode", Size::new(2, 2), ColorMode::Rgb, SampleType::F32, photocraft_doc::Color::WHITE);
-        let mut active = None;
-        single_layer(&mut document, &mut active, mode, &px, "result", false);
-        let fmt = document.pixel_format();
-        let mut expected = Surface::new(fmt);
-        let converted: Vec<f32> = px.iter().flat_map(|q| photocraft_raster::from_rgba(&fmt, *q)).collect();
-        expected.write_region(document.bounds(), &converted);
-        let actual = document.layers[0].surface().unwrap();
-        assert_eq!(actual.to_interleaved(document.bounds()), expected.to_interleaved(document.bounds()), "{mode:?}");
-        assert_eq!(document.depth, SampleType::U8);
-        assert_eq!(active, Some(document.layers[0].id));
+    // Exercise the live mode handlers, not the removed legacy single_layer helper.
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32, SampleType::U32, SampleType::F64] {
+        for (mode, command, params) in [
+            (ColorMode::Indexed, "image.mode.indexedColor", json!({"palette":"exact","colors":4,"forced":"none","dither":"none","transparency":false})),
+            (ColorMode::Bitmap, "image.mode.bitmap", json!({"method":"threshold"})),
+            (ColorMode::Duotone, "image.mode.duotone", json!({})),
+        ] {
+            let input_mode = if mode == ColorMode::Indexed { ColorMode::Rgb } else { ColorMode::Grayscale };
+            let mut document = Document::new("mode", Size::new(2, 2), input_mode, sample);
+            let format = document.pixel_format();
+            let px = [0.0f32, 0.25, 0.75, 1.0]
+                .into_iter()
+                .zip([0.0, 0.2, 0.7, 1.0])
+                .map(|(v, a)| [v, v, v, if mode == ColorMode::Duotone { a } else { 1.0 }])
+                .collect::<Vec<_>>();
+            let converted: Vec<f32> = px.iter().flat_map(|q| photocraft_raster::from_rgba(&format, *q)).collect();
+            let mut surface = Surface::new(format);
+            surface.write_region(document.bounds(), &converted);
+            let original_native = surface.to_interleaved(document.bounds());
+            document.layers.push(Layer::new("Input", LayerContent::Raster(surface)));
+            let original = document.clone();
+            let mut session = Session::new();
+            session.add_document(document, None).unwrap();
+            if matches!(sample, SampleType::U32 | SampleType::F64) {
+                assert!(session.execute(command, params).is_err(), "unsupported {mode:?}/{sample:?}");
+                assert_eq!(*session.active().unwrap().doc, original);
+                continue;
+            }
+            session.execute(command, params).unwrap();
+            let state = session.active().unwrap();
+            assert_eq!(state.doc.mode, mode);
+            assert_eq!(state.doc.layers.len(), 1);
+            let actual = state.doc.layers[0].surface().unwrap();
+            if mode == ColorMode::Duotone {
+                // Duotone is metadata over the original Gray native plane.
+                assert_eq!(state.doc.depth, sample);
+                assert_eq!(actual.format(), format);
+                assert_eq!(actual.to_interleaved(state.doc.bounds()), original_native);
+            } else {
+                assert_eq!(state.doc.depth, SampleType::U8);
+                let expected_values = if mode == ColorMode::Bitmap { [0.0, 0.0, 1.0, 1.0] } else { [0.0, 64.0 / 255.0, 191.0 / 255.0, 1.0] };
+                let mut expected = Surface::new(state.doc.pixel_format());
+                let pixels: Vec<f32> = expected_values.into_iter().flat_map(|v| photocraft_raster::from_rgba(&expected.format(), [v, v, v, 1.0])).collect();
+                expected.write_region(state.doc.bounds(), &pixels);
+                assert_eq!(actual.format(), expected.format());
+                assert_eq!(actual.to_interleaved(state.doc.bounds()), expected.to_interleaved(state.doc.bounds()), "{mode:?}/{sample:?}");
+            }
+            assert_eq!(state.active_layer, Some(state.doc.layers[0].id));
+        }
     }
 }
 
@@ -555,7 +591,7 @@ fn duotone_to_colour_modes_keeps_the_ink_colours() {
                 s.execute("image.mode.duotone", cfg.clone()).unwrap();
                 let before = s.active().unwrap().doc.clone();
                 let gray: Vec<f32> = (0..16).map(|x| before.layers[0].surface().unwrap().pixel(x, 1)[0]).collect();
-                let shown = photocraft_compose::render(&display_document(&before).unwrap(), Rect::from_xywh(0, 1, 16, 1)).px;
+                let shown = photocraft_compose::render(&display_document(&before).unwrap(), Rect::from_xywh(0, 1, 16, 1)).unwrap().px;
                 s.execute(&format!("image.mode.{mode}"), json!({})).unwrap();
                 let d = doc(&s);
                 assert!(d.duotone.is_none(), "{ctx}");

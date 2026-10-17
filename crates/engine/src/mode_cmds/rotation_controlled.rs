@@ -127,11 +127,8 @@ fn visit(layers: &[Layer], depth: usize, count: &mut usize, control: &Interrupt<
     for layer in layers {
         poll(control)?;
         *count = count.checked_add(1).filter(|n| *n <= 100000).ok_or_else(|| bad("rotation item count limit"))?;
-        // The legacy whole-image route clears only top-level position/all locks;
-        // nested Free Transform consumers still honor their own locks.
-        if depth > 0 && (layer.locks.all || (layer.locks.position && layer.name != "Background")) {
-            return Err(bad("nested layer is locked"));
-        }
+        // A whole-image coordinate transform preserves nested layer locks.
+        // Per-layer Free Transform still checks those locks independently.
         if layer.indexed_source.is_some() || layer.video.is_some() {
             return Err(bad("original indexed/video geometry is not qualified"));
         }
@@ -494,6 +491,8 @@ fn background(
     poll(control)?;
     Ok(output)
 }
+// Keep the admitted geometry, native format, background and original control explicit without a new heap-owning context.
+#[allow(clippy::too_many_arguments)]
 fn move_pixels(
     layers: &mut [Layer],
     depth: usize,
@@ -510,11 +509,6 @@ fn move_pixels(
     for layer in layers {
         poll(control)?;
         let is_background = depth == 0 && layer.name == "Background" && layer.locks.position && matches!(layer.content, LayerContent::Raster(_));
-        if depth > 0 && layer.name == "Background" && layer.locks.position {
-            layer.locks.position = false;
-            layer.locks.transparency = false;
-            layer.name = "Layer 0".into();
-        }
         match &mut layer.content {
             LayerContent::Group(group) => move_pixels(&mut group.children, depth + 1, h, parameters, canvas, format, bg, control)?,
             LayerContent::Raster(surface) => {
@@ -623,7 +617,8 @@ pub(super) fn run(session: &mut Session, value: &Value) -> Result<Value> {
             ctx.stage(0.95, 1.0, "Rotate Canvas", |control| {
                 poll(control)?;
                 let size = document.size;
-                session.edit_with_interrupt("Rotate Canvas", control, move |current, _| {
+                let (_, sampler, _) = mapping(baseline.size, parameters.degrees)?;
+                session.edit_with_sampler_map("Rotate Canvas", control, Some(sampler), move |current, _| {
                     poll(control)?;
                     *current = document;
                     Ok(())

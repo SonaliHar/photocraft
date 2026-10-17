@@ -208,7 +208,7 @@ fn gray_exr_round_trip_is_linear() {
     assert!((v[0] - 0.2159).abs() < 1e-3, "stored linear: {v:?}");
     assert!(close(shown(&s, &back), shown(&s, &d), 1.0), "{:?} vs {:?}", shown(&s, &back), shown(&s, &d));
     // Opening keeps it linear without a mismatch prompt.
-    let (_, report) = s.open_document(back, None);
+    let (_, report) = s.open_document(back, None).unwrap();
     assert_eq!(report["action"], "kept");
     assert!(report.get("ask").is_none());
 }

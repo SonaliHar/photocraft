@@ -43,10 +43,10 @@ fn validate_wire(params: &Value) -> Result<usize> {
                 .as_object()
                 .filter(|object| object.len() <= 3 && object.keys().all(|key| matches!(key.as_str(), "name" | "color" | "curve")))
                 .ok_or_else(|| error("ink must be a bounded name/color/curve object"))?;
-            if let Some(name) = object.get("name") {
-                if !name.as_str().is_some_and(|name| name.len() <= MAX_NAME && !name.contains('\0')) {
-                    return Err(error("ink name exceeds the supported string domain"));
-                }
+            if let Some(name) = object.get("name")
+                && !name.as_str().is_some_and(|name| name.len() <= MAX_NAME && !name.contains('\0'))
+            {
+                return Err(error("ink name exceeds the supported string domain"));
             }
             if let Some(color) = object.get("color") {
                 let bounded = match color {

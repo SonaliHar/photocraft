@@ -81,10 +81,11 @@ fn parse(session: &Session, params: &Value) -> Result<BitmapMethod> {
             .map(|value| value.unwrap_or(default))
     };
     let frequency = numeric("frequency", 53.)?;
-    let angle = numeric("angle", 45.)? as f32;
-    if !angle.is_finite() {
-        return Err(error("Bitmap angle exceeds the legacy f32 domain"));
+    let angle = numeric("angle", 45.)?;
+    if !(-180.0..=180.0).contains(&angle) {
+        return Err(error("Bitmap angle must be between -180 and 180 degrees"));
     }
+    let angle = angle as f32;
     let shape = named(params, "shape", "round")?;
     if !matches!(shape, "round" | "ellipse" | "line" | "square" | "diamond" | "cross") {
         return Err(error("unknown halftone shape"));
@@ -149,10 +150,10 @@ fn layers(values: &[Layer], depth: usize, count: &mut u64, tiles: &mut u64, cont
         if let Some(cache) = layer.surface() {
             surface(cache, tiles, control)?;
         }
-        if let LayerContent::Smart(smart) = &layer.content {
-            if let Some(mask) = &smart.filter_mask {
-                surface(&mask.surface, tiles, control)?;
-            }
+        if let LayerContent::Smart(smart) = &layer.content
+            && let Some(mask) = &smart.filter_mask
+        {
+            surface(&mask.surface, tiles, control)?;
         }
         if let LayerContent::Group(group) = &layer.content {
             layers(&group.children, depth + 1, count, tiles, control)?;

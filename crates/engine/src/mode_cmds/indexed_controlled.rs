@@ -60,11 +60,15 @@ fn settings(params: &Value) -> Result<Settings> {
             Some(value) => value.as_bool().ok_or_else(|| bad(CMD, "transparency/canonicalIndexed must be boolean")),
         }
     };
+    let colors = number("colors", 256.)?;
+    if !(2.0..=256.0).contains(&colors) || colors.fract() != 0.0 {
+        return Err(bad(CMD, "colors must be an integer between 2 and 256"));
+    }
     Ok(Settings {
         kind: PaletteKind::from_id(text("palette", "selective")?).ok_or_else(|| bad(CMD, "unknown palette"))?,
         forced: parse_forced(text("forced", "blackWhite")?).ok_or_else(|| bad(CMD, "unknown forced colors"))?,
         dither: parse_dither(text("dither", "diffusion")?).ok_or_else(|| bad(CMD, "unknown dither"))?,
-        colors: (number("colors", 256.)?.clamp(2., 256.) as f32) as usize,
+        colors: colors as usize,
         amount: (number("amount", 75.)?.clamp(0., 100.) as f32) / 100.,
         transparency: boolean("transparency", true)?,
         canonical: boolean("canonicalIndexed", false)?,
@@ -144,7 +148,10 @@ fn source_envelope(doc: &Document, control: &Interrupt<'_>) -> Result<()> {
     }
     for channel in &doc.channels {
         poll(control)?;
-        if matches!(channel.surface.format().sample, SampleType::U32 | SampleType::F64) {
+        let format = channel.surface.format();
+        // Ordinary Gray F64 auxiliary channels use the native f64-to-U8 converter
+        // below. Source/current documents and wide layer pixels remain excluded.
+        if format.sample == SampleType::U32 || format.sample == SampleType::F64 && format.mode != ColorMode::Grayscale {
             return Err(bad(CMD, "wide saved channel conversion is not qualified"));
         }
     }
@@ -198,11 +205,17 @@ fn admit(doc: &Document, config: Settings, control: &Interrupt<'_>) -> Result<u6
     .map_err(|e| error(control, e))?;
     for channel in &doc.channels {
         poll(control)?;
-        if matches!(channel.surface.format().sample, SampleType::U32 | SampleType::F64) {
+        let format = channel.surface.format();
+        // Ordinary Gray F64 auxiliary channels use the native f64-to-U8 converter
+        // below. Source/current documents and wide layer pixels remain excluded.
+        if format.sample == SampleType::U32 || format.sample == SampleType::F64 && format.mode != ColorMode::Grayscale {
             return Err(bad(CMD, "wide saved channel conversion is not qualified"));
         }
     }
     let preparation = photocraft_io::NativeSaveLimits::default().preparation;
+    // Runtime native bytes include each saved channel's actual sample width.
+    // Gray-U8 output is no larger than admitted Gray-F64 input; retained/clone
+    // envelopes below cover both planes, and work prices all physical input bytes.
     let payload = photocraft_io::retained_native_payload_bytes(doc, preparation, control).map_err(|e| error(control, e))? as u64;
     let model = photocraft_io::retained_native_model_bytes(doc, preparation, control).map_err(|e| error(control, e))? as u64;
     let raster = crate::DocumentSnapshot::resident_raster_footprint_of(doc, control)?;

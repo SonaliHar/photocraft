@@ -56,7 +56,7 @@ fn benchmark_large_group_merge() {
     let expected_area = photocraft_compose::layer_bounds(&doc.layers[0], doc.bounds()).intersect(&doc.bounds());
 
     let start = Instant::now();
-    let reference = photocraft_compose::flatten(&doc);
+    let reference = photocraft_compose::flatten(&doc).unwrap();
     let reference_data: Vec<f32> = reference.px.iter().flat_map(|p| photocraft_raster::from_rgba(&fmt, *p)).collect();
     let mut reference_surface = Surface::new(fmt);
     reference_surface.write_region(doc.bounds(), &reference_data);
@@ -64,7 +64,7 @@ fn benchmark_large_group_merge() {
     let reference_time = start.elapsed();
 
     let start = Instant::now();
-    let optimized = composite_layers(&doc, fmt, None);
+    let optimized = composite_layers(&doc, fmt, None).unwrap();
     let optimized_time = start.elapsed();
     assert_eq!(reference_surface.read_region(expected_area), optimized.read_region(expected_area));
     println!("#1561 5000x7073, 4x 1000x1000 layers: full-canvas {:?}, bounded/banded {:?}", reference_time, optimized_time);
@@ -110,7 +110,7 @@ fn tiled_adjustment_matches_one_pass_over_the_content() {
             for sel in [None, Some(&soft)] {
                 let want = one_pass(&s, &adj, sel, fmt.mode);
                 let mut got = s.clone();
-                adjust_surface(&mut got, &adj, sel, fmt.mode);
+                adjust_surface(&mut got, &adj, sel, fmt.mode).unwrap();
                 assert!(want != s, "{kind} {fmt:?}: the adjustment changes the layer");
                 assert!(got == want, "{kind} {fmt:?} selection {}: tiled result differs", sel.is_some());
             }
@@ -121,7 +121,7 @@ fn tiled_adjustment_matches_one_pass_over_the_content() {
 #[test]
 fn an_empty_layer_is_left_alone() {
     let mut s = Surface::new(PixelFormat::RGBA8);
-    adjust_surface(&mut s, &Adjustment::Invert, None, ColorMode::Rgb);
+    adjust_surface(&mut s, &Adjustment::Invert, None, ColorMode::Rgb).unwrap();
     assert_eq!(s.tile_count(), 0);
 }
 
@@ -189,7 +189,7 @@ fn tiled_clear_and_fill_match_one_pass_over_the_area() {
             let area = sel.map_or(canvas, |m| m.content_bounds());
             let what = format!("{fmt:?} selection {}", sel.is_some());
             let mut got = s.clone();
-            try_clear_surface(&mut got, area, sel).unwrap();
+            try_clear_surface(&mut got, area, sel, &photocraft_raster::Interrupt::NONE).unwrap();
             assert!(same_pixels(&got, &reference_fill_or_clear(&s, area, sel, None)), "clear {what}");
             if fmt.alpha {
                 assert!(!same_pixels(&got, &s), "clear {what} changes the layer");
@@ -215,7 +215,7 @@ fn clear_leaves_unselected_tiles_shared_and_drops_cleared_ones() {
     sel.write_pixel(600, 300, &[0.0]);
     sel.write_pixel(601, 301, &[0.5]);
     let mut got = s.clone();
-    try_clear_surface(&mut got, Rect::new(0, 0, 602, 302), Some(&sel)).unwrap();
+    try_clear_surface(&mut got, Rect::new(0, 0, 602, 302), Some(&sel), &photocraft_raster::Interrupt::NONE).unwrap();
     let tile = |s: &Surface, tx, ty| s.tile(photocraft_geom::TileCoord::new(tx, ty)).cloned();
     assert!(tile(&got, 0, 0).is_none(), "a fully cleared tile is no tile");
     let (a, b) = (tile(&s, 2, 1).unwrap(), tile(&got, 2, 1).unwrap());
@@ -253,7 +253,7 @@ fn invert_in_a_lab_document_mirrors_l_a_and_b() {
         let mut s = Surface::new(fmt);
         let r = Rect::new(0, 0, 2, 2);
         s.write_region(r, &(0..4).flat_map(|_| from_rgba(&fmt, [c[0], c[1], c[2], 1.0])).collect::<Vec<_>>());
-        adjust_surface(&mut s, &Adjustment::Invert, None, ColorMode::Lab);
+        adjust_surface(&mut s, &Adjustment::Invert, None, ColorMode::Lab).unwrap();
         let px = s.read_region(Rect::new(1, 1, 2, 2));
         let rgba = photocraft_raster::to_rgba(&fmt, &px);
         let got = srgb_to_lab([rgba[0], rgba[1], rgba[2]]);
@@ -308,7 +308,7 @@ fn adjusted_pixel(fmt: PixelFormat, ch: &[f32], adj: &Adjustment, k: Option<f32>
     if let Some(k) = k {
         sel.write_region(unit, &[k]);
     }
-    adjust_surface(&mut s, adj, k.map(|_| &sel), fmt.mode);
+    adjust_surface(&mut s, adj, k.map(|_| &sel), fmt.mode).unwrap();
     s.read_region(unit)
 }
 

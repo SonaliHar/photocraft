@@ -54,7 +54,7 @@ fn upper_layer() -> Layer {
 
 fn session(doc: Document) -> Session {
     let mut s = Session::new();
-    s.add_document(doc, None);
+    s.add_document(doc, None).unwrap();
     s
 }
 
@@ -166,4 +166,33 @@ fn compositor_flatten_separates_through_the_documents_profile() {
     // The synthetic profile's small tables don't round-trip exactly; the built-in profile's
     // separation lands about 0.08 off on average.
     assert!(mean < 0.03, "flattening shifted the printed colour by {mean} on average");
+}
+
+#[test]
+fn merge_down_cmyk_keeps_translated_native_ink_and_original_layers() {
+    let doc = cmyk_doc();
+    let area = Rect::new(-2, -1, 2, 1);
+    let mut below = Surface::new(PixelFormat::new(ColorMode::Cmyk, SampleType::U16, false));
+    below.fill_rect(area, &[0.2, 0.4, 0.6, 0.3]);
+    let mut above = Surface::new(PixelFormat::new(ColorMode::Cmyk, SampleType::U16, true));
+    above.fill_rect(area, &[0.8, 0.1, 0.25, 0.05, 0.5]);
+    let mut lower = Layer::new("lower", LayerContent::Raster(below));
+    lower.locks.position = true;
+    let upper = Layer::new("upper", LayerContent::Raster(above));
+    let before = (lower.clone(), upper.clone());
+    let b = lower.surface().unwrap().pixel(-2, -1);
+    let a = upper.surface().unwrap().pixel(-2, -1);
+    let alpha = a[4];
+    let want: Vec<f32> = (0..4).map(|c| a[c] * alpha + b[c] * (1.0 - alpha)).collect();
+    let merged = crate::pixels::merge_down(&doc, &lower, &upper).unwrap();
+    assert_eq!((lower, upper), before, "source layers and native history unchanged");
+    assert_eq!(merged.id, before.0.id);
+    assert_eq!(merged.locks, before.0.locks);
+    let surface = merged.surface().unwrap();
+    assert_eq!(surface.format().mode, ColorMode::Cmyk);
+    assert_eq!(surface.format().sample, SampleType::U16);
+    assert_eq!(surface.content_bounds(), area, "current translated/offcanvas area preserved");
+    for (got, want) in surface.pixel(-2, -1).iter().take(4).zip(&want) {
+        assert!((got - want).abs() <= 1.0 / 65535.0);
+    }
 }

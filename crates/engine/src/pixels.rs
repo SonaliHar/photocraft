@@ -3,7 +3,7 @@
 use photocraft_compose::{Buffer, adjust};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, TILE_SIZE};
-use photocraft_raster::{Surface, to_rgba, from_rgba};
+use photocraft_raster::{Surface, to_rgba};
 
 /// Composite `layers` inside their visible composite bounds (effects included) and write the result directly into a
 /// tiled surface. Large merges used to hold both a full-canvas RGBA buffer and a second converted
@@ -30,7 +30,7 @@ pub fn composite_layers(solo: &Document, format: photocraft_color::PixelFormat, 
 
 /// [`composite_layers`] without cropping to the canvas: pixels of the layers that lie outside it are kept
 /// (merging layers must not lose them, #5067).
-pub fn composite_layers_uncropped(solo: &Document, format: photocraft_color::PixelFormat) -> Surface {
+pub fn composite_layers_uncropped(solo: &Document, format: photocraft_color::PixelFormat) -> crate::Result<Surface> {
     let canvas = solo.bounds();
     // The canvas grown to every visible layer's content and effects, so no layer is clipped by `composite_bounds`.
     let reach = solo
@@ -53,14 +53,32 @@ pub fn composite_layers_uncropped(solo: &Document, format: photocraft_color::Pix
         .reduce(|a, b| a.union(&b))
         .unwrap_or(Rect::EMPTY);
     if area.is_empty() {
-        return Surface::new(format);
+        return Ok(Surface::new(format));
     }
-    photocraft_compose::composite_to_surface(solo, area, format, None)
+    Ok(photocraft_compose::composite_to_surface(solo, area, format, None)?)
 }
 
+/// Flatten a source into the destination's effective colour interpretation before quantizing.
+/// The source document and its original imported samples/provenance are unchanged.
+pub fn flattened_into(source: &Document, target: &Document) -> crate::Result<Surface> {
+    use photocraft_cms::{Intent, Transform};
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    let src_profile = crate::color_cmds::composite_profile(source);
+    let dst_profile = crate::color_cmds::document_profile(target);
+    let transform = Transform::new(&src_profile, &dst_profile, Intent::RelativeColorimetric, true)
+        .map_err(|e| crate::EngineError::Other(format!("cannot place image in destination colour space: {e}")))?;
+    let fmt = target.pixel_format();
+    if transform.inputs() != 3 || transform.outputs() != fmt.mode.color_channels() {
+        return Err(crate::EngineError::Other("cannot place image: destination profile does not match its pixel model".into()));
+    }
+    let float = photocraft_compose::flatten_to_surface(source, PixelFormat::new(ColorMode::Rgb, SampleType::F32, true), None)?;
+    let converted = crate::color_cmds::convert_surface(&float, ColorMode::Rgb, fmt, &transform)?;
+    converted.try_convert(fmt).map_err(|e| crate::EngineError::Other(e.to_string()))
+}
 /// Apply an adjustment destructively to a surface, weighted by an optional selection.
 /// Applies `adj` to a surface (any colour model and depth, via straight RGBA) through the
 /// selection; `mode` is the document's, for the tone transfer (e.g. Exposure in Grayscale).
+#[cfg(test)]
 pub fn adjust_surface(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface>, mode: photocraft_color::ColorMode) -> crate::Result<()> {
     let transfer = adjust::Transfer::for_document(mode, s.format().sample);
     adjust_surface_with_transfer(s, adj, selection, mode, transfer)
@@ -187,7 +205,7 @@ fn adjusted_with_transfer(
         (photocraft_color::SampleType::U16, Adjustment::Posterize { .. } | Adjustment::Threshold { .. }) => Some(fmt.sample),
         _ => None,
     };
-    adjust::apply_in(adj, &mut buf, adjust::Transfer::for_document(mode, fmt.sample), depth, mode);
+    adjust::apply_in(adj, &mut buf, transfer, depth, mode);
     mix_through_selection(&fmt, r, &orig.px, &buf.px, selection)
 }
 
@@ -276,7 +294,9 @@ pub(crate) fn mix_through_selection(
 /// Works tile by tile in parallel on the encoded pixels; a fully selected tile of an opaque fill
 /// that may set alpha becomes one shared solid tile.
 pub(crate) fn try_fill_surface(s: &mut Surface, area: Rect, color: [f32; 4], selection: Option<&Surface>, lock_transparency: bool) -> crate::Result<()> {
-    if matches!(s.format().sample,photocraft_doc::SampleType::U32|photocraft_doc::SampleType::F64){return Err(crate::EngineError::Other("ordinary fill does not support authoritative U32/F64 arithmetic".into()));}
+    if matches!(s.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64) {
+        return Err(crate::EngineError::Other("ordinary fill does not support authoritative U32/F64 arithmetic".into()));
+    }
     let fmt = s.format();
     // Coverage 1 of an opaque colour replaces the colour (and the alpha, unless it is kept).
     let opaque = color[3] == 1.0 && (!lock_transparency || !fmt.alpha) && selection.is_none_or(|m| m.format().sample != photocraft_color::SampleType::F32);
@@ -434,7 +454,9 @@ fn native_clear_weight(selection: Option<&Surface>, x: i32, y: i32) -> crate::Re
     let samples = samples.get_mut(..selection.channels()).ok_or_else(|| clear_error("invalid selection channels"))?;
     selection.try_read_pixel_f64(x, y, samples).map_err(clear_error)?;
     let weight = samples.first().copied().ok_or_else(|| clear_error("invalid selection channels"))?;
-    if !weight.is_finite() || !(0.0..=1.0).contains(&weight) { return Err(clear_error("invalid selection coverage")); }
+    if !weight.is_finite() || !(0.0..=1.0).contains(&weight) {
+        return Err(clear_error("invalid selection coverage"));
+    }
     Ok(weight)
 }
 
@@ -483,7 +505,9 @@ pub fn preflight_clear_surface(s: &Surface, area: Rect, selection: Option<&Surfa
                     let pixel = raw.get_mut(..s.format().bytes_per_pixel()).ok_or_else(|| clear_error("invalid pixel length"))?;
                     s.try_read_pixel_bytes(x, y, pixel).map_err(clear_error)?;
                     let alpha = photocraft_color::try_read_sample_f64(pixel, s.format().sample, s.format().mode.color_channels()).map_err(clear_error)?;
-                    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) { return Err(clear_error("invalid fractional clear alpha")); }
+                    if !alpha.is_finite() || !(0.0..=1.0).contains(&alpha) {
+                        return Err(clear_error("invalid fractional clear alpha"));
+                    }
                 }
             }
         }
@@ -497,7 +521,7 @@ pub fn try_clear_surface(s: &mut Surface, area: Rect, selection: Option<&Surface
     control.check().map_err(|_| crate::EngineError::Cancelled)?;
     if !matches!(s.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64) {
         try_clear_surface_ordinary(s, area, selection)?;
-        control.check().map_err(|_|crate::EngineError::Cancelled)?;
+        control.check().map_err(|_| crate::EngineError::Cancelled)?;
         return Ok(());
     }
     preflight_clear_surface(s, area, selection, control)?;
@@ -548,8 +572,12 @@ pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> crate::Result
     // The pair is read (and a CMYK one separated again) through the document's own profile.
     tmp.icc_profile = doc.icc_profile.clone();
     tmp.layers = stack;
-    // A Background stays canvas-sized; any other layer keeps the pixels outside the canvas (#5067).
-    let s = if doc.is_background(lower.id) { composite_layers(&tmp, format, None) } else { composite_layers_uncropped(&tmp, format) };
+    tmp.sample_encoding = doc.sample_encoding;
+    tmp.source_color_context = doc.source_color_context.clone();
+    // Preserve the previous fallible RGBA region admission before rendering.
+    photocraft_raster::checked_region_byte_len(area, photocraft_color::PixelFormat::RGBA32F)?;
+    // A Background stays canvas-sized; any other layer keeps pixels outside the canvas (#5067).
+    let s = if doc.is_background(lower.id) { composite_layers(&tmp, format, None)? } else { composite_layers_uncropped(&tmp, format)? };
     let mut merged = Layer::new(lower.name.clone(), LayerContent::Raster(s));
     merged.id = lower.id;
     merged.blend = lower.blend;
@@ -562,7 +590,7 @@ pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> crate::Result
     merged.clipped = lower.clipped && upper.clipped;
     merged.label = lower.label;
     merged.link_group = lower.link_group;
-    merged
+    Ok(merged)
 }
 
 #[cfg(test)]
@@ -619,61 +647,6 @@ mod imported_flatten_tests {
         assert!((merged.surface().unwrap().pixel(0, 0)[0] - 0.5).abs() < 2.0 / 65535.0);
         assert!(merged.import_compositing.is_none());
     }
-}
-
-fn adjusted_channels(s: &Surface, r: Rect, adj: &Adjustment, selection: Option<&Surface>) -> Vec<f32> {
-    let fmt = s.format();
-    let (n, colors) = (fmt.channels(), fmt.mode.color_channels());
-    let mut raw = s.read_region(r);
-    let w = (r.width() as usize).max(1);
-    let mut coverage = vec![1.0f32; w];
-    for (j, row) in raw.chunks_mut(w * n).enumerate() {
-        if let Some(sel) = selection {
-            sel.sample_row_strided(r.y0.saturating_add(j as i32), r.x0, 1, 0, &mut coverage);
-        }
-        for (px, &k) in row.chunks_exact_mut(n).zip(&coverage) {
-            if k <= 0.0 {
-                continue;
-            }
-            let p = to_rgba(&fmt, px);
-            let gray = photocraft_color::convert::rgb_to_gray([p[0], p[1], p[2]]);
-            let Some(ch) = px.get_mut(..colors) else { continue };
-            let mut out = [0.0f32; 4];
-            let Some(out) = out.get_mut(..colors) else { continue };
-            out.copy_from_slice(ch);
-            adjust::stored_channels(adj, fmt.mode, Some(fmt.sample), out, gray);
-            for (v, o) in ch.iter_mut().zip(out.iter()) {
-                *v += (o - *v) * k;
-            }
-        }
-    }
-    raw
-}
-
-pub(crate) fn mix_through_selection(
-    fmt: &photocraft_color::PixelFormat,
-    r: Rect,
-    orig: &[[f32; 4]],
-    edited: &[[f32; 4]],
-    selection: Option<&Surface>,
-) -> Vec<f32> {
-    let w = (r.width() as usize).max(1);
-    let mut out = Vec::with_capacity(orig.len() * fmt.channels());
-    // The selection's coverage (channel 0) one row at a time, each of its tiles looked up once
-    // per row rather than once per pixel.
-    let mut coverage = vec![1.0f32; w];
-    for (j, (edited_row, orig_row)) in edited.chunks(w).zip(orig.chunks(w)).enumerate() {
-        if let Some(sel) = selection {
-            sel.sample_row_strided(r.y0.saturating_add(j as i32), r.x0, 1, 0, &mut coverage);
-        }
-        for ((a, o), k) in edited_row.iter().zip(orig_row).zip(&coverage) {
-            let mixed: [f32; 4] = std::array::from_fn(|c| o[c] + (a[c] - o[c]) * k);
-            let mut enc = [0.0f32; 8];
-            let m = photocraft_raster::from_rgba_into(fmt, mixed, &mut enc);
-            out.extend_from_slice(&enc[..m]);
-        }
-    }
-    out
 }
 
 #[cfg(test)]
