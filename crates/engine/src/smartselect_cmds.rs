@@ -144,7 +144,12 @@ pub fn sampled_target(doc: &Document, layer: Option<LayerId>, all_layers: bool) 
 /// Object Finder (#4087): the object Object Selection would select at document point `(x, y)`,
 /// sampling `layer` (or the composite). Pure, so the UI can run it on a worker thread while the
 /// pointer hovers; `select.object` with `"point"` commits the same result.
-pub fn find_object(doc: &Document, layer: Option<LayerId>, all_layers: bool, x: f32, y: f32) -> Option<Region> {
+pub fn find_object(doc: &std::sync::Arc<Document>, layer: Option<LayerId>, all_layers: bool, x: f32, y: f32) -> Option<Region> {
+    // SAM 2 when its model is installed (a point on the background selects nothing, as below).
+    if let Some(found) = crate::sam_object::find(doc, layer, all_layers, &[crate::sam_object::Prompt::Point { x, y, positive: true }]) {
+        return found;
+    }
+    crate::sam_object::set_provider(crate::sam_object::Provider::Classical);
     with_doc_sampler(doc, layer, all_layers, |smp, doc| grabcut::object_at(smp, doc.bounds(), x, y, grabcut::OBJECT_AT_WORK_PX))
 }
 
@@ -264,7 +269,14 @@ fn object_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let all_layers = b(p, "sampleAllLayers", false);
     let d = s.active().ok_or(EngineError::NoDocument)?;
     check_sampled_pixels(&d.doc, d.active_layer, all_layers, rect)?;
-    let region = with_sampler(s, all_layers, |smp, doc| grabcut::object_select(smp, doc.bounds(), rect, 160_000))?;
+    let sam = crate::sam_object::find(&d.doc, d.active_layer, all_layers, &[crate::sam_object::Prompt::Box { x0: rect.x0 as f32, y0: rect.y0 as f32, x1: rect.x1 as f32, y1: rect.y1 as f32 }]);
+    let region = match sam {
+        Some(found) => found,
+        None => {
+            crate::sam_object::set_provider(crate::sam_object::Provider::Classical);
+            with_sampler(s, all_layers, |smp, doc| grabcut::object_select(smp, doc.bounds(), rect, 160_000))?
+        }
+    };
     apply(s, "Object Selection", region.as_ref(), mode(p, "replace"))
 }
 
@@ -745,6 +757,60 @@ mod tests {
         // Negative width/height (drag up-left) work too.
         s.execute("select.object", json!({"rect": [160, 140, -120, -120]})).unwrap();
         assert!(cov(&s, 100, 80) >= 0.5);
+    }
+
+    /// The real model: `PHOTOCRAFT_SAM2=1 PHOTOCRAFT_ML_DIR=<assets> cargo test -p photocraft-engine
+    /// --release sam2_live -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "needs the SAM 2 models and ONNX Runtime"]
+    fn sam2_live_click_and_box_select_the_disc() {
+        let (mut s, inside) = disc(8);
+        let t = std::time::Instant::now();
+        s.execute("select.object", json!({"point": [100, 80]})).unwrap();
+        eprintln!("first click (load + encode + decode + refine): {} ms, backend {:?}", t.elapsed().as_millis(), crate::sam_object::backend());
+        let v = sel_iou(&s, 200, 160, &inside);
+        assert!(v > 0.95, "click IoU {v}");
+        s.execute("select.deselect", json!({})).unwrap();
+        let t = std::time::Instant::now();
+        s.execute("select.object", json!({"point": [100, 80]})).unwrap();
+        eprintln!("second click (cached embedding): {} ms", t.elapsed().as_millis());
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("select.object", json!({"rect": [40, 20, 120, 120]})).unwrap();
+        let v = sel_iou(&s, 200, 160, &inside);
+        assert!(v > 0.95, "box IoU {v}");
+        // The background is no object.
+        s.execute("select.deselect", json!({})).unwrap();
+        let r = s.execute("select.object", json!({"point": [3, 3]})).unwrap();
+        assert_eq!(r["changed"], false, "background click: {r}");
+    }
+
+    /// Dumps a real photo's Object Selection for eyeballing (opt-in, needs the SAM 2 assets):
+    /// `PHOTOCRAFT_TEST_IMAGE=photo.jpg PHOTOCRAFT_TEST_POINT=x,y PHOTOCRAFT_TEST_OUT=sel.raw`
+    /// writes `w h` (u32 LE) then RGB and coverage bytes per pixel; `PHOTOCRAFT_SAM2=0` gives the
+    /// classical result for comparison.
+    #[test]
+    #[ignore = "needs a photo, the SAM 2 models and ONNX Runtime"]
+    fn sam2_live_photo_dump() {
+        let (Ok(img), Ok(pt), Ok(out)) = (std::env::var("PHOTOCRAFT_TEST_IMAGE"), std::env::var("PHOTOCRAFT_TEST_POINT"), std::env::var("PHOTOCRAFT_TEST_OUT")) else { return };
+        let xy: Vec<f64> = pt.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+        let mut s = Session::new();
+        s.execute("file.openAs", json!({"path": img})).unwrap();
+        let t = std::time::Instant::now();
+        let r = s.execute("select.object", json!({"point": xy})).unwrap();
+        eprintln!("select.object: {r} in {} ms via {:?}", t.elapsed().as_millis(), crate::sam_object::last_provider());
+        let d = s.active().unwrap();
+        let b = d.doc.bounds();
+        let rgba = photocraft_compose::render(&d.doc, b).px;
+        let mut bytes = Vec::new();
+        let bw = b.width() as i32;
+        bytes.extend((b.width()).to_le_bytes());
+        bytes.extend((b.height()).to_le_bytes());
+        for (i, p) in rgba.iter().enumerate() {
+            let (x, y) = (b.x0 + (i as i32 % bw), b.y0 + (i as i32 / bw));
+            bytes.extend(p[..3].iter().map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8));
+            bytes.push((d.doc.selection.as_ref().map_or(0.0, |m| m.sample_channel(x, y, 0)) * 255.0).round() as u8);
+        }
+        std::fs::write(out, bytes).unwrap();
     }
 
     #[test]

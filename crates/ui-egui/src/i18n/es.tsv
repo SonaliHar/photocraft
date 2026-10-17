@@ -4172,3 +4172,46 @@ navigator	Zoom	Zoom
 	GPU Memory (MB, 0 = Automatic)	Memoria de GPU (MB, 0 = Automático)
 	{name} was changed by another app after it was opened or saved here.	Otra aplicación cambió {name} después de abrirlo o guardarlo aquí.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Reemplázalo con este documento, o cancela y usa Archivo › Guardar como para conservar ambos.
+	API key	Clave de API
+	Kept in the system credential store, never in the preferences file.	Se guarda en el almacén de credenciales del sistema, nunca en el archivo de preferencias.
+	Paste the API key	Pega la clave de API
+	Save Key	Guardar clave
+	Key saved.	Clave guardada.
+	It is used for this session only.	Solo se usa durante esta sesión.
+	Remove Key	Quitar clave
+	Key removed.	Clave eliminada.
+	A key is set.	Hay una clave establecida.
+	No key is set.	No hay ninguna clave establecida.
+	Test Connection	Probar conexión
+	Testing…	Probando…
+	Could not start the test.	No se pudo iniciar la prueba.
+	Remote services are not available in the web build.	Los servicios remotos no están disponibles en la versión web.
+	Service URL	URL del servicio
+	Use for Object Selection	Usar para Selección de objetos
+	Use for Decompose into Layers	Usar para «Descomponer en capas»
+	Layers to create	Capas que crear
+	Layer detail (pixels)	Detalle de capa (píxeles)
+	Quality steps	Pasos de calidad
+	Layer type	Tipo de capa
+	Generative	Generativo
+	Decompose into Layers	Descomponer en capas
+	640	640
+	1024	1024
+	Object to Layer	Objeto a capa
+	Fill method	Método de relleno
+	Use for Object to Layer fill	Usar para el relleno de «Objeto a capa»
+	Quick fill	Relleno rápido
+	Clean fill	Relleno limpio
+	Clean fill + detail	Relleno limpio + detalle
+	Prompted fill	Relleno con indicación
+	Prompt	Indicación
+	Describe what to paint (optional)	Describe qué pintar (opcional)
+	Enhance	Mejorar
+	Enhancing…	Mejorando…
+	Improve detail	Mejorar detalle
+	Surrounding context	Contexto circundante
+	Object to Layer…	Objeto a capa…
+	Prompt enhancer URL	URL del mejorador de indicaciones
+	Prompt enhancer model	Modelo del mejorador de indicaciones
+	Prompt enhancer key	Clave del mejorador de indicaciones
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	Opcional. Un modelo de lenguaje que reescribe las indicaciones: solo se envía el texto. No hace falta con un servidor local.

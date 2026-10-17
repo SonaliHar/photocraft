@@ -3203,3 +3203,46 @@ curves	Smooth	Haluskan
 	Replace	Ganti
 	{name} was changed by another app after it was opened or saved here.	{name} diubah oleh aplikasi lain setelah dibuka atau disimpan di sini.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Ganti dengan dokumen ini, atau batalkan dan gunakan Berkas › Simpan Sebagai untuk menyimpan keduanya.
+	API key	Kunci API
+	Kept in the system credential store, never in the preferences file.	Disimpan di penyimpanan kredensial sistem, tidak pernah di berkas preferensi.
+	Paste the API key	Tempel kunci API
+	Save Key	Simpan Kunci
+	Key saved.	Kunci disimpan.
+	It is used for this session only.	Hanya digunakan untuk sesi ini.
+	Remove Key	Hapus Kunci
+	Key removed.	Kunci dihapus.
+	A key is set.	Kunci sudah diatur.
+	No key is set.	Belum ada kunci yang diatur.
+	Test Connection	Uji Koneksi
+	Testing…	Menguji…
+	Could not start the test.	Pengujian tidak dapat dimulai.
+	Remote services are not available in the web build.	Layanan jarak jauh tidak tersedia di versi web.
+	Service URL	URL layanan
+	Use for Object Selection	Gunakan untuk Pilihan Objek
+	Use for Decompose into Layers	Gunakan untuk “Pecah menjadi Layer”
+	Layers to create	Jumlah layer yang dibuat
+	Layer detail (pixels)	Detail layer (piksel)
+	Quality steps	Langkah kualitas
+	Layer type	Jenis layer
+	Generative	Generatif
+	Decompose into Layers	Pecah menjadi Layer
+	640	640
+	1024	1024
+	Object to Layer	Objek ke Layer
+	Fill method	Metode isi
+	Use for Object to Layer fill	Gunakan untuk isian “Objek ke Layer”
+	Quick fill	Isi cepat
+	Clean fill	Isi bersih
+	Clean fill + detail	Isi bersih + detail
+	Prompted fill	Isi dengan prompt
+	Prompt	Prompt
+	Describe what to paint (optional)	Jelaskan apa yang dilukis (opsional)
+	Enhance	Tingkatkan
+	Enhancing…	Meningkatkan…
+	Improve detail	Tingkatkan detail
+	Surrounding context	Konteks sekitar
+	Object to Layer…	Objek ke Layer…
+	Prompt enhancer URL	URL penyempurna prompt
+	Prompt enhancer model	Model penyempurna prompt
+	Prompt enhancer key	Kunci penyempurna prompt
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	Opsional. Model bahasa yang menulis ulang prompt: hanya teks prompt yang dikirim. Tidak perlu untuk server lokal.

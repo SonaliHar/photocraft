@@ -25,6 +25,8 @@ thiserror = { workspace = true }
 rayon = { workspace = true }
 photocraft-paint = { workspace = true }
 photocraft-algo = { workspace = true }
+photocraft-ml = { workspace = true }
+log = { workspace = true }
 photocraft-text = { workspace = true }
 photocraft-vector = { workspace = true }
 photocraft-io = { workspace = true }
@@ -44,6 +46,8 @@ roxmltree = "0.20"
 tempfile = "3"
 
 [dev-dependencies]
+# Result archives for the Decompose into Layers tests.
+zip = { version = "9", default-features = false, features = ["deflate"] }
 photocraft-affinity = { workspace = true, features = ["synth"] }
 # Synthetic camera raw files for the open tests.
 photocraft-raw = { workspace = true, features = ["testgen"] }

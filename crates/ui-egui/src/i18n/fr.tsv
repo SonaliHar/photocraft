@@ -3216,3 +3216,46 @@ curves	Smooth	Lisser
 	Replace	Remplacer
 	{name} was changed by another app after it was opened or saved here.	{name} a été modifié par une autre application après avoir été ouvert ou enregistré ici.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Remplacez-le par ce document, ou annulez et utilisez Fichier › Enregistrer sous pour garder les deux.
+	API key	Clé d’API
+	Kept in the system credential store, never in the preferences file.	Conservée dans le magasin d’identifiants du système, jamais dans le fichier des préférences.
+	Paste the API key	Collez la clé d’API
+	Save Key	Enregistrer la clé
+	Key saved.	Clé enregistrée.
+	It is used for this session only.	Elle n’est utilisée que pour cette session.
+	Remove Key	Supprimer la clé
+	Key removed.	Clé supprimée.
+	A key is set.	Une clé est définie.
+	No key is set.	Aucune clé n’est définie.
+	Test Connection	Tester la connexion
+	Testing…	Test en cours…
+	Could not start the test.	Impossible de lancer le test.
+	Remote services are not available in the web build.	Les services distants ne sont pas disponibles dans la version web.
+	Service URL	URL du service
+	Use for Object Selection	Utiliser pour la sélection d’objet
+	Use for Decompose into Layers	Utiliser pour « Décomposer en calques »
+	Layers to create	Nombre de calques
+	Layer detail (pixels)	Détail des calques (pixels)
+	Quality steps	Étapes de qualité
+	Layer type	Type de calque
+	Generative	Génératif
+	Decompose into Layers	Décomposer en calques
+	640	640
+	1024	1024
+	Object to Layer	Objet vers calque
+	Fill method	Méthode de remplissage
+	Use for Object to Layer fill	Utiliser pour le remplissage de « Objet vers calque »
+	Quick fill	Remplissage rapide
+	Clean fill	Remplissage propre
+	Clean fill + detail	Remplissage propre + détails
+	Prompted fill	Remplissage guidé
+	Prompt	Prompt
+	Describe what to paint (optional)	Décrivez ce qu’il faut peindre (facultatif)
+	Enhance	Améliorer
+	Enhancing…	Amélioration…
+	Improve detail	Améliorer les détails
+	Surrounding context	Contexte environnant
+	Object to Layer…	Objet vers calque…
+	Prompt enhancer URL	URL de l’améliorateur de prompt
+	Prompt enhancer model	Modèle de l’améliorateur de prompt
+	Prompt enhancer key	Clé de l’améliorateur de prompt
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	Facultatif. Un modèle de langage qui réécrit les prompts : seul le texte du prompt est envoyé. Inutile pour un serveur local.

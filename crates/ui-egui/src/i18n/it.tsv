@@ -4331,3 +4331,46 @@ shape	Appearance	Aspetto
 	GPU Memory (MB, 0 = Automatic)	Memoria GPU (MB, 0 = Automatico)
 	{name} was changed by another app after it was opened or saved here.	{name} è stato modificato da un'altra app dopo essere stato aperto o salvato qui.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Sostituiscilo con questo documento, oppure annulla e usa File › Salva con nome per tenerli entrambi.
+	API key	Chiave API
+	Kept in the system credential store, never in the preferences file.	Conservata nell’archivio credenziali del sistema, mai nel file delle preferenze.
+	Paste the API key	Incolla la chiave API
+	Save Key	Salva chiave
+	Key saved.	Chiave salvata.
+	It is used for this session only.	Viene usata solo per questa sessione.
+	Remove Key	Rimuovi chiave
+	Key removed.	Chiave rimossa.
+	A key is set.	È impostata una chiave.
+	No key is set.	Nessuna chiave impostata.
+	Test Connection	Verifica connessione
+	Testing…	Verifica in corso…
+	Could not start the test.	Impossibile avviare la verifica.
+	Remote services are not available in the web build.	I servizi remoti non sono disponibili nella versione web.
+	Service URL	URL del servizio
+	Use for Object Selection	Usa per Selezione oggetto
+	Use for Decompose into Layers	Usa per «Scomponi in livelli»
+	Layers to create	Livelli da creare
+	Layer detail (pixels)	Dettaglio livello (pixel)
+	Quality steps	Passaggi di qualità
+	Layer type	Tipo di livello
+	Generative	Generativo
+	Decompose into Layers	Scomponi in livelli
+	640	640
+	1024	1024
+	Object to Layer	Oggetto in livello
+	Fill method	Metodo di riempimento
+	Use for Object to Layer fill	Usa per il riempimento di «Oggetto in livello»
+	Quick fill	Riempimento rapido
+	Clean fill	Riempimento pulito
+	Clean fill + detail	Riempimento pulito + dettaglio
+	Prompted fill	Riempimento guidato
+	Prompt	Prompt
+	Describe what to paint (optional)	Descrivi cosa dipingere (facoltativo)
+	Enhance	Migliora
+	Enhancing…	Miglioramento…
+	Improve detail	Migliora dettaglio
+	Surrounding context	Contesto circostante
+	Object to Layer…	Oggetto in livello…
+	Prompt enhancer URL	URL del miglioratore di prompt
+	Prompt enhancer model	Modello del miglioratore di prompt
+	Prompt enhancer key	Chiave del miglioratore di prompt
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	Facoltativo. Un modello linguistico che riscrive i prompt: viene inviato solo il testo. Non serve con un server locale.

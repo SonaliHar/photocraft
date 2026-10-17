@@ -3970,3 +3970,46 @@ curves	Smooth	Vloeiend maken
 	GPU Memory (MB, 0 = Automatic)	GPU-geheugen (MB, 0 = Automatisch)
 	{name} was changed by another app after it was opened or saved here.	{name} is door een andere app gewijzigd nadat het hier is geopend of bewaard.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Vervang het door dit document, of annuleer en gebruik Bestand › Opslaan als om beide te houden.
+	API key	API-sleutel
+	Kept in the system credential store, never in the preferences file.	Opgeslagen in de referentieopslag van het systeem, nooit in het voorkeurenbestand.
+	Paste the API key	Plak de API-sleutel
+	Save Key	Sleutel opslaan
+	Key saved.	Sleutel opgeslagen.
+	It is used for this session only.	Hij wordt alleen in deze sessie gebruikt.
+	Remove Key	Sleutel verwijderen
+	Key removed.	Sleutel verwijderd.
+	A key is set.	Er is een sleutel ingesteld.
+	No key is set.	Er is geen sleutel ingesteld.
+	Test Connection	Verbinding testen
+	Testing…	Bezig met testen…
+	Could not start the test.	De test kon niet worden gestart.
+	Remote services are not available in the web build.	Externe services zijn niet beschikbaar in de webversie.
+	Service URL	Service-URL
+	Use for Object Selection	Gebruiken voor Objectselectie
+	Use for Decompose into Layers	Gebruiken voor ‘Opsplitsen in lagen’
+	Layers to create	Aantal lagen
+	Layer detail (pixels)	Laagdetail (pixels)
+	Quality steps	Kwaliteitsstappen
+	Layer type	Laagtype
+	Generative	Generatief
+	Decompose into Layers	Opsplitsen in lagen
+	640	640
+	1024	1024
+	Object to Layer	Object naar laag
+	Fill method	Vulmethode
+	Use for Object to Layer fill	Gebruiken voor het vullen bij ‘Object naar laag’
+	Quick fill	Snelle vulling
+	Clean fill	Schone vulling
+	Clean fill + detail	Schone vulling + detail
+	Prompted fill	Vulling met prompt
+	Prompt	Prompt
+	Describe what to paint (optional)	Beschrijf wat er geschilderd moet worden (optioneel)
+	Enhance	Verbeteren
+	Enhancing…	Bezig met verbeteren…
+	Improve detail	Detail verbeteren
+	Surrounding context	Omringende context
+	Object to Layer…	Object naar laag…
+	Prompt enhancer URL	URL van de promptverbeteraar
+	Prompt enhancer model	Model van de promptverbeteraar
+	Prompt enhancer key	Sleutel van de promptverbeteraar
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	Optioneel. Een taalmodel dat prompts herschrijft: alleen de prompttekst wordt verzonden. Niet nodig voor een lokale server.

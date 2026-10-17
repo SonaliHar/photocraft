@@ -3809,3 +3809,46 @@ curves	Smooth	Wygładź
 	Replace	Zastąp
 	{name} was changed by another app after it was opened or saved here.	Plik {name} został zmieniony przez inną aplikację po otwarciu lub zapisaniu go tutaj.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Zastąp go tym dokumentem albo anuluj i użyj Plik › Zapisz jako, aby zachować oba.
+	API key	Klucz API
+	Kept in the system credential store, never in the preferences file.	Przechowywany w magazynie poświadczeń systemu, nigdy w pliku preferencji.
+	Paste the API key	Wklej klucz API
+	Save Key	Zapisz klucz
+	Key saved.	Klucz zapisany.
+	It is used for this session only.	Jest używany tylko w tej sesji.
+	Remove Key	Usuń klucz
+	Key removed.	Klucz usunięty.
+	A key is set.	Klucz jest ustawiony.
+	No key is set.	Klucz nie jest ustawiony.
+	Test Connection	Testuj połączenie
+	Testing…	Testowanie…
+	Could not start the test.	Nie udało się rozpocząć testu.
+	Remote services are not available in the web build.	Usługi zdalne nie są dostępne w wersji internetowej.
+	Service URL	Adres URL usługi
+	Use for Object Selection	Używaj do zaznaczania obiektów
+	Use for Decompose into Layers	Używaj do „Rozłóż na warstwy”
+	Layers to create	Liczba warstw
+	Layer detail (pixels)	Szczegółowość warstw (piksele)
+	Quality steps	Kroki jakości
+	Layer type	Typ warstwy
+	Generative	Generatywny
+	Decompose into Layers	Rozłóż na warstwy
+	640	640
+	1024	1024
+	Object to Layer	Obiekt do warstwy
+	Fill method	Metoda wypełniania
+	Use for Object to Layer fill	Używaj do wypełniania w „Obiekt do warstwy”
+	Quick fill	Szybkie wypełnienie
+	Clean fill	Czyste wypełnienie
+	Clean fill + detail	Czyste wypełnienie + detale
+	Prompted fill	Wypełnienie z opisem
+	Prompt	Opis (prompt)
+	Describe what to paint (optional)	Opisz, co namalować (opcjonalnie)
+	Enhance	Ulepsz
+	Enhancing…	Ulepszanie…
+	Improve detail	Popraw szczegóły
+	Surrounding context	Kontekst otoczenia
+	Object to Layer…	Obiekt do warstwy…
+	Prompt enhancer URL	Adres URL ulepszacza opisu
+	Prompt enhancer model	Model ulepszacza opisu
+	Prompt enhancer key	Klucz ulepszacza opisu
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	Opcjonalne. Model językowy, który przepisuje opisy: wysyłany jest tylko tekst opisu. Niepotrzebny przy serwerze lokalnym.

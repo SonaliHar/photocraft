@@ -3910,3 +3910,46 @@ curves	Smooth	Згладити
 	Replace	Замінити
 	{name} was changed by another app after it was opened or saved here.	Файл {name} змінила інша програма після того, як його тут відкрили або зберегли.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Замініть його цим документом або скасуйте й скористайтеся Файл › Зберегти як, щоб зберегти обидва.
+	API key	Ключ API
+	Kept in the system credential store, never in the preferences file.	Зберігається в системному сховищі облікових даних, а не у файлі налаштувань.
+	Paste the API key	Вставте ключ API
+	Save Key	Зберегти ключ
+	Key saved.	Ключ збережено.
+	It is used for this session only.	Використовується лише в цьому сеансі.
+	Remove Key	Видалити ключ
+	Key removed.	Ключ видалено.
+	A key is set.	Ключ задано.
+	No key is set.	Ключ не задано.
+	Test Connection	Перевірити підключення
+	Testing…	Перевірка…
+	Could not start the test.	Не вдалося запустити перевірку.
+	Remote services are not available in the web build.	Віддалені служби недоступні у веб-версії.
+	Service URL	URL служби
+	Use for Object Selection	Використовувати для виділення об’єкта
+	Use for Decompose into Layers	Використовувати для «Розкласти на шари»
+	Layers to create	Кількість шарів
+	Layer detail (pixels)	Деталізація шарів (пікселів)
+	Quality steps	Кроки якості
+	Layer type	Тип шарів
+	Generative	Генеративний
+	Decompose into Layers	Розкласти на шари
+	640	640
+	1024	1024
+	Object to Layer	Об’єкт на шар
+	Fill method	Спосіб заливки
+	Use for Object to Layer fill	Використовувати для заливки при «Об’єкт на шар»
+	Quick fill	Швидка заливка
+	Clean fill	Чиста заливка
+	Clean fill + detail	Чиста заливка + деталі
+	Prompted fill	Заливка за описом
+	Prompt	Опис (промпт)
+	Describe what to paint (optional)	Опишіть, що намалювати (необов’язково)
+	Enhance	Покращити
+	Enhancing…	Покращення…
+	Improve detail	Покращити деталі
+	Surrounding context	Навколишній контекст
+	Object to Layer…	Об’єкт на шар…
+	Prompt enhancer URL	URL покращувача описів
+	Prompt enhancer model	Модель покращувача описів
+	Prompt enhancer key	Ключ покращувача описів
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	Необов’язково. Мовна модель, що переписує описи: надсилається лише текст опису. Для локального сервера не потрібна.

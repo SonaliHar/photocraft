@@ -137,8 +137,9 @@ what an agent can't finish alone.
 
 ### G15. AI and generative features
 - **Missing:** Generative Fill and Expand, Generative Upscale, Neural Filters, Sky Replacement,
-  Super Zoom, ML Select Subject/Sky. There is no ML runtime (AUTO-219-7). Classical substitutes
-  exist (GrabCut/max-flow selection, Remove tool by non-local patch completion).
+  Super Zoom, ML Select Subject/Sky. An optional ML runtime exists since 2026-10-16
+  (`photocraft-ml`, SAM 2 behind Object Selection, [docs/ml.md](ml.md); AUTO-219-7 partial) but
+  nothing else uses it yet. Classical substitutes exist (GrabCut/max-flow selection, Remove tool by non-local patch completion).
 - **Evidence:** Photoshop's `Required/UXP` ships the Neural Filters gallery and its `.kys` has
   a Neural Filters taskspace; users ask for local models (#2313, #1996, #2682).
 - **Estimate:** 300–600 h. **Human:** owner decision #41 (model licences, local vs remote).

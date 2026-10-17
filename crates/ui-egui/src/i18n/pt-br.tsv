@@ -4000,3 +4000,46 @@ layerLabel	No Color	Sem cor
 	GPU Memory (MB, 0 = Automatic)	Memória da GPU (MB, 0 = Automático)
 	{name} was changed by another app after it was opened or saved here.	{name} foi alterado por outro app depois de ser aberto ou salvo aqui.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Substitua-o por este documento, ou cancele e use Arquivo › Salvar como para manter os dois.
+	API key	Chave de API
+	Kept in the system credential store, never in the preferences file.	Armazenada no cofre de credenciais do sistema, nunca no arquivo de preferências.
+	Paste the API key	Cole a chave de API
+	Save Key	Salvar chave
+	Key saved.	Chave salva.
+	It is used for this session only.	Ela é usada apenas nesta sessão.
+	Remove Key	Remover chave
+	Key removed.	Chave removida.
+	A key is set.	Há uma chave definida.
+	No key is set.	Nenhuma chave definida.
+	Test Connection	Testar conexão
+	Testing…	Testando…
+	Could not start the test.	Não foi possível iniciar o teste.
+	Remote services are not available in the web build.	Os serviços remotos não estão disponíveis na versão web.
+	Service URL	URL do serviço
+	Use for Object Selection	Usar na Seleção de objeto
+	Use for Decompose into Layers	Usar em “Decompor em camadas”
+	Layers to create	Camadas a criar
+	Layer detail (pixels)	Detalhe da camada (pixels)
+	Quality steps	Etapas de qualidade
+	Layer type	Tipo de camada
+	Generative	Generativo
+	Decompose into Layers	Decompor em camadas
+	640	640
+	1024	1024
+	Object to Layer	Objeto para camada
+	Fill method	Método de preenchimento
+	Use for Object to Layer fill	Usar no preenchimento de “Objeto para camada”
+	Quick fill	Preenchimento rápido
+	Clean fill	Preenchimento limpo
+	Clean fill + detail	Preenchimento limpo + detalhe
+	Prompted fill	Preenchimento com prompt
+	Prompt	Prompt
+	Describe what to paint (optional)	Descreva o que pintar (opcional)
+	Enhance	Melhorar
+	Enhancing…	Melhorando…
+	Improve detail	Melhorar detalhe
+	Surrounding context	Contexto ao redor
+	Object to Layer…	Objeto para camada…
+	Prompt enhancer URL	URL do aprimorador de prompt
+	Prompt enhancer model	Modelo do aprimorador de prompt
+	Prompt enhancer key	Chave do aprimorador de prompt
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	Opcional. Um modelo de linguagem que reescreve prompts: apenas o texto do prompt é enviado. Desnecessário com um servidor local.
