@@ -43,7 +43,7 @@ fn reconstruct_native_pack() -> Result<Vec<u8>, UiAssetError> {
             AssetKind::Catalog => {
                 let meta = descriptor.catalog.ok_or(UiAssetError::Metadata(descriptor.id))?;
                 std::borrow::Cow::Owned(canonical_catalog_bytes(
-                    crate::i18n::LANGUAGES.iter().find(|language| language.code == meta.code).ok_or(UiAssetError::Metadata(descriptor.id))?.source,
+                    crate::i18n::LANGUAGES.iter().find(|language| language.code == meta.code).ok_or(UiAssetError::Metadata(descriptor.id))?.text().as_str(),
                 )?)
             }
         };
@@ -150,8 +150,8 @@ fn checkout_line_endings_have_identical_canonical_catalog_bytes() {
 fn every_catalog_matches_pinned_lf_bytes_from_both_checkout_forms() {
     for descriptor in DESCRIPTORS.iter().filter(|descriptor| descriptor.kind == AssetKind::Catalog) {
         let meta = descriptor.catalog.expect("catalog metadata");
-        let input = crate::i18n::LANGUAGES.iter().find(|language| language.code == meta.code).expect("registered catalog").source;
-        let lf = canonical_catalog_bytes(input).expect("canonical LF");
+        let input = crate::i18n::LANGUAGES.iter().find(|language| language.code == meta.code).expect("registered catalog").text();
+        let lf = canonical_catalog_bytes(&input).expect("canonical LF");
         let mut crlf = Vec::new();
         for byte in &lf {
             if *byte == b'\n' {

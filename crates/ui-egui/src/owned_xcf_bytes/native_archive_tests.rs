@@ -1,5 +1,5 @@
 //! UNRUN portable capture/archive lifecycle and raw-storage regression drafts.
-use super::super::{Family, Request, WORK};
+use super::super::{Family, Request};
 use super::*;
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent};
@@ -33,7 +33,8 @@ fn immutable_capture_is_shared_without_copy_and_future_control_is_independent() 
     let source = source(captured, &control()).unwrap();
     assert_eq!(Arc::as_ptr(&source.capture.bytes), identity);
     request.work.cancelled.store(true, Ordering::Relaxed);
-    request.work.used.store(WORK, Ordering::Relaxed);
+    let diagnostics = request.work.meter.diagnostics();
+    request.work.meter.check(diagnostics.limit - diagnostics.used).unwrap();
     drop(request);
     let held = q.usage().unwrap();
     let work = AtomicU64::new(0);

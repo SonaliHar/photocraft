@@ -17,7 +17,7 @@ fn pattern_id(app: &PhotocraftApp, name: &str) -> String {
 }
 
 fn steps(app: &PhotocraftApp) -> usize {
-    app.session.active().unwrap().history.entries().len()
+    app.session.active().unwrap().history.entry_labels().count()
 }
 
 fn set(app: &mut PhotocraftApp, dialog: u64, values: serde_json::Value) {
@@ -38,14 +38,14 @@ fn new_pattern_fill_opens_the_dialog_previews_and_ok_is_one_step() {
     assert!(owns(&d.fields));
     assert_eq!(crate::dialogs::title(d), "Pattern Fill");
     assert_eq!((d.fields["scale"].clone(), d.fields["angle"].clone(), d.fields["link"].clone()), (json!(100.0), json!(0.0), json!(true)));
-    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc), "no layer until OK");
+    assert!(before.shares_state(&app.session.active().unwrap().doc), "no layer until OK");
     let bricks = pattern_id(&app, "Bricks");
     set(&mut app, dialog, json!({"pattern": bricks, "scale": 200.0, "angle": 45.0, "link": false}));
     let (shown, key) = display_doc(&mut app, 0).unwrap();
     let (again, again_key) = display_doc(&mut app, 0).unwrap();
     assert!(Arc::ptr_eq(&shown, &again) && key == again_key, "the preview is cached");
     assert_eq!(shown.layers.len(), before.layers.len() + 1, "the preview shows the new layer");
-    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc), "previewing does not edit");
+    assert!(before.shares_state(&app.session.active().unwrap().doc), "previewing does not edit");
     assert_eq!(steps(&app), count);
     crate::dialogs::confirm(&mut app, dialog).unwrap();
     assert_eq!(steps(&app), count + 1);
@@ -70,7 +70,7 @@ fn cancelling_a_new_pattern_fill_adds_nothing() {
     assert!(display_doc(&mut app, 0).is_some());
     crate::dialogs::cancel(&mut app, dialog).unwrap();
     assert!(display_doc(&mut app, 0).is_none());
-    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+    assert!(before.shares_state(&app.session.active().unwrap().doc));
     assert_eq!(steps(&app), count);
     // Explicit params (Actions, CLI, MCP) still create the layer directly.
     let r = crate::menus::invoke(&mut app, &ctx, cmds::CREATE, json!({"pattern": "Grid"})).unwrap();
@@ -105,7 +105,7 @@ fn content_options_edit_the_layer_and_cancel_restores() {
     let (shown, _) = display_doc(&mut app, 0).unwrap();
     assert!(matches!(&shown.layer(LayerId(id)).unwrap().content, LayerContent::Fill(Fill::Pattern { phase, .. }) if *phase == (5.0, 5.0)));
     crate::dialogs::cancel(&mut app, dialog).unwrap();
-    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+    assert!(before.shares_state(&app.session.active().unwrap().doc));
     assert!(display_doc(&mut app, 0).is_none());
     // A stale dialog never edits another document.
     let dialog = open(&mut app).unwrap();

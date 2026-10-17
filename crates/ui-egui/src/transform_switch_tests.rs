@@ -73,7 +73,7 @@ fn placed_app() -> Harness<'static, PhotocraftApp> {
 }
 
 fn history(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
-    h.state().session.active().unwrap().history.entries().to_vec()
+    h.state().session.active().unwrap().history.entry_labels().map(str::to_owned).collect()
 }
 
 /// The box on a just-placed layer (a file dropped on the canvas), moved.

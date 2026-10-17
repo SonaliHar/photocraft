@@ -47,7 +47,7 @@ fn shape_thumbnail_double_click_picks_the_fill_colour() {
     let app = h.state_mut();
     assert_eq!(app.session.active().unwrap().active_layer, Some(id));
     let before = app.session.active().unwrap().doc.clone();
-    let steps = app.session.active().unwrap().history.entries().len();
+    let steps = app.session.active().unwrap().history.entry_labels().count();
     let dialog = app.ui.dialogs.last().filter(|d| owns(&d.fields)).expect("Color Picker opened on the shape fill");
     assert_eq!(dialog.fields["color"], "#336699");
     let dialog = dialog.id;
@@ -59,14 +59,14 @@ fn shape_thumbnail_double_click_picks_the_fill_colour() {
     assert_eq!(sh.fill, Some(Fill::Solid(Color::rgb(1.0, 136.0 / 255.0, 0.0))));
     app.ui.close_dialog(dialog);
     assert!(display_doc(app, 0).is_none());
-    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc), "Cancel leaves the shape alone");
+    assert!(before.shares_state(&app.session.active().unwrap().doc), "Cancel leaves the shape alone");
 
     // OK commits the colour as one undo step.
     let dialog = open(app).unwrap();
     app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!("#ff8800"));
     crate::dialogs::confirm(app, dialog).unwrap();
     assert_eq!(fill(app, id), Some(Fill::Solid(Color::rgb(1.0, 136.0 / 255.0, 0.0))));
-    assert_eq!(app.session.active().unwrap().history.entries().len(), steps + 1);
+    assert_eq!(app.session.active().unwrap().history.entry_labels().count(), steps + 1);
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(*app.session.active().unwrap().doc, *before);
 }

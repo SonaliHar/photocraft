@@ -205,7 +205,11 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::canvas::tool_event;
+    use crate::canvas::tool_event as raw_tool_event;
+    fn tool_event(app: &mut PhotocraftApp, event: ToolEvent, modifiers: egui::Modifiers) {
+        raw_tool_event(app, event, modifiers);
+        crate::canvas::wait_for_test_live_stroke(app);
+    }
 
     const CTRL_ALT: Modifiers = Modifiers { alt: true, ctrl: true, shift: false, mac_cmd: false, command: false };
 
@@ -285,6 +289,7 @@ mod tests {
                     return;
                 }
                 egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+                crate::canvas::wait_for_test_live_stroke(app);
             },
             a,
         );
@@ -326,6 +331,7 @@ mod tests {
                     return;
                 }
                 egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+                crate::canvas::wait_for_test_live_stroke(app);
             },
             a,
         );

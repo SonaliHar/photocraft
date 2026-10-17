@@ -55,6 +55,8 @@ fn fresh_red_eye_owner_canvas_and_properties_are_visible() {
                 let Outcome::Done(reply) = handle(h.state_mut(), &ctx, &request) else { panic!("ui.set deferred") };
                 assert_eq!(reply["ok"], true);
                 h.run_steps(6);
+                h.get_by_label("Threshold").focus();
+                h.run_steps(2);
                 h.get_by_label("Threshold").scroll_to_me();
                 h.run_steps(4);
                 assert!(!h.get_by_label("Threshold").accesskit_node().is_disabled());
@@ -66,16 +68,21 @@ fn fresh_red_eye_owner_canvas_and_properties_are_visible() {
                 if theme == "studio" && control == "source" {
                     let before = h.state().session.active().unwrap().doc.clone();
                     let history = h.state().session.active().unwrap().history.past_len();
-                    h.get_by_label("Threshold").click();
+                    h.get_by_label("Threshold").focus();
                     h.run_steps(2);
+                    assert!(h.get_by_label("Threshold").is_focused());
                     h.key_press(egui::Key::Escape);
                     h.run_steps(2);
                     assert_eq!(*h.state().session.active().unwrap().doc, *before);
                     assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
-                    h.get_by_label("Threshold").click();
+                    h.get_by_label("Threshold").focus();
                     h.run_steps(2);
+                    assert!(h.get_by_label("Threshold").is_focused());
                     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
                     h.get_by_label("Threshold").type_text("0.675");
+                    h.run_steps(2);
+                    assert_eq!(*h.state().session.active().unwrap().doc, *before);
+                    assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
                     h.key_press(egui::Key::Enter);
                     h.run_steps(2);
                     let edited = h.state().session.active().unwrap().doc.clone();
@@ -98,10 +105,19 @@ fn fresh_red_eye_owner_canvas_and_properties_are_visible() {
                     assert_eq!(*h.state().session.active().unwrap().doc, *edited);
                     h.run_steps(2);
                     let caption = edited.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].source_display_name.clone().unwrap();
-                    h.get_by_label(&caption).scroll_to_me();
+                    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, &caption).scroll_to_me();
                     h.run_steps(4);
-                    h.get_by_label(&caption).click();
+                    let activation = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, &caption);
+                    assert!(!activation.accesskit_node().is_disabled());
+                    let viewport = h.ctx.input(|input| input.viewport_rect());
+                    let checkbox = activation.rect();
+                    assert!(
+                        viewport.contains(checkbox.min) && viewport.contains(checkbox.max),
+                        "activation checkbox must be visible: {checkbox:?} in {viewport:?}"
+                    );
+                    activation.click();
                     h.run_steps(2);
+                    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
                     let disabled = h.state().session.active().unwrap().doc.clone();
                     assert!(!disabled.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].enabled);
                     assert_eq!(disabled.layers[0].surface(), before.layers[0].surface());

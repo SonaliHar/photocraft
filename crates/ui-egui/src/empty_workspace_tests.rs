@@ -19,7 +19,7 @@ fn harness(home: bool) -> (Harness<'static, PhotocraftApp>, Requests) {
     let held = requests.clone();
     let services = Services { file_dialog: Some(Box::new(move |request, _parent, reply| held.borrow_mut().push((request, reply)))), ..Default::default() };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
-    app.session.edit_prefs(|p| p.general.auto_show_home_screen = home);
+    app.session.edit_prefs(|p| p.general.auto_show_home_screen = home).unwrap();
     let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             let ctx = ui.ctx().clone();

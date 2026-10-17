@@ -6,7 +6,6 @@ use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image};
 use photocraft_ui_egui::{PhotocraftApp, menus};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
 
@@ -164,7 +163,7 @@ fn existing_engine_batch_and_image_processor_support_webp_quality() {
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
     let doc = app.session.active().unwrap().doc.clone();
     let revision = app.session.active().unwrap().revision;
-    let history = app.session.active().unwrap().history.entries();
+    let history = app.session.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>();
     let prefs = serde_json::to_value(app.session.prefs()).unwrap();
 
     for (command, prefix) in [("file.automate.batch", "batch"), ("file.scripts.imageProcessor", "processor")] {
@@ -192,9 +191,9 @@ fn existing_engine_batch_and_image_processor_support_webp_quality() {
         assert!(outputs[1].len() < outputs[2].len(), "{command}: this synthetic pattern grows at higher quality");
     }
     let active = app.session.active().unwrap();
-    assert!(Arc::ptr_eq(&active.doc, &doc), "batch commands leave the active document untouched");
+    assert!(active.doc.shares_state(&doc), "batch commands leave the active document untouched");
     assert_eq!(active.revision, revision);
-    assert_eq!(active.history.entries(), history);
+    assert_eq!(active.history.entry_labels().map(str::to_owned).collect::<Vec<_>>(), history);
     assert_eq!(serde_json::to_value(app.session.prefs()).unwrap(), prefs);
 }
 
@@ -234,7 +233,7 @@ fn batch_and_processor_real_controls_write_the_chosen_webp_quality() {
     let mut h = harness();
     let doc = h.state().session.active().unwrap().doc.clone();
     let revision = h.state().session.active().unwrap().revision;
-    let history = h.state().session.active().unwrap().history.entries();
+    let history = h.state().session.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>();
     let prefs = serde_json::to_value(h.state().session.prefs()).unwrap();
     let actions = serde_json::to_value(&h.state().session.actions.list).unwrap();
     for (command, prefix) in [("file.automate.batch", "batch"), ("file.scripts.imageProcessor", "processor")] {
@@ -275,8 +274,8 @@ fn batch_and_processor_real_controls_write_the_chosen_webp_quality() {
         assert!(outputs[0].len() < outputs[1].len());
     }
     let active = h.state().session.active().unwrap();
-    assert!(Arc::ptr_eq(&active.doc, &doc));
-    assert_eq!((active.revision, active.history.entries()), (revision, history));
+    assert!(active.doc.shares_state(&doc));
+    assert_eq!((active.revision, active.history.entry_labels().map(str::to_owned).collect::<Vec<_>>()), (revision, history));
     assert_eq!(serde_json::to_value(h.state().session.prefs()).unwrap(), prefs);
     assert_eq!(serde_json::to_value(&h.state().session.actions.list).unwrap(), actions);
 }

@@ -1088,7 +1088,7 @@ mod tests {
             assert_eq!(bg, "#336699");
             crate::dialogs::confirm(h.state_mut(), nd).unwrap();
             let doc = &h.state().session.active().unwrap().doc;
-            let px = photocraft_compose::flatten(doc).px[0];
+            let px = photocraft_compose::flatten(doc).unwrap().px[0];
             assert!((px[0] * 255.0 - 51.0).abs() < 1.0 && (px[1] * 255.0 - 102.0).abs() < 1.0 && (px[2] * 255.0 - 153.0).abs() < 1.0, "{px:?}");
         }
 

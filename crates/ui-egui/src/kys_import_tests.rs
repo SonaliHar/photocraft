@@ -243,7 +243,7 @@ fn first_launch_offers_photoshops_live_set_and_import_applies_it() {
     let offer = app.ui.kys_offer.clone().unwrap();
     assert_eq!(offer.set, "texcuts");
     assert!(offer.changes > 0);
-    assert_eq!(crate::control::inspect(&app, &egui::Context::default())["kysOffer"]["set"], "texcuts");
+    assert_eq!(crate::control::inspect(&app, &egui::Context::default()).unwrap()["kysOffer"]["set"], "texcuts");
     super::answer_offer(&mut app, true);
     assert!(app.ui.kys_offer.is_none());
     assert!(app.ui.dialogs.is_empty(), "applied without the dialog");

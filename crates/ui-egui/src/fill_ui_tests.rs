@@ -202,7 +202,7 @@ fn choosing_color_opens_the_color_picker() {
     // The Contents dropdown shows its choice as the combo box's value.
     h.get_by_value("Foreground Color").click();
     h.run_steps(3);
-    h.get_by_label("Colorâ€¦").click();
+    h.get_by_label("Color…").click();
     h.run_steps(4);
     let (fill, picker) = fill_and_picker(&h);
     assert_eq!(field(&h, fill, "contents"), json!("color"));
@@ -283,24 +283,24 @@ fn the_pattern_is_picked_from_its_swatches() {
 
 #[test]
 fn captured_fill_refuses_changed_target_and_restored_fields_before_remembering() {
-    let mut app=app();
-    let id=open(&mut app);
-    let f=app.ui.dialog_mut(id).unwrap().fields.clone();
-    let before=app.session.prefs().dialogs.clone();
-    app.session.active_mut().unwrap().revision+=1;
-    assert!(confirm_for_dialog(&mut app,id,&f).is_err());
-    assert_eq!(app.session.prefs().dialogs,before);
-    app.ui.fill_origin=None;
-    assert!(confirm_for_dialog(&mut app,id,&f).is_err());
-    assert_eq!(app.session.prefs().dialogs,before);
+    let mut app = app();
+    let id = open(&mut app);
+    let f = app.ui.dialog_mut(id).unwrap().fields.clone();
+    let before = app.session.prefs().dialogs.clone();
+    app.session.active_mut().unwrap().revision += 1;
+    assert!(confirm_for_dialog(&mut app, id, &f).is_err());
+    assert_eq!(app.session.prefs().dialogs, before);
+    app.ui.fill_origin = None;
+    assert!(confirm_for_dialog(&mut app, id, &f).is_err());
+    assert_eq!(app.session.prefs().dialogs, before);
 }
 #[test]
 fn fill_origin_tracks_channel_view_even_when_document_revision_is_unchanged() {
-    let mut app=app();
-    let id=open(&mut app);
-    let f=app.ui.dialog_mut(id).unwrap().fields.clone();
-    let before=app.session.active().unwrap().doc.clone();
-    app.session.active_mut().unwrap().channel_view.target=photocraft_engine::channel_cmds::ChannelTarget::Color(0);
-    assert!(confirm_for_dialog(&mut app,id,&f).is_err());
+    let mut app = app();
+    let id = open(&mut app);
+    let f = app.ui.dialog_mut(id).unwrap().fields.clone();
+    let before = app.session.active().unwrap().doc.clone();
+    app.session.active_mut().unwrap().channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::Color(0);
+    assert!(confirm_for_dialog(&mut app, id, &f).is_err());
     assert!(app.session.active().unwrap().doc.shares_state(&before));
 }

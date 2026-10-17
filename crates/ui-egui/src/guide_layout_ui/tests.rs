@@ -284,7 +284,7 @@ fn disabled_axes_preserve_values_and_do_not_validate_stale_inputs() {
     }
     let p = params(f);
     assert_eq!(p["columns"], 0);
-    assert_eq!(p["width"], Value::Null);
+    assert!(!p.as_object().unwrap().contains_key("width"));
     assert_eq!(f["columns"], 8);
     crate::dialogs::confirm(&mut app, id).unwrap();
     assert!(app.session.active().unwrap().doc.guides.vertical.is_empty());

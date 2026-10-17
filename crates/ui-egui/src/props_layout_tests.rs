@@ -294,7 +294,7 @@ fn properties_distribute_buttons_move_selected_layers_and_undo_in_both_axes() {
             let b = st.doc.layer(LayerId(ids[1])).unwrap().surface().unwrap().content_bounds();
             if horizontal { b.x0 } else { b.y0 }
         };
-        let history = h.state().session.active().unwrap().history.entries().len();
+        let history = h.state().session.active().unwrap().history.entry_labels().count();
         h.get_by_label(button).click();
         h.run_steps(4);
         let after = {
@@ -303,7 +303,7 @@ fn properties_distribute_buttons_move_selected_layers_and_undo_in_both_axes() {
             if horizontal { b.x0 } else { b.y0 }
         };
         assert_ne!(after, before, "{button} moved the middle layer");
-        assert_eq!(h.state().session.active().unwrap().history.entries().len(), history + 1);
+        assert_eq!(h.state().session.active().unwrap().history.entry_labels().count(), history + 1);
         h.state_mut().session.undo();
         let restored = {
             let st = h.state().session.active().unwrap();
@@ -336,7 +336,7 @@ fn background_in_a_multiple_selection_keeps_align_and_distribute() {
     h.state_mut().run("layer.select", json!({"layer": bg, "mode": "add"})).unwrap();
     h.run_steps(8);
     assert_eq!(h.state().session.active().unwrap().active_layer, Some(LayerId(bg)));
-    assert_eq!(h.state().session.active().unwrap().selected_layers().len(), 2);
+    assert_eq!(h.state().session.active().unwrap().selected_layers().unwrap().len(), 2);
     let names: Vec<String> = headers(&h).into_iter().map(|(n, _)| n).collect();
     assert!(names.iter().any(|n| n == "Align and Distribute"), "{names:?}");
     h.get_by_label("Align Horizontal Centers").click();

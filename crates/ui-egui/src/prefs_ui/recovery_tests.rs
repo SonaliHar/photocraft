@@ -98,7 +98,7 @@ fn recovery_keeps_frames_and_editing_live_and_adopts_the_admitted_document() {
     assert!(app.session.has_jobs());
     assert!(log.lock().unwrap().is_empty());
     // Opening a copy while decoding exercises ID collision handling as well as focus retention.
-    app.session.add_document(original.clone(), Some("working.psb".into()));
+    assert!(app.session.add_document(original.clone(), Some("working.psb".into())).is_ok());
     let working_id = app.session.active().unwrap().doc.id;
     app.run("edit.fill", json!({"color": "#0000ff"})).unwrap();
     for _ in 0..3 {

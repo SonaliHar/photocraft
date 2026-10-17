@@ -54,13 +54,14 @@ fn shows(app: &PhotocraftApp) -> bool {
 }
 
 /// The selected layers that are live rectangles, front first.
-fn targets(app: &PhotocraftApp) -> Vec<Target> {
+fn targets(app: &PhotocraftApp) -> Result<Vec<Target>, String> {
     if !shows(app) {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    let Some(st) = app.session.active() else { return Vec::new() };
+    let Some(st) = app.session.active() else { return Ok(Vec::new()) };
     let mut out: Vec<Target> = st
         .selected_layers()
+        .map_err(|error| error.to_string())?
         .into_iter()
         .filter_map(|id| {
             let l = st.doc.layer(id)?;
@@ -73,7 +74,7 @@ fn targets(app: &PhotocraftApp) -> Vec<Target> {
         .collect();
     // `selected_layers` lists bottom to top; the topmost widget wins a press.
     out.reverse();
-    out
+    Ok(out)
 }
 
 /// The largest radius a corner of `rect` takes.
@@ -135,8 +136,11 @@ fn hit(app: &PhotocraftApp, targets: &[Target], p: [f64; 2]) -> Option<(usize, u
 
 /// Is a widget under document point `p`, or one being dragged? The canvas then shows the corner
 /// radius cursor.
-pub fn hovers(app: &PhotocraftApp, p: [f64; 2]) -> bool {
-    app.ui.corner_radius.is_some() || hit(app, &targets(app), p).is_some()
+pub fn hovers(app: &PhotocraftApp, p: [f64; 2]) -> Result<bool, String> {
+    if app.ui.corner_radius.is_some() {
+        return Ok(true);
+    }
+    Ok(hit(app, &targets(app)?, p).is_some())
 }
 
 /// Canvas pointer events for the corner widgets; false when the event is not theirs.
@@ -146,7 +150,14 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
             if mods.command {
                 return false;
             }
-            let targets = targets(app);
+            let targets = match targets(app) {
+                Ok(targets) => targets,
+                Err(error) => {
+                    app.ui.status = error;
+                    app.ui.status_error = true;
+                    return true;
+                }
+            };
             let Some((grabbed, corner)) = hit(app, &targets, [x, y]) else { return false };
             let now = targets.iter().map(|t| t.radii).collect();
             app.ui.corner_radius = Some(Drag { targets, grabbed, corner, all: !mods.alt, start: [x, y], now });
@@ -204,7 +215,7 @@ fn dragged_radius(d: &Drag) -> Option<f64> {
 
 /// The widgets of every selected live rectangle; while one is dragged, the new outlines and the
 /// radius beside the pointer (`R: 25.0 px`), as in Photoshop.
-pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32) {
+pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32) -> Result<(), String> {
     let drag = app.ui.corner_radius.as_ref();
     if let Some(r) = drag.and_then(dragged_radius)
         && let Some(at) = painter.ctx().input(|i| i.pointer.hover_pos())
@@ -212,7 +223,7 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 
         crate::canvas::draw_value_readout(app, painter.ctx(), "corner-radius-readout", at, ["R:"], [format!("{r:.1} px")]);
     }
     let z = zoom(app);
-    for t in targets(app) {
+    for t in targets(app)? {
         let now = drag.and_then(|d| d.targets.iter().position(|g| g.layer == t.layer).and_then(|i| d.now.get(i)));
         let radii = now.copied().unwrap_or(t.radii);
         if now.is_some() {
@@ -225,6 +236,7 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 
             painter.circle_filled(p, 2.5, accent);
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]

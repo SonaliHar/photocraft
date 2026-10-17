@@ -296,7 +296,7 @@ mod tests {
     fn app() -> PhotocraftApp {
         let doc = Document::with_background("crop", Size::new(200, 100), ColorMode::Rgb, SampleType::U8, Color::WHITE);
         let mut s = photocraft_engine::Session::new();
-        s.add_document(doc, None);
+        assert!(s.add_document(doc, None).is_ok());
         let mut app = PhotocraftApp::new(s, crate::Services::default());
         app.sync_views();
         app.ui.tool = Tool::Crop;

@@ -27,24 +27,24 @@ fn preview_is_cached_cancel_is_clean_and_ok_is_one_undo_step_at_all_depths() {
             let (mut app, id) = fixture(kind, depth);
             let st = app.session.active().unwrap();
             let (doc, rev, dirty, history) = (st.doc.clone(), st.revision, st.is_dirty(), st.history.past_len());
-            let original_pixels = photocraft_compose::flatten(&doc);
+            let original_pixels = photocraft_compose::flatten(&doc).unwrap();
             let (x, y) =
                 (0..160).flat_map(|y| (0..320).map(move |x| (x, y))).find(|&(x, y)| original_pixels.get(x, y)[3] > 0.1).expect("fixture renders visible text");
             let picker = open(&mut app, kind, id).unwrap();
             set(&mut app, picker, "#00ff00");
             let (shown, key) = canvas::display_doc(&mut app, 0);
             let again = canvas::display_doc(&mut app, 0);
-            assert!(Arc::ptr_eq(&shown, &again.0));
+            assert!(shown.shares_state(&again.0));
             assert_eq!(key, again.1);
-            assert_ne!(photocraft_compose::flatten(&shown).get(x, y), photocraft_compose::flatten(&doc).get(x, y));
+            assert_ne!(photocraft_compose::flatten(&shown).unwrap().get(x, y), photocraft_compose::flatten(&doc).unwrap().get(x, y));
             let st = app.session.active().unwrap();
-            assert!(Arc::ptr_eq(&st.doc, &doc));
+            assert!(st.doc.shares_state(&doc));
             assert_eq!((st.revision, st.is_dirty(), st.history.past_len()), (rev, dirty, history));
             set(&mut app, picker, "#0000ff");
             assert_ne!(canvas::display_doc(&mut app, 0).1, key);
             dialogs::cancel(&mut app, picker).unwrap();
             assert!(app.text_style_preview.is_none());
-            assert!(Arc::ptr_eq(&canvas::display_doc(&mut app, 0).0, &doc));
+            assert!(canvas::display_doc(&mut app, 0).0.shares_state(&doc));
             let picker = open(&mut app, kind, id).unwrap();
             set(&mut app, picker, "#00ff00");
             let shown = canvas::display_doc(&mut app, 0).0;
@@ -52,7 +52,7 @@ fn preview_is_cached_cancel_is_clean_and_ok_is_one_undo_step_at_all_depths() {
             let st = app.session.active().unwrap();
             assert_eq!(st.history.past_len(), history + 1);
             assert_eq!(serde_json::to_value(&st.doc.text_styles).unwrap(), serde_json::to_value(&shown.text_styles).unwrap());
-            assert_eq!(photocraft_compose::flatten(&st.doc).get(x, y), photocraft_compose::flatten(&shown).get(x, y));
+            assert_eq!(photocraft_compose::flatten(&st.doc).unwrap().get(x, y), photocraft_compose::flatten(&shown).unwrap().get(x, y));
             assert!(app.text_style_preview.is_none());
             app.run("edit.undo", json!({})).unwrap();
             assert_eq!(serde_json::to_value(&app.session.active().unwrap().doc.text_styles).unwrap(), serde_json::to_value(&doc.text_styles).unwrap());
@@ -73,10 +73,10 @@ fn no_op_keeps_precise_imported_color_and_returning_to_original_removes_preview(
     set(&mut app, picker, "#ffffff");
     canvas::display_doc(&mut app, 0);
     set(&mut app, picker, &original);
-    assert!(Arc::ptr_eq(&canvas::display_doc(&mut app, 0).0, &before));
+    assert!(canvas::display_doc(&mut app, 0).0.shares_state(&before));
     assert!(app.text_style_preview.is_none());
     dialogs::confirm(&mut app, picker).unwrap();
-    assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &before));
+    assert!(app.session.active().unwrap().doc.shares_state(&before));
     assert_eq!(app.session.active().unwrap().history.past_len(), history);
 }
 
@@ -107,14 +107,14 @@ fn invalidated_targets_never_redirect_and_bad_color_never_commits() {
         prune(&mut app);
         assert!(app.ui.dialogs.is_empty());
         assert!(app.text_style_preview.is_none());
-        assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &doc));
+        assert!(app.session.active().unwrap().doc.shares_state(&doc));
     }
     let (mut app, id) = fixture(Kind::Character, 8);
     let picker = open(&mut app, Kind::Character, id).unwrap();
     set(&mut app, picker, "invalid");
     let doc = app.session.active().unwrap().doc.clone();
     assert!(dialogs::confirm(&mut app, picker).is_err());
-    assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &doc));
+    assert!(app.session.active().unwrap().doc.shares_state(&doc));
 }
 
 #[test]
@@ -169,9 +169,9 @@ fn actual_style_swatch_opens_shared_picker_enter_commits_escape_cancels() {
             h.run();
             assert!(h.state().ui.dialogs.is_empty());
             if key == Key::Escape {
-                assert!(Arc::ptr_eq(&h.state().session.active().unwrap().doc, &doc));
+                assert!(h.state().session.active().unwrap().doc.shares_state(&doc));
             } else {
-                assert!(!Arc::ptr_eq(&h.state().session.active().unwrap().doc, &doc));
+                assert!(!h.state().session.active().unwrap().doc.shares_state(&doc));
             }
             assert!(h.state().ui.type_panels.options.is_some());
         }

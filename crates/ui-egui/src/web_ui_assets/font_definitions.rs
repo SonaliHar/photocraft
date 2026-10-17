@@ -23,7 +23,7 @@ pub(super) fn definitions(bytes_for: impl Fn(FontRole) -> Result<&'static [u8], 
         data.tweak.scale = f32::from_bits(meta.scale_bits);
         fonts.font_data.insert(name.to_owned(), std::sync::Arc::new(data));
     }
-    fonts.font_data.insert("Inter".into(), std::sync::Arc::new(FontData::from_static(photocraft_text::fonts::INTER_REGULAR)));
+    fonts.font_data.insert("Inter".into(), std::sync::Arc::new(FontData::from_static(&photocraft_text::fonts::INTER_REGULAR)));
     fonts.families.insert(FontFamily::Monospace, ["JetBrainsMono", "Hack", "Ubuntu-Light", "NotoEmoji-Regular", "emoji-icon-font"].map(str::to_owned).to_vec());
     let fallback = ["Inter", "Ubuntu-Light", "NotoEmoji-Regular", "emoji-icon-font"].map(str::to_owned).to_vec();
     fonts.families.insert(FontFamily::Proportional, fallback.clone());

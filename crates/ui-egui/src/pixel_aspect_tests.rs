@@ -117,6 +117,7 @@ fn a_click_paints_the_pixel_drawn_under_the_pointer() {
     let xf = ViewXform::active(h.state()).unwrap();
     let at = xf.to_screen(120.5, 30.5);
     click(&mut h, at);
+    crate::canvas::wait_for_test_live_stroke(h.state_mut());
     assert_eq!(alpha(&h, 120, 30), 1.0, "painted under the pointer");
     // A square mapping of the same screen point is a different pixel, left blank.
     let square = ViewXform { aspect: 1.0, ..xf }.to_doc(at);

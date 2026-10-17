@@ -2,7 +2,6 @@ use super::*;
 use crate::{canvas, dialogs, layer_style, theme::ThemeKind};
 use egui::{Key, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
-use std::sync::Arc;
 
 fn app(depth: u32) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -45,7 +44,7 @@ fn every_exposed_color_field_uses_the_shared_picker_and_only_updates_its_target(
             let mut expected = original;
             set_param(&mut expected, &effect, field, json!("#23a567"));
             assert_eq!(fields(&app, parent), expected, "{kind}.{field}");
-            assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &doc));
+            assert!(app.session.active().unwrap().doc.shares_state(&doc));
             assert_eq!(app.session.active().unwrap().history.past_len(), history);
             assert_eq!(app.session.tools.foreground, tools.foreground);
             assert_eq!(app.session.tools.background, tools.background);
@@ -66,15 +65,15 @@ fn preview_cancel_ok_parent_cancel_and_apply_are_transactional_at_every_depth() 
         let picker = open(&mut app, parent, &effect, "color").unwrap();
         set_color(&mut app, picker, "#00ff00");
         let (shown, key) = canvas::display_doc(&mut app, 0);
-        assert!(!Arc::ptr_eq(&shown, &doc));
+        assert!(!shown.shares_state(&doc));
         let again = canvas::display_doc(&mut app, 0);
         assert_eq!(key, again.1);
-        assert!(Arc::ptr_eq(&shown, &again.0), "unchanged preview is cached");
-        let pixel = photocraft_compose::flatten(&shown).get(3, 3);
+        assert!(shown.shares_state(&again.0), "unchanged preview is cached");
+        let pixel = photocraft_compose::flatten(&shown).unwrap().get(3, 3);
         assert!(pixel[1] > pixel[0] && pixel[1] > pixel[2], "live preview is green at {depth} bits");
         let st = app.session.active().unwrap();
         assert_eq!((st.history.past_len(), st.revision, st.is_dirty()), (history, revision, dirty));
-        assert!(Arc::ptr_eq(&st.doc, &doc));
+        assert!(st.doc.shares_state(&doc));
         dialogs::cancel(&mut app, picker).unwrap();
         assert_eq!(fields(&app, parent), original);
         assert_ne!(canvas::display_doc(&mut app, 0).1, key);
@@ -83,7 +82,7 @@ fn preview_cancel_ok_parent_cancel_and_apply_are_transactional_at_every_depth() 
         dialogs::confirm(&mut app, picker).unwrap();
         assert_eq!(app.session.active().unwrap().history.past_len(), history);
         dialogs::cancel(&mut app, parent).unwrap();
-        assert!(Arc::ptr_eq(&canvas::display_doc(&mut app, 0).0, &doc));
+        assert!(canvas::display_doc(&mut app, 0).0.shares_state(&doc));
         let parent = layer_style::open(&mut app, Some("colorOverlay")).unwrap();
         let effect = selected(&app, parent);
         let picker = open(&mut app, parent, &effect, "color").unwrap();
@@ -91,7 +90,7 @@ fn preview_cancel_ok_parent_cancel_and_apply_are_transactional_at_every_depth() 
         dialogs::confirm(&mut app, picker).unwrap();
         dialogs::confirm(&mut app, parent).unwrap();
         let applied = app.session.active().unwrap().doc.clone();
-        let pixel = photocraft_compose::flatten(&applied).get(3, 3);
+        let pixel = photocraft_compose::flatten(&applied).unwrap().get(3, 3);
         assert!(pixel[1] > pixel[0]);
         app.run("edit.undo", json!({})).unwrap();
         assert_eq!(app.session.active().unwrap().doc.layer(doc.layers[0].id).unwrap().effects.items.len(), 0);
@@ -194,7 +193,7 @@ fn preview_off_and_parent_confirmation_and_cancellation_keep_their_contract() {
     let doc = app.session.active().unwrap().doc.clone();
     let picker = open(&mut app, parent, &effect, "color").unwrap();
     set_color(&mut app, picker, "#00ff00");
-    assert!(Arc::ptr_eq(&canvas::display_doc(&mut app, 0).0, &doc));
+    assert!(canvas::display_doc(&mut app, 0).0.shares_state(&doc));
     assert!(dialogs::confirm(&mut app, parent).is_err());
     assert_eq!(fields(&app, parent), original);
     assert_eq!(app.ui.dialogs.len(), 2);
@@ -255,7 +254,7 @@ fn eyedropper_edits_only_the_picker_and_invalid_samples_leave_it_unchanged() {
     color_picker_ui::sample_at(&mut app, -100.0, -100.0);
     assert_eq!(fields(&app, picker)["color"], "#406080");
     assert_eq!(fields(&app, parent), original);
-    assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &doc));
+    assert!(app.session.active().unwrap().doc.shares_state(&doc));
     assert_eq!(app.session.tools.foreground, tools.foreground);
     dialogs::cancel(&mut app, picker).unwrap();
 }

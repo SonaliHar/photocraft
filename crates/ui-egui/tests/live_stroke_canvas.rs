@@ -106,9 +106,29 @@ fn frames(h: &mut Harness, c: Case) -> (Pixels, Pixels, Pixels, bool) {
     times.sort_by(f64::total_cmp);
     // Pointer move → stroke rendered → frame built (canvas refresh and upload included).
     eprintln!("{c:?}: move-to-frame median {:.2} ms, max {:.2} ms", times[times.len() / 2], times[times.len() - 1]);
-    let drawing = canvas(h);
+    // Native begin/update preparation runs on a worker. Fast offscreen frames do
+    // not imply that the worker has published the last pointer move yet.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut drawing = canvas(h);
+    let mut stable = 0;
+    while stable < 3 {
+        assert!(!h.state().ui.status_error, "{c:?}: {}", h.state().ui.status);
+        assert!(std::time::Instant::now() < deadline, "{c:?}: live pixels did not settle while pressed");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let next = canvas(h);
+        stable = if max_diff(&before, &next) > 100 && next == drawing { stable + 1 } else { 0 };
+        drawing = next;
+    }
     let gpu = h.state().perf.gpu && !c.flip;
+    let revision = h.state().session.active().unwrap().revision;
     control(h, "ui.pointer", json!({"events": [{"kind": "up", "x": last.0, "y": last.1}]}));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while h.state().session.active().unwrap().revision == revision {
+        assert!(!h.state().ui.status_error, "{c:?}: {}", h.state().ui.status);
+        assert!(std::time::Instant::now() < deadline, "{c:?}: released stroke did not commit");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run_steps(3);
+    }
     let done = canvas(h);
     (before, drawing, done, gpu)
 }

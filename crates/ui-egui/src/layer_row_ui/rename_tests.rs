@@ -20,6 +20,10 @@ fn session() -> (photocraft_engine::Session, [u64; 3]) {
 
 fn harness(ppp: f32) -> (Harness<'static, PhotocraftApp>, [u64; 3]) {
     let (s, ids) = session();
+    (harness_session(s, ppp), ids)
+}
+
+fn harness_session(s: photocraft_engine::Session, ppp: f32) -> Harness<'static, PhotocraftApp> {
     let mut h =
         Harness::builder().with_size(vec2(1440.0, 900.0)).with_pixels_per_point(ppp).with_step_dt(1.0 / 60.0).with_max_steps(64).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
@@ -29,7 +33,52 @@ fn harness(ppp: f32) -> (Harness<'static, PhotocraftApp>, [u64; 3]) {
     let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"dock": {"collapsed": ["color", "properties", "history", "navigator"]}}));
     crate::control::handle(h.state_mut(), &ctx, &req);
     h.run_steps(8);
-    (h, ids)
+    h
+}
+
+#[test]
+fn native_reopened_selected_and_unselected_rows_rename_after_real_click_selection() {
+    for initially_selected in [false, true] {
+        let (source, [first, _, last]) = session();
+        let bytes = photocraft_format::save_to_bytes(&source.active().unwrap().doc, &Default::default()).unwrap();
+        let reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
+        let mut current = photocraft_engine::Session::new();
+        current.add_document(reopened, Some("reopened.pcraft".into())).unwrap();
+        let target = if initially_selected { last } else { first };
+        current.select_layer(photocraft_doc::LayerId(last)).unwrap();
+        let mut h = harness_session(current, 1.0);
+        let history = h.state().session.active().unwrap().history.past_len();
+        start(&mut h, target);
+        type_text(&mut h, "Native validation layer");
+        key(&mut h, Key::Enter);
+        assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+        assert_eq!(name(&h, target), "Native validation layer");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(name(&h, target), if initially_selected { "Gamma" } else { "Alpha" });
+    }
+}
+
+#[test]
+fn deferred_row_rename_refuses_failed_selection_and_same_id_snapshot_replacement() {
+    for replaced in [false, true] {
+        let (session, [layer, _, _]) = session();
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        let context = egui::Context::default();
+        let original = app.session.active().unwrap().doc.clone();
+        app.session.select_layer(photocraft_doc::LayerId(layer)).unwrap();
+        if replaced {
+            app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().name = "different same-ID model".into();
+        }
+        let state = app.session.active().unwrap();
+        let (before, revision, history) = (state.doc.clone(), state.revision, state.history.past_len());
+        super::start_rename_after_selection(&mut app, &context, &original, layer, "Alpha", replaced);
+        assert_eq!(super::renaming(&context), None);
+        assert_eq!(app.ui.status, "layer.rename.ui.stale-target");
+        let state = app.session.active().unwrap();
+        assert!(state.doc.shares_state(&before));
+        assert_eq!((state.revision, state.history.past_len()), (revision, history));
+    }
 }
 
 fn name(h: &Harness<'_, PhotocraftApp>, layer: u64) -> String {
@@ -148,6 +197,7 @@ fn enter_and_tab_commit_and_escape_cancels() {
 #[test]
 fn shift_tab_renames_the_layer_above_and_tab_at_the_bottom_ends() {
     let (mut h, [a, b, c]) = harness(1.0);
+    let history = h.state().session.active().unwrap().history.past_len();
     start(&mut h, b);
     type_text(&mut h, "Middle");
     h.event(Event::ModifiersChanged(Modifiers::SHIFT));
@@ -161,6 +211,14 @@ fn shift_tab_renames_the_layer_above_and_tab_at_the_bottom_ends() {
     type_text(&mut h, "Top");
     key(&mut h, Key::Enter);
     assert_eq!((name(&h, c), renaming(&h.ctx)), ("Top".into(), None));
+    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 2);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!((name(&h, b), name(&h, c)), ("Middle".into(), "Gamma".into()));
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!((name(&h, b), name(&h, c)), ("Beta".into(), "Gamma".into()));
+    h.state_mut().run("edit.redo", json!({})).unwrap();
+    h.state_mut().run("edit.redo", json!({})).unwrap();
     // Tab from the lowest layer ends the rename: the Background below isn't renamed in place.
     start(&mut h, a);
     key(&mut h, Key::Tab);
@@ -173,8 +231,11 @@ fn starting_another_rename_commits_the_first_and_only_one_is_open() {
         let (mut h, [a, b, _]) = harness(ppp);
         start(&mut h, a);
         type_text(&mut h, "First");
+        let history = h.state().session.active().unwrap().history.past_len();
         start(&mut h, b);
         assert_eq!(name(&h, a), "First", "@{ppp}x: the first rename was committed");
+        assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1);
         assert!(!field_shown(&h, a), "@{ppp}x: its field closed");
         assert!(field_shown(&h, b));
         type_text(&mut h, "Second");
@@ -183,6 +244,57 @@ fn starting_another_rename_commits_the_first_and_only_one_is_open() {
         assert_eq!((name(&h, a), name(&h, b)), ("First".into(), "Second".into()));
         assert_eq!(renaming(&h.ctx), None);
     }
+}
+
+#[test]
+fn tab_continuation_refuses_a_replaced_captured_editor_even_with_unchanged_text() {
+    let (mut h, [_, middle, top]) = harness(1.0);
+    start(&mut h, middle);
+    h.state_mut().session.active_mut().unwrap().doc.try_resident_mut().unwrap().name = "Different same-ID model".into();
+    let state = h.state().session.active().unwrap();
+    let before = state.doc.clone();
+    let revision = state.revision;
+    let history = state.history.past_len();
+    h.event(Event::ModifiersChanged(Modifiers::SHIFT));
+    h.event(Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT });
+    h.event(Event::Key { key: Key::Tab, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::SHIFT });
+    h.run_steps(1);
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert!(h.state().ui.status_error);
+    assert_eq!(h.state().ui.status, "layer.rename.ui.stale-target");
+    assert_eq!(renaming(&h.ctx), None);
+    assert!(!field_shown(&h, top));
+    let state = h.state().session.active().unwrap();
+    assert!(state.doc.shares_state(&before));
+    assert_eq!((state.revision, state.history.past_len()), (revision, history));
+    assert_eq!((name(&h, middle), name(&h, top)), ("Beta".into(), "Gamma".into()));
+}
+
+#[test]
+fn tab_continuation_refuses_invalid_multibyte_text_without_opening_the_next_editor() {
+    let (mut h, [_, middle, top]) = harness(1.0);
+    start(&mut h, middle);
+    let state = h.state().session.active().unwrap();
+    let before = state.doc.clone();
+    let revision = state.revision;
+    let history = state.history.past_len();
+    // Fewer than 4096 characters, but more than the existing 4096-byte command bound.
+    type_text(&mut h, &"Ω".repeat(2049));
+    h.event(Event::ModifiersChanged(Modifiers::SHIFT));
+    h.event(Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT });
+    h.event(Event::Key { key: Key::Tab, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::SHIFT });
+    h.run_steps(1);
+    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert!(h.state().ui.status_error);
+    assert_eq!(h.state().ui.status, "layer.rename.ui.invalid-name");
+    assert_eq!(renaming(&h.ctx), None);
+    assert!(!field_shown(&h, top));
+    let state = h.state().session.active().unwrap();
+    assert!(state.doc.shares_state(&before));
+    assert_eq!((state.revision, state.history.past_len()), (revision, history));
+    assert_eq!((name(&h, middle), name(&h, top)), ("Beta".into(), "Gamma".into()));
 }
 
 #[test]
@@ -270,7 +382,6 @@ fn double_click_beside_the_name_opens_layer_style() {
     assert_eq!(styles(&h), 0);
 }
 
-
 #[test]
 fn captured_layer_rename_uses_registered_id_selectors_trim_and_one_undo() {
     let (session, [layer, _, _]) = session();
@@ -282,89 +393,93 @@ fn captured_layer_rename_uses_registered_id_selectors_trim_and_one_undo() {
     let mut draft = super::rename(&context).unwrap();
     draft.text = "  Own captured rename  ".into();
     super::store(&context, Some(draft));
-    let (id,params) = super::end_rename_checked(&mut app, &context, true).unwrap();
+    let (id, params) = super::end_rename_checked(&mut app, &context, true).unwrap();
     assert_eq!(id, "layer.renameLayer");
     assert_eq!(params["layerId"], layer.to_string());
     assert!(params.get("layer").is_none());
     assert_eq!(params["documentId"], before.id.0.to_string());
     assert_eq!(params["expectedRevision"], revision.to_string());
     assert_eq!(params["name"], "Own captured rename");
-    app.run(&id,params).unwrap();
-    assert_eq!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)).unwrap().name,"Own captured rename");
-    app.run("edit.undo",json!({})).unwrap();
-    assert_eq!(*app.session.active().unwrap().doc,*before);
-    app.run("edit.redo",json!({})).unwrap();
-    assert_eq!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)).unwrap().name,"Own captured rename");
+    app.run(&id, params).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)).unwrap().name, "Own captured rename");
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(*app.session.active().unwrap().doc, *before);
+    app.run("edit.redo", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)).unwrap().name, "Own captured rename");
 }
 
 #[test]
 fn captured_rename_rejects_same_revision_replacement_and_reports_error() {
     let (session, [layer, _, _]) = session();
-    let mut app = PhotocraftApp::new(session,crate::Services::default());
+    let mut app = PhotocraftApp::new(session, crate::Services::default());
     let context = egui::Context::default();
-    super::start_rename_checked(&mut app,&context,layer,"Alpha");
-    let mut draft=super::rename(&context).unwrap();
-    draft.text="Own stale rename".into();
-    super::store(&context,Some(draft));
-    app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().name="Own new snapshot".into();
-    let before=app.session.active().unwrap().doc.clone();
-    let history=app.session.active().unwrap().history.past_len();
-    assert!(super::end_rename_checked(&mut app,&context,true).is_none());
+    super::start_rename_checked(&mut app, &context, layer, "Alpha");
+    let mut draft = super::rename(&context).unwrap();
+    draft.text = "Own stale rename".into();
+    super::store(&context, Some(draft));
+    app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().name = "Own new snapshot".into();
+    let before = app.session.active().unwrap().doc.clone();
+    let history = app.session.active().unwrap().history.past_len();
+    assert!(super::end_rename_checked(&mut app, &context, true).is_none());
     assert!(app.ui.status_error);
-    assert_eq!(app.ui.status,"layer.rename.ui.stale-target");
+    assert_eq!(app.ui.status, "layer.rename.ui.stale-target");
     assert!(app.session.active().unwrap().doc.shares_state(&before));
-    assert_eq!(app.session.active().unwrap().history.past_len(),history);
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
 }
 
 #[test]
 fn captured_rename_byte_bound_never_dispatches_multibyte_overflow() {
-    let (session, [layer, _, _])=session();
-    let mut app=PhotocraftApp::new(session,crate::Services::default());
-    let context=egui::Context::default();
-    super::start_rename_checked(&mut app,&context,layer,"Alpha");
-    let mut draft=super::rename(&context).unwrap();
-    draft.text="Ω".repeat(2049);
-    super::store(&context,Some(draft));
-    let before=app.session.active().unwrap().doc.clone();
-    assert!(super::end_rename_checked(&mut app,&context,true).is_none());
-    assert_eq!(app.ui.status,"layer.rename.ui.invalid-name");
+    let (session, [layer, _, _]) = session();
+    let mut app = PhotocraftApp::new(session, crate::Services::default());
+    let context = egui::Context::default();
+    super::start_rename_checked(&mut app, &context, layer, "Alpha");
+    let mut draft = super::rename(&context).unwrap();
+    draft.text = "Ω".repeat(2049);
+    super::store(&context, Some(draft));
+    let before = app.session.active().unwrap().doc.clone();
+    assert!(super::end_rename_checked(&mut app, &context, true).is_none());
+    assert_eq!(app.ui.status, "layer.rename.ui.invalid-name");
     assert!(app.session.active().unwrap().doc.shares_state(&before));
 }
 
-
 #[test]
 fn captured_second_editor_commits_first_before_binding_its_revision() {
-    let (session,[first,second,_])=session();
-    let mut app=PhotocraftApp::new(session,crate::Services::default());
-    let context=egui::Context::default();
-    super::start_rename_checked(&mut app,&context,first,"Alpha");
-    let mut draft=super::rename(&context).unwrap();draft.text="Own first".into();super::store(&context,Some(draft));
-    super::start_rename_checked(&mut app,&context,second,"Beta");
-    assert_eq!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(first)).unwrap().name,"Own first");
-    let mut draft=super::rename(&context).unwrap();draft.text="Own second".into();super::store(&context,Some(draft));
-    let (command,params)=super::end_rename_checked(&mut app,&context,true).unwrap();
-    assert_eq!(params["expectedRevision"],app.session.active().unwrap().revision.to_string());
-    app.run(&command,params).unwrap();
-    assert_eq!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(second)).unwrap().name,"Own second");
+    let (session, [first, second, _]) = session();
+    let mut app = PhotocraftApp::new(session, crate::Services::default());
+    let context = egui::Context::default();
+    super::start_rename_checked(&mut app, &context, first, "Alpha");
+    let mut draft = super::rename(&context).unwrap();
+    draft.text = "Own first".into();
+    super::store(&context, Some(draft));
+    super::start_rename_checked(&mut app, &context, second, "Beta");
+    assert_eq!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(first)).unwrap().name, "Own first");
+    let mut draft = super::rename(&context).unwrap();
+    draft.text = "Own second".into();
+    super::store(&context, Some(draft));
+    let (command, params) = super::end_rename_checked(&mut app, &context, true).unwrap();
+    assert_eq!(params["expectedRevision"], app.session.active().unwrap().revision.to_string());
+    app.run(&command, params).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(second)).unwrap().name, "Own second");
 }
-
 
 #[test]
 fn captured_rename_layer_id_above_json_exact_number_range_is_a_lossless_string() {
-    let (session,[old,_,_])=session();
-    let mut app=PhotocraftApp::new(session,crate::Services::default());
-    let high=9_007_199_254_740_995u64;
+    let (session, [old, _, _]) = session();
+    let mut app = PhotocraftApp::new(session, crate::Services::default());
+    let high = 9_007_199_254_740_995u64;
     {
-        let active=app.session.active_mut().unwrap();
-        active.doc.try_resident_mut().unwrap().layers.iter_mut().find(|layer|layer.id.0==old).unwrap().id=photocraft_doc::LayerId(high);
-        active.active_layer=Some(photocraft_doc::LayerId(high));
+        let active = app.session.active_mut().unwrap();
+        active.doc.try_resident_mut().unwrap().layers.iter_mut().find(|layer| layer.id.0 == old).unwrap().id = photocraft_doc::LayerId(high);
+        active.active_layer = Some(photocraft_doc::LayerId(high));
     }
-    let context=egui::Context::default();
-    super::start_rename_checked(&mut app,&context,high,"Alpha");
-    let mut draft=super::rename(&context).unwrap();draft.text="Own high identity".into();super::store(&context,Some(draft));
-    let (command,params)=super::end_rename_checked(&mut app,&context,true).unwrap();
-    assert_eq!(params["layerId"].as_str(),Some("9007199254740995"));
+    let context = egui::Context::default();
+    super::start_rename_checked(&mut app, &context, high, "Alpha");
+    let mut draft = super::rename(&context).unwrap();
+    draft.text = "Own high identity".into();
+    super::store(&context, Some(draft));
+    let (command, params) = super::end_rename_checked(&mut app, &context, true).unwrap();
+    assert_eq!(params["layerId"].as_str(), Some("9007199254740995"));
     assert!(params.get("layer").is_none());
-    app.run(&command,params).unwrap();
-    assert_eq!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(high)).unwrap().name,"Own high identity");
+    app.run(&command, params).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(high)).unwrap().name, "Own high identity");
 }

@@ -200,7 +200,7 @@ fn layer_reselection_commits_type_edit_and_cancel_preserves_committed_text() {
     // The first row click commits the edit; the second opens a new session (#5584).
     double_click(&mut h, at);
     assert_ne!(h.state().ui.text_edit.as_ref().unwrap().session, key);
-    assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + 1);
+    assert_eq!(h.state().session.active().unwrap().history.entry_labels().count(), steps + 1);
     crate::type_tool::cancel(h.state_mut());
     assert_eq!(text(&h, id), "Changed");
     assert!(h.state_mut().session.undo());

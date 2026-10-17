@@ -319,7 +319,7 @@ mod tests {
         let mut doc = Document::with_background("crop", Size::new(400, 300), ColorMode::Rgb, depth, Color::WHITE);
         doc.resolution_dpi = 72.0;
         let mut s = photocraft_engine::Session::new();
-        s.add_document(doc, None);
+        assert!(s.add_document(doc, None).is_ok());
         let mut app = PhotocraftApp::new(s, crate::Services::default());
         app.ui.tool = Tool::Crop;
         app.ui.extras.snap = false;

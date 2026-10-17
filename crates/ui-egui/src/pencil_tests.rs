@@ -6,8 +6,13 @@ use egui_kittest::Harness;
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::canvas::{ToolEvent, ViewXform, pencil_cursor_rect, pencil_tip_is_round, tool_event};
+use crate::canvas::{ToolEvent, ViewXform, pencil_cursor_rect, pencil_tip_is_round, tool_event as raw_tool_event};
 use crate::state::Tool;
+
+fn tool_event(app: &mut PhotocraftApp, event: ToolEvent, modifiers: egui::Modifiers) {
+    raw_tool_event(app, event, modifiers);
+    crate::canvas::wait_for_test_live_stroke(app);
+}
 
 fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -223,7 +228,7 @@ fn b_cycles_brush_pencil_mixer_brush_and_color_replacement() {
         app
     });
     h.state_mut().ui.tool = Tool::Move;
-    h.state_mut().session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
+    assert!(h.state_mut().session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false).is_ok());
     h.run_steps(4);
     let press = |h: &mut Harness<'_, PhotocraftApp>, m: Modifiers| {
         h.event(egui::Event::Key { key: Key::B, physical_key: None, pressed: true, repeat: false, modifiers: m });

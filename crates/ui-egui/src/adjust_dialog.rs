@@ -543,7 +543,7 @@ mod tests {
         h.run_steps(3);
         let stops = h.state().ui.dialogs[0].fields["stops"].as_array().unwrap();
         assert!((stops[0][0].as_f64().unwrap() - 0.3).abs() < 0.001);
-        assert!(std::sync::Arc::ptr_eq(&doc, &h.state().session.active().unwrap().doc), "dialog edits are previews");
+        assert!(doc.shares_state(&h.state().session.active().unwrap().doc), "dialog edits are previews");
         assert_eq!(h.state().session.active().unwrap().history.past_len(), steps);
         crate::dialogs::confirm(h.state_mut(), id).unwrap();
         h.run_steps(2);
@@ -655,7 +655,7 @@ mod tests {
         assert!(sample_at(&mut app, 8.0, 8.0));
         let in_white = |key: &str| app.ui.dialogs.last().and_then(|d| d.fields.get(key)).and_then(|c| c.get("inWhite")).and_then(Value::as_f64);
         assert_eq!([in_white("red"), in_white("green"), in_white("blue")], [Some(176.0), Some(64.0), Some(32.0)]);
-        assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &original));
+        assert!(app.session.active().unwrap().doc.shares_state(&original));
     }
 
     #[test]

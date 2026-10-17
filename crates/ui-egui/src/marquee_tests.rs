@@ -578,7 +578,7 @@ fn arrow_keys_nudge_the_selection_outline() {
     use egui::Key;
     for (tool, bundle) in [(Tool::RectMarquee, false), (Tool::EllipseMarquee, false), (Tool::RectMarquee, true), (Tool::EllipseMarquee, true)] {
         let mut h = harness(tool);
-        h.state_mut().session.edit_prefs(|p| p.tools.bundle_nudges = bundle);
+        h.state_mut().session.edit_prefs(|p| p.tools.bundle_nudges = bundle).unwrap();
         press_at(&mut h, 100.0, 80.0, Modifiers::NONE);
         release_at(&mut h, 200.0, 160.0, Modifiers::NONE);
         let drawn = selection(&h);

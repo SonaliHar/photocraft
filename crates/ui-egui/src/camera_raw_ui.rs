@@ -511,7 +511,9 @@ pub fn open_smart_filter(app: &mut PhotocraftApp, ctx: &egui::Context, layer: La
         return Err("the smart filter is not a Camera Raw filter".into());
     }
     let params = raw_params(RAW, &filter.params).map_err(|e| e.to_string())?;
-    let surf = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, index)
+    let surf = app
+        .session
+        .render_below_smart_filter(layer, index)
         .map_err(|e| e.to_string())?
         .ok_or("the smart object's contents are unavailable (missing linked file?)")?;
     let coverage = sm.filter_mask.clone().filter(|m| m.enabled).map_or(Coverage::None, Coverage::Mask);
@@ -1491,9 +1493,7 @@ mod tests {
     fn raw_app() -> (PhotocraftApp, Vec<u8>) {
         use photocraft_raw::testgen::{DngSpec, mosaic, scene};
         let services = crate::Services {
-            import: Some(Box::new(|name: &str, b: &[u8], depth: usize| {
-                photocraft_io::import_with_svg_group_depth(name, b, depth).map_err(|e| e.to_string())
-            })),
+            import: Some(Box::new(|name: &str, b: &[u8], depth: usize| photocraft_io::import_with_svg_group_depth(name, b, depth).map_err(|e| e.to_string()))),
             ..Default::default()
         };
         let (w, h) = (48, 32);

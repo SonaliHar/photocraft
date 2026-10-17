@@ -198,38 +198,227 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 
 /// The registry. English first: it is the fallback and the source language.
 pub static LANGUAGES: [LangInfo; 21] = [
-    LangInfo { code: "en", name: "English", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: b"", plural: plural_one_other, complete_menus: false, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
-    LangInfo { code: "ja", name: "日本語", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("ja"), plural: plural_none, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
-    LangInfo { code: "zh-hans", name: "简体中文", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
+    LangInfo {
+        code: "en",
+        name: "English",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: b"",
+        plural: plural_one_other,
+        complete_menus: false,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "ja",
+        name: "日本語",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("ja"),
+        plural: plural_none,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "zh-hans",
+        name: "简体中文",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("zh-hans"),
+        plural: plural_none,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
     // Traditional Chinese in the vocabulary used in Taiwan; `zh-TW`, `zh-HK`, `zh-MO` and `zh-Hant-*`
     // locales all resolve here (see `candidates`).
-    LangInfo { code: "zh-hant", name: "繁體中文", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("zh-hant"), plural: plural_none, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
-    LangInfo { code: "es", name: "Español", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("es"), plural: plural_one_other, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
-    LangInfo { code: "ru", name: "Русский", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("ru"), plural: plural_russian, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
+    LangInfo {
+        code: "zh-hant",
+        name: "繁體中文",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("zh-hant"),
+        plural: plural_none,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "es",
+        name: "Español",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("es"),
+        plural: plural_one_other,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "ru",
+        name: "Русский",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("ru"),
+        plural: plural_russian,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
     // Ukrainian has the same one/few/many rule for integer counts.
-    LangInfo { code: "uk", name: "Українська", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("uk"), plural: plural_russian, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
+    LangInfo {
+        code: "uk",
+        name: "Українська",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("uk"),
+        plural: plural_russian,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
     // Serbian (Latin script, Ekavian) has the same one/few/many rule for integer counts. `sr-RS`,
     // `sr-Latn-*` and `sr_RS@latin` resolve here; so do Cyrillic `sr` locales, which read Latin
     // rather than English.
-    LangInfo { code: "sr", name: "Srpski", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("sr"), plural: plural_russian, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
-    LangInfo { code: "cs", name: "Čeština", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("cs"), plural: plural_cs, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
-    LangInfo { code: "fr", name: "Français", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("fr"), plural: plural_fr, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
-    LangInfo { code: "id", name: "Bahasa Indonesia", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("id"), plural: plural_none, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
-    LangInfo { code: "ko", name: "한국어", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("ko"), plural: plural_none, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
-    LangInfo { code: "pl", name: "Polski", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("pl"), plural: plural_polish, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
-    LangInfo { code: "de", name: "Deutsch", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("de"), plural: plural_one_other, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
+    LangInfo {
+        code: "sr",
+        name: "Srpski",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("sr"),
+        plural: plural_russian,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "cs",
+        name: "Čeština",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("cs"),
+        plural: plural_cs,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "fr",
+        name: "Français",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("fr"),
+        plural: plural_fr,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "id",
+        name: "Bahasa Indonesia",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("id"),
+        plural: plural_none,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "ko",
+        name: "한국어",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("ko"),
+        plural: plural_none,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "pl",
+        name: "Polski",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("pl"),
+        plural: plural_polish,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "de",
+        name: "Deutsch",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("de"),
+        plural: plural_one_other,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
     // Brazilian Portuguese; `pt`, `pt-BR` and `pt-PT` locales all resolve here (see `candidates`).
-    LangInfo { code: "pt-br", name: "Português (Brasil)", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("pt-br"), plural: plural_pt, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
-    LangInfo { code: "el", name: "Ελληνικά", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("el"), plural: plural_one_other, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
+    LangInfo {
+        code: "pt-br",
+        name: "Português (Brasil)",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("pt-br"),
+        plural: plural_pt,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "el",
+        name: "Ελληνικά",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("el"),
+        plural: plural_one_other,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
     // Dutch; `nl-NL` and `nl-BE` locales both resolve here.
-    LangInfo { code: "nl", name: "Nederlands", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("nl"), plural: plural_one_other, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
-    LangInfo { code: "it", name: "Italiano", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("it"), plural: plural_one_other, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
+    LangInfo {
+        code: "nl",
+        name: "Nederlands",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("nl"),
+        plural: plural_one_other,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
+    LangInfo {
+        code: "it",
+        name: "Italiano",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("it"),
+        plural: plural_one_other,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
     // Hungarian: a count takes the singular noun ("3 réteg"), so one plural form.
-    LangInfo { code: "hu", name: "Magyar", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("hu"), plural: plural_none, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
+    LangInfo {
+        code: "hu",
+        name: "Magyar",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("hu"),
+        plural: plural_none,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
     // Turkish; `tr`, `tr-TR` and `tr_TR` locales resolve here.
-    LangInfo { code: "tr", name: "Türkçe", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("tr"), plural: plural_none, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
+    LangInfo {
+        code: "tr",
+        name: "Türkçe",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("tr"),
+        plural: plural_none,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
     // Vietnamese; `vi-VN` resolves here.
-    LangInfo { code: "vi", name: "Tiếng Việt", #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] source: catalog!("vi"), plural: plural_none, complete_menus: true, #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))] catalog: OnceLock::new() },
+    LangInfo {
+        code: "vi",
+        name: "Tiếng Việt",
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        source: catalog!("vi"),
+        plural: plural_none,
+        complete_menus: true,
+        #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
+        catalog: OnceLock::new(),
+    },
 ];
 
 #[cfg(not(all(target_arch = "wasm32", feature = "web_external_assets")))]
@@ -1015,7 +1204,7 @@ mod tests {
             catalog: OnceLock::new(),
         }));
         assert_eq!(info.text(), "");
-        assert_eq!(tr(Lang(info), "Layer"), "Layer", "falls back to English");
+        assert_eq!(tr(Lang(info, CatalogSource::Builtin), "Layer"), "Layer", "falls back to English");
     }
 
     /// Packed lines unpack to their keys; references to keys that don't exist are an error, not a

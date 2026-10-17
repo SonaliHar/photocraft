@@ -1006,7 +1006,7 @@ mod tests {
     /// What OK applies: `filter.filterGallery` with the dialog's stack on a copy of the document.
     fn applied(app: &PhotocraftApp, d: &GalleryDialog) -> Surface {
         let mut s2 = photocraft_engine::Session::new();
-        s2.add_document(app.session.active().unwrap().doc.as_ref().clone(), None);
+        assert!(s2.add_document(app.session.active().unwrap().doc.as_ref().clone(), None).is_ok());
         s2.select_layer(d.layer).unwrap();
         s2.execute("filter.filterGallery", d.params()).unwrap();
         s2.active().unwrap().doc.layer(d.layer).unwrap().surface().unwrap().clone()

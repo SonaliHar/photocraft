@@ -69,7 +69,7 @@ fn a_refused_position_reopens_the_dialog_without_a_guide() {
     let d = open(&mut app, &ctx);
     set(&mut app, d, "vertical", "12 furlongs");
     let err = crate::dialogs::confirm(&mut app, d).unwrap_err();
-    assert!(err.contains("not a length"), "{err}");
+    assert!(err.contains("position") && err.contains("px"), "the typed position error lists accepted units: {err}");
     assert_eq!(guides(&app), (vec![], vec![]));
     let again = app.ui.dialogs.iter().find(|d| owns(&d.fields)).expect("the dialog is open again");
     assert_eq!(again.fields["position"], "12 furlongs", "what was typed is kept");

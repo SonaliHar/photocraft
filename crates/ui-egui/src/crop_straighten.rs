@@ -180,7 +180,7 @@ mod tests {
     fn app(depth: SampleType) -> PhotocraftApp {
         let doc = Document::with_background("straighten", Size::new(200, 100), ColorMode::Rgb, depth, Color::WHITE);
         let mut s = photocraft_engine::Session::new();
-        s.add_document(doc, None);
+        assert!(s.add_document(doc, None).is_ok());
         let mut app = PhotocraftApp::new(s, crate::Services::default());
         app.ui.tool = Tool::Crop;
         // Classic Mode: the frame turns over the image (the default mode's Straighten is tested in

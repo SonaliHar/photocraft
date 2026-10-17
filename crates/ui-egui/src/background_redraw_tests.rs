@@ -89,13 +89,28 @@ fn settle(g: &mut Gpu) {
     }
 }
 
+/// Join only the actual selection worker; leave independent redraw uploads queued.
+fn finish_selection(g: &mut Gpu, doc: DocId) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let context = g.harness.ctx.clone();
+    while g.harness.state().session.has_jobs() {
+        crate::jobs_ui::tick(g.harness.state_mut(), &context);
+        assert_eq!(g.harness.state().session.active().unwrap().doc.id, doc);
+        assert!(std::time::Instant::now() < deadline, "selection job did not finish");
+        std::thread::yield_now();
+    }
+    assert_eq!(g.harness.state().session.active().unwrap().doc.id, doc);
+    assert!(!g.harness.state().ui.status_error, "{}", g.harness.state().ui.status);
+    assert!(g.harness.state().session.active().unwrap().doc.selection.is_some());
+}
+
 /// The canvas texture of `doc` against the synchronous CPU refresh of the current document.
 fn assert_matches_synchronous(g: &mut Gpu, doc: DocId) {
     let app = g.harness.state_mut();
     let d = app.session.active().expect("document").doc.clone();
     let (display, _) = crate::canvas::canvas_display(app, &d, None);
     let reference = doc.0 ^ (1u64 << 60);
-    g.observer.upload_composite(reference, &d, display.as_deref());
+    assert!(g.observer.upload_composite(reference, &d, display.as_deref()).is_ok());
     let (_, size, shown) = g.observer.read_texels(doc.0).expect("canvas texture");
     let (_, _, want) = g.observer.read_texels(reference).expect("reference texture");
     assert_eq!(size, [d.size.width, d.size.height]);
@@ -130,7 +145,7 @@ fn an_edit_during_a_redraw_is_not_overwritten_by_blocks_drawn_before_it() {
     g.harness.state_mut().run("layer.new.layer", json!({})).expect("layer");
     g.harness.step();
     g.harness.state_mut().run("select.rect", json!({"x": 3900, "y": 2900, "width": 150, "height": 150})).expect("select");
-    g.harness.step();
+    finish_selection(&mut g, doc);
     g.harness.state_mut().run("edit.fill", json!({"color": "#22ee22"})).expect("fill");
     g.harness.step();
     assert_eq!(g.harness.state().perf.last_refresh, "rect", "the fill's damage was drawn synchronously");
@@ -147,7 +162,7 @@ fn an_edit_damaging_most_of_a_large_document_is_drawn_in_the_background_too() {
     settle(&mut g);
     // Filling part of the Blend If layer can change the composite anywhere: the whole canvas.
     g.harness.state_mut().run("select.rect", json!({"x": 100, "y": 100, "width": 300, "height": 300})).expect("select");
-    g.harness.step();
+    finish_selection(&mut g, doc);
     g.harness.state_mut().run("edit.fill", json!({"color": "#22ee22"})).expect("fill");
     assert_eq!(g.harness.state().session.active().expect("document").last_damage, Some(Rect::new(0, 0, 2600, 1700)));
     g.harness.step();

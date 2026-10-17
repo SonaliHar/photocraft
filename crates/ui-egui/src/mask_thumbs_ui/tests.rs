@@ -624,7 +624,7 @@ fn backslash_toggles_the_rubylith() {
     h.key_press(egui::Key::Backslash);
     h.run_steps(2);
     assert_eq!(mask_view(&h), serde_json::Value::Null, "\\ again hides it");
-    assert!(std::sync::Arc::ptr_eq(&doc, &h.state().session.active().unwrap().doc), "a view toggle, not an edit");
+    assert!(doc.shares_state(&h.state().session.active().unwrap().doc), "a view toggle, not an edit");
     // A layer without a layer mask: nothing happens.
     h.state_mut().run("layer.select", json!({"layer": shape})).unwrap();
     h.run_steps(2);

@@ -289,7 +289,9 @@ fn apply_image_dialog_offers_source_layer_scale_and_offset() {
     app.run("layer.new.layer", json!({"name": "Skin High"})).unwrap();
     app.run("edit.fill", json!({"color": "#406080"})).unwrap();
     app.sync_views();
-    let background = app.session.active().unwrap().doc.walk()[0].2.name.clone();
+    let background_layer = app.session.active().unwrap().doc.walk()[0].2.clone();
+    let background = background_layer.id.0.to_string();
+    let source = app.session.active().unwrap().active_layer.unwrap().0.to_string();
     let open = |app: &mut PhotocraftApp| menu(app, &ctx, "image.applyImage", json!({})).unwrap()["dialog"].as_u64().unwrap();
     let d = open(&mut app);
     let fields = &app.ui.dialog_mut(d).unwrap().fields;
@@ -297,12 +299,15 @@ fn apply_image_dialog_offers_source_layer_scale_and_offset() {
     assert_eq!(fields["scale"], 1.0);
     assert_eq!(fields["offset"], 0);
     // Merged first, then the layers top to bottom, shown by their own names.
-    assert_eq!(fields["__choices"]["sourceLayer"], json!(["merged", "Skin High", background]));
-    assert_eq!(fields["__labels"]["Skin High"], "Skin High");
+    assert_eq!(fields["__choices"]["sourceLayer"], json!(["merged", source, background]));
+    assert_eq!(fields["__labels"][&source], "Skin High");
+    assert_eq!(fields["__labels"][&background], background_layer.name);
     // The frequency separation recipe: a layer subtracted from itself at Scale 2, Offset 128 is mid grey.
-    for (k, v) in [("sourceLayer", json!("Skin High")), ("blending", json!("subtract")), ("scale", json!(2.0)), ("offset", json!(128))] {
+    for (k, v) in [("sourceLayer", json!(source)), ("blending", json!("subtract")), ("scale", json!(2.0)), ("offset", json!(128))] {
         app.ui.dialog_mut(d).unwrap().fields.insert(k.into(), v);
     }
+    let dispatched = crate::filter_dialog::params_of(&app.ui.dialog_mut(d).unwrap().fields);
+    assert_eq!(dispatched["sourceLayer"].as_u64(), source.parse::<u64>().ok());
     crate::dialogs::confirm(&mut app, d).unwrap();
     let st = app.session.active().unwrap();
     let p = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(3, 3);
@@ -318,6 +323,16 @@ fn apply_image_dialog_offers_source_layer_scale_and_offset() {
     let p = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(3, 3);
     let want = (64.0 - 192.0) / 255.0 / 2.0 + 128.0 / 255.0;
     assert!((p[0] - want).abs() < 0.003, "{p:?} vs {want}");
+    // Duplicate display names remain distinct actual source identities.
+    app.run("layer.new.layer", json!({"name":"Skin High"})).unwrap();
+    let duplicate = app.session.active().unwrap().active_layer.unwrap().0.to_string();
+    assert_ne!(duplicate, source);
+    let d = open(&mut app);
+    let fields = &app.ui.dialog_mut(d).unwrap().fields;
+    let choices = fields["__choices"]["sourceLayer"].as_array().unwrap();
+    assert!(choices.contains(&json!(source)) && choices.contains(&json!(duplicate)));
+    assert_eq!(fields["__labels"][&source], "Skin High");
+    assert_eq!(fields["__labels"][&duplicate], "Skin High");
 }
 
 #[test]
@@ -536,11 +551,11 @@ fn print_size_legacy_default_and_valid_zoom_bounds() {
     for (physical, legacy, expected) in [
         (None, 144.0, 0.5),
         (None, 72.0, 1.0),
-        (Some(photocraft_doc::PhysicalResolution::square(f64::MIN_POSITIVE)), 300.0, 64.0),
+        (Some(photocraft_doc::PhysicalResolution::square(f64::MIN_POSITIVE)), 300.0, 128.0),
         (Some(photocraft_doc::PhysicalResolution::square(1.125)), 300.0, 64.0),
         (Some(photocraft_doc::PhysicalResolution::square(144.0)), 300.0, 0.5),
-        (Some(photocraft_doc::PhysicalResolution::square(7200.0)), 300.0, 0.01),
-        (Some(photocraft_doc::PhysicalResolution::square(f64::MAX)), 300.0, 0.01),
+        (Some(photocraft_doc::PhysicalResolution::square(7200.0)), 300.0, 0.02),
+        (Some(photocraft_doc::PhysicalResolution::square(f64::MAX)), 300.0, 0.02),
     ] {
         let (mut app, ctx) = print_app(8, physical, legacy, "none").unwrap();
         print_menu_exact(&mut app, &ctx, "view.printSize", Ok(expected)).unwrap();
@@ -549,11 +564,12 @@ fn print_size_legacy_default_and_valid_zoom_bounds() {
 }
 #[test]
 fn print_size_threshold_neighbors_are_bounded() {
-    for threshold in [1.125_f64, 7200.0] {
+    // This 200×100 document uses the shared 12800% maximum and 2px shorter-side minimum.
+    for threshold in [0.5625_f64, 3600.0] {
         for bits in [threshold.to_bits() - 1, threshold.to_bits() + 1] {
             let dpi = f64::from_bits(bits);
             let (mut app, ctx) = print_app(8, Some(photocraft_doc::PhysicalResolution::square(dpi)), 300.0, "none").unwrap();
-            print_menu_exact(&mut app, &ctx, "view.printSize", Ok((72.0 / dpi).clamp(0.01, 64.0) as f32)).unwrap();
+            print_menu_exact(&mut app, &ctx, "view.printSize", Ok((72.0 / dpi).clamp(f64::from(0.02f32), 128.0) as f32)).unwrap();
         }
     }
 }
@@ -722,14 +738,18 @@ fn save_selection_opens_its_dialog_and_saves_on_confirm() {
     let fields = &mut app.ui.dialog_mut(dialog).unwrap().fields;
     assert_eq!(fields["__command"], "select.saveSelection");
     assert_eq!(fields["channel"], "new");
-    assert_eq!(fields["__choices"]["operation"], json!(["new", "replace", "add", "subtract", "intersect"]));
+    let operations = crate::channel_action_dialog::operation_options("select.saveSelection").into_iter().map(|(key, _)| key).collect::<Vec<_>>();
+    assert_eq!(json!(operations), json!(["new", "replace", "add", "subtract", "intersect"]));
     fields.insert("name".into(), json!("Keep"));
     crate::dialogs::confirm(&mut app, dialog).unwrap();
     let names: Vec<_> = app.session.active().unwrap().doc.channels.iter().map(|c| c.name.clone()).collect();
     assert_eq!(names, ["Keep"]);
     // A second save lists the new channel as a destination.
     let dialog = menu(&mut app, &ctx, "select.saveSelection", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields["__choices"]["channel"], json!(["new", "Keep"]));
+    let channel = app.session.active().unwrap().doc.channels[0].id;
+    let rows = app.ui.dialog_mut(dialog).unwrap().fields["__channels"].as_array().unwrap();
+    assert_eq!(rows.iter().map(|r| r["key"].clone()).collect::<Vec<_>>(), vec![json!("new"), json!(format!("alpha:{}", channel.0))]);
+    assert_eq!(rows[1]["label"], "Keep");
 }
 
 #[test]
@@ -741,15 +761,18 @@ fn load_selection_opens_its_dialog_and_loads_on_confirm() {
     app.run("select.deselect", json!({})).unwrap();
     let dialog = menu(&mut app, &ctx, "select.loadSelection", json!({})).unwrap()["dialog"].as_u64().expect("Load Selection opens a dialog");
     assert!(app.session.active().unwrap().doc.selection.is_none(), "loaded before confirmation");
+    let channel = app.session.active().unwrap().doc.channels[0].id;
     let fields = &app.ui.dialog_mut(dialog).unwrap().fields;
     assert_eq!(fields["__command"], "select.loadSelection");
-    assert_eq!(fields["channel"], "Keep");
+    let key = format!("alpha:{}", channel.0);
+    assert_eq!(fields["channel"], key);
     assert_eq!(fields["invert"], false);
     assert_eq!(fields["operation"], "new");
-    let channels = fields["__choices"]["channel"].as_array().unwrap();
-    assert!(channels.contains(&json!("Keep")) && channels.contains(&json!("transparency")));
+    let channels = fields["__channels"].as_array().unwrap();
+    assert!(channels.iter().any(|r| r["key"] == key && r["label"] == "Keep"));
+    assert!(channels.iter().any(|r| r["key"] == "transparency"));
     // The layer has no mask, so its mask is not offered.
-    assert!(!channels.contains(&json!("mask")), "{channels:?}");
+    assert!(!channels.iter().any(|r| r["key"] == "mask"), "{channels:?}");
     crate::dialogs::confirm(&mut app, dialog).unwrap();
     assert!(app.session.active().unwrap().doc.selection.is_some());
 }
@@ -758,7 +781,7 @@ fn load_selection_opens_its_dialog_and_loads_on_confirm() {
 fn load_selection_without_alpha_channels_offers_the_composite() {
     let (mut app, ctx) = app_with(1);
     let dialog = menu(&mut app, &ctx, "select.loadSelection", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields["channel"], "RGB");
+    assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields["channel"], "composite");
     crate::dialogs::confirm(&mut app, dialog).unwrap();
 }
 

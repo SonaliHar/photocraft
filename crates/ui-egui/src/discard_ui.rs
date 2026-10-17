@@ -450,20 +450,22 @@ mod tests {
         app.session.active_mut().unwrap().path = Some("/pics/kept.psd".into());
         app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new()))));
         app.services.write = Some(Box::new(|_: &str, _: &[u8]| Ok(())));
-        app.session.edit_prefs(|prefs| {
-            prefs.script_events.enabled = true;
-            prefs.script_events.bindings = vec![ScriptBinding {
-                event: "saveDocument".into(),
-                script: None,
-                steps: Some(json!([["layer.new.layer", {"name": "From the script"}]])),
-                name: "Binding".into(),
-            }];
-        });
+        app.session
+            .edit_prefs(|prefs| {
+                prefs.script_events.enabled = true;
+                prefs.script_events.bindings = vec![ScriptBinding {
+                    event: "saveDocument".into(),
+                    script: None,
+                    steps: Some(json!([["layer.new.layer", {"name": "From the script"}]])),
+                    name: "Binding".into(),
+                }];
+            })
+            .unwrap();
         let doc = doc_id(&app, 0);
         assert!(!save(&mut app, &ctx, doc), "the script's layer was never written");
         assert!(app.session.documents()[0].is_dirty());
         // Without the script the same save releases the prompt.
-        app.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
+        app.session.edit_prefs(|prefs| prefs.script_events.enabled = false).unwrap();
         assert!(save(&mut app, &ctx, doc));
     }
 
@@ -920,7 +922,7 @@ mod tests {
         app.session.active_mut().unwrap().path = Some("/pics/big.psd".into());
         app.background_jobs = true;
         let (g, w) = (gate.clone(), written.clone());
-        app.services.save_file = Some(Arc::new(move |_, path, _, ctx| {
+        app.services.save_file = Some(Arc::new(move |_, path, _, ctx, _| {
             while !g.load(Ordering::Relaxed) {
                 ctx.check().map_err(|e| e.to_string())?;
                 std::thread::sleep(std::time::Duration::from_millis(1));

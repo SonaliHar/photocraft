@@ -129,14 +129,18 @@ fn main() {
     }
     println!("built {w}×{hh}, {layers} layers in {:.0} ms", ms(t));
 
+    let mut session = photocraft_engine::Session::new();
+    if let Err(error) = session.open_document(doc, Some("big.psb".into())) {
+        eprintln!("Cannot prepare Lasso benchmark document: {error}");
+        return;
+    }
     let builder = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1000.0));
     let mut h: H = builder.wgpu_setup(photocraft_ui_egui::gpu_canvas::wgpu_setup()).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+        let mut app = PhotocraftApp::new(session, Services::default());
         if let Some(rs) = cc.wgpu_render_state.as_ref() {
             app.set_wgpu(rs.clone());
         }
-        app.session.open_document(doc, Some("big.psb".into()));
         app.sync_views();
         app
     });

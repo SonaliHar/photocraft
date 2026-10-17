@@ -47,7 +47,7 @@ fn tapping_an_arrow_key_ten_times_is_one_history_step() {
     }
     assert_eq!(bounds(&h).x0, start.x0 + 10);
     assert_eq!(steps(&h), n0 + 1, "ten taps, one state");
-    let entries = h.state().session.active().unwrap().history.entries();
+    let entries: Vec<String> = h.state().session.active().unwrap().history.entry_labels().map(str::to_owned).collect();
     assert_eq!(entries.last().map(String::as_str), Some("Move"));
     assert_eq!(entries.iter().filter(|e| *e == "Move").count(), 1);
     h.state_mut().session.undo();

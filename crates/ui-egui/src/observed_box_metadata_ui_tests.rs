@@ -26,10 +26,10 @@ fn observed_box_metadata_uses_existing_layer_controls_and_gestures() {
             assert!(app.run(&command, params).unwrap().is_null());
             let named = app.session.active().unwrap().doc.clone();
             let past = app.session.active().unwrap().history.past_len();
-            let (command, params) = pct_action(&named.layers[0], "opacity", 37.5, Some(42));
+            let (command, params) = pct_action(&json!({"layer": named.layers[0].id.0}), "opacity", 37.5, Some(42));
             assert_eq!(params["coalesce"], "layer-opacity-slider:42");
             assert!(app.run(&command, params).unwrap().is_null());
-            let (command, params) = pct_action(&app.session.active().unwrap().doc.layers[0], "opacity", -0.0, Some(42));
+            let (command, params) = pct_action(&json!({"layer": app.session.active().unwrap().doc.layers[0].id.0}), "opacity", -0.0, Some(42));
             app.run(&command, params).unwrap();
             app.run("layer.setProps", json!({"layer":layer.id.0,"visible":false,"name":"Same gesture hidden","coalesce":"layer-opacity-slider:42"})).unwrap();
             let changed = app.session.active().unwrap().doc.clone();
@@ -59,10 +59,10 @@ fn observed_box_metadata_uses_existing_layer_controls_and_gestures() {
                 ],
                 ..Default::default()
             };
-            let _ = ctx.run(input, |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            let _ = ctx.run_ui(input, |root| {
+                egui::CentralPanel::default().show(root, |ui| {
                     let response = ui.allocate_response(egui::vec2(20., 20.), egui::Sense::click_and_drag());
-                    eye_sweep(ctx, &changed.layers[0], egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200., 30.)), &response, &mut actions);
+                    eye_sweep(ui.ctx(), &changed.layers[0], egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200., 30.)), &response, &mut actions);
                 });
             });
             assert_eq!(actions.len(), 1);
@@ -73,7 +73,7 @@ fn observed_box_metadata_uses_existing_layer_controls_and_gestures() {
             assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Layer Visibility"));
             // Opacity remains raw negative zero: the current display is transparent.
             let snapshot = app.session.active().unwrap().doc.clone();
-            let (image, fee) = crate::canvas_backed_preview::backed_snapshot_display_image(
+            let (image, fee) = crate::canvas::test_backed_snapshot_display_image(
                 &snapshot,
                 snapshot.size.width,
                 snapshot.size.height,

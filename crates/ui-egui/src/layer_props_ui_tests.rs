@@ -28,7 +28,7 @@ fn the_layers_panel_locks_every_selected_layer() {
     let extra = h.state_mut().run("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
     h.state_mut().run("layer.select", json!({"layer": ids[1], "mode": "add"})).unwrap();
     h.run_steps(3);
-    assert_eq!(h.state().session.active().unwrap().selected_layers().len(), 2);
+    assert_eq!(h.state().session.active().unwrap().selected_layers().unwrap().len(), 2);
     h.query_by_label_contains("Lock all").expect("the Lock all button").click();
     h.run_steps(3);
     let st = h.state().session.active().unwrap();

@@ -127,8 +127,13 @@ pub fn draw_line_preview(
 mod tests {
     use super::*;
     use crate::PhotocraftApp;
-    use crate::canvas::{ToolEvent, tool_event};
+    use crate::canvas::{ToolEvent, tool_event as raw_tool_event};
     use serde_json::json;
+
+    fn tool_event(app: &mut PhotocraftApp, event: ToolEvent, modifiers: egui::Modifiers) {
+        raw_tool_event(app, event, modifiers);
+        crate::canvas::wait_for_test_live_stroke(app);
+    }
 
     fn close(a: [f64; 2], b: [f64; 2]) -> bool {
         (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6
@@ -358,6 +363,7 @@ mod tests {
                     return;
                 }
                 egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+                crate::canvas::wait_for_test_live_stroke(app);
             },
             a,
         );
@@ -376,12 +382,12 @@ mod tests {
         h.event(Event::ModifiersChanged(Modifiers::NONE));
         let start = c - vec2(60.0, 0.0);
         h.event(Event::PointerMoved(start));
-        h.run();
+        h.run_steps(1);
         h.event(Event::PointerButton { pos: start, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-        h.run();
+        h.run_steps(1);
         for k in 1..=6 {
             h.event(Event::PointerMoved(start + vec2(10.0 * k as f32, 0.0)));
-            h.run();
+            h.run_steps(1);
         }
         h.event(Event::PointerButton { pos: c, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
         h.run_steps(2);

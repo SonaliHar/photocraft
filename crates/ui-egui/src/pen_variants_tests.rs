@@ -30,7 +30,7 @@ fn freeform_pen_drag_is_fitted_into_one_work_path_or_shape() {
     assert_eq!(Tool::from_name("freeformPen"), Some(Tool::FreeformPen));
     assert_eq!(Tool::FreeformPen.key(), 'P');
     let mut app = app(Tool::FreeformPen);
-    let before = app.session.active().unwrap().history.entries().len();
+    let before = app.session.active().unwrap().history.entry_labels().count();
     // A zig-zag with two right-angle corners, sampled every 2 px: 90 pointer samples.
     let corners = [[20.0, 20.0], [80.0, 20.0], [80.0, 80.0], [140.0, 80.0]];
     let trace: Vec<[f64; 2]> = corners
@@ -49,7 +49,7 @@ fn freeform_pen_drag_is_fitted_into_one_work_path_or_shape() {
     assert!(!sp.closed);
     let anchors: Vec<[f64; 2]> = sp.knots.iter().map(|k| [k.anchor.x, k.anchor.y]).collect();
     assert_eq!(anchors, corners, "the fit keeps the corners, not the 90 samples");
-    assert_eq!(app.session.active().unwrap().history.entries().len(), before + 1, "one History step");
+    assert_eq!(app.session.active().unwrap().history.entry_labels().count(), before + 1, "one History step");
 
     // Shape mode: a closed loop (released on its start) becomes a filled shape layer.
     app.ui.tool_options.vector_mode = "shape".into();
@@ -120,7 +120,7 @@ fn freeform_pen_alt_clicks_draw_straight_segments_between_freehand_runs() {
     // releasing ⌥ with the button down goes on freehand.
     let mut app = app(Tool::FreeformPen);
     app.sync_views();
-    let before = app.session.active().unwrap().history.entries().len();
+    let before = app.session.active().unwrap().history.entry_labels().count();
     ev(&mut app, "down", 20.0, 20.0, Modifiers::NONE);
     for x in (22..=80).step_by(2) {
         ev(&mut app, "move", f64::from(x), 20.0, Modifiers::NONE);
@@ -148,7 +148,7 @@ fn freeform_pen_alt_clicks_draw_straight_segments_between_freehand_runs() {
     assert!(!knots[1].smooth && !knots[2].smooth);
     // The freehand run after it curves.
     assert!(knots[2..].iter().any(|k| k.out_ctrl != k.anchor), "{knots:?}");
-    assert_eq!(app.session.active().unwrap().history.entries().len(), before + 1, "one History step");
+    assert_eq!(app.session.active().unwrap().history.entry_labels().count(), before + 1, "one History step");
 }
 
 #[test]

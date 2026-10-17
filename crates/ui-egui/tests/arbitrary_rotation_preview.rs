@@ -160,6 +160,7 @@ fn preview_toggle_and_cancel_keep_the_document_while_ok_applies_rotation() {
     h.get_by_label("OK").click();
     h.run_steps(4);
     assert!(h.state().ui.dialogs.is_empty());
+    assert!(!h.state().ui.status_error, "rotation confirmation: {}", h.state().ui.status);
     let st = h.state().session.active().unwrap();
     assert_eq!((st.doc.size.width, st.doc.size.height), (453, 453));
     assert_eq!(st.history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), history.len() + 1);

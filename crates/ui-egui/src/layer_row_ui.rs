@@ -376,65 +376,153 @@ struct RenameWitness {
     layer: u64,
     snapshot: photocraft_engine::document_snapshot::WeakDocumentSnapshot,
 }
-fn witness_id() -> egui::Id { egui::Id::new("layer-rename-current-witness") }
-fn witness(ctx: &egui::Context) -> Option<RenameWitness> { ctx.data(|data|data.get_temp::<RenameWitness>(witness_id())) }
-fn checked_rename_action(app: &mut crate::PhotocraftApp, target: Option<RenameWitness>, action: Option<(String,Value)>) -> Option<(String,Value)> {
-    let (_,mut params) = action?;
+fn witness_id() -> egui::Id {
+    egui::Id::new("layer-rename-current-witness")
+}
+fn witness(ctx: &egui::Context) -> Option<RenameWitness> {
+    ctx.data(|data| data.get_temp::<RenameWitness>(witness_id()))
+}
+fn checked_rename_target(app: &crate::PhotocraftApp, target: &RenameWitness) -> Result<(), &'static str> {
+    let active = app.session.active().ok_or("layer.rename.ui.stale-target")?;
+    let snapshot = target.snapshot.upgrade().ok_or("layer.rename.ui.stale-target")?;
+    if active.doc.id != target.document || active.revision != target.revision || !active.doc.shares_state(&snapshot) {
+        return Err("layer.rename.ui.stale-target");
+    }
+    if app.ui.transform.is_some()
+        || app.session.has_jobs()
+        || active.floating.is_some()
+        || active.doc.xcf_state.as_ref().is_some_and(|state| state.floating.is_some())
+    {
+        return Err("layer.rename.ui.context");
+    }
+    Ok(())
+}
+fn checked_rename_action(app: &mut crate::PhotocraftApp, target: Option<RenameWitness>, action: Option<(String, Value)>) -> Option<(String, Value)> {
+    let (_, mut params) = action?;
     let result = (|| {
         let target = target.ok_or("layer.rename.ui.stale-target")?;
-        let active = app.session.active().ok_or("layer.rename.ui.stale-target")?;
-        let snapshot = target.snapshot.upgrade().ok_or("layer.rename.ui.stale-target")?;
-        if active.doc.id != target.document || active.revision != target.revision || !active.doc.shares_state(&snapshot)
-            || params.get("layer").and_then(Value::as_u64) != Some(target.layer) { return Err("layer.rename.ui.stale-target"); }
-        if app.ui.transform.is_some() || app.session.has_jobs() || active.floating.is_some()
-            || active.doc.xcf_state.as_ref().is_some_and(|state|state.floating.is_some()) { return Err("layer.rename.ui.context"); }
+        checked_rename_target(app, &target)?;
+        if params.get("layer").and_then(Value::as_u64) != Some(target.layer) {
+            return Err("layer.rename.ui.stale-target");
+        }
         let name = params.get("name").and_then(Value::as_str).ok_or("layer.rename.ui.invalid-name")?;
-        if name.len() > 4096 || name.contains('\0') { return Err("layer.rename.ui.invalid-name"); }
+        if name.len() > 4096 || name.contains('\0') {
+            return Err("layer.rename.ui.invalid-name");
+        }
         let object = params.as_object_mut().ok_or("layer.rename.ui.invalid-name")?;
         object.remove("layer");
-        object.insert("layerId".into(),json!(target.layer.to_string()));
-        object.insert("documentId".into(),json!(target.document.0.to_string()));
-        object.insert("expectedRevision".into(),json!(target.revision.to_string()));
-        Ok(("layer.renameLayer".into(),params))
+        object.insert("layerId".into(), json!(target.layer.to_string()));
+        object.insert("documentId".into(), json!(target.document.0.to_string()));
+        object.insert("expectedRevision".into(), json!(target.revision.to_string()));
+        Ok(("layer.renameLayer".into(), params))
     })();
-    match result { Ok(action)=>Some(action),Err(error)=>{app.ui.status=error.into();app.ui.status_error=true;None} }
+    match result {
+        Ok(action) => Some(action),
+        Err(error) => {
+            app.ui.status = error.into();
+            app.ui.status_error = true;
+            None
+        }
+    }
 }
 /// Production entry point: retain a snapshot witness alongside the legacy edit
 /// field without changing its trim/focus/menu behavior or serialized document.
-pub fn start_rename_checked(app: &mut crate::PhotocraftApp, ctx: &egui::Context, layer: u64, name: &str) -> Option<(String,Value)> {
-    if renaming(ctx) == Some(layer) { return None; }
+pub fn start_rename_checked(app: &mut crate::PhotocraftApp, ctx: &egui::Context, layer: u64, name: &str) -> Option<(String, Value)> {
+    if renaming(ctx) == Some(layer) {
+        return None;
+    }
     let old = witness(ctx);
-    let Some(active) = app.session.active() else { return None; };
+    let active = app.session.active()?;
     if name.len() > 4096 || name.contains('\0') || active.doc.layer(photocraft_doc::LayerId(layer)).is_none() {
-        app.ui.status="layer.rename.ui.invalid-name".into();app.ui.status_error=true;return None;
+        app.ui.status = "layer.rename.ui.invalid-name".into();
+        app.ui.status_error = true;
+        return None;
     }
     let requested_document = active.doc.id;
-    let action = start_rename(ctx,layer,name);
+    let action = start_rename(ctx, layer, name);
     // Commit the previous editor before capturing the next editor's revision.
     // Otherwise that successful rename would invalidate the new target itself.
-    if let Some((command,params)) = checked_rename_action(app,old,action)
-        && let Err(error) = app.run(&command,params) { app.ui.status=error;app.ui.status_error=true; }
-    let Some(active) = app.session.active().filter(|active| active.doc.id == requested_document
-        && active.doc.layer(photocraft_doc::LayerId(layer)).is_some_and(|current|current.name == name)) else {
-        store(ctx,None);
-        ctx.data_mut(|data|data.remove::<RenameWitness>(witness_id()));
-        app.ui.status="layer.rename.ui.stale-target".into();app.ui.status_error=true;return None;
+    if let Some((command, params)) = checked_rename_action(app, old, action)
+        && let Err(error) = app.run(&command, params)
+    {
+        app.ui.status = error;
+        app.ui.status_error = true;
+    }
+    let Some(active) = app
+        .session
+        .active()
+        .filter(|active| active.doc.id == requested_document && active.doc.layer(photocraft_doc::LayerId(layer)).is_some_and(|current| current.name == name))
+    else {
+        store(ctx, None);
+        ctx.data_mut(|data| data.remove::<RenameWitness>(witness_id()));
+        app.ui.status = "layer.rename.ui.stale-target".into();
+        app.ui.status_error = true;
+        return None;
     };
-    let target = RenameWitness {document:active.doc.id,revision:active.revision,layer,snapshot:active.doc.downgrade()};
-    ctx.data_mut(|data|data.insert_temp(witness_id(),target));
+    let target = RenameWitness { document: active.doc.id, revision: active.revision, layer, snapshot: active.doc.downgrade() };
+    ctx.data_mut(|data| data.insert_temp(witness_id(), target));
     None
 }
-pub fn end_rename_checked(app: &mut crate::PhotocraftApp, ctx: &egui::Context, commit: bool) -> Option<(String,Value)> {
-    let target=witness(ctx);
-    let action=end_rename(ctx,commit);
-    ctx.data_mut(|data|data.remove::<RenameWitness>(witness_id()));
-    checked_rename_action(app,target,action)
+
+/// Complete a row's queued selection before minting the rename revision fence.
+/// Selection may advance revision, but cannot replace the captured model or
+/// transfer the gesture to another document/layer.
+pub(crate) fn start_rename_after_selection(
+    app: &mut crate::PhotocraftApp,
+    ctx: &egui::Context,
+    snapshot: &photocraft_engine::DocumentSnapshot,
+    layer: u64,
+    name: &str,
+    selection_succeeded: bool,
+) {
+    if !selection_succeeded
+        || !app.session.active().is_some_and(|active| {
+            active.doc.id == snapshot.id
+                && active.doc.shares_state(snapshot)
+                && active.active_layer == Some(photocraft_doc::LayerId(layer))
+                && active.doc.layer(photocraft_doc::LayerId(layer)).is_some_and(|current| current.name == name)
+        })
+    {
+        app.ui.status = "layer.rename.ui.stale-target".into();
+        app.ui.status_error = true;
+        return;
+    }
+    let _ = start_rename_checked(app, ctx, layer, name);
 }
-pub fn rename_field_checked(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, layer:u64, rect:Rect) -> Option<(String,Value)> {
-    let target=witness(ui.ctx());
-    let action=rename_field(ui,layer,rect);
-    if renaming(ui.ctx()).is_none() {ui.data_mut(|data|data.remove::<RenameWitness>(witness_id()));}
-    checked_rename_action(app,target,action)
+pub fn end_rename_checked(app: &mut crate::PhotocraftApp, ctx: &egui::Context, commit: bool) -> Option<(String, Value)> {
+    let target = witness(ctx);
+    let action = end_rename(ctx, commit);
+    ctx.data_mut(|data| data.remove::<RenameWitness>(witness_id()));
+    checked_rename_action(app, target, action)
+}
+pub fn rename_field_checked(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, layer: u64, rect: Rect) -> Option<(String, Value)> {
+    let target = witness(ui.ctx());
+    let action = rename_field(ui, layer, rect);
+    // A Tab continuation is still the original editor's gesture, even when its
+    // text was unchanged. Validate that witness before retaining the next cue.
+    if ui.data(|data| data.get_temp::<(u64, bool)>(next_rename_id())).is_some_and(|(from, _)| from == layer) {
+        let valid =
+            target.as_ref().filter(|target| target.layer == layer).ok_or("layer.rename.ui.stale-target").and_then(|target| checked_rename_target(app, target));
+        if let Err(error) = valid {
+            ui.data_mut(|data| {
+                data.remove::<(u64, bool)>(next_rename_id());
+                data.remove::<RenameWitness>(witness_id());
+            });
+            app.ui.status = error.into();
+            app.ui.status_error = true;
+            return None;
+        }
+    }
+    if renaming(ui.ctx()).is_none() {
+        ui.data_mut(|data| data.remove::<RenameWitness>(witness_id()));
+    }
+    let committing = action.is_some();
+    let checked = checked_rename_action(app, target, action);
+    if committing && checked.is_none() {
+        // Refused text must not transfer its Tab gesture to another editor.
+        ui.data_mut(|data| data.remove::<(u64, bool)>(next_rename_id()));
+    }
+    checked
 }
 
 #[cfg(test)]

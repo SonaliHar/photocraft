@@ -88,7 +88,7 @@ fn statistics_browse_and_mode_selection_compute_the_chosen_statistic() {
     assert_eq!(doc.layers.len(), 1);
     let photocraft_doc::LayerContent::Smart(smart) = &doc.layers[0].content else { panic!("expected a stack smart object") };
     assert_eq!(smart.stack_mode, Some(photocraft_doc::StackMode::Mean));
-    let pixel = photocraft_compose::flatten(doc).px[0];
+    let pixel = photocraft_compose::flatten(doc).unwrap().px[0];
     for (actual, expected) in pixel.iter().zip([96.0, 128.0, 160.0, 255.0]) {
         assert!((actual * 255.0 - expected).abs() < 1.5, "{pixel:?}");
     }

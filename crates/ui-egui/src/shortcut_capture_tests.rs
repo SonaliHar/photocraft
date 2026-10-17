@@ -96,7 +96,7 @@ fn toolbar_shortcut_overrides_remove_old_keys_and_skip_removed_group_members() {
     app.ui.tool = Tool::Brush;
     press(&mut app, Key::B, Modifiers::SHIFT);
     assert_eq!(app.ui.tool, Tool::Pencil, "reset restores the default group");
-    app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
+    assert!(app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false).is_ok());
     press(&mut app, Key::B, Modifiers::NONE);
     assert_eq!(app.ui.tool, Tool::MixerBrush, "plain-key cycling still follows the preference");
 }

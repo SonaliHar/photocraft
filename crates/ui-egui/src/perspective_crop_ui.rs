@@ -305,7 +305,7 @@ mod tests {
     fn drag_a_box_move_a_corner_and_commit() {
         let doc = Document::with_background("p", Size::new(200, 150), ColorMode::Rgb, SampleType::U8, Color::WHITE);
         let mut s = photocraft_engine::Session::new();
-        s.add_document(doc, None);
+        assert!(s.add_document(doc, None).is_ok());
         let mut app = PhotocraftApp::new(s, crate::Services::default());
         app.ui.tool = Tool::PerspectiveCrop;
         let ev = |app: &mut PhotocraftApp, e| assert!(pointer(app, e));

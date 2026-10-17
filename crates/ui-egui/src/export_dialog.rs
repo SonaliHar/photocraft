@@ -225,7 +225,9 @@ fn batch_paths(path: &str, docs: &[Document]) -> Vec<String> {
 /// The document a dialog exports: the whole image, or one layer (`__layer`).
 fn source_document_from(doc: DocumentSnapshot, f: &Map<String, Value>) -> Result<DocumentSnapshot, String> {
     match f.get("__layer").and_then(Value::as_u64) {
-        Some(id) => photocraft_engine::layer_menu_cmds::layer_document(&doc, photocraft_doc::LayerId(id)).map_err(|e| e.to_string()).and_then(|doc| DocumentSnapshot::from_resident(Arc::new(doc)).map_err(|error| error.to_string())),
+        Some(id) => photocraft_engine::layer_menu_cmds::layer_document(&doc, photocraft_doc::LayerId(id))
+            .map_err(|e| e.to_string())
+            .and_then(|doc| DocumentSnapshot::from_resident(Arc::new(doc)).map_err(|error| error.to_string())),
         None => Ok(doc),
     }
 }
@@ -245,7 +247,7 @@ fn n(f: &Map<String, Value>, k: &str, d: f64) -> f64 {
 /// transparency is off or the format has no alpha.
 fn export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>) -> Result<Document, String> {
     let mut session = photocraft_engine::Session::new();
-    session.add_document(doc.clone(), None);
+    session.add_document(doc.clone(), None).map_err(|error| error.to_string())?;
     if s(f, "profile") == "srgb" && doc.icc_profile.is_some() {
         session.execute("edit.convertToProfile", json!({"profile": "srgb", "intent": "perceptual"})).map_err(|e| e.to_string())?;
     }
@@ -810,9 +812,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         Some(source_document(app, f).and_then(|source| preview_sync(app, &source, f)))
                     };
                     #[cfg(target_arch = "wasm32")]
-                    let result = {
-                        Some(source_document(app, f).and_then(|source| preview_sync(app, &source, f)))
-                    };
+                    let result = { Some(source_document(app, f).and_then(|source| preview_sync(app, &source, f))) };
                     result.map(|result| cache_preview(ui, key, sig, result))
                 }
             };

@@ -21,6 +21,7 @@ fn harness() -> Harness<'static, PhotocraftApp> {
                 return;
             }
             egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            crate::canvas::wait_for_test_live_stroke(app);
         },
         app,
     );
@@ -321,8 +322,8 @@ fn releasing_a_stroke_commits_the_live_pixels_and_replays_identically() {
     fresh.execute("file.new", json!({"width": 200, "height": 100, "background": "white"})).unwrap();
     fresh.execute("tools.setBrush", json!({"brush": {"size": 14, "hardness": 0.2}, "smoothing": {"amount": 0.3}})).unwrap();
     fresh.execute("paint.stroke", p).unwrap();
-    let a = photocraft_compose::render(&st.doc, st.doc.bounds());
-    let b = photocraft_compose::render(&fresh.active().unwrap().doc, st.doc.bounds());
+    let a = photocraft_compose::render(&st.doc, st.doc.bounds()).unwrap();
+    let b = photocraft_compose::render(&fresh.active().unwrap().doc, st.doc.bounds()).unwrap();
     assert_eq!(a.px.len(), b.px.len());
     assert!(a.px.iter().zip(&b.px).all(|(x, y)| x == y), "live commit and replay differ");
 }
@@ -420,8 +421,8 @@ fn releasing_a_clone_stamp_stroke_commits_what_a_replay_paints() {
     });
     fresh.execute("paint.cloneStamp", p).unwrap();
     let st = app.session.active().unwrap();
-    let a = photocraft_compose::render(&st.doc, st.doc.bounds());
-    let b = photocraft_compose::render(&fresh.active().unwrap().doc, st.doc.bounds());
+    let a = photocraft_compose::render(&st.doc, st.doc.bounds()).unwrap();
+    let b = photocraft_compose::render(&fresh.active().unwrap().doc, st.doc.bounds()).unwrap();
     assert_eq!(a.px.len(), b.px.len());
     assert!(a.px.iter().zip(&b.px).all(|(x, y)| x == y), "live commit and replay differ");
 }

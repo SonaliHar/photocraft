@@ -78,11 +78,11 @@ pub(super) fn preview(app: &mut PhotocraftApp, ctx: &egui::Context, params: &Val
         }
         (state.doc.id, state.revision, bounds, state.doc.quota().ok_or(tl!("Color Range preview is unavailable for this document."))?.clone())
     };
-    if let Some(p) = app.color_range.as_ref().filter(|p| p.doc == doc && p.revision == revision && p.mask_key == key && p.error.is_none()) {
-        if let (Some(native), Some(texture)) = (&p.backed, &p.mask) {
-            current(&native.query, app)?;
-            return Ok((texture.id(), native.size, 1));
-        }
+    if let Some(p) = app.color_range.as_ref().filter(|p| p.doc == doc && p.revision == revision && p.mask_key == key && p.error.is_none())
+        && let (Some(native), Some(texture)) = (&p.backed, &p.mask)
+    {
+        current(&native.query, app)?;
+        return Ok((texture.id(), native.size, 1));
     }
     let control = &Interrupt::NONE;
     let query = BackedColorRangeSamples::new_with_interrupt(&app.session, params, control).map_err(|e| e.to_string())?;

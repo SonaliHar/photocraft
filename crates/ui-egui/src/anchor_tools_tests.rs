@@ -35,7 +35,7 @@ fn work(app: &PhotocraftApp) -> Path {
 }
 
 fn steps(app: &PhotocraftApp) -> usize {
-    app.session.active().unwrap().history.entries().len()
+    app.session.active().unwrap().history.entry_labels().count()
 }
 
 fn click(app: &mut PhotocraftApp, at: [f64; 2], mods: Modifiers) {

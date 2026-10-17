@@ -137,7 +137,7 @@ fn invalid_custom_paper_is_rejected_without_printing_or_changing_the_document() 
     assert!(photocraft_engine::print_cmds::layout(&h.state().session.active().unwrap().doc, &Value::Object(edited), "file.print").is_err());
     click(&mut h, "Print");
     let error = &h.state().ui.status;
-    assert!(error.contains("paper is too small"), "{error}");
+    assert!(error.contains("paper must have finite dimensions greater than 36 points"), "{error}");
     assert_eq!(h.state().session.active().unwrap().doc, before);
     assert!(h.state().session.file_menu.last_print.is_none());
     assert!(!output.exists());

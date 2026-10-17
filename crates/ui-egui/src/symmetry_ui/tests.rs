@@ -117,6 +117,7 @@ fn guides_never_consume_normal_paint_and_transform_background_clicks_never_paint
     let before = app.session.active().unwrap().history.past_len();
     down(&mut app, [20.0, 20.0]);
     up(&mut app, [20.0, 20.0]);
+    crate::canvas::wait_for_test_live_stroke(&mut app);
     assert_eq!(app.session.active().unwrap().history.past_len(), before + 1);
     begin(&mut app).unwrap();
     down(&mut app, [10.0, 10.0]);
@@ -127,7 +128,7 @@ fn guides_never_consume_normal_paint_and_transform_background_clicks_never_paint
 #[test]
 fn menu_selects_all_modes_resets_positions_and_preserves_work_path_choice() {
     let mut app = app();
-    app.session.edit_prefs(|p| p.interface.language = "en".into());
+    assert!(app.session.edit_prefs(|p| p.interface.language = "en".into()).is_ok());
     app.run("path.set", json!({"name":"work","path":{"subpaths":[{"knots":[[20,0],[20,80]]}]}})).unwrap();
     let mut h = Harness::builder().with_size(vec2(500.0, 450.0)).build_ui_state(
         |ctx, app| {

@@ -124,7 +124,7 @@ impl Bench {
                     let _ = rs.device.poll(eframe::wgpu::PollType::Wait { submission_index: None, timeout: None });
                 }
                 None => {
-                    std::hint::black_box(photocraft_compose::render(doc, r));
+                    std::hint::black_box(photocraft_compose::render(doc, r).map_err(|error| error.to_string())?);
                 }
             }
         }
@@ -582,7 +582,17 @@ fn full_canvas_layer_scenarios(b: &mut Bench, sz: &Sizes) {
     };
     if let (Some((g, _)), Some(st)) = (&b.gpu, s.active()) {
         // As the app counts it (`canvas::gpu_budget`).
-        let pixels = st.memory_bytes() as u64;
+        let pixels = match st
+            .memory_bytes()
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| u64::try_from(bytes).map_err(|error| format!("document memory byte count: {error}")))
+        {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                b.errors.push((opacity.to_string(), error));
+                return;
+            }
+        };
         let allowance = u64::from(photocraft_engine::prefs::Performance::default().memory_usage_mb) << 20;
         g.set_memory_budget(photocraft_ui_egui::gpu_canvas::memory_budget(
             allowance,

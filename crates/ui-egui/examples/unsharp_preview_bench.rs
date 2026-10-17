@@ -40,9 +40,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut checksum = 0u64;
             for rep in 0..reps + 2 {
                 let start = Instant::now();
-                let result = filter_dialog::preview_document(&doc, Some(id), cmd, &json!({"radius":radius,"amount":amount,"threshold":threshold}), k)
-                    .ok_or("preview failed")?;
-                let pixels = photocraft_compose::flatten(&result);
+                let result = filter_dialog::preview_document(&doc, Some(id), cmd, &json!({"radius":radius,"amount":amount,"threshold":threshold}), k)?;
+                let pixels = photocraft_compose::flatten(&result)?;
                 let ms = start.elapsed().as_secs_f64() * 1000.0;
                 // Outside timing: stable hash over the full flattened result, no image file needed.
                 let hash = pixels.px.iter().flatten().fold(0u64, |h, v| h.wrapping_mul(1099511628211).wrapping_add(u64::from(v.to_bits())));

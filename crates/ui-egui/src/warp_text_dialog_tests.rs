@@ -35,7 +35,7 @@ fn warp_of(doc: &Document, id: photocraft_doc::LayerId) -> Option<TextWarp> {
 }
 
 fn steps(app: &PhotocraftApp) -> usize {
-    app.session.active().unwrap().history.entries().len()
+    app.session.active().unwrap().history.entry_labels().count()
 }
 
 /// The open dialogs drawn over `app`, as the window shows them.
@@ -129,7 +129,7 @@ fn an_unknown_warp_style_opens_at_none_with_the_layers_values() {
     if let Some(LayerContent::Text(t)) = doc.layer_mut(id).map(|l| &mut l.content) {
         t.warp = Some(TextWarp { style: "warpCustom".into(), value: 12.0, horizontal_distortion: -5.0, vertical_distortion: 7.0, horizontal: false });
     }
-    st.doc = std::sync::Arc::new(doc);
+    st.doc = photocraft_engine::document_snapshot::DocumentSnapshot::from_resident(std::sync::Arc::new(doc)).unwrap();
     let (_, fields) = open(&mut app);
     assert_eq!(shown(&fields), ("none", 12.0, -5.0, 7.0, "vertical"));
 }
@@ -150,7 +150,7 @@ fn warp_text_dialog_previews_the_warp_without_editing_the_document() {
     let app = h.state();
     let shown = app.filter_preview.as_ref().and_then(|p| p.result.clone()).expect("a preview");
     assert_eq!(warp_of(&shown, layer).map(|w| (w.style, w.value)), Some(("warpArc".to_string(), 40.0)));
-    assert_ne!(photocraft_compose::flatten(&shown).px, photocraft_compose::flatten(&original).px, "the preview shows the warp");
+    assert_ne!(photocraft_compose::flatten(&shown).unwrap().px, photocraft_compose::flatten(&original).unwrap().px, "the preview shows the warp");
     let st = app.session.active().unwrap();
     assert_eq!(st.revision, revision);
     assert_eq!(warp(app), None, "the document is not edited");
@@ -189,7 +189,7 @@ fn confirming_warp_text_is_one_undoable_step() {
     assert!(app.ui.dialogs.is_empty());
     assert_eq!(warp(app).map(|w| (w.style, w.value, w.horizontal)), Some(("warpFish".to_string(), 25.0, true)));
     assert_eq!(steps(app), history + 1);
-    assert_eq!(app.session.active().unwrap().history.entries().last().map(|e| e.to_string()), Some("Warp Text".to_string()));
+    assert_eq!(app.session.active().unwrap().history.entry_labels().last().map(|e| e.to_string()), Some("Warp Text".to_string()));
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(warp(app), before);
 }

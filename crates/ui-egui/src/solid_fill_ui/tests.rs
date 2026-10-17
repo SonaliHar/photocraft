@@ -48,7 +48,7 @@ fn new_solid_color_from_menu_cancel_keeps_document_and_history_unchanged() {
     let app = h.state_mut();
     let before = app.session.active().unwrap().doc.clone();
     let active = app.session.active().unwrap().active_layer;
-    let steps = app.session.active().unwrap().history.entries().len();
+    let steps = app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
 
     let opened = crate::menus::invoke(app, &ctx, "layer.newFillLayer.solidColor", json!({})).unwrap();
     assert!(opened.get("layer").is_none(), "no layer exists until OK");
@@ -57,15 +57,15 @@ fn new_solid_color_from_menu_cancel_keeps_document_and_history_unchanged() {
     assert_eq!(picker.id, dialog);
     assert!(owns_new(&picker.fields), "new Solid Color fill opens the shared Color Picker");
     assert_eq!(picker.fields["__params"]["document"], before.id.0);
-    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
-    assert_eq!(app.session.active().unwrap().history.entries().len(), steps);
+    assert!(before.shares_state(&app.session.active().unwrap().doc));
+    assert_eq!(app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), steps);
 
     app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!("#ff8800"));
     crate::dialogs::cancel(app, dialog).unwrap();
     assert!(app.ui.dialogs.iter().all(|d| d.id != dialog));
-    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc), "Cancel must not create or delete a layer");
+    assert!(before.shares_state(&app.session.active().unwrap().doc), "Cancel must not create or delete a layer");
     assert_eq!(app.session.active().unwrap().active_layer, active);
-    assert_eq!(app.session.active().unwrap().history.entries().len(), steps, "Cancel must not record a history entry");
+    assert_eq!(app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), steps, "Cancel must not record a history entry");
 }
 
 #[test]
@@ -73,14 +73,14 @@ fn new_solid_color_from_menu_ok_creates_one_layer_with_chosen_or_default_color()
     let (mut h, _) = harness(1.0);
     let ctx = h.ctx.clone();
     let app = h.state_mut();
-    let steps = app.session.active().unwrap().history.entries().len();
+    let steps = app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
 
     // OK with the initial foreground colour still creates the fill layer.
     let first = crate::menus::invoke(app, &ctx, "layer.newFillLayer.solidColor", json!({})).unwrap();
     let created = crate::dialogs::confirm(app, first["dialog"].as_u64().unwrap()).unwrap();
     let id = LayerId(created["layer"].as_u64().unwrap());
     assert!(matches!(app.session.active().unwrap().doc.layer(id).unwrap().content, LayerContent::Fill(Fill::Solid(_))));
-    assert_eq!(app.session.active().unwrap().history.entries().len(), steps + 1);
+    assert_eq!(app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), steps + 1);
 
     let second = crate::menus::invoke(app, &ctx, "layer.newFillLayer.solidColor", json!({})).unwrap();
     let dialog = second["dialog"].as_u64().unwrap();
@@ -92,14 +92,14 @@ fn new_solid_color_from_menu_ok_creates_one_layer_with_chosen_or_default_color()
     };
     assert_eq!(color.to_rgba8()[..3], [255, 136, 0]);
     assert_eq!(app.session.active().unwrap().active_layer, Some(id));
-    assert_eq!(app.session.active().unwrap().history.entries().len(), steps + 2);
+    assert_eq!(app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), steps + 2);
 
     let dialogs = app.ui.dialogs.len();
     let explicit = crate::menus::invoke(app, &ctx, "layer.newFillLayer.solidColor", json!({"color": "#123456"})).unwrap();
     assert!(explicit["layer"].as_u64().is_some());
     assert!(explicit.get("dialog").is_none());
     assert_eq!(app.ui.dialogs.len(), dialogs, "parameterised creation stays non-interactive");
-    assert_eq!(app.session.active().unwrap().history.entries().len(), steps + 3);
+    assert_eq!(app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), steps + 3);
 }
 
 #[test]
@@ -111,10 +111,10 @@ fn new_solid_color_picker_rejects_a_different_active_document() {
     app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!("#ff8800"));
     app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
     let before = app.session.active().unwrap().doc.clone();
-    let steps = app.session.active().unwrap().history.entries().len();
+    let steps = app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
     assert!(crate::dialogs::confirm(app, dialog).is_err());
-    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
-    assert_eq!(app.session.active().unwrap().history.entries().len(), steps);
+    assert!(before.shares_state(&app.session.active().unwrap().doc));
+    assert_eq!(app.session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), steps);
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn only_the_colour_thumbnail_opens_the_solid_fill_picker() {
     for ppp in [1.0, 2.0] {
         let (mut h, id) = harness(ppp);
         let r = row(&h, id).row;
-        let count = h.state().session.active().unwrap().history.entries().len();
+        let count = h.state().session.active().unwrap().history.entry_labels().count();
         double_click(&mut h, pos2(r.left() + 46.0, r.center().y));
         assert_eq!(h.state().session.active().unwrap().active_layer, Some(id));
         assert!(!h.state().ui.mask_target && !h.state().ui.vector_mask_target, "the colour thumbnail targets the fill, not its mask");
@@ -131,7 +131,7 @@ fn only_the_colour_thumbnail_opens_the_solid_fill_picker() {
         assert_eq!(d.fields["__label"], "Color Picker (Solid Color)");
         assert_eq!(d.fields["color"], "#336699");
         assert_eq!(d.fields["__params"]["layer"], id.0);
-        assert_eq!(h.state().session.active().unwrap().history.entries().len(), count);
+        assert_eq!(h.state().session.active().unwrap().history.entry_labels().count(), count);
 
         let (mut h, id) = harness(ppp);
         let r = row(&h, id).row;
@@ -165,7 +165,7 @@ fn picker_previews_without_editing_cancel_discards_and_ok_is_one_step() {
     app.run("layer.select", json!({"layer": id.0})).unwrap();
     let before = app.session.active().unwrap().doc.clone();
     let LayerContent::Fill(Fill::Solid(original)) = before.layer(id).unwrap().content else { panic!() };
-    let steps = app.session.active().unwrap().history.entries().len();
+    let steps = app.session.active().unwrap().history.entry_labels().count();
     let tools = app.session.tools.foreground;
     let dialog = open(app).unwrap();
     app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!("#ff8800"));
@@ -173,8 +173,8 @@ fn picker_previews_without_editing_cancel_discards_and_ok_is_one_step() {
     let (again, again_key) = display_doc(app, 0).unwrap();
     assert_eq!(key, again_key);
     assert!(Arc::ptr_eq(&preview, &again), "preview is cached");
-    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc), "preview does not dirty the real document");
-    assert_eq!(app.session.active().unwrap().history.entries().len(), steps);
+    assert!(before.shares_state(&app.session.active().unwrap().doc), "preview does not dirty the real document");
+    assert_eq!(app.session.active().unwrap().history.entry_labels().count(), steps);
     let LayerContent::Fill(Fill::Solid(color)) = preview.layer(id).unwrap().content else { panic!() };
     assert_eq!(color.to_rgba8(), [255, 136, 0, 128]);
     assert_eq!(thumbnail_color(app, before.id, id, original), color);
@@ -187,7 +187,7 @@ fn picker_previews_without_editing_cancel_discards_and_ok_is_one_step() {
     let (_, reopened_key) = display_doc(app, 0).unwrap();
     assert_ne!(key, reopened_key, "reopening a picker never reuses a cancelled preview key");
     crate::dialogs::confirm(app, dialog).unwrap();
-    assert_eq!(app.session.active().unwrap().history.entries().len(), steps + 1);
+    assert_eq!(app.session.active().unwrap().history.entry_labels().count(), steps + 1);
     assert_eq!(app.session.tools.foreground, tools, "editing a fill doesn't change the tool colour");
     assert_eq!(app.session.active().unwrap().doc.layer(id).unwrap().content, LayerContent::Fill(Fill::Solid(color)));
     let bytes = photocraft_format::save_to_bytes(&app.session.active().unwrap().doc, &Default::default()).unwrap();
@@ -217,7 +217,7 @@ fn unchanged_ok_keeps_imported_model_precision_and_alpha() {
     let before = app.session.active().unwrap().doc.clone();
     let dialog = open(app).unwrap();
     crate::dialogs::confirm(app, dialog).unwrap();
-    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+    assert!(before.shares_state(&app.session.active().unwrap().doc));
 }
 
 #[test]
@@ -232,7 +232,7 @@ fn picker_never_applies_to_a_different_document_with_the_same_layer_id() {
     let before = app.session.active().unwrap().doc.clone();
     assert!(display_doc(app, app.session.active_index().unwrap()).is_none());
     assert!(crate::dialogs::confirm(app, dialog).is_err());
-    assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+    assert!(before.shares_state(&app.session.active().unwrap().doc));
 }
 
 #[test]
@@ -245,24 +245,24 @@ fn cmyk_lab_preview_thumbnail_cancel_and_ok_are_consistent() {
         let before = app.session.active().unwrap().doc.clone();
         let LayerContent::Fill(Fill::Solid(original)) = before.layer(id).unwrap().content else { panic!() };
         assert_eq!(before.mode, mode);
-        let count = app.session.active().unwrap().history.entries().len();
+        let count = app.session.active().unwrap().history.entry_labels().count();
         let dialog = open(app).unwrap();
         app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!("#ff8800"));
         let (shown, _) = display_doc(app, app.session.active_index().unwrap()).unwrap();
         let LayerContent::Fill(Fill::Solid(preview)) = shown.layer(id).unwrap().content else { panic!() };
         assert_eq!(preview, Color::rgba(1.0, 136.0 / 255.0, 0.0, original.alpha).in_mode(mode));
         assert_eq!(thumbnail_color(app, before.id, id, original), preview);
-        assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
-        assert_eq!(app.session.active().unwrap().history.entries().len(), count);
+        assert!(before.shares_state(&app.session.active().unwrap().doc));
+        assert_eq!(app.session.active().unwrap().history.entry_labels().count(), count);
         app.ui.close_dialog(dialog);
         assert!(display_doc(app, app.session.active_index().unwrap()).is_none());
-        assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
-        assert_eq!(app.session.active().unwrap().history.entries().len(), count);
+        assert!(before.shares_state(&app.session.active().unwrap().doc));
+        assert_eq!(app.session.active().unwrap().history.entry_labels().count(), count);
         let dialog = open(app).unwrap();
         app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!("#ff8800"));
         crate::dialogs::confirm(app, dialog).unwrap();
         assert_eq!(app.session.active().unwrap().doc.layer(id).unwrap().content, LayerContent::Fill(Fill::Solid(preview)));
-        assert_eq!(app.session.active().unwrap().history.entries().len(), count + 1);
+        assert_eq!(app.session.active().unwrap().history.entry_labels().count(), count + 1);
         app.run("edit.undo", json!({})).unwrap();
         assert_eq!(*app.session.active().unwrap().doc, *before);
         app.run("edit.redo", json!({})).unwrap();

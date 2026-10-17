@@ -211,7 +211,11 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     } else if tool == Tool::Move || moves_layer {
         let exclude = match app.session.active().map(|state| state.selected_layers()) {
             Some(Ok(ids)) => ids,
-            Some(Err(error)) => { app.ui.status = error.to_string(); app.ui.status_error = true; return; }
+            Some(Err(error)) => {
+                app.ui.status = error.to_string();
+                app.ui.status_error = true;
+                return;
+            }
             None => Vec::new(),
         };
         moving_rect(app, tool).map(|rect| (Gesture::Move { rect }, exclude))
@@ -236,11 +240,19 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
         // A marquee or lasso inside the selection moves the outline (⌘: cuts its pixels into a
         // floating piece): its bounds snap, as the Move tool's do, not the pointer. A cut piece
         // doesn't snap to its own layer.
-        let exclude = if cut { match app.session.active().map(|state| state.selected_layers()) {
-            Some(Ok(ids)) => ids,
-            Some(Err(error)) => { app.ui.status = error.to_string(); app.ui.status_error = true; return; }
-            None => Vec::new(),
-        } } else { Vec::new() };
+        let exclude = if cut {
+            match app.session.active().map(|state| state.selected_layers()) {
+                Some(Ok(ids)) => ids,
+                Some(Err(error)) => {
+                    app.ui.status = error.to_string();
+                    app.ui.status_error = true;
+                    return;
+                }
+                None => Vec::new(),
+            }
+        } else {
+            Vec::new()
+        };
         selection_rect(app).map(|rect| (Gesture::SelectionMove { rect }, exclude))
     } else if is_point_tool(tool) {
         Some((Gesture::Point, Vec::new()))
@@ -884,7 +896,7 @@ mod tests {
                 assert_eq!(app.ui.transform.as_ref().unwrap().quad, expected, "release preserves {menu}");
                 crate::transform_tool::cancel(&mut app);
                 assert!(app.ui.transform.is_none() && app.prefs_rt.snap.is_none() && app.prefs_rt.snap_lines.is_empty());
-                assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &doc), "cancel preserves {menu}'s document");
+                assert!(app.session.active().unwrap().doc.shares_state(&doc), "cancel preserves {menu}'s document");
                 assert_eq!(app.session.active().unwrap().history.past_len(), past, "cancel preserves {menu}'s history");
                 assert_eq!(serde_json::to_value(app.session.prefs()).unwrap(), prefs, "{menu} does not change preferences");
             }
@@ -912,7 +924,7 @@ mod tests {
             crate::canvas::tool_event(&mut app, ToolEvent::Up { x: end[0] + 2.0, y: end[1] + 1.0 }, ctrl);
             assert_eq!(app.ui.transform.as_ref().unwrap().quad, expected, "release preserves the type's edge");
             crate::transform_tool::cancel(&mut app);
-            assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &doc));
+            assert!(app.session.active().unwrap().doc.shares_state(&doc));
             assert_eq!(app.session.active().unwrap().history.past_len(), past);
         }
     }
@@ -977,7 +989,7 @@ mod tests {
         let before_bounds = mover_bounds(&app);
         let past = app.session.active().unwrap().history.past_len();
         move_corner(&mut app, 1, [4.0, 3.0], [108.0, 32.0], egui::Modifiers::NONE, egui::Modifiers::NONE);
-        assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &before_doc), "preview does not edit the document");
+        assert!(app.session.active().unwrap().doc.shares_state(&before_doc), "preview does not edit the document");
         crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 112.0, y: 35.0 }, egui::Modifiers::NONE);
         crate::transform_tool::commit(&mut app);
         assert!(!app.ui.status_error, "{}", app.ui.status);

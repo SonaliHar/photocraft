@@ -93,7 +93,7 @@ fn layer_edges_follow_the_displayed_document_in_secondary_views() {
 fn layer_edges_stay_with_unmoved_pixels_when_live_preview_is_disabled() {
     let mut app = app(8);
     let ctx = context(1.0);
-    app.session.edit_prefs(|p| p.interface.show_bounding_box_when_dragging_layer = true);
+    assert!(app.session.edit_prefs(|p| p.interface.show_bounding_box_when_dragging_layer = true).is_ok());
     tool_event(&mut app, ToolEvent::Down { x: 180.0, y: 180.0, pressure: 1.0 }, egui::Modifiers::NONE);
     tool_event(&mut app, ToolEvent::Move { x: 260.0, y: 220.0, pressure: 1.0 }, egui::Modifiers::NONE);
     assert_edges(&mut app, &ctx, 0, true, ORIGINAL);

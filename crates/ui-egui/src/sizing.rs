@@ -46,50 +46,64 @@ pub fn is_sizing(command: &str) -> bool {
     matches!(command, "image.imageSize" | "image.canvasSize")
 }
 
-
 /// Runtime-only authority captured by explicit dialog opening, never restored
 /// from serialized sizing fields. One active sizing witness bounds storage.
 #[derive(Clone, Debug)]
 pub(crate) struct SizingWitness {
-    dialog:u64,
-    command:String,
-    document:photocraft_doc::DocId,
-    revision:u64,
-    snapshot:photocraft_engine::document_snapshot::WeakDocumentSnapshot,
+    dialog: u64,
+    command: String,
+    document: photocraft_doc::DocId,
+    revision: u64,
+    snapshot: photocraft_engine::document_snapshot::WeakDocumentSnapshot,
 }
 impl PartialEq for SizingWitness {
-    fn eq(&self,other:&Self)->bool {
-        self.dialog==other.dialog && self.command==other.command && self.document==other.document && self.revision==other.revision
-            && match (self.snapshot.upgrade(),other.snapshot.upgrade()) {(Some(a),Some(b))=>a.shares_state(&b),(None,None)=>true,_=>false}
+    fn eq(&self, other: &Self) -> bool {
+        self.dialog == other.dialog
+            && self.command == other.command
+            && self.document == other.document
+            && self.revision == other.revision
+            && match (self.snapshot.upgrade(), other.snapshot.upgrade()) {
+                (Some(a), Some(b)) => a.shares_state(&b),
+                (None, None) => true,
+                _ => false,
+            }
     }
 }
-fn context(app:&PhotocraftApp)->Result<(),String> {
-    let active=app.session.active().ok_or("sizing.ui.no-document")?;
-    if app.ui.transform.is_some() || app.session.has_jobs() || active.floating.is_some()
-        || active.doc.xcf_state.as_ref().is_some_and(|state|state.floating.is_some()) {
+fn context(app: &PhotocraftApp) -> Result<(), String> {
+    let active = app.session.active().ok_or("sizing.ui.no-document")?;
+    if app.ui.transform.is_some()
+        || app.session.has_jobs()
+        || active.floating.is_some()
+        || active.doc.xcf_state.as_ref().is_some_and(|state| state.floating.is_some())
+    {
         return Err("sizing.ui.context".into());
     }
     Ok(())
 }
-pub(crate) fn owns(fields:&Map<String,Value>)->bool {
-    fields.get("__sizing").and_then(Value::as_bool)==Some(true)
+pub(crate) fn owns(fields: &Map<String, Value>) -> bool {
+    fields.get("__sizing").and_then(Value::as_bool) == Some(true)
 }
 /// Confirm only the explicit-open witness. Serialized fields, including any
 /// edited selectors, do not grant authority; authoritative selectors replace them.
-pub(crate) fn confirm(app:&mut PhotocraftApp,id:u64,fields:&Map<String,Value>)->Result<Value,String> {
-    let target=app.ui.sizing_witness.take().ok_or("sizing.ui.stale-target")?;
+pub(crate) fn confirm(app: &mut PhotocraftApp, id: u64, fields: &Map<String, Value>) -> Result<Value, String> {
+    let target = app.ui.sizing_witness.take().ok_or("sizing.ui.stale-target")?;
     context(app)?;
-    let active=app.session.active().ok_or("sizing.ui.stale-target")?;
-    let snapshot=target.snapshot.upgrade().ok_or("sizing.ui.stale-target")?;
-    if target.dialog!=id || !owns(fields) || fields.get("__command").and_then(Value::as_str)!=Some(target.command.as_str())
-        || active.doc.id!=target.document || active.revision!=target.revision || !active.doc.shares_state(&snapshot) {
+    let active = app.session.active().ok_or("sizing.ui.stale-target")?;
+    let snapshot = target.snapshot.upgrade().ok_or("sizing.ui.stale-target")?;
+    if target.dialog != id
+        || !owns(fields)
+        || fields.get("__command").and_then(Value::as_str) != Some(target.command.as_str())
+        || active.doc.id != target.document
+        || active.revision != target.revision
+        || !active.doc.shares_state(&snapshot)
+    {
         return Err("sizing.ui.stale-target".into());
     }
-    let mut params=crate::filter_dialog::params_of(fields);
-    let object=params.as_object_mut().ok_or("sizing.ui.invalid-params")?;
-    object.insert("documentId".into(),json!(target.document.0.to_string()));
-    object.insert("expectedRevision".into(),json!(target.revision.to_string()));
-    app.run(&target.command,params)
+    let mut params = crate::filter_dialog::params_of(fields);
+    let object = params.as_object_mut().ok_or("sizing.ui.invalid-params")?;
+    object.insert("documentId".into(), json!(target.document.0.to_string()));
+    object.insert("expectedRevision".into(), json!(target.revision.to_string()));
+    app.run(&target.command, params)
 }
 
 /// Alt+Cancel (Reset): restore the dimensions and options from when the dialog opened.
@@ -115,7 +129,9 @@ pub fn reset(f: &mut Map<String, Value>) {
 }
 
 pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
-    if !is_sizing(command) || context(app).is_err() { return None; }
+    if !is_sizing(command) || context(app).is_err() {
+        return None;
+    }
     let unit = pref_unit(app.session.prefs().units_and_rulers.rulers);
     let resample = pref_resample(app.session.prefs().general.image_interpolation);
     let pt_per_in = app.session.prefs().units_and_rulers.point_size.per_inch();
@@ -148,11 +164,11 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
         f.insert("anchor".into(), json!("center"));
         f.insert("extensionColor".into(), json!("background"));
     }
-    let active=app.session.active()?;
-    let mut target=SizingWitness {dialog:0,command:command.into(),document:active.doc.id,revision:active.revision,snapshot:active.doc.downgrade()};
-    let id=app.ui.open_dialog(DialogKind::Command,f);
-    target.dialog=id;
-    app.ui.sizing_witness=Some(target);
+    let active = app.session.active()?;
+    let mut target = SizingWitness { dialog: 0, command: command.into(), document: active.doc.id, revision: active.revision, snapshot: active.doc.downgrade() };
+    let id = app.ui.open_dialog(DialogKind::Command, f);
+    target.dialog = id;
+    app.ui.sizing_witness = Some(target);
     Some(id)
 }
 
@@ -164,6 +180,33 @@ fn num(f: &Map<String, Value>, k: &str) -> f64 {
 /// opens: 72 (PostScript) when missing or not a positive finite number.
 fn pt_per_in(f: &Map<String, Value>) -> f64 {
     f.get("__ptPerIn").and_then(Value::as_f64).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(72.0)
+}
+
+/// Untouched axes retain the source pair. Scalar input remains an explicit automation compatibility route.
+fn dimension_resolution(f: &Map<String, Value>, key: &str) -> f64 {
+    let original = if key == "height" { f.get("__origResY").and_then(Value::as_f64).unwrap_or(num(f, "__origRes")) } else { num(f, "__origRes") };
+    let axis = if key == "height" { "resolutionY" } else { "resolutionX" };
+    f.get(axis).and_then(Value::as_f64).or_else(|| f.get("resolution").and_then(Value::as_f64)).unwrap_or(original)
+}
+/// Preserve the companion axis if a legacy scalar dialog field was restored.
+/// The emitted registered parameters never combine scalar and independent DPI.
+fn set_resolution_axis(f: &mut Map<String, Value>, key: &str, value: f64, resampling: bool) {
+    if !matches!(key, "resolutionX" | "resolutionY") || !value.is_finite() || value <= 0.0 || value > 10000.0 {
+        return;
+    }
+    if f.contains_key("resolution") {
+        let x = dimension_resolution(f, "width");
+        let y = dimension_resolution(f, "height");
+        f.remove("resolution");
+        f.insert("resolutionX".into(), json!(x));
+        f.insert("resolutionY".into(), json!(y));
+    }
+    f.insert(key.into(), json!(value));
+    if !resampling {
+        // Pixel dimensions are fixed; each displayed physical length follows its own axis.
+        f.insert("width".into(), json!(num(f, "__origW")));
+        f.insert("height".into(), json!(num(f, "__origH")));
+    }
 }
 
 /// Pixels → display unit; `ppi` is points per inch (a pica is 12 points).
@@ -341,15 +384,21 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.horizontal(|ui| {
             label(ui, &format!("{} {axis}", tl!("Resolution:")), 90.0);
             let mut r = dimension_resolution(f, dimension);
-            let changed = ui.push_id(("image-size-resolution", axis), |ui| {
-                ui.add_sized([90.0, 22.0], egui::DragValue::new(&mut r)
-                    .range(f64::from_bits(1)..=10000.0)
-                    .clamp_existing_to_range(false)
-                    .speed(0.5)
-                    .custom_formatter(|value, _| value.to_string())
-                    .custom_parser(crate::widgets::parse_num)
-                    .update_while_editing(false)).changed()
-            }).inner;
+            let changed = ui
+                .push_id(("image-size-resolution", axis), |ui| {
+                    ui.add_sized(
+                        [90.0, 22.0],
+                        egui::DragValue::new(&mut r)
+                            .range(f64::from_bits(1)..=10000.0)
+                            .clamp_existing_to_range(false)
+                            .speed(0.5)
+                            .custom_formatter(|value, _| value.to_string())
+                            .custom_parser(crate::widgets::parse_num)
+                            .update_while_editing(false),
+                    )
+                    .changed()
+                })
+                .inner;
             if changed {
                 set_resolution_axis(f, key, r, resampling);
             }
@@ -693,14 +742,18 @@ mod tests {
     fn resample_off_keeps_pixel_dimensions_in_the_dialog() {
         use egui_kittest::kittest::Queryable;
         let (mut h, id) = resample_off_dialog("px");
+        let before = h.state().session.active().unwrap().doc.clone();
         type_width(&mut h, "200");
         let f = fields(&h);
-        assert_eq!((num(&f, "width"), num(&f, "height"), num(&f, "resolution")), (100.0, 50.0, 72.0), "{f:?}");
+        assert_eq!((num(&f, "width"), num(&f, "height")), (100.0, 50.0), "{f:?}");
+        assert_eq!((dimension_resolution(&f, "width"), dimension_resolution(&f, "height")), (72.0, 72.0), "{f:?}");
+        assert!(f.get("resolution").is_none() && f.get("resolutionX").is_none() && f.get("resolutionY").is_none(), "untouched DPI stays implicit: {f:?}");
         assert!(h.query_by_label("100 px × 50 px").is_some(), "the Dimensions line shows the kept pixels");
         assert!(h.query_by_label_contains("20K (was 20K)").is_some(), "the Image Size estimate is unchanged");
         crate::dialogs::confirm(h.state_mut(), id).unwrap();
         let doc = &h.state().session.active().unwrap().doc;
         assert_eq!((doc.size, doc.resolution_dpi), (photocraft_doc::Size::new(100, 50), 72.0));
+        assert_eq!(&**doc, &*before, "accepting without a valid width/DPI edit preserves the complete native model");
     }
 
     /// With Resample off, a physical Width changes the resolution and keeps the pixels (Photoshop):
@@ -791,8 +844,8 @@ mod tests {
         let id = open(&mut app, "image.imageSize").unwrap();
         let fields = &app.ui.dialog_mut(id).unwrap().fields;
         assert!(!fields.contains_key("resolution"));
-        assert_eq!(to_unit(144.0, "in", 144.0, dimension_resolution(fields, "width")), 1.0);
-        assert_eq!(to_unit(288.0, "in", 288.0, dimension_resolution(fields, "height")), 1.0);
+        assert_eq!(to_unit(144.0, "in", 144.0, dimension_resolution(fields, "width"), 72.0), 1.0);
+        assert_eq!(to_unit(288.0, "in", 288.0, dimension_resolution(fields, "height"), 72.0), 1.0);
         crate::dialogs::confirm(&mut app, id).unwrap();
         assert_eq!(app.session.active().unwrap().doc.effective_resolution(), resolution);
         let id = open(&mut app, "image.imageSize").unwrap();
@@ -811,8 +864,9 @@ mod tests {
         let changed = app.session.active().unwrap().doc.effective_resolution();
         assert_eq!((changed.x_dpi, changed.y_dpi), (200.0, 200.0));
         assert_eq!(changed.unit, resolution.unit);
-        assert_eq!(to_unit(1.0, "in", 1.0, 0.5), 2.0);
-        assert_eq!(from_unit(2.0, "in", 1.0, 0.5), 1.0);
+        // Upstream display conversion clamps sub-one DPI divisors; stored axes remain exact.
+        assert_eq!(to_unit(1.0, "in", 1.0, 0.5, 72.0), 1.0);
+        assert_eq!(from_unit(2.0, "in", 1.0, 0.5, 72.0), 1.0);
     }
 }
 
@@ -924,62 +978,84 @@ mod physical_resolution_borrow_tests {
         assert_eq!(dimension_resolution(&fields, "width").to_bits(), exact.to_bits());
         assert_eq!(dimension_resolution(&fields, "height"), 288.0);
     }
-
 }
-
 
 #[cfg(test)]
 mod captured_target_tests {
     use super::*;
-    fn app()->PhotocraftApp {
-        let mut app=PhotocraftApp::new(photocraft_engine::Session::new(),crate::Services::default());
-        app.session.execute("file.new",json!({"width":12,"height":8})).unwrap();app
+    fn app() -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width":12,"height":8})).unwrap();
+        app
     }
     #[test]
     fn stale_document_revision_and_restored_fields_cannot_apply() {
-        for command in ["image.imageSize","image.canvasSize"] {
-            let mut app=app();let id=open(&mut app,command).unwrap();
-            let fields=app.ui.dialog_mut(id).unwrap().fields.clone();
-            app.session.execute("file.new",json!({"width":6,"height":4})).unwrap();
-            let before=app.session.active().unwrap().doc.clone();let revision=app.session.active().unwrap().revision;
-            assert!(confirm(&mut app,id,&fields).is_err());
-            assert!(app.session.active().unwrap().doc.shares_state(&before));assert_eq!(app.session.active().unwrap().revision,revision);
-            let id=open(&mut app,command).unwrap();let fields=app.ui.dialog_mut(id).unwrap().fields.clone();
-            app.session.execute("image.canvasSize",json!({"width":7,"height":4})).unwrap();
-            let before=app.session.active().unwrap().doc.clone();
-            assert!(confirm(&mut app,id,&fields).is_err());assert!(app.session.active().unwrap().doc.shares_state(&before));
-            let id=open(&mut app,command).unwrap();let fields=app.ui.dialog_mut(id).unwrap().fields.clone();
-            let serialized=serde_json::to_value(&app.ui).unwrap();
-            app.ui=serde_json::from_value(serialized).unwrap();
+        for command in ["image.imageSize", "image.canvasSize"] {
+            let mut app = app();
+            let id = open(&mut app, command).unwrap();
+            let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+            app.session.execute("file.new", json!({"width":6,"height":4})).unwrap();
+            let before = app.session.active().unwrap().doc.clone();
+            let revision = app.session.active().unwrap().revision;
+            assert!(confirm(&mut app, id, &fields).is_err());
+            assert!(app.session.active().unwrap().doc.shares_state(&before));
+            assert_eq!(app.session.active().unwrap().revision, revision);
+            let id = open(&mut app, command).unwrap();
+            let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+            app.session.execute("image.canvasSize", json!({"width":7,"height":4})).unwrap();
+            let before = app.session.active().unwrap().doc.clone();
+            assert!(confirm(&mut app, id, &fields).is_err());
+            assert!(app.session.active().unwrap().doc.shares_state(&before));
+            let id = open(&mut app, command).unwrap();
+            let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+            let serialized = serde_json::to_value(&app.ui).unwrap();
+            app.ui = serde_json::from_value(serialized).unwrap();
             assert!(app.ui.sizing_witness.is_none());
-            let before=app.session.active().unwrap().doc.clone();
-            assert!(confirm(&mut app,id,&fields).is_err());assert!(app.session.active().unwrap().doc.shares_state(&before));
+            let before = app.session.active().unwrap().doc.clone();
+            assert!(confirm(&mut app, id, &fields).is_err());
+            assert!(app.session.active().unwrap().doc.shares_state(&before));
         }
     }
     #[test]
     fn unchanged_high_id_target_uses_canonical_selectors_over_restored_fields() {
-        for command in ["image.imageSize","image.canvasSize"] {
-            let mut app=app();
-            app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().id=photocraft_doc::DocId(9_007_199_254_740_995);
-            let id=open(&mut app,command).unwrap();
-            let mut fields=app.ui.dialog_mut(id).unwrap().fields.clone();
-            fields.insert("width".into(),json!(10));
-            fields.insert("documentId".into(),json!("wrong-restored-selector"));
-            fields.insert("expectedRevision".into(),json!("wrong-restored-selector"));
-            let doc=app.session.active().unwrap().doc.id;
-            confirm(&mut app,id,&fields).unwrap();
-            assert_eq!(app.session.active().unwrap().doc.id,doc);
-            assert_eq!(app.session.active().unwrap().doc.size.width,10);
+        for command in ["image.imageSize", "image.canvasSize"] {
+            let mut app = app();
+            app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().id = photocraft_doc::DocId(9_007_199_254_740_995);
+            let id = open(&mut app, command).unwrap();
+            let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+            fields.insert("width".into(), json!(10));
+            fields.insert("documentId".into(), json!("wrong-restored-selector"));
+            fields.insert("expectedRevision".into(), json!("wrong-restored-selector"));
+            let doc = app.session.active().unwrap().doc.id;
+            confirm(&mut app, id, &fields).unwrap();
+            assert_eq!(app.session.active().unwrap().doc.id, doc);
+            assert_eq!(app.session.active().unwrap().doc.size.width, 10);
         }
     }
     #[test]
     fn live_transform_context_refuses_without_consuming_document_state() {
-        let mut app=app();let id=open(&mut app,"image.imageSize").unwrap();
-        let fields=app.ui.dialog_mut(id).unwrap().fields.clone();
-        let before=app.session.active().unwrap().doc.clone();
-        app.ui.transform=Some(crate::state::TransformSession {session:1,layer:1,rect:[0.,0.,1.,1.],quad:[[0.,0.],[1.,0.],[1.,1.],[0.,1.]],pivot:[0.5,0.5],interpolation:"nearest".into(),warp:None,selection:false,target:None,made:None,mode:Default::default()});
-        assert_eq!(confirm(&mut app,id,&fields).unwrap_err(),"sizing.ui.context");
+        let mut app = app();
+        let id = open(&mut app, "image.imageSize").unwrap();
+        let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        let before = app.session.active().unwrap().doc.clone();
+        app.ui.transform = Some(crate::state::TransformSession {
+            session: 1,
+            layer: 1,
+            rect: [0., 0., 1., 1.],
+            quad: [[0., 0.], [1., 0.], [1., 1.], [0., 1.]],
+            pivot: [0.5, 0.5],
+            interpolation: "nearest".into(),
+            warp: None,
+            selection: false,
+            target: None,
+            path: None,
+            made: None,
+            mode: Default::default(),
+            content_aware: None,
+            skew_v: 0.0,
+        });
+        assert_eq!(confirm(&mut app, id, &fields).unwrap_err(), "sizing.ui.context");
         assert!(app.session.active().unwrap().doc.shares_state(&before));
-        assert!(open(&mut app,"image.canvasSize").is_none());
+        assert!(open(&mut app, "image.canvasSize").is_none());
     }
 }

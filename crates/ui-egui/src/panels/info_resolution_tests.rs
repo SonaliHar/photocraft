@@ -46,7 +46,7 @@ fn info_physical_positions_and_selection_use_each_authoritative_axis() {
         let mut app = source("inches", Some(PhysicalResolution { x_dpi: 144.0, y_dpi: 288.0, unit }), 72.0).unwrap();
         let before = app.session.active().unwrap().doc.clone();
         let rev = app.session.active().unwrap().revision;
-        assert_eq!(readouts(&paint(&mut app)).unwrap(), vec!["1.00"; 4]);
+        assert_eq!(readouts(&paint(&mut app)).unwrap(), vec!["1.000"; 4]);
         assert_eq!(app.session.active().unwrap().doc, before);
         assert_eq!(app.session.active().unwrap().revision, rev);
     }
@@ -57,7 +57,7 @@ fn info_resolution_accessibility_uses_authoritative_axes() {
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(380.0, 260.0)).build_ui_state(|ui, app| info_panel(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(2);
-    assert_eq!(h.get_all_by_label("1.00").count(), 4, "accessible Info values use canonical axes");
+    assert_eq!(h.get_all_by_label("1.000").count(), 4, "accessible Info values use canonical axes");
 }
 #[test]
 fn info_resolution_invalid_metadata_has_no_bogus_physical_readouts() {
@@ -84,7 +84,7 @@ fn info_resolution_legacy_default_and_all_pref_units_preserve_formats() {
         ("pixels", vec!["144", "288", "144", "288"]),
         ("percent", vec!["50.0"; 4]),
         ("cm", vec!["2.54"; 4]),
-        ("mm", vec!["25.4"; 4]),
+        ("mm", vec!["25.40"; 4]),
         ("points", vec!["72.0"; 4]),
         ("picas", vec!["6.00"; 4]),
     ] {
@@ -96,10 +96,10 @@ fn info_resolution_legacy_default_and_all_pref_units_preserve_formats() {
         assert_eq!(
             readouts(&paint(&mut app)).unwrap(),
             vec![
-                format!("{:.2}", 144.0 / f64::from(legacy)),
-                format!("{:.2}", 288.0 / f64::from(legacy)),
-                format!("{:.2}", 144.0 / f64::from(legacy)),
-                format!("{:.2}", 288.0 / f64::from(legacy))
+                format!("{:.3}", 144.0 / f64::from(legacy)),
+                format!("{:.3}", 288.0 / f64::from(legacy)),
+                format!("{:.3}", 144.0 / f64::from(legacy)),
+                format!("{:.3}", 288.0 / f64::from(legacy))
             ]
         );
     }
@@ -119,7 +119,7 @@ fn info_resolution_offscreen_visual() {
         .build_ui_state(|ui, app| info_panel(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, Default::default());
     h.run_steps(3);
-    assert_eq!(h.get_all_by_label("1.00").count(), 4);
+    assert_eq!(h.get_all_by_label("1.000").count(), 4);
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol3-info-physical-resolution-20261012/info-canonical.png");
     h.render().unwrap().save(path).unwrap();
 }
@@ -127,7 +127,7 @@ fn info_resolution_offscreen_visual() {
 #[test]
 fn info_resolution_tiny_valid_axes_are_not_silently_clamped() {
     let mut app = source("inches", Some(PhysicalResolution { x_dpi: 1e-7, y_dpi: 2e-7, unit: custom() }), 72.0).unwrap();
-    assert_eq!(readouts(&paint(&mut app)).unwrap(), vec!["1440000000.00"; 4]);
+    assert_eq!(readouts(&paint(&mut app)).unwrap(), vec!["1440000000.000"; 4]);
     let mut app = source("inches", Some(PhysicalResolution { x_dpi: f64::MIN_POSITIVE, y_dpi: f64::MIN_POSITIVE, unit: custom() }), 72.0).unwrap();
     assert_eq!(readouts(&paint(&mut app)).unwrap(), vec!["—"; 4]);
     let mut app = source("inches", None, 0.0).unwrap();

@@ -147,7 +147,7 @@ fn live_stroke_at(depth: u32) {
     }
     let st = app.session.active().unwrap();
     assert_eq!(st.history.past_len(), steps + 1, "one History step");
-    assert_eq!(st.history.entries().last().map(|e| e.to_string()).as_deref(), Some("Color Replacement"));
+    assert_eq!(st.history.entry_labels().last().map(|e| e.to_string()).as_deref(), Some("Color Replacement"));
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(rgba(&app, 20, 20), before, "one undo restores the pixels");
     app.run("edit.redo", json!({})).unwrap();
@@ -259,7 +259,7 @@ fn ui_set_selects_it_and_inspect_reports_it() {
     let (req, _rx) = crate::control::ControlRequest::new("ui.set", json!({"tool": "colorReplacement"}));
     let _ = crate::control::handle(&mut a, &ctx, &req);
     assert_eq!(a.ui.tool, Tool::ColorReplacement);
-    assert_eq!(crate::control::inspect(&a, &ctx)["tool"], "ColorReplacement");
+    assert_eq!(crate::control::inspect(&a, &ctx).unwrap()["tool"], "ColorReplacement");
     assert_eq!(Tool::ColorReplacement.key(), 'B');
     assert_eq!(Tool::ColorReplacement.label(), "Color Replacement Tool");
 }

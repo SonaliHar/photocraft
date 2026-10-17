@@ -121,6 +121,11 @@ pub fn params(f: &Map<String, Value>) -> Value {
             p.insert(gap.into(), json!(0));
         }
     }
+    for key in ["width", "height"] {
+        if p.get(key).is_some_and(Value::is_null) {
+            p.remove(key);
+        }
+    }
     Value::Object(p)
 }
 

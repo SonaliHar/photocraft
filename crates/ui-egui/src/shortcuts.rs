@@ -689,7 +689,7 @@ mod tests {
             ctx.end_pass().textures_delta.clear();
         };
         // Plain-key cycling (the pref is on by default, as in Photoshop).
-        app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
+        assert!(app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false).is_ok());
         // Polygonal Lasso picked from the toolbar flyout, then the Brush (#2608).
         app.ui.tool = Tool::PolygonLasso;
         press(&mut app, Key::B, Modifiers::NONE);
@@ -704,7 +704,7 @@ mod tests {
         press(&mut app, Key::L, Modifiers::NONE);
         assert_eq!(app.ui.tool, Tool::MagneticLasso);
         // Use Shift Key for Tool Switch: the plain key also returns to the last-used tool.
-        app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = true);
+        assert!(app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = true).is_ok());
         press(&mut app, Key::B, Modifiers::NONE);
         press(&mut app, Key::L, Modifiers::NONE);
         assert_eq!(app.ui.tool, Tool::MagneticLasso);
@@ -736,7 +736,7 @@ mod tests {
         press(&mut app, Modifiers::SHIFT);
         assert_ne!(app.ui.tool, Tool::Type);
         // A stored "off" restores plain-key cycling.
-        app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
+        assert!(app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false).is_ok());
         app.ui.tool = Tool::Type;
         press(&mut app, Modifiers::NONE);
         assert_ne!(app.ui.tool, Tool::Type);

@@ -337,21 +337,30 @@ fn alternate_keys_run_their_command() {
         assert!(matches!(log.as_slice(), [(id, _)] if id == want), "{key}: {log:?}");
     }
     // Overriding Copy's main key keeps F3; ⌘C no longer copies.
-    h.state_mut().session.edit_prefs(|p| {
-        p.shortcuts.insert("edit.copy".into(), "Cmd+K".into());
-    });
+    h.state_mut()
+        .session
+        .edit_prefs(|p| {
+            p.shortcuts.insert("edit.copy".into(), "Cmd+K".into());
+        })
+        .unwrap();
     press(&mut h, "F3");
     assert!(matches!(take_log(&h.ctx).as_slice(), [(id, _)] if id == "edit.copy"));
     // A key a user gives another command wins over a default alternate.
-    h.state_mut().session.edit_prefs(|p| {
-        p.shortcuts.insert("layer.renameLayer".into(), "F2".into());
-    });
+    h.state_mut()
+        .session
+        .edit_prefs(|p| {
+            p.shortcuts.insert("layer.renameLayer".into(), "F2".into());
+        })
+        .unwrap();
     assert!(bindings(h.state()).iter().any(|(id, sc)| id == "layer.renameLayer" && *sc == parse("F2").unwrap()));
     assert!(!bindings(h.state()).iter().any(|(id, sc)| id == "edit.cut" && *sc == parse("F2").unwrap()));
     // A removed alternate no longer fires.
-    h.state_mut().session.edit_prefs(|p| {
-        p.alternate_shortcuts.insert("edit.paste".into(), Vec::new());
-    });
+    h.state_mut()
+        .session
+        .edit_prefs(|p| {
+            p.alternate_shortcuts.insert("edit.paste".into(), Vec::new());
+        })
+        .unwrap();
     press(&mut h, "F4");
     assert!(take_log(&h.ctx).is_empty());
 }
@@ -581,7 +590,7 @@ fn delete_with_several_layers_selected_deletes_them_even_with_the_mask_targeted(
     let second = photocraft_doc::LayerId(s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap());
     s.execute("layer.select", json!({"layer": first.0, "mode": "add"})).unwrap();
     let st = s.active().unwrap();
-    assert_eq!(st.selected_layers().len(), 2);
+    assert_eq!(st.selected_layers().unwrap().len(), 2);
     assert!(st.active_layer.and_then(|l| st.doc.layer(l)).is_some_and(|l| l.mask.is_some()), "the active adjustment layer has a mask");
     assert!(st.doc.selection.is_some(), "the harness keeps a selection");
     h.state_mut().ui.mask_target = true;
@@ -660,7 +669,7 @@ fn clip_key_toggles_several_selected_layers() {
     for id in [paint, top] {
         s.execute("layer.select", json!({"layer": id.0, "mode": "add"})).unwrap();
     }
-    assert_eq!(s.active().unwrap().selected_layers().len(), 3);
+    assert_eq!(s.active().unwrap().selected_layers().unwrap().len(), 3);
     h.run_steps(2);
     press(&mut h, "Cmd+Alt+G");
     assert_eq!(logged(&h), ["layer.createClippingMask"], "the top layer isn't clipped yet");

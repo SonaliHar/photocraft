@@ -103,7 +103,7 @@ fn the_preview_matches_the_committed_layer() {
         for l in solo.layers.iter_mut() {
             l.visible = l.id == id;
         }
-        let committed = photocraft_compose::render(&solo, plan.shown);
+        let committed = photocraft_compose::render(&solo, plan.shown).unwrap();
         let premultiplied = |p: &[f32; 4]| [p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]];
         let (mut sum, mut off) = (0.0f64, 0usize);
         for (a, b) in shown.px.iter().zip(&committed.px) {
@@ -243,7 +243,7 @@ fn the_canvas_draws_the_styled_preview_and_reuses_it_between_frames() {
     let mut h = crate::transform_undo_tests::harness();
     h.state_mut().run("layer.layerStyle.stroke", json!({"size": 4, "color": "#00ff00", "position": "outside"})).unwrap();
     h.run_steps(2);
-    let steps = h.state().session.active().unwrap().history.entries().len();
+    let steps = h.state().session.active().unwrap().history.entry_labels().count();
     crate::transform_undo_tests::begin(&mut h);
     let builds = |h: &egui_kittest::Harness<'static, PhotocraftApp>| crate::transform_tool::styled_frame(h.state(), 1.0, false).unwrap().0.builds();
     assert_eq!(builds(&h), 1, "composited when the box opened");
@@ -265,7 +265,7 @@ fn the_canvas_draws_the_styled_preview_and_reuses_it_between_frames() {
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
     h.run_steps(2);
     assert_eq!(h.state().ui.transform.as_ref().unwrap().quad[2], [200.0, 160.0]);
-    assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps);
+    assert_eq!(h.state().session.active().unwrap().history.entry_labels().count(), steps);
     assert_eq!(builds(&h), after_drag + 2);
     // Enter commits: one history step, the style still on the layer.
     h.key_press(egui::Key::Enter);

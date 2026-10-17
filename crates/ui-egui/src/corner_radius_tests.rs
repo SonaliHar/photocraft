@@ -32,7 +32,7 @@ fn radii(app: &PhotocraftApp) -> Option<[f64; 4]> {
 }
 
 fn steps(app: &PhotocraftApp) -> usize {
-    app.session.active().unwrap().history.entries().len()
+    app.session.active().unwrap().history.entry_labels().count()
 }
 
 fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: Modifiers) {
@@ -164,23 +164,23 @@ fn the_move_tool_shows_and_drags_the_widgets_with_its_transform_controls() {
     let (mut app, ids) = three(Tool::Move);
     assert!(!super::pointer(&mut app, ToolEvent::Down { x: 120.0, y: 30.0, pressure: 1.0 }, Modifiers::NONE), "not without the controls");
     app.ui.tool_options.move_show_transform = true;
-    let before = app.session.active().unwrap().selected_layers();
+    let before = app.session.active().unwrap().selected_layers().expect("valid resident selection");
     drag(&mut app, [120.0, 30.0], [130.0, 40.0], Modifiers::NONE);
     assert_eq!((radii_of(&app, ids[0]), radii_of(&app, ids[1])), ([10.0; 4], [10.0; 4]));
-    assert_eq!(app.session.active().unwrap().selected_layers(), before, "the press neither moved nor reselected layers");
+    assert_eq!(app.session.active().unwrap().selected_layers().expect("valid resident selection"), before, "the press neither moved nor reselected layers");
 }
 
 #[test]
 fn the_cursor_and_readout_follow_the_widgets() {
     let mut app = app(Tool::PathSelection);
     // The corner radius cursor shows over a widget, not elsewhere.
-    assert!(super::hovers(&app, [50.0, 50.0]));
-    assert!(!super::hovers(&app, [100.0, 80.0]));
+    assert!(super::hovers(&app, [50.0, 50.0]).unwrap());
+    assert!(!super::hovers(&app, [100.0, 80.0]).unwrap());
     // While dragging it stays, and the readout shows the dragged corner's radius.
     tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 50.0, pressure: 1.0 }, Modifiers::NONE);
     tool_event(&mut app, ToolEvent::Move { x: 62.0, y: 62.0, pressure: 1.0 }, Modifiers::NONE);
-    assert!(super::hovers(&app, [100.0, 80.0]));
+    assert!(super::hovers(&app, [100.0, 80.0]).unwrap());
     assert_eq!(app.ui.corner_radius.as_ref().and_then(super::dragged_radius), Some(22.0));
     tool_event(&mut app, ToolEvent::Up { x: 62.0, y: 62.0 }, Modifiers::NONE);
-    assert!(!super::hovers(&app, [100.0, 80.0]));
+    assert!(!super::hovers(&app, [100.0, 80.0]).unwrap());
 }

@@ -776,6 +776,7 @@ mod tests {
         let pr = app.stylus.pressure();
         tool_event(&mut app, ToolEvent::Move { x: 100.0, y: 40.0, pressure: pr }, m);
         tool_event(&mut app, ToolEvent::Up { x: 100.0, y: 40.0 }, m);
+        crate::canvas::wait_for_test_live_stroke(&mut app);
         let (id, p) = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").cloned().unwrap();
         assert_eq!(id, "paint.stroke");
         assert_eq!(p["points"][0], json!([10.0, 40.0, 0.2f32 as f64, 40.0, 0.0, 30.0]));
@@ -785,6 +786,7 @@ mod tests {
         let pr = app.stylus.pressure();
         tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 60.0, pressure: pr }, m);
         tool_event(&mut app, ToolEvent::Up { x: 90.0, y: 60.0 }, m);
+        crate::canvas::wait_for_test_live_stroke(&mut app);
         let (_, p) = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").cloned().unwrap();
         assert_eq!(p["points"][0], json!([10.0, 60.0, 1.0]));
     }

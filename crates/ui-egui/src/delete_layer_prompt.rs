@@ -17,7 +17,10 @@ pub fn intercept(app: &mut PhotocraftApp, command: &str, params: &Value) -> Opti
         return None;
     }
     let state = app.session.active()?;
-    let selected = match state.selected_layers() {Ok(selected)=>selected,Err(error)=>return Some(Err(error.to_string()))};
+    let selected = match state.selected_layers() {
+        Ok(selected) => selected,
+        Err(error) => return Some(Err(error.to_string())),
+    };
     let ids = if let Some(id) = params.get("layer").and_then(Value::as_u64) { vec![photocraft_doc::LayerId(id)] } else { selected.clone() };
     if ids.is_empty() {
         return None;
@@ -48,7 +51,7 @@ pub fn body(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
 pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
     let state = app.session.active().ok_or(tl!("The document is closed"))?;
     if fields.get("document").and_then(Value::as_u64) != Some(state.doc.id.0)
-        || fields.get("selected") != Some(&json!(state.selected_layers().map_err(|error|error.to_string())?.iter().map(|id| id.0).collect::<Vec<_>>()))
+        || fields.get("selected") != Some(&json!(state.selected_layers().map_err(|error| error.to_string())?.iter().map(|id| id.0).collect::<Vec<_>>()))
     {
         return Err(tl!("The document or selected layers changed. Please request deletion again.").into());
     }
@@ -56,14 +59,19 @@ pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<V
     if command != "layer.delete" {
         return Err(tl!("Invalid delete command").into());
     }
-    if fields.get("skip").and_then(Value::as_bool) == Some(true) {
-        if let Err(error)=app.session.edit_prefs(|prefs| {
-            prefs.dialogs.insert(PREF.into(),json!({"skip":true}));
-        }).map_err(|error|error.to_string()).and_then(|_|crate::prefs_ui::save_preferences(app)) {
-            let message=crate::i18n::fmt(tl!("Could not save the confirmation preference. The layer was kept: {error}"),&[("error",&error)]);
-            app.ui.status=message.clone();app.ui.status_error=true;
-            return Err(message);
-        }
+    if fields.get("skip").and_then(Value::as_bool) == Some(true)
+        && let Err(error) = app
+            .session
+            .edit_prefs(|prefs| {
+                prefs.dialogs.insert(PREF.into(), json!({"skip":true}));
+            })
+            .map_err(|error| error.to_string())
+            .and_then(|_| crate::prefs_ui::save_preferences(app))
+    {
+        let message = crate::i18n::fmt(tl!("Could not save the confirmation preference. The layer was kept: {error}"), &[("error", &error)]);
+        app.ui.status = message.clone();
+        app.ui.status_error = true;
+        return Err(message);
     }
     let result = app.run_command(command, fields.get("params").cloned().unwrap_or(Value::Null))?;
     Ok(result)

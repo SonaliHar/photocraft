@@ -366,7 +366,7 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 1, "height": 1, "resolution": 300, "background": "white"})).unwrap();
         app.session.prefs.edit(|p| p.units_and_rulers.rulers = photocraft_engine::prefs::Unit::Inches);
-        let undo = app.session.active().unwrap().history.entries().len();
+        let undo = app.session.active().unwrap().history.entry_labels().count();
         let mut h = Harness::builder().with_size(vec2(320.0, 600.0)).build_ui_state(
             |ui, app: &mut PhotocraftApp| {
                 if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
@@ -379,7 +379,7 @@ mod tests {
         h.run_steps(3);
         let st = h.state().session.active().unwrap();
         assert_eq!((st.doc.size.width, st.doc.size.height), (1, 1));
-        assert_eq!(st.history.entries().len(), undo, "no history step");
+        assert_eq!(st.history.entry_labels().count(), undo, "no history step");
     }
 
     #[test]
