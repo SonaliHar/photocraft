@@ -20,6 +20,15 @@ const FORMATS: [(&str, &str); 6] = [("png", "PNG"), ("jpg", "JPG"), ("webp", "We
 /// filter dialogs do.
 pub(crate) const COMMAND: &str = "file.export.exportAs";
 
+/// The dialog's own settings: what Export As remembers for next time and what an action records
+/// with the destination (#7207).
+const SETTINGS: [&str; 13] =
+    ["format", "quality", "lossless", "transparency", "scale", "metadata", "tgaBits", "sizing", "width", "height", "lockAspect", "profile", "embedProfile"];
+
+fn settings_of(f: &Map<String, Value>) -> Map<String, Value> {
+    SETTINGS.iter().filter_map(|k| f.get(*k).map(|v| ((*k).to_string(), v.clone()))).collect()
+}
+
 /// The dialog is seeded from the settings it was used with last (see [`COMMAND`]); a value that
 /// no longer matches a control (a hand-edited preferences file) is left at its default.
 fn seed_remembered(app: &PhotocraftApp, f: &mut Map<String, Value>) {
@@ -65,9 +74,7 @@ fn seed_remembered(app: &PhotocraftApp, f: &mut Map<String, Value>) {
 
 /// Record the settings for the next Export As (see [`seed_remembered`]).
 fn remember(app: &mut PhotocraftApp, f: &Map<String, Value>) {
-    const KEYS: [&str; 13] =
-        ["format", "quality", "lossless", "transparency", "scale", "metadata", "tgaBits", "sizing", "width", "height", "lockAspect", "profile", "embedProfile"];
-    let saved: Map<String, Value> = KEYS.iter().filter_map(|k| f.get(*k).map(|v| ((*k).to_string(), v.clone()))).collect();
+    let saved = settings_of(f);
     app.session.prefs.edit(|p| {
         p.dialogs.insert(COMMAND.into(), Value::Object(saved));
     });
@@ -848,21 +855,48 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a).to_string();
     let ext = s_fmt(f);
     let suggested = format!("{stem}.{ext}");
-    let (f, settings) = (f.clone(), settings(f));
+    let f = f.clone();
     app.pick_save(&suggested, move |app, path| {
-        let out = export_document(&doc, &f, None)?;
-        let export = app.services.export.as_ref().ok_or("no exporter configured")?;
-        let (bytes, warnings) = export(&out, &path, &settings)?;
-        let write = app.services.write.as_mut().ok_or("no writer configured")?;
-        write(&path, &bytes)?;
-        let template = "Exported {path} ({size})";
-        app.ui.status = crate::i18n::fmt(tl!(template), &[("path", &path), ("size", &crate::sizing::human_bytes(bytes.len() as f64))]);
-        app.ui.status_error = false;
-        let template = "Exported {path}";
-        let what = crate::i18n::fmt(tl!(template), &[("path", &crate::file_open::display_name(&path))]);
-        crate::notices::io_warnings(app, &what, &warnings);
-        Ok(json!({"path": path, "bytes": bytes.len(), "warnings": warnings}))
+        let r = write_export(app, &doc, &f, &path)?;
+        // An action being recorded keeps a whole-document export with its destination and
+        // settings (#7207). A layer's export isn't recorded: its layer is this document's.
+        if !f.contains_key("__layer") {
+            let mut step = settings_of(&f);
+            step.insert("path".into(), json!(path));
+            app.session.journal.push((COMMAND.into(), Value::Object(step)));
+        }
+        Ok(r)
     })
+}
+
+/// Exports `doc` to `path` with the dialog settings `f` (Export As, and its replayed action step).
+fn write_export(app: &mut PhotocraftApp, doc: &Document, f: &Map<String, Value>, path: &str) -> Result<Value, String> {
+    let out = export_document(doc, f, None)?;
+    let export = app.services.export.as_ref().ok_or("no exporter configured")?;
+    let (bytes, warnings) = export(&out, path, &settings(f))?;
+    let write = app.services.write.as_mut().ok_or("no writer configured")?;
+    write(path, &bytes)?;
+    let template = "Exported {path} ({size})";
+    app.ui.status = crate::i18n::fmt(tl!(template), &[("path", path), ("size", &crate::sizing::human_bytes(bytes.len() as f64))]);
+    app.ui.status_error = false;
+    let template = "Exported {path}";
+    let what = crate::i18n::fmt(tl!(template), &[("path", &crate::file_open::display_name(path))]);
+    crate::notices::io_warnings(app, &what, &warnings);
+    Ok(json!({"path": path, "bytes": bytes.len(), "warnings": warnings}))
+}
+
+/// Replays a recorded Export As step (#7207): the active document exported to the recorded `path`
+/// with the recorded settings, without the dialog. The remembered dialog settings are untouched.
+pub(crate) fn replay(app: &mut PhotocraftApp, params: &Value) -> Result<Value, String> {
+    let path = params.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()).ok_or("Export As needs a `path`")?;
+    let f = params.as_object().map(settings_of).unwrap_or_default();
+    if let Some(format) = f.get("format")
+        && !FORMATS.iter().any(|(k, _)| format.as_str() == Some(*k))
+    {
+        return Err(format!("Export As can't write the format {format}"));
+    }
+    let doc = app.session.active().ok_or("no document")?.doc.clone();
+    write_export(app, &doc, &f, path)
 }
 
 /// [`confirm`] for several layers: one destination prompt, then each layer exported with the
@@ -983,6 +1017,21 @@ mod tests {
         assert_eq!(f["format"], "png");
         assert_eq!(f["scale"], 100);
         assert_eq!(f["metadata"], "none");
+    }
+
+    /// A recorded Export As step replays only with a destination and a format Export As writes
+    /// (#7207); anything else is an error, not a guess.
+    #[test]
+    fn a_replayed_export_needs_a_path_and_a_known_format() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        assert!(replay(&mut app, &json!({"path": "/x.png"})).unwrap_err().contains("document"));
+        app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+        for bad in [json!({}), json!({"path": ""}), json!("nope"), json!({"path": 3})] {
+            assert!(replay(&mut app, &bad).unwrap_err().contains("path"), "{bad}");
+        }
+        for format in [json!("bmp"), json!(7)] {
+            assert!(replay(&mut app, &json!({"path": "/x.bmp", "format": format})).unwrap_err().contains("format"), "{format}");
+        }
     }
 
     /// Only the dialog's own settings are remembered: not the destination, the document size or
