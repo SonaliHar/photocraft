@@ -15,8 +15,9 @@
 //!    c. **Distortion and Manual Transformations** as one inverse warp: Offset and Aspect are
 //!    undone first, then [`crate::lens::LensMap`] (scale, rotation, Vertical / Horizontal
 //!    keystone homography, Brown–Conrady radial distortion; see [`crate::lens`]); the source is
-//!    sampled with a Catmull-Rom bicubic clamped to its 2×2 neighbourhood (no ringing), edges
-//!    extended. The caller restores alpha. Upright's rotation ([`upright`]) sits between the
+//!    sampled with a Catmull-Rom bicubic clamped to its 2×2 neighbourhood (no ringing), colour
+//!    edges extended, and alpha warped too, so corners the warp uncovers come out transparent.
+//!    The caller keeps the layer's own alpha when there is no warp. Upright's rotation ([`upright`]) sits between the
 //!    keystone and the distortion.
 //! 1. **Calibration**, then **white balance and exposure**, in linear light (white balance decodes
 //!    the document's values with the sRGB curve as a perceptual working encoding; encoding is
@@ -776,8 +777,9 @@ impl CameraRaw {
             _ => true,
         }
     }
-    /// Optics › Distortion, Upright and the Manual Transformations (the warp).
-    fn geometry_neutral(&self) -> bool {
+    /// Optics › Distortion, Upright and the Manual Transformations (the warp). When it isn't
+    /// neutral, the result's alpha is the warped alpha: corners the warp uncovers are transparent.
+    pub fn geometry_neutral(&self) -> bool {
         !self.upright_active()
             && [
                 self.lens_distortion,
@@ -1336,8 +1338,31 @@ fn geometry(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
             let at = map.source_of(ox, oy).unwrap_or([cx + (ox - cx) * 1e4, cy + (oy - cy) * 1e4]);
             let c = bicubic_rgb(&src, w, h, at[0] - 0.5, at[1] - 0.5);
             q[..3].copy_from_slice(&c);
+            q[3] = bilinear_alpha(&src, w, h, at[0] - 0.5, at[1] - 0.5) * coverage(at[0], w) * coverage(at[1], h);
         }
     });
+}
+
+/// How much of a one-pixel footprint centred on source coordinate `v` lies inside `0..n`: 1
+/// inside, 0 beyond the edge, a half-pixel ramp across it (an antialiased frame edge).
+fn coverage(v: f64, n: usize) -> f32 {
+    if !v.is_finite() {
+        return 0.0;
+    }
+    ((v + 0.5).min(n as f64 - v + 0.5)).clamp(0.0, 1.0) as f32
+}
+
+/// The source's alpha at `(x, y)` (pixel-centre coordinates, clamped to the frame).
+fn bilinear_alpha(src: &[[f32; 4]], w: usize, h: usize, x: f64, y: f64) -> f32 {
+    let x = if x.is_finite() { x.clamp(0.0, (w - 1) as f64) } else { 0.0 };
+    let y = if y.is_finite() { y.clamp(0.0, (h - 1) as f64) } else { 0.0 };
+    let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+    let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+    let (fx, fy) = ((x - x0 as f64) as f32, (y - y0 as f64) as f32);
+    let a = |xx: usize, yy: usize| src.get(yy * w + xx).map_or(0.0, |q| q[3]);
+    let top = a(x0, y0) + (a(x1, y0) - a(x0, y0)) * fx;
+    let bottom = a(x0, y1) + (a(x1, y1) - a(x0, y1)) * fx;
+    top + (bottom - top) * fy
 }
 
 /// Calibration › Red / Green / Blue Primary as a linear-RGB matrix (`None` when they are all
@@ -1945,8 +1970,24 @@ mod tests {
             assert!(!p.is_identity(), "{p:?}");
             let out = run(&base, w, h, &p);
             assert_ne!(out, base, "{p:?}");
-            assert!(out.iter().all(|q| q[..3].iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)) && q[3] == 1.0), "{p:?}");
+            // A warp may uncover corners (transparent); nothing else touches alpha.
+            let alpha_ok = |a: f32| if p.geometry_neutral() { a == 1.0 } else { (0.0..=1.0).contains(&a) };
+            assert!(out.iter().all(|q| q[..3].iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)) && alpha_ok(q[3])), "{p:?}");
         }
+    }
+
+    #[test]
+    fn a_warp_leaves_the_corners_it_uncovers_transparent() {
+        let (w, h) = (60, 40);
+        let base = img(w, h);
+        let out = run(&base, w, h, &CameraRaw { transform_rotate: 8.0, ..Default::default() });
+        assert!(out[0][3] < 0.01 && out[w * h - 1][3] < 0.01, "corners {:?} {:?}", out[0], out[w * h - 1]);
+        assert_eq!(out[(h / 2) * w + w / 2][3], 1.0, "the middle stays opaque");
+        // Shrinking the picture (Scale) uncovers a border all round; enlarging covers it again.
+        let small = run(&base, w, h, &CameraRaw { transform_scale: 80.0, ..Default::default() });
+        assert!(small[w / 2][3] < 0.01);
+        let big = run(&base, w, h, &CameraRaw { transform_rotate: 8.0, transform_scale: 130.0, ..Default::default() });
+        assert!(big.iter().all(|q| q[3] > 0.99));
     }
 
     #[test]

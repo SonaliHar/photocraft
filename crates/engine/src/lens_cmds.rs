@@ -11,7 +11,7 @@ use photocraft_algo::exif;
 use photocraft_algo::lens::{self, EdgeMode, LensCorrection};
 use photocraft_algo::transform::Interp;
 use photocraft_algo::wideangle::{self, WideAngle};
-use photocraft_color::{ColorMode, SampleType};
+use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, SmartFilter};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into};
@@ -177,21 +177,24 @@ pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> Surface 
         return surf.clone();
     }
     let Some(len) = raw_pixels(area) else { return surf.clone() };
-    let fmt = surf.format();
     let (w, h) = (area.width() as usize, area.height() as usize);
     let mut px = rgba_region(surf, area, len);
-    camera_raw::develop(&mut px, w, h, p, fmt.sample == SampleType::F32);
+    camera_raw::develop(&mut px, w, h, p, surf.format().sample == SampleType::F32);
+    // A warp leaves the corners it uncovers transparent, so the result needs alpha; otherwise
+    // alpha is untouched.
+    let warped = !p.geometry_neutral();
+    let src = if warped && !surf.format().alpha { surf.convert(PixelFormat::new(surf.format().mode, surf.format().sample, true)) } else { surf.clone() };
+    let fmt = src.format();
     let n = fmt.channels();
-    let orig = surf.read_region(area);
+    let orig = src.read_region(area);
     let mut data = vec![0.0f32; w * h * n];
     for (i, (q, o)) in px.iter().zip(data.chunks_exact_mut(n)).enumerate() {
         from_rgba_into(&fmt, *q, o);
-        if fmt.alpha {
-            // Alpha is untouched.
+        if fmt.alpha && !warped {
             o[n - 1] = orig[i * n + n - 1];
         }
     }
-    let mut out = surf.clone();
+    let mut out = src;
     out.write_region(area, &data);
     out.prune();
     out
@@ -406,7 +409,9 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let t0 = Stopwatch::start();
-    let id = run_filter(s, RAW, "Camera Raw Filter", p.clone(), false, &|surf, canvas| camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr))?;
+    let id = run_filter(s, RAW, "Camera Raw Filter", p.clone(), !cr.geometry_neutral(), &|surf, canvas| {
+        camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr)
+    })?;
     Ok(json!({"layer": id.0, "identity": cr.is_identity(), "ms": t0.ms()}))
 }
 
@@ -602,6 +607,24 @@ mod tests {
         assert!((p[0] - p[2]).abs() < 0.01, "{p:?}");
     }
 
+    /// A raw opens as a Background layer: a warp turns it into a layer with transparent corners,
+    /// as Lens Correction's Transparency edge does; colour-only settings leave it a Background.
+    #[test]
+    fn camera_raw_warp_makes_the_background_a_layer_with_transparent_corners() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 60, "height": 40, "background": "white"})).unwrap();
+        let bg = s.active().unwrap().active_layer.unwrap();
+        assert!(s.active().unwrap().doc.is_background(bg));
+        s.execute(RAW, json!({"exposure": 0.5})).unwrap();
+        assert!(s.active().unwrap().doc.is_background(bg));
+        s.execute(RAW, json!({"transformRotate": 8})).unwrap();
+        let d = s.active().unwrap();
+        assert!(!d.doc.is_background(bg));
+        let surf = d.doc.layer(bg).unwrap().surface().unwrap();
+        assert!(surf.format().alpha);
+        assert!(surf.rgba(0, 0)[3] < 0.01 && surf.rgba(30, 20)[3] == 1.0);
+    }
+
     #[test]
     fn camera_raw_clamps_and_renders_the_optics_geometry_and_calibration_controls() {
         let p = raw_params(
@@ -628,8 +651,9 @@ mod tests {
             assert_eq!(r["identity"], false);
             for (x, y) in [(0, 0), (60, 40), (119, 79), (5, 70)] {
                 let q = active_px(&s, x, y);
-                assert!(q[..3].iter().all(|v| v.is_finite()) && q[0] == q[1] && q[1] == q[2] && q[3] == 1.0, "depth {depth} ({x},{y}): {q:?}");
+                assert!(q[..3].iter().all(|v| v.is_finite()) && (q[3] == 0.0 || (q[0] == q[1] && q[1] == q[2])), "depth {depth} ({x},{y}): {q:?}");
             }
+            assert_eq!(active_px(&s, 60, 40)[3], 1.0, "depth {depth}");
         }
         // Placeholders alone are an identity (Guided Upright without guides too); unknown modes
         // are refused.
