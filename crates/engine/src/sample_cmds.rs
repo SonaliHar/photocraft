@@ -78,7 +78,8 @@ pub fn sample_rect(x: f64, y: f64, size: u32, canvas: Rect) -> Option<Rect> {
 
 /// Round `v` to what a channel of `depth` can store (32 bit keeps the float).
 fn quantize(v: f32, depth: SampleType) -> f32 {
-    let mut b = [0u8; 4];
+    // SampleType includes native F64; retain enough stack storage for its eight bytes.
+    let mut b = [0u8; 8];
     photocraft_color::write_sample(&mut b, depth, 0, v);
     photocraft_color::read_sample(&b, depth, 0)
 }
@@ -347,6 +348,19 @@ mod tests {
     /// A 9×9 document: white, except a black 3×3 block at (0..3, 0..3).
     fn block(mode: ColorMode, depth: SampleType) -> Document {
         doc(9, 9, mode, depth, |x, y| if x < 3 && y < 3 { [0.0, 0.0, 0.0, 1.0] } else { [1.0; 4] })
+    }
+
+    #[test]
+    fn two_pixel_averages_keep_opaque_alpha_at_every_native_sample_width() {
+        for depth in SampleType::ALL {
+            let got = average(&[[0., 0., 0., 1.], [1., 1., 1., 1.]], ColorMode::Rgb, depth);
+            let half = match depth {
+                SampleType::U8 => 128. / 255.,
+                SampleType::U16 => 32768. / 65535.,
+                SampleType::U32 | SampleType::F32 | SampleType::F64 => 0.5,
+            };
+            assert_eq!(got, [half, half, half, 1.], "{depth:?}");
+        }
     }
 
     #[test]

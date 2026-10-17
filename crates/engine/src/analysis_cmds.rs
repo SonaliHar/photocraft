@@ -179,7 +179,7 @@ fn set_quiet(s: &mut Session, f: impl FnOnce(&mut Document)) -> Result<()> {
 /// replay an edit that was taken back.
 pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Session) -> Result<R>) -> Result<R> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let (before, history, prior) = (st.doc.clone(), st.history.clone(), st.layer_target());
+    let (before, history, prior) = (st.doc.clone(), st.history.clone(), st.layer_target()?);
     // An inner command may select a layer that disappears when the compound rolls back.
     // Selection, channel targeting and coalescing must roll back with the document (#4975).
     let anchor = st.layer_anchor;
@@ -199,9 +199,10 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
     let result = match r {
         Ok(v) => {
             // As in `Session::edit`: undo targets what was selected just before the step (#1356).
-            st.history.set_current_layers(prior);
-            st.history.record(label, before, st.layer_target());
-            st.trim_history();
+            let control = ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &|_| Ok(()) };
+            st.history.set_current_layers(prior, &control)?;
+            st.history.record(label, before, st.layer_target()?, &control)?;
+            st.history.trim(&st.doc, &control)?;
             st.coalesce = None;
             Ok(v)
         }

@@ -171,6 +171,8 @@ fn unique(values: &mut Vec<f64>, value: f64, control: &Interrupt<'_>) -> Result<
     values.push(value);
     Ok(())
 }
+// Keep the explicit authority, borrowed payload and original-control proof inputs together.
+#[allow(clippy::too_many_arguments)]
 fn lines(start: f64, end: f64, count: u32, width: Option<f64>, gutter: f64, center: bool, output: &mut Vec<f64>, control: &Interrupt<'_>) -> Result<()> {
     let available = (end - start).max(0.);
     if count == 0 {
@@ -180,6 +182,11 @@ fn lines(start: f64, end: f64, count: u32, width: Option<f64>, gutter: f64, cent
     let n = f64::from(count);
     let width = width.unwrap_or(((available - (n - 1.) * gutter) / n).max(0.));
     let total = n * width + (n - 1.) * gutter;
+    // Match the shared preview's admitted geometry before producing lines.
+    // A fixed width or gutter must fit, rather than silently escaping margins.
+    if width <= 0. || !total.is_finite() || total > available + 0.001 {
+        return Err(error("count, size and gutter must fit inside the target margins"));
+    }
     let start = if center && fixed { start + (available - total) / 2. } else { start };
     for index in 0..count {
         poll(control)?;
@@ -353,11 +360,11 @@ fn prepare_targets(
     }
     for value in vertical {
         poll(control)?;
-        unique(&mut result.vertical, f64::from(value), control)?;
+        unique(&mut result.vertical, value, control)?;
     }
     for value in horizontal {
         poll(control)?;
-        unique(&mut result.horizontal, f64::from(value), control)?;
+        unique(&mut result.horizontal, value, control)?;
     }
     poll(control)?;
     Ok((result, response))
@@ -429,6 +436,27 @@ fn exact_guides(first: &Guides, second: &Guides, control: &Interrupt<'_>) -> Res
     Ok(same(&first.horizontal, &second.horizontal)? && same(&first.vertical, &second.vertical)? && first.colors == second.colors)
 }
 
+fn copied_colors(values: &[photocraft_doc::GuideColor], control: &Interrupt<'_>) -> Result<Vec<photocraft_doc::GuideColor>> {
+    if values.len() > 100_000 {
+        return Err(error("guide color metadata limit"));
+    }
+    let mut output = Vec::new();
+    output.try_reserve_exact(values.len()).map_err(|_| error("guide color allocation denied"))?;
+    for value in values {
+        poll(control)?;
+        if !value.position.is_finite() {
+            return Err(error("nonfinite guide color position"));
+        }
+        output.push(*value);
+    }
+    Ok(output)
+}
+
+#[cfg(test)]
+fn prepare(snapshot: &crate::DocumentSnapshot, plan: Plan, control: &Interrupt<'_>) -> Result<(Guides, Value)> {
+    prepare_targets(snapshot, plan, &[snapshot.bounds()], false, control)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,8 +479,6 @@ mod tests {
             json!({"columns":2,"rows":3}),
             json!({"columns":2,"width":20,"gutter":10,"centerColumns":true,"clearExisting":true}),
             json!({"columns":3,"rows":2,"margin":[5,5,10,15],"gutter":2.5,"rowGutter":3}),
-            json!({"margin":-2.25}),
-            json!({"columns":2,"width":0,"gutter":-2}),
         ] {
             let Plan::Layout(layout) = plan(&session, &params, false).unwrap() else { panic!("layout expected") };
             let [top, left, bottom, right] = layout.margin;
@@ -469,10 +495,10 @@ mod tests {
             let response = json!({"vertical":vertical.len(),"horizontal":horizontal.len()});
             let mut expected = if layout.clear { Guides::default() } else { snapshot.guides.clone() };
             for value in vertical {
-                super::super::push_unique(&mut expected.vertical, f64::from(value));
+                super::super::push_unique(&mut expected.vertical, value);
             }
             for value in horizontal {
-                super::super::push_unique(&mut expected.horizontal, f64::from(value));
+                super::super::push_unique(&mut expected.horizontal, value);
             }
             let (actual, actual_response) = prepare(snapshot, Plan::Layout(layout), &Interrupt::NONE).unwrap();
             assert!(exact_guides(&actual, &expected, &Interrupt::NONE).unwrap());
@@ -535,6 +561,36 @@ mod tests {
         assert_eq!(session.active().unwrap().history.redo_label(), Some(redo.as_str()));
     }
     #[test]
+    fn upstream_negative_layout_sizes_refuse_without_touching_native_history_or_redo() {
+        let mut session = fixture();
+        session
+            .edit("Retained guide redo", |document, _| {
+                document.layers[0].name.push_str(" redo");
+                Ok(())
+            })
+            .unwrap();
+        assert!(session.undo());
+        let state = session.active().unwrap();
+        let before = state.doc.clone();
+        let revision = state.revision;
+        let past = state.history.entry_labels().map(str::to_string).collect::<Vec<_>>();
+        let redo = state.history.redo_labels().map(str::to_string).collect::<Vec<_>>();
+        assert!(!redo.is_empty());
+        let native = photocraft_format::save_to_bytes(&before, &Default::default()).unwrap();
+        for params in [json!({"margin":-2.25}), json!({"columns":2,"width":0,"gutter":-2})] {
+            assert!(run(&mut session, &params, false).is_err());
+            let state = session.active().unwrap();
+            assert!(state.doc.shares_state(&before));
+            assert_eq!(state.revision, revision);
+            assert_eq!(state.history.entry_labels().collect::<Vec<_>>(), past.iter().map(String::as_str).collect::<Vec<_>>());
+            assert_eq!(state.history.redo_labels().collect::<Vec<_>>(), redo.iter().map(String::as_str).collect::<Vec<_>>());
+            assert_eq!(photocraft_format::save_to_bytes(&state.doc, &Default::default()).unwrap(), native);
+        }
+        assert!(session.redo());
+        assert!(session.active().unwrap().doc.layers[0].name.ends_with(" redo"));
+    }
+
+    #[test]
     fn stale_hostile_and_cancelled_layouts_do_not_publish() {
         let session = fixture();
         let state = session.active().unwrap();
@@ -554,25 +610,4 @@ mod tests {
         assert!(matches!(prepare(&before, planned, &Interrupt::cancel_only(&cancel)), Err(EngineError::Cancelled)));
         assert!(state.doc.shares_state(&before));
     }
-}
-
-fn copied_colors(values: &[photocraft_doc::GuideColor], control: &Interrupt<'_>) -> Result<Vec<photocraft_doc::GuideColor>> {
-    if values.len() > 100_000 {
-        return Err(error("guide color metadata limit"));
-    }
-    let mut output = Vec::new();
-    output.try_reserve_exact(values.len()).map_err(|_| error("guide color allocation denied"))?;
-    for value in values {
-        poll(control)?;
-        if !value.position.is_finite() {
-            return Err(error("nonfinite guide color position"));
-        }
-        output.push(*value);
-    }
-    Ok(output)
-}
-
-#[cfg(test)]
-fn prepare(snapshot: &crate::DocumentSnapshot, plan: Plan, control: &Interrupt<'_>) -> Result<(Guides, Value)> {
-    prepare_targets(snapshot, plan, &[snapshot.bounds()], false, control)
 }

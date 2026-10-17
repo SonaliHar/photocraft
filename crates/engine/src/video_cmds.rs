@@ -267,11 +267,34 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat) -> Result<Footage
         return Err(EngineError::Other(format!("no images in `{path}`")));
     }
     let mut frames = Vec::with_capacity(files.len());
-    let delays = Vec::new();
+    let mut delays = Vec::new();
     for f in &files {
         let bytes = std::fs::read(f).map_err(|e| EngineError::Other(format!("read `{}`: {e}", f.display())))?;
         let name = f.to_string_lossy();
-        let doc = photocraft_io::import(&name, &bytes).map_err(|e| EngineError::Other(format!("`{}`: {e}", f.display())))?.document;
+        // Preserve the existing synchronous footage policy. Generic image
+        // opening intentionally returns only a GIF's first frame.
+        if photocraft_codecs::detect(&bytes) == Some(photocraft_codecs::Format::Gif) {
+            photocraft_io::import_gif_frames(&name, &bytes, &mut |doc, delay_ms| {
+                let frame = crate::file_cmds::flattened(&doc, fmt).map_err(|e| photocraft_io::IoError::Unsupported(e.to_string()))?;
+                frames.try_reserve(1).map_err(|_| photocraft_io::IoError::Unsupported("video frame allocation".into()))?;
+                delays.try_reserve(1).map_err(|_| photocraft_io::IoError::Unsupported("video delay allocation".into()))?;
+                frames.push(frame);
+                delays.push(delay_ms);
+                Ok(())
+            })
+            .map_err(|e| EngineError::Other(format!("`{}`: {e}", f.display())))?;
+            continue;
+        }
+        let mut doc = photocraft_io::import(&name, &bytes).map_err(|e| EngineError::Other(format!("`{}`: {e}", f.display())))?.document;
+        // Only an actual ordinary Targa frame uses its saved alpha as footage
+        // transparency. A misleading filename must not rewrite a source role.
+        if f.extension().is_some_and(|e| e.eq_ignore_ascii_case("tga"))
+            && photocraft_codecs::detect(&bytes) == Some(photocraft_codecs::Format::Tga)
+            && doc.xcf_state.is_none()
+            && !doc.has_backed_rasters().map_err(|e| EngineError::Other(e.to_string()))?
+        {
+            photocraft_io::tga_alpha_channel_to_transparency(&mut doc);
+        }
         frames.push(crate::file_cmds::flattened(&doc, fmt)?);
     }
     // Only a lone GIF says how fast it plays; a sequence mixing files has no single rate.

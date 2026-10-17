@@ -107,11 +107,7 @@ fn select_target(
     let target_layers = layers.ok_or_else(|| EngineError::Other("the history can't step right now".into()))?;
     // Save As identity/title is outside history. Repair the private accounted
     // target through its paid copier before publishing the travelled cursor.
-    let title_changed = if doc.accounted().is_some() {
-        !same_accounted_title(&doc.name, &start.name, control)?
-    } else {
-        doc.name != start.name
-    };
+    let title_changed = if doc.accounted().is_some() { !same_accounted_title(&doc.name, &start.name, control)? } else { doc.name != start.name };
     if let Some(owner) = doc.accounted()
         && title_changed
     {
@@ -191,6 +187,8 @@ fn same_accounted_title(a: &str, b: &str, control: &photocraft_raster::backing::
 
 #[cfg(test)]
 #[path = "history_select_accounted_title_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod accounted_title_tests;
 
 /// Same target repair as checked Undo/Redo, prepared fallibly before publication.

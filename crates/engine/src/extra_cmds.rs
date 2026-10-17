@@ -442,7 +442,8 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
     let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let r = s.execute("edit.paste", params)?;
     let id = layer_param(s, &Value::Null)?;
-    s.execute("layer.layerMask.revealAll", json!({"layer": id.0, "coalesce": key}))?;
+    // The following coalesced edit installs the complete final mask directly;
+    // no transient reveal-all mask or nested mask command is required.
     s.coalesce_request = Some(key);
     let r2 = s.edit(label, |doc, _| {
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
@@ -750,7 +751,8 @@ fn rasterize_content(s: &mut Session, id: LayerId, only: Option<&str>, key: &str
                 let snapshot = doc.clone();
                 let mut snap = doc.layer(id).cloned().ok_or(EngineError::NoLayer(id))?;
                 if matches!(snap.content, LayerContent::Smart(ref sm) if sm.cache.is_none()) {
-                    let _ = crate::smart_cmds::refresh_layer(&snapshot, &mut snap);
+                    // Preserve missing-source Ok(false), but never publish after a replay denial.
+                    crate::smart_cmds::refresh_layer(&snapshot, &mut snap)?;
                 }
                 let fmt = snapshot.pixel_format();
                 let surface = match &mut snap.content {
@@ -1551,6 +1553,10 @@ mod tests {
         s.execute("edit.copy", json!({})).unwrap();
         let steps = s.active().unwrap().history.past_len();
         s.execute("select.rect", json!({"x": 20, "y": 10, "width": 8, "height": 8})).unwrap();
+        let before_paste = s.active().unwrap().doc.clone();
+        let before_active = s.active().unwrap().active_layer;
+        let before_view = s.active().unwrap().channel_view.clone();
+        let clipboard = s.clipboard.clone().unwrap();
         s.execute("edit.pasteSpecial.pasteInto", json!({})).unwrap();
         let l = active(&s);
         let m = l.mask.as_ref().unwrap();
@@ -1559,6 +1565,24 @@ mod tests {
         assert_eq!(m.value(0, 0), 0.0);
         assert!(doc(&s).selection.is_none());
         assert_eq!(s.active().unwrap().history.past_len(), steps + 2, "select + one Paste Into step");
+        let pasted = s.active().unwrap().doc.clone();
+        assert_eq!(s.active().unwrap().channel_view, before_view);
+        let retained = s.clipboard.as_ref().unwrap();
+        assert_eq!(retained.surface, clipboard.surface);
+        assert_eq!(retained.bounds, clipboard.bounds);
+        assert_eq!(retained.color.mode, clipboard.color.mode);
+        assert_eq!(retained.color.icc_profile, clipboard.color.icc_profile);
+        assert_eq!(retained.color.sample_encoding, clipboard.color.sample_encoding);
+        assert_eq!(retained.color.interpretation, clipboard.color.interpretation);
+        assert_eq!(retained.composition, clipboard.composition);
+        assert_eq!(retained.layers, clipboard.layers);
+        assert_eq!(retained.resolution, clipboard.resolution);
+        assert!(s.undo(), "one undo removes the entire Paste Into");
+        assert_eq!(doc(&s), &*before_paste);
+        assert_eq!(s.active().unwrap().active_layer, before_active);
+        assert_eq!(s.active().unwrap().channel_view, before_view);
+        assert!(s.redo());
+        assert_eq!(doc(&s), &*pasted);
         // Paste Outside reveals everything but the selection.
         s.execute("select.rect", json!({"x": 20, "y": 10, "width": 8, "height": 8})).unwrap();
         s.execute("edit.pasteSpecial.pasteOutside", json!({})).unwrap();
@@ -1659,7 +1683,7 @@ mod tests {
         let b = active(&s).id;
         let visible = |s: &Session| doc(s).layer(b).unwrap().visible;
         // Select › All Layers leaves out the Background, as in Photoshop.
-        let all = |s: &Session| crate::layer_multi_cmds::selected(s).iter().map(|id| doc(s).layer(*id).unwrap().visible).collect::<Vec<_>>();
+        let all = |s: &Session| crate::layer_multi_cmds::selected(s).unwrap().iter().map(|id| doc(s).layer(*id).unwrap().visible).collect::<Vec<_>>();
         s.execute("layer.hideLayers", json!({})).unwrap();
         assert!(!visible(&s));
         s.execute("layer.hideLayers", json!({})).unwrap();

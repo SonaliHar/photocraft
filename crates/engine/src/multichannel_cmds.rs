@@ -146,10 +146,10 @@ fn layer_admission(layers: &[Layer], depth: usize, count: &mut u64, tiles: &mut 
         if let Some(surface) = layer.surface() {
             surface_admission(surface, tiles, control)?;
         }
-        if let LayerContent::Smart(smart) = &layer.content {
-            if let Some(mask) = &smart.filter_mask {
-                surface_admission(&mask.surface, tiles, control)?;
-            }
+        if let LayerContent::Smart(smart) = &layer.content
+            && let Some(mask) = &smart.filter_mask
+        {
+            surface_admission(&mask.surface, tiles, control)?;
         }
         if matches!(&layer.content, LayerContent::BackedRaster(_)) {
             return Err(error("backed plate conversion unsupported"));

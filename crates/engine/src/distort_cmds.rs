@@ -380,7 +380,14 @@ fn puppet(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             if b.is_empty() {
                 return Ok(x.clone());
             }
-            let (out, mask) = photocraft_algo::puppet::try_puppet_warp_with_mask(x, b, &w, it, linked.as_deref(), &photocraft_raster::Interrupt::NONE)?
+            let (out, mask) = photocraft_algo::puppet::try_puppet_warp_with_mask(x, b, &w, it, linked.as_deref(), &photocraft_raster::Interrupt::NONE)
+                .map_err(|error| {
+                    if error == photocraft_raster::RasterInputError::InvalidBounds {
+                        bad(cmd, "invalid geometry or the pins stretch the content too far")
+                    } else {
+                        EngineError::from(error)
+                    }
+                })?
                 .ok_or_else(too_far)?;
             *moved_mask.borrow_mut() = mask;
             Ok(out)

@@ -148,7 +148,6 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests {
     use super::*;
     use photocraft_doc::LayerId;
-    use std::sync::Arc;
 
     fn session(depth: u64) -> (Session, LayerId) {
         let mut s = Session::new();
@@ -168,7 +167,7 @@ mod tests {
         for depth in [8, 16, 32] {
             let (mut s, id) = session(depth);
             let before = s.active().unwrap().doc.clone();
-            let count = s.active().unwrap().history.entries().len();
+            let count = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
             let r = s.execute(SET, json!({"layer": id.0, "pattern": "Bricks", "scale": 250, "angle": -45, "link": false, "phase": [3, -4]})).unwrap();
             assert_eq!(r["scale"], json!(250.0));
             let bricks = crate::pattern_cmds::resolve(&s, "Bricks").unwrap();
@@ -177,7 +176,7 @@ mod tests {
                 Fill::Pattern { name: bricks.name.clone(), scale: 2.5, id: bricks.id.clone(), angle: -45.0, link: false, phase: (3.0, -4.0) }
             );
             let st = s.active().unwrap();
-            assert_eq!(st.history.entries().len(), count + 1);
+            assert_eq!(st.history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), count + 1);
             assert!(st.doc.patterns.iter().any(|p| p.id == bricks.id), "the new pattern is copied into the document");
             assert_eq!(st.doc.layer(id).unwrap().mask, before.layer(id).unwrap().mask, "the selection mask is kept");
             // Omitted values keep the layer's; Snap to Origin zeroes the phase.
@@ -189,9 +188,13 @@ mod tests {
             assert_eq!(*s.active().unwrap().doc, *before);
             s.redo();
             assert_eq!(fill(&s, id), Fill::Pattern { name: bricks.name.clone(), scale: 2.5, id: bricks.id, angle: -45.0, link: false, phase: (3.0, -4.0) });
-            let count = s.active().unwrap().history.entries().len();
+            let count = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
             s.execute(SET, json!({"scale": 250, "angle": -45})).unwrap();
-            assert_eq!(s.active().unwrap().history.entries().len(), count, "an unchanged fill is not a history step");
+            assert_eq!(
+                s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(),
+                count,
+                "an unchanged fill is not a history step"
+            );
         }
     }
 
@@ -199,10 +202,10 @@ mod tests {
     fn preview_matches_what_the_command_commits() {
         let (mut s, id) = session(8);
         let p = json!({"layer": id.0, "pattern": "Dots", "scale": 50, "angle": 30});
-        let (before, count) = (s.active().unwrap().doc.clone(), s.active().unwrap().history.entries().len());
+        let (before, count) = (s.active().unwrap().doc.clone(), s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len());
         let shown = preview(&s, SET, &p).unwrap();
-        assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
-        assert_eq!(s.active().unwrap().history.entries().len(), count, "previewing is not an edit");
+        assert!(before.shares_state(&s.active().unwrap().doc));
+        assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), count, "previewing is not an edit");
         s.execute(SET, p).unwrap();
         assert_eq!(shown, *s.active().unwrap().doc);
         let p = json!({"pattern": "Grid", "scale": 300, "angle": 90, "link": false});
@@ -211,7 +214,7 @@ mod tests {
         // Layer ids are allocated per process, so the preview's new layer has its own id: compare
         // what the documents look like.
         let all = photocraft_geom::Rect::new(0, 0, 40, 30);
-        assert_eq!(photocraft_compose::render(&shown, all).px, photocraft_compose::render(&s.active().unwrap().doc, all).px);
+        assert_eq!(photocraft_compose::render(&shown, all).unwrap().px, photocraft_compose::render(&s.active().unwrap().doc, all).unwrap().px);
         assert_eq!(shown.layers.len(), s.active().unwrap().doc.layers.len());
         assert!(preview(&s, "edit.fill", &json!({})).is_err());
     }

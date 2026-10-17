@@ -623,13 +623,17 @@ fn save_doc_with_fingerprints(
         let mut held = photocraft_io::source_protection::fingerprint_resident_bytes(fingerprints, fingerprint_slots, control)
             .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(error.to_string()) })?;
         if let Some(source) = source {
-            held = held.checked_add(std::mem::size_of::<crate::SourceIdentity>())
+            held = held
+                .checked_add(std::mem::size_of::<crate::SourceIdentity>())
                 .and_then(|n| n.checked_add(source.label.capacity()))
                 .and_then(|n| n.checked_add(source.path.as_ref().map_or(0, String::capacity)))
                 .ok_or_else(|| EngineError::Other("source-protection.resident-limit: captured identity overflow".into()))?;
         }
         let mut limits = photocraft_io::NativeSaveLimits::default();
-        limits.preparation.resident_bytes = limits.preparation.resident_bytes.checked_sub(held)
+        limits.preparation.resident_bytes = limits
+            .preparation
+            .resident_bytes
+            .checked_sub(held)
             .ok_or_else(|| EngineError::Other("source-protection.resident-limit: captured identities exceed save envelope".into()))?;
         let guard = |target: &std::path::Path, resident_limit: u64| -> std::result::Result<(), photocraft_io::IoError> {
             control.check().map_err(|_| photocraft_io::IoError::Cancelled)?;
@@ -1282,9 +1286,11 @@ pub(crate) struct BatchInput {
 }
 
 /// Subfolders below a batch input folder are walked at most this deep ("Include All Subfolders").
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) const MAX_SUBFOLDER_DEPTH: usize = 32;
 /// A batch over subfolders lists at most this many files; a larger tree is an error, not a run
 /// that silently stops partway.
+#[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) const MAX_SUBFOLDER_FILES: usize = 100_000;
 
 /// [`batch_inputs`] for the commands whose Photoshop dialog has "Include All Subfolders" (Batch,
@@ -1491,7 +1497,7 @@ fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     };
     let r = match names {
-        Some(names) => process_outputs(inputs.iter().map(|i| i.path.as_str()).zip(names), save, &run),
+        Some(names) => process_outputs(inputs.iter().map(|i| i.path.as_str()).zip(names), save, &run, format == "same"),
         None => process_tree(&inputs, &output, &format, save, "", &run),
     };
     Ok(r)
@@ -1572,6 +1578,23 @@ fn load_files_into_stack(s: &mut Session, p: &Value) -> Result<Value> {
         stack.layers = vec![smart];
     }
     let i = s.add_document(stack, None)?;
+    if align {
+        s.execute("select.allLayers", json!({}))?;
+        s.execute("edit.autoAlignLayers", json!({"projection": "auto"}))?;
+        if smart {
+            let name = s.active().map(|d| d.doc.name.clone()).unwrap_or_default();
+            s.edit("Convert to Smart Object", |doc, active| {
+                let layers = std::mem::take(&mut doc.layers);
+                let smart = crate::smart_cmds::layers_to_smart(doc, &name, layers)?;
+                *active = Some(smart.id);
+                doc.layers = vec![smart];
+                Ok(())
+            })?;
+            if let Some(st) = s.active_mut() {
+                st.selected_layers = st.active_layer.into_iter().collect();
+            }
+        }
+    }
     Ok(json!({"document": i, "layers": n, "warnings": warnings}))
 }
 
@@ -1940,7 +1963,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("file.revert", "Revert", &["File"], Some("F12"), "{} (reloads the saved file as one undoable step)", can_revert, |s, _| revert(s)),
         spec!(
             "file.saveACopy",
-            "Save a Copyâ€¦",
+            "Save a Copy…",
             &["File"],
             Some("Cmd+Alt+S"),
             r##"{"path":str (format from the extension),"quality":0..12? (JPEG),"layers":bool=true,"tiffLayers":bool=false (TIFF: keep the layers; flat by default),"tgaBits":24|32? (TGA: 32 writes the alpha channel, or else the transparency, as the alpha; unset, 32 with an alpha channel or transparency, else 24),"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16)}"##,
@@ -1949,7 +1972,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "file.openAs",
-            "Open Asâ€¦",
+            "Open As…",
             &["File"],
             Some("Cmd+Alt+Shift+O"),
             r##"{"path":str,"as":"psd|png|jpg|tiff|â€¦"? (decode as this format)}"##,
@@ -1958,7 +1981,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "file.placeEmbedded",
-            "Place Embeddedâ€¦",
+            "Place Embedded…",
             &["File"],
             None,
             r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?}"##,
@@ -1967,7 +1990,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "file.placeLinked",
-            "Place Linkedâ€¦",
+            "Place Linked…",
             &["File"],
             None,
             r##"{"path":str,"scale":%?,"fit":bool? (default: Preferences > General > Resize Image During Place),"center":[x,y]?}"##,
@@ -1976,7 +1999,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "file.fileInfo",
-            "File Infoâ€¦",
+            "File Info…",
             &["File"],
             Some("Cmd+Alt+Shift+I"),
             r##"{"title":str?,"author":str?,"authorTitle":str?,"description":str?,"keywords":[str]|"a; b"?,"copyright":str?,"copyrightStatus":"unknown|copyrighted|publicDomain"?,"copyrightUrl":str?} (no keys: read; the result also has read-only "camera":{"make","model","dateTaken","exposure","fNumber","iso","focalLength","focalLength35mm","lens"}, present keys only)"##,
@@ -1985,7 +2008,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "file.automate.fitImage",
-            "Fit Imageâ€¦",
+            "Fit Image…",
             &["File", "Automate"],
             None,
             r##"{"width":px,"height":px,"dontEnlarge":bool=false,"resample":"automatic|preserveDetails|bicubicSmoother|bicubicSharper|bicubicAutomatic|bicubic|nearest|bilinear|lanczos"="bicubic"}"##,
@@ -1994,7 +2017,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "file.automate.conditionalModeChange",
-            "Conditional Mode Changeâ€¦",
+            "Conditional Mode Change…",
             &["File", "Automate"],
             None,
             r##"{"from":["rgb","grayscale","cmyk","lab","indexed","bitmap",â€¦]|"any"="any","to":"rgb|grayscale|cmyk|lab"}"##,
@@ -2003,7 +2026,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "file.automate.batch",
-            "Batchâ€¦",
+            "Batch…",
             &["File", "Automate"],
             None,
             r##"{"steps":[[commandId,params]|{"command":id,"params":{}}…] (a recorded action),"input":folder|[paths],"includeSubfolders":bool=false (a folder input also takes the images in its subfolders, up to 32 levels and 100000 files; each result keeps its subfolder under output),"output":folder,"format":"same|png|jpg|psd|tiff|…"="same","quality":0..12?,"naming":string? (blank keeps source names; {name}, {serial} padded to 3 digits, {date} as YYYY-MM-DD UTC; extension added automatically),"startingSerial":1..4294967295=1 (input position, including failed inputs),"tiffLayers":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"calledActions":[{"name","steps"}…]? (the actions Play Action steps call; default: the session's)} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
@@ -2012,7 +2035,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "file.scripts.imageProcessor",
-            "Image Processorâ€¦",
+            "Image Processor…",
             &["File", "Scripts"],
             None,
             r##"{"input":folder|[paths],"includeSubfolders":bool=false (a folder input also takes the images in its subfolders, up to 32 levels and 100000 files; each result keeps its subfolder under output),"output":folder,"format":"jpg|png|psd|tiff|…"="jpg","quality":0..12=8,"tiffLayers":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"width":px?,"height":px? (fit, never enlarge),"convertToSrgb":bool=false} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
@@ -2021,7 +2044,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "file.scripts.loadFilesIntoStack",
-            "Load Files into Stackâ€¦",
+            "Load Files into Stack…",
             &["File", "Scripts"],
             None,
             r##"{"paths":[str]|folder,"align":bool=false (Auto-Align Layers on them first),"createSmartObject":bool=false} â†’ new document with one layer per file (inside one smart object with createSmartObject)"##,
@@ -2040,7 +2063,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "file.export.layersToFiles",
-            "Layers to Filesâ€¦",
+            "Layers to Files…",
             &["File", "Export"],
             None,
             r##"{"dir":folder,"format":"png|jpg|psd|tiff|â€¦"="png","prefix":str=document name,"visibleOnly":bool=true,"quality":0..12?,"tiffLayers":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16)} â†’ {files}"##,
@@ -2049,7 +2072,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "file.export.colorLookupTables",
-            "Color Lookup Tablesâ€¦",
+            "Color Lookup Tables…",
             &["File", "Export"],
             None,
             r##"{"path":str? (.cube; omit to return the text),"size":2..129=33,"title":str?,"scope":"all|selected"="all","layers":[id,â€¦]?} (selected layer IDs use original document stacking; masks are spatial and omitted)"##,
@@ -2058,7 +2081,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "view.newGuideLayout",
-            "New Guide Layoutâ€¦",
+            "New Guide Layout…",
             &["View"],
             None,
             r##"{"columns":n=0,"width":px?,"gutter":px=0,"rows":n=0,"height":px?,"rowGutter":px=gutter,"margin":px|[top,left,bottom,right]=0,"centerColumns":bool=false,"clearExisting":bool=false,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
@@ -2089,6 +2112,12 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 #[path = "file_cmds/tests.rs"]
 mod tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "file_cmds/all_open_export_protection_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
+mod all_open_export_protection_tests;
 
 #[cfg(test)]
 mod aces_exr_tests {

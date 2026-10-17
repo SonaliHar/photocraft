@@ -455,7 +455,7 @@ mod tests {
         let sel = |s: &mut Session, r: [f64; 4], target: &str, mode: &str| {
             let p = json!({"x": r[0], "y": r[1], "width": r[2], "height": r[3], "target": target, "mode": mode});
             let hit: Vec<u64> = s.execute("layer.selectInRect", p).unwrap()["layers"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
-            let mut now: Vec<u64> = s.active().unwrap().selected_layers().iter().map(|l| l.0).collect();
+            let mut now: Vec<u64> = s.active().unwrap().selected_layers().unwrap().iter().map(|l| l.0).collect();
             now.sort_unstable();
             (hit, now)
         };

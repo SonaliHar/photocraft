@@ -290,15 +290,15 @@ pub(crate) fn flush_recording(s: &mut Session) -> Result<()> {
     if idx >= s.actions.list.len() {
         return Err(bad("actions.stop", "the action being recorded no longer exists"));
     }
-    let count=pending_steps(s,idx).count();
-    let mut steps=Vec::new();
-    steps.try_reserve_exact(count).map_err(|_|bad("actions.stop","cannot allocate recorded steps"))?;
-    for (id,params) in pending_steps(s,idx) {
-        steps.push((id.clone(),action_recipe::normalize(id,params.clone())?));
+    let count = pending_steps(s, idx).count();
+    let mut steps = Vec::new();
+    steps.try_reserve_exact(count).map_err(|_| bad("actions.stop", "cannot allocate recorded steps"))?;
+    for (id, params) in pending_steps(s, idx) {
+        steps.push((id.clone(), action_recipe::normalize(id, params.clone())?));
     }
     // Complete all normalization and reserve publication storage before advancing the cursor.
-    let action=s.actions.list.get_mut(idx).ok_or_else(||bad("actions.stop","the action being recorded no longer exists"))?;
-    action.steps.try_reserve(steps.len()).map_err(|_|bad("actions.stop","cannot allocate recorded steps"))?;
+    let action = s.actions.list.get_mut(idx).ok_or_else(|| bad("actions.stop", "the action being recorded no longer exists"))?;
+    action.steps.try_reserve(steps.len()).map_err(|_| bad("actions.stop", "cannot allocate recorded steps"))?;
     if !steps.is_empty() {
         action.steps.extend(steps);
         s.actions.touch();
@@ -761,7 +761,7 @@ mod tests {
             disabled: Default::default(),
             ..Default::default()
         });
-        s.edit_prefs(|p| p.shortcuts.insert(format!("{PLAY_SHORTCUT_PREFIX}Action 1"), "F2".into()));
+        s.edit_prefs(|p| p.shortcuts.insert(format!("{PLAY_SHORTCUT_PREFIX}Action 1"), "F2".into())).unwrap();
         assert_eq!(s.execute("actions.rename", json!({"action": 0, "name": "Sepia"})).unwrap()["action"], "Sepia");
         assert_eq!(s.execute("actions.list", json!({})).unwrap()["actions"][0]["name"], "Sepia");
         assert_eq!(s.actions.list[1].steps[0].1["action"], "Sepia");
@@ -1064,21 +1064,21 @@ mod tests {
         s.execute("layer.select", json!({"layer":first.0})).unwrap();
         let r = s.execute("actions.play", json!({"action":0})).unwrap();
         assert!(r.get("failed").is_none(), "{r}");
-        assert_eq!(s.active().unwrap().selected_layers(), vec![first, second]);
+        assert_eq!(s.active().unwrap().selected_layers().unwrap(), vec![first, second]);
         s.execute("layer.select", json!({"name":"Photo","occurrence":1,"mode":"toggle"})).unwrap();
-        assert_eq!(s.active().unwrap().selected_layers(), vec![first]);
+        assert_eq!(s.active().unwrap().selected_layers().unwrap(), vec![first]);
         s.execute("layer.select", json!({"name":"Photo","occurrence":1,"mode":"range"})).unwrap();
-        assert!(s.active().unwrap().selected_layers().contains(&second));
+        assert!(s.active().unwrap().selected_layers().unwrap().contains(&second));
         // Main's imported .atn steps use a string-valued `layer` and choose the topmost match.
         s.execute("layer.select", json!({"layer":"Photo"})).unwrap();
-        assert_eq!(s.active().unwrap().selected_layers(), vec![second]);
+        assert_eq!(s.active().unwrap().selected_layers().unwrap(), vec![second]);
         s.execute("layer.select", json!({"name":"Photo","occurrence":0,"mode":"add"})).unwrap();
         s.execute("layer.select", json!({"name":"Photo","occurrence":1,"mode":"remove"})).unwrap();
-        assert_eq!(s.active().unwrap().selected_layers(), vec![first]);
+        assert_eq!(s.active().unwrap().selected_layers().unwrap(), vec![first]);
         // Removing an unselected layer does not add it; removing the last target keeps it.
         s.execute("layer.select", json!({"layer":"Photo","mode":"remove"})).unwrap();
         s.execute("layer.select", json!({"name":"Photo","occurrence":0,"mode":"remove"})).unwrap();
-        assert_eq!(s.active().unwrap().selected_layers(), vec![first]);
+        assert_eq!(s.active().unwrap().selected_layers().unwrap(), vec![first]);
         for p in [
             json!({"name":"absent"}),
             json!({"name":"Photo"}),
@@ -1089,9 +1089,9 @@ mod tests {
             json!({"name":"Photo","layer":first.0}),
             json!({"layer":first.0,"occurrence":0}),
         ] {
-            let before = s.active().unwrap().selected_layers();
+            let before = s.active().unwrap().selected_layers().unwrap();
             assert!(s.execute("layer.select", p.clone()).is_err(), "{p}");
-            assert_eq!(s.active().unwrap().selected_layers(), before);
+            assert_eq!(s.active().unwrap().selected_layers().unwrap(), before);
         }
         s.actions.list.push(Action {
             name: "Missing".into(),

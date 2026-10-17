@@ -65,18 +65,18 @@ fn boards(document: &Document, control: &Interrupt<'_>) -> Result<Vec<Rect>> {
             return Err(error("hierarchy depth limit"));
         }
         if let LayerContent::Group(group) = &layer.content {
-            if depth == 0 {
-                if let Some(board) = &group.artboard {
-                    let rect = board.rect;
-                    if rect.x0 > rect.x1 || rect.y0 > rect.y1 {
-                        return Err(error("invalid native artboard bounds"));
-                    }
-                    if boards.len() >= 100_000 {
-                        return Err(error("artboard count limit"));
-                    }
-                    boards.try_reserve(1).map_err(|_| error("artboard allocation denied"))?;
-                    boards.push(rect);
+            if depth == 0
+                && let Some(board) = &group.artboard
+            {
+                let rect = board.rect;
+                if rect.x0 > rect.x1 || rect.y0 > rect.y1 {
+                    return Err(error("invalid native artboard bounds"));
                 }
+                if boards.len() >= 100_000 {
+                    return Err(error("artboard count limit"));
+                }
+                boards.try_reserve(1).map_err(|_| error("artboard allocation denied"))?;
+                boards.push(rect);
             }
             if pending.len().checked_add(group.children.len()).is_none_or(|count| count > 100_000) {
                 return Err(error("hierarchy pending limit"));
@@ -109,7 +109,7 @@ fn retained(values: &[f64], boards: &[Rect], vertical: bool, control: &Interrupt
                 poll(control)?;
             }
             let (first, last) = if vertical { (rect.x0, rect.x1) } else { (rect.y0, rect.y1) };
-            if f64::from(*value) > f64::from(first) && f64::from(*value) < f64::from(last) {
+            if (*value) > f64::from(first) && (*value) < f64::from(last) {
                 inside = true;
                 break;
             }
@@ -195,6 +195,22 @@ pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
     )
 }
 
+fn copied_colors(values: &[photocraft_doc::GuideColor], control: &Interrupt<'_>) -> Result<Vec<photocraft_doc::GuideColor>> {
+    if values.len() > 100_000 {
+        return Err(error("guide color metadata limit"));
+    }
+    let mut output = Vec::new();
+    output.try_reserve_exact(values.len()).map_err(|_| error("guide color allocation denied"))?;
+    for value in values {
+        poll(control)?;
+        if !value.position.is_finite() {
+            return Err(error("nonfinite guide color position"));
+        }
+        output.push(*value);
+    }
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,15 +247,16 @@ mod tests {
                 .vertical
                 .iter()
                 .copied()
-                .filter(|value| rectangles.iter().any(|rect| f64::from(*value) > f64::from(rect.x0) && f64::from(*value) < f64::from(rect.x1)))
+                .filter(|value| rectangles.iter().any(|rect| (*value) > f64::from(rect.x0) && (*value) < f64::from(rect.x1)))
                 .collect(),
             horizontal: snapshot
                 .guides
                 .horizontal
                 .iter()
                 .copied()
-                .filter(|value| rectangles.iter().any(|rect| f64::from(*value) > f64::from(rect.y0) && f64::from(*value) < f64::from(rect.y1)))
+                .filter(|value| rectangles.iter().any(|rect| (*value) > f64::from(rect.y0) && (*value) < f64::from(rect.y1)))
                 .collect(),
+            colors: Vec::new(),
         };
         let (actual, count) = prepare(snapshot, &Interrupt::NONE).unwrap();
         assert_eq!(actual, expected);
@@ -305,20 +322,4 @@ mod tests {
         assert!(state.doc.shares_state(&before));
         assert!(retained(&[f64::NAN], &[Rect::new(0, 0, 10, 10)], true, &Interrupt::NONE).is_err());
     }
-}
-
-fn copied_colors(values: &[photocraft_doc::GuideColor], control: &Interrupt<'_>) -> Result<Vec<photocraft_doc::GuideColor>> {
-    if values.len() > 100_000 {
-        return Err(error("guide color metadata limit"));
-    }
-    let mut output = Vec::new();
-    output.try_reserve_exact(values.len()).map_err(|_| error("guide color allocation denied"))?;
-    for value in values {
-        poll(control)?;
-        if !value.position.is_finite() {
-            return Err(error("nonfinite guide color position"));
-        }
-        output.push(*value);
-    }
-    Ok(output)
 }

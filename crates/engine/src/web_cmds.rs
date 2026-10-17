@@ -962,7 +962,6 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     // Estimate only (the dialog's annotations): the whole image, or each chosen slice.
     if single.is_none() && dir.is_none() {
         let o = optimize_with_png_density(&buf.px, bw, wdoc.bounds(), &st, icc, xmp.as_deref(), dpi, false, density)?;
-        s.file_menu.last_web = Some(last_web.clone());
         return Ok(json!({"format": o.ext, "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors}));
     }
     if let Some(path) = single.filter(|_| dir.is_none() && (all.len() == 1 && (delivery.is_none() || doc.slices.is_empty()) || p.get("slices").is_none())) {

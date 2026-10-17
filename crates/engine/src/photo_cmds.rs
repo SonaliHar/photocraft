@@ -1166,7 +1166,7 @@ mod tests {
             session.add_document(source.clone(), None).unwrap();
             session
                 .edit("Source redo witness", |doc, _| {
-                    doc.name.push_str(" redo");
+                    doc.layers[0].name.push_str(" redo");
                     Ok(())
                 })
                 .unwrap();
@@ -1354,7 +1354,7 @@ mod tests {
             session.add_document(source.clone(), Some(path.to_string_lossy().into_owned())).unwrap();
             session
                 .edit("Source real redo", |doc, _| {
-                    doc.name.push_str(" redo");
+                    doc.layers[0].name.push_str(" redo");
                     Ok(())
                 })
                 .unwrap();

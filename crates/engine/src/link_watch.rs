@@ -202,7 +202,7 @@ mod tests {
     }
 
     fn centre(s: &Session) -> [f32; 3] {
-        let p = photocraft_compose::render(&s.active().unwrap().doc, Rect::new(20, 20, 21, 21)).px[0];
+        let p = photocraft_compose::render(&s.active().unwrap().doc, Rect::new(20, 20, 21, 21)).unwrap().px[0];
         [p[0], p[1], p[2]]
     }
 
@@ -302,7 +302,7 @@ mod tests {
         let snapshot = s.active().unwrap().doc.clone();
         // The path the desktop app's timer takes: it doesn't go through the command conflict check.
         assert_eq!(super::update_changed(&mut s, &json!({})).unwrap(), json!({"updated": []}));
-        assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &snapshot), "the job's snapshot must stay in place");
+        assert!(s.active().unwrap().doc.shares_state(&snapshot), "the job's snapshot must stay in place");
         release.send(()).unwrap();
         s.wait_job(job).unwrap();
         // The job finished; the change that came meanwhile is picked up exactly once.

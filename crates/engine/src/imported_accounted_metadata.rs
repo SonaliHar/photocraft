@@ -64,22 +64,66 @@ pub(super) fn parse(params: &Value) -> Result<Request<'_>> {
     let visible = p.get("visible").and_then(Value::as_bool);
     let opacity = p.get("opacity").and_then(Value::as_f64).map(|v| (v as f32).clamp(0.0, 1.0));
     let only_visibility = p.contains_key("visible") && p.keys().all(|k| matches!(k.as_str(), "layer" | "visible" | "coalesce"));
-    Ok(Request { target, name, visible, opacity, coalesce, only_visibility, rename:false })
+    Ok(Request { target, name, visible, opacity, coalesce, only_visibility, rename: false })
 }
 /// Borrowed legacy rename witness, dispatched only for the actual mixed class.
-pub(super) fn parse_rename<'a>(session:&Session,params:&'a Value,c:&ReadControl<'_>)->Result<Request<'a>>{
- let cmd="layer.renameLayer";
- let p=params.as_object().filter(|p|p.len()<=4&&p.keys().all(|k|matches!(k.as_str(),"layer"|"layerId"|"name"|"documentId"|"expectedRevision"))).ok_or_else(||bad(cmd,"unknown/too many rename fields"))?;
- let raw=p.get("name").and_then(Value::as_str).filter(|v|v.len()<=1<<20).ok_or_else(||bad(cmd,"bounded name required"))?;
- c.check(raw.len().checked_mul(3).ok_or(BackingError::Length)? as u64)?;
- if raw.contains('\0'){return Err(bad(cmd,"name must not contain NUL"))}
- let name=raw.trim();if name.is_empty(){return Err(bad(cmd,"nonempty name required"))}
- let state=session.active().ok_or(EngineError::NoDocument)?;
- if !state.doc.accounted().is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()))||session.command_is_background()||session.command_has_pending_job()||session.has_jobs()||session.coalesce_request.is_some()||session.color_restrict.is_some()||state.coalesce.is_some()||state.floating.is_some()||state.doc.xcf_state.as_ref().is_some_and(|x|x.floating.is_some())||state.revision==u64::MAX{return Err(bad(cmd,"synchronous idle uncoalesced rename required"))}
- let decimal=|v:&Value,zero:bool|->Result<u64>{let text=v.as_str().filter(|v|!v.is_empty()&&v.len()<=20&&v.bytes().all(|b|b.is_ascii_digit())&&!(v.len()>1&&v.starts_with('0'))).ok_or_else(||bad(cmd,"canonical captured identity required"))?;let id=text.parse().map_err(|_|bad(cmd,"identity overflow"))?;if id==0&&!zero{return Err(bad(cmd,"zero identity"))}Ok(id)};
- match(p.get("documentId"),p.get("expectedRevision")){(None,None)=>{},(Some(doc),Some(rev))=>{if decimal(doc,false)?!=state.doc.id.0||decimal(rev,true)?!=state.revision{return Err(bad(cmd,"stale captured target"))}},_=>return Err(bad(cmd,"paired captured identity/revision required"))}
- let target=match(p.get("layer"),p.get("layerId")){(Some(_),Some(_))=>return Err(bad(cmd,"one layer selector only")),(Some(v),None)=>Target::Id(LayerId(v.as_u64().ok_or_else(||bad(cmd,"integer layer required"))?)),(None,Some(v))=>Target::Id(LayerId(decimal(v,false)?)),(None,None)=>Target::Active};
- Ok(Request{target,name:Some(name),visible:None,opacity:None,coalesce:None,only_visibility:false,rename:true})
+pub(super) fn parse_rename<'a>(session: &Session, params: &'a Value, c: &ReadControl<'_>) -> Result<Request<'a>> {
+    let cmd = "layer.renameLayer";
+    let p = params
+        .as_object()
+        .filter(|p| p.len() <= 4 && p.keys().all(|k| matches!(k.as_str(), "layer" | "layerId" | "name" | "documentId" | "expectedRevision")))
+        .ok_or_else(|| bad(cmd, "unknown/too many rename fields"))?;
+    let raw = p.get("name").and_then(Value::as_str).filter(|v| v.len() <= 1 << 20).ok_or_else(|| bad(cmd, "bounded name required"))?;
+    c.check(raw.len().checked_mul(3).ok_or(BackingError::Length)? as u64)?;
+    if raw.contains('\0') {
+        return Err(bad(cmd, "name must not contain NUL"));
+    }
+    let name = raw.trim();
+    if name.is_empty() {
+        return Err(bad(cmd, "nonempty name required"));
+    }
+    let state = session.active().ok_or(EngineError::NoDocument)?;
+    if !state.doc.accounted().is_some_and(|o| {
+        o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage())
+    }) || session.command_is_background()
+        || session.command_has_pending_job()
+        || session.has_jobs()
+        || session.coalesce_request.is_some()
+        || session.color_restrict.is_some()
+        || state.coalesce.is_some()
+        || state.floating.is_some()
+        || state.doc.xcf_state.as_ref().is_some_and(|x| x.floating.is_some())
+        || state.revision == u64::MAX
+    {
+        return Err(bad(cmd, "synchronous idle uncoalesced rename required"));
+    }
+    let decimal = |v: &Value, zero: bool| -> Result<u64> {
+        let text = v
+            .as_str()
+            .filter(|v| !v.is_empty() && v.len() <= 20 && v.bytes().all(|b| b.is_ascii_digit()) && !(v.len() > 1 && v.starts_with('0')))
+            .ok_or_else(|| bad(cmd, "canonical captured identity required"))?;
+        let id = text.parse().map_err(|_| bad(cmd, "identity overflow"))?;
+        if id == 0 && !zero {
+            return Err(bad(cmd, "zero identity"));
+        }
+        Ok(id)
+    };
+    match (p.get("documentId"), p.get("expectedRevision")) {
+        (None, None) => {}
+        (Some(doc), Some(rev)) => {
+            if decimal(doc, false)? != state.doc.id.0 || decimal(rev, true)? != state.revision {
+                return Err(bad(cmd, "stale captured target"));
+            }
+        }
+        _ => return Err(bad(cmd, "paired captured identity/revision required")),
+    }
+    let target = match (p.get("layer"), p.get("layerId")) {
+        (Some(_), Some(_)) => return Err(bad(cmd, "one layer selector only")),
+        (Some(v), None) => Target::Id(LayerId(v.as_u64().ok_or_else(|| bad(cmd, "integer layer required"))?)),
+        (None, Some(v)) => Target::Id(LayerId(decimal(v, false)?)),
+        (None, None) => Target::Active,
+    };
+    Ok(Request { target, name: Some(name), visible: None, opacity: None, coalesce: None, only_visibility: false, rename: true })
 }
 pub(super) fn channel_check(channel: &ChannelView, colors: usize) -> Result<()> {
     if channel.color_hidden.len() > 32 || channel.alpha_visible.len() > 4096 {
@@ -141,18 +185,36 @@ impl<'a> Request<'a> {
             return Err(BackingError::Length.into());
         }
         let policy = MetadataPolicy::for_owner(owner);
-        if crate::accounted_session::metadata_gesture::point_metadata_class(owner) && !matches!(policy,MetadataPolicy::ObservedBox) { return Err(BackingError::Unsupported.into()); }
-        if matches!(policy,MetadataPolicy::FlatComposite | MetadataPolicy::ObservedBox | MetadataPolicy::FilteredFlat | MetadataPolicy::MaskedFilteredFlat | MetadataPolicy::NormalHierarchy) {policy.validate_storage(owner,control)?;}
+        if crate::accounted_session::metadata_gesture::point_metadata_class(owner) && !matches!(policy, MetadataPolicy::ObservedBox) {
+            return Err(BackingError::Unsupported.into());
+        }
+        if matches!(
+            policy,
+            MetadataPolicy::FlatComposite
+                | MetadataPolicy::ObservedBox
+                | MetadataPolicy::FilteredFlat
+                | MetadataPolicy::MaskedFilteredFlat
+                | MetadataPolicy::NormalHierarchy
+        ) {
+            policy.validate_storage(owner, control)?;
+        }
         let id = match self.target {
             Target::Active => state.active_layer.ok_or(EngineError::NoDocument)?,
             Target::Id(id) => id,
             Target::Name(name) => {
                 let mut found = None;
-                if owner.is_readonly_normal_hierarchy_storage(){
-                    let index=owner.checked_readonly_normal_hierarchy_current_index(control)?;
-                    for row in index.rows().iter().rev(){if same_name(&row.layer.name,name,control)?{found=Some(row.layer.id);break;}}
+                if owner.is_readonly_normal_hierarchy_storage() {
+                    let index = owner.checked_readonly_normal_hierarchy_current_index(control)?;
+                    for row in index.rows().iter().rev() {
+                        if same_name(&row.layer.name, name, control)? {
+                            found = Some(row.layer.id);
+                            break;
+                        }
+                    }
                 } else if matches!(MetadataPolicy::for_owner(owner), MetadataPolicy::IsolatedNormalGroup | MetadataPolicy::GaussianGroup) {
-                    if owner.is_readonly_gaussian_group_storage() { owner.validate_gaussian_group_storage(control)?; }
+                    if owner.is_readonly_gaussian_group_storage() {
+                        owner.validate_gaussian_group_storage(control)?;
+                    }
                     // Reverse depth-first order is upper child, lower child,
                     // group, backdrop. The hint bounds this traversal to four
                     // borrowed layers; full storage validation follows below.
@@ -179,7 +241,18 @@ impl<'a> Request<'a> {
                     // Preserve the original flat topmost-name policy.
                     for layer in state.doc.layers.iter().rev() {
                         control.check((name.len() + 1) as u64)?;
-                        if if matches!(policy,MetadataPolicy::FlatComposite | MetadataPolicy::ObservedBox | MetadataPolicy::FilteredFlat | MetadataPolicy::MaskedFilteredFlat | MetadataPolicy::NormalHierarchy) {same_name(&layer.name,name,control)?} else {layer.name == name} {
+                        if if matches!(
+                            policy,
+                            MetadataPolicy::FlatComposite
+                                | MetadataPolicy::ObservedBox
+                                | MetadataPolicy::FilteredFlat
+                                | MetadataPolicy::MaskedFilteredFlat
+                                | MetadataPolicy::NormalHierarchy
+                        ) {
+                            same_name(&layer.name, name, control)?
+                        } else {
+                            layer.name == name
+                        } {
                             found = Some(layer.id);
                             break;
                         }
@@ -196,7 +269,14 @@ impl<'a> Request<'a> {
         policy.validate_current(owner, control)?;
         let assigned = match policy {
             MetadataPolicy::Plain => None,
-            MetadataPolicy::ObservedBox | MetadataPolicy::FlatComposite | MetadataPolicy::FilteredFlat | MetadataPolicy::MaskedFilteredFlat | MetadataPolicy::NormalHierarchy | MetadataPolicy::AssignedGeometry | MetadataPolicy::IsolatedNormalGroup | MetadataPolicy::GaussianGroup => Some(AssignedFence::prepare::<Prepared<'_>>(session, control)?),
+            MetadataPolicy::ObservedBox
+            | MetadataPolicy::FlatComposite
+            | MetadataPolicy::FilteredFlat
+            | MetadataPolicy::MaskedFilteredFlat
+            | MetadataPolicy::NormalHierarchy
+            | MetadataPolicy::AssignedGeometry
+            | MetadataPolicy::IsolatedNormalGroup
+            | MetadataPolicy::GaussianGroup => Some(AssignedFence::prepare::<Prepared<'_>>(session, control)?),
         };
         check_locks(owner, edit, self.rename, control)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
@@ -231,15 +311,24 @@ impl<'a> Request<'a> {
             anchor: state.layer_anchor,
             channel,
             only_visibility: self.only_visibility,
-            rename:self.rename,
+            rename: self.rename,
             assigned,
             _lease: lease,
         })
     }
 }
-fn check_locks(owner: &photocraft_doc::accounted_document::AccountedDocument, edit: AccountedEdit<'_>, rename:bool, control: &ReadControl<'_>) -> Result<()> {
-    let access = if owner.is_readonly_filtered_flat_point_storage() || (owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage()) {owner.accounted_layer_access(edit.layer_id(),control)?} else {accounted_layer_access(owner.document(), edit.layer_id(), control)?}.ok_or(EngineError::NoLayer(edit.layer_id()))?;
-    if rename && (access.locks.all || access.locks.pixels || access.imported_locks.content) {return Err(EngineError::Other("the imported layer is content-locked".into()));}
+fn check_locks(owner: &photocraft_doc::accounted_document::AccountedDocument, edit: AccountedEdit<'_>, rename: bool, control: &ReadControl<'_>) -> Result<()> {
+    let access = if owner.is_readonly_filtered_flat_point_storage()
+        || (owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage())
+    {
+        owner.accounted_layer_access(edit.layer_id(), control)?
+    } else {
+        accounted_layer_access(owner.document(), edit.layer_id(), control)?
+    }
+    .ok_or(EngineError::NoLayer(edit.layer_id()))?;
+    if rename && (access.locks.all || access.locks.pixels || access.imported_locks.content) {
+        return Err(EngineError::Other("the imported layer is content-locked".into()));
+    }
     let AccountedEdit::LayerMetadata { visible, .. } = edit else { return Err(BackingError::Unsupported.into()) };
     // Content/Position/Alpha locks remain unchanged and are inspected through the
     // genuine access record. Existing name/opacity semantics do not prohibit
@@ -270,7 +359,13 @@ impl Prepared<'_> {
         let result = Value::Null;
         control.check(1)?;
         session.edit_accounted_metadata_with_coalesce(
-            if self.rename { "Rename Layer" } else if self.only_visibility { "Layer Visibility" } else { "Layer Properties" },
+            if self.rename {
+                "Rename Layer"
+            } else if self.only_visibility {
+                "Layer Visibility"
+            } else {
+                "Layer Properties"
+            },
             self.edit,
             self.coalesce,
             control,
@@ -280,8 +375,12 @@ impl Prepared<'_> {
 }
 #[cfg(test)]
 #[path = "imported_accounted_metadata_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "imported_accounted_metadata/assigned_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod assigned_tests;

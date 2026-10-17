@@ -103,7 +103,7 @@ mod tests {
     }
 
     fn flat(s: &Session) -> photocraft_compose::Buffer {
-        photocraft_compose::flatten(&s.active().unwrap().doc)
+        photocraft_compose::flatten(&s.active().unwrap().doc).unwrap()
     }
 
     #[test]

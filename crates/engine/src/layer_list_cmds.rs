@@ -79,7 +79,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => false,
         Some(v) => v.as_bool().ok_or_else(|| bad("`flat` must be true or false"))?,
     };
-    let selected = d.selected_layers();
+    let selected = d.selected_layers()?;
     let layers = if as_flat {
         let mut out = Vec::new();
         flat(&d.doc.layers, d, &selected, None, 0, &mut out);
