@@ -1057,6 +1057,8 @@ pub struct ColorPanelState {
     /// Color Picker › Only Web Colors, kept across opens like Photoshop (#4995).
     #[serde(default)]
     pub web_only: bool,
+    /// The Color panel shows the Photoshop-style hue wheel instead of the hue cube.
+    pub color_wheel: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

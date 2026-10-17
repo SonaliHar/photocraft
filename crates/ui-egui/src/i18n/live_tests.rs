@@ -426,3 +426,26 @@ fn czech_shortcut_conflicts_keep_warning_state_and_shortcut_codes() {
         assert_eq!(fields["overrides"]["file.new"], json!("Cmd+O"));
     });
 }
+#[test]
+fn french_color_wheel_labels_are_translated() {
+    let fr = lang("fr");
+    assert_eq!(tr(fr, "Color Wheel"), "Roue chromatique");
+    assert_eq!(tr(fr, "Hue Cube"), "Cube de teinte");
+}
+
+#[test]
+fn color_wheel_contextual_labels_translate_without_changing_height() {
+    let fr = lang("fr");
+    let en = lang("en");
+
+    // Label contextuel de la roue : traduit en français
+    assert_eq!(tr_ctx(fr, "color-wheel", "H"), "T");
+    assert_eq!(tr_ctx(fr, "color-wheel", "S"), "S");
+    assert_eq!(tr_ctx(fr, "color-wheel", "B"), "L");
+
+    // Fallback anglais : le texte anglais est conservé
+    assert_eq!(tr_ctx(en, "color-wheel", "H"), "H");
+
+    // Label plain (hauteur) : non traduit en français
+    assert_eq!(tr(fr, "H"), "H");
+}
