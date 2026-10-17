@@ -1,0 +1,12 @@
+{
+  "scope": "Current reference 1 (legacy 4), Snapshots dock header and visible empty list area. Shared histogram/metadata are measured separately in the Info specification.",
+  "normalizedWidth": 540,
+  "sourceRect": [28, 136, 568, 620],
+  "elements": [
+    {"id": "snapshots-top-divider", "rect": [0, 294, 540, 302]},
+    {"id": "snapshots-heading", "rect": [38, 318, 220, 358]},
+    {"id": "create-snapshot-glyph", "rect": [458, 318, 500, 360]},
+    {"id": "snapshots-bottom-divider", "rect": [0, 374, 540, 384]},
+    {"id": "empty-list-surface", "rect": [0, 386, 540, 484]}
+  ]
+}

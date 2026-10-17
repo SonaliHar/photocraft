@@ -3699,3 +3699,12 @@ curves	Smooth	Làm mượt
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Biến đổi tự do vẫn đang được áp dụng; hãy thử lại khi hoàn tất.
 	The transform couldn't be applied.	Không thể áp dụng phép biến đổi.
+cameraRaw	Adjust	Điều chỉnh
+cameraRaw	Content Credentials	Thông tin xác thực nội dung
+cameraRaw	Snapshot	Ảnh chụp nhanh
+cameraRaw	Snapshots	Ảnh chụp nhanh
+cameraRaw	Create Snapshot	Tạo ảnh chụp nhanh
+cameraRaw	Before	Trước
+cameraRaw	Denoise	Khử nhiễu
+cameraRaw	Raw Details	Chi tiết Raw
+cameraRaw	Super Resolution	Siêu độ phân giải

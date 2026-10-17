@@ -3973,3 +3973,12 @@ cameraRaw	File Name	Bestandsnaam
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Vrije transformatie wordt nog toegepast; probeer het opnieuw als die klaar is.
 	The transform couldn't be applied.	De transformatie kon niet worden toegepast.
+cameraRaw	Adjust	Aanpassen
+cameraRaw	Content Credentials	Inhoudsreferenties
+cameraRaw	Snapshot	Momentopname
+cameraRaw	Snapshots	Momentopnamen
+cameraRaw	Create Snapshot	Momentopname maken
+cameraRaw	Before	Voor
+cameraRaw	Denoise	Ruis verwijderen
+cameraRaw	Raw Details	Raw-details
+cameraRaw	Super Resolution	Superresolutie

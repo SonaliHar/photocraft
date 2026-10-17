@@ -3391,3 +3391,12 @@ curves	Smooth	매끄럽게
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	자유 변형을 아직 적용하는 중입니다. 완료된 후 다시 시도하세요.
 	The transform couldn't be applied.	변형을 적용할 수 없습니다.
+cameraRaw	Adjust	조정
+cameraRaw	Content Credentials	콘텐츠 자격 증명
+cameraRaw	Snapshot	스냅샷
+cameraRaw	Snapshots	스냅샷
+cameraRaw	Create Snapshot	스냅샷 만들기
+cameraRaw	Before	보정 전
+cameraRaw	Denoise	노이즈 제거
+cameraRaw	Raw Details	Raw 세부 사항
+cameraRaw	Super Resolution	슈퍼 해상도

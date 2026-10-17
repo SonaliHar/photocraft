@@ -3205,3 +3205,12 @@ curves	Smooth	Haluskan
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Transformasi Bebas masih diterapkan; coba lagi setelah selesai.
 	The transform couldn't be applied.	Transformasi tidak dapat diterapkan.
+cameraRaw	Adjust	Sesuaikan
+cameraRaw	Content Credentials	Kredensial Konten
+cameraRaw	Snapshot	Snapshot
+cameraRaw	Snapshots	Snapshot
+cameraRaw	Create Snapshot	Buat Snapshot
+cameraRaw	Before	Sebelum
+cameraRaw	Denoise	Hilangkan Noise
+cameraRaw	Raw Details	Detail Raw
+cameraRaw	Super Resolution	Resolusi Super

@@ -1,0 +1,28 @@
+{
+  "scope": "Current reference 4 (legacy 7), Info dock through credentials. Dynamic image/metadata values are deliberately visible in diagnostic differences; the synthetic fixture does not reproduce the reference photograph.",
+  "normalizedWidth": 540,
+  "sourceRect": [52, 136, 592, 1020],
+  "elements": [
+    {"id": "histogram", "rect": [0, 0, 540, 244], "notes": "Photo-dependent histogram shape; compare bounds and chrome independently of pixel content."},
+    {"id": "shadow-clipping-indicator", "rect": [0, 0, 40, 38]},
+    {"id": "highlight-clipping-indicator", "rect": [500, 0, 540, 38]},
+    {"id": "metadata-divider", "rect": [0, 242, 540, 252]},
+    {"id": "metadata-iso", "rect": [32, 256, 140, 292], "notes": "Actual source metadata; synthetic fixture has no ISO."},
+    {"id": "metadata-lens", "rect": [150, 256, 320, 292], "notes": "Actual source metadata."},
+    {"id": "metadata-aperture", "rect": [350, 256, 400, 292], "notes": "Actual source metadata."},
+    {"id": "metadata-shutter", "rect": [420, 256, 520, 292], "notes": "Actual source metadata."},
+    {"id": "info-top-divider", "rect": [0, 294, 540, 302]},
+    {"id": "camera-card", "rect": [28, 326, 486, 434]},
+    {"id": "camera-model", "rect": [50, 344, 330, 373], "notes": "Actual camera model, not fabricated for matching."},
+    {"id": "dimensions-and-size", "rect": [50, 380, 380, 419], "notes": "Actual image dimensions and available original byte count."},
+    {"id": "file-kind-badge", "rect": [392, 382, 470, 424]},
+    {"id": "capture-date-heading", "rect": [38, 466, 255, 498]},
+    {"id": "capture-date-value", "rect": [38, 505, 360, 537], "notes": "Actual capture date; unavailable on synthetic fixture."},
+    {"id": "file-name-heading", "rect": [38, 571, 245, 603]},
+    {"id": "file-name-value", "rect": [38, 610, 400, 643], "notes": "Actual filename."},
+    {"id": "credentials-divider", "rect": [0, 684, 510, 694]},
+    {"id": "credentials-heading", "rect": [38, 718, 315, 757]},
+    {"id": "credentials-glyph", "rect": [314, 717, 352, 757]},
+    {"id": "credentials-status", "rect": [38, 766, 300, 800], "notes": "Credentials verification is not implemented; never paint a successful result to imitate the reference."}
+  ]
+}

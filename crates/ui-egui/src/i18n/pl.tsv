@@ -3811,3 +3811,12 @@ curves	Smooth	Wygładź
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Przekształcanie swobodne jest nadal stosowane; spróbuj ponownie, gdy się zakończy.
 	The transform couldn't be applied.	Nie można zastosować przekształcenia.
+cameraRaw	Adjust	Dostosuj
+cameraRaw	Content Credentials	Poświadczenia zawartości
+cameraRaw	Snapshot	Migawka
+cameraRaw	Snapshots	Migawki
+cameraRaw	Create Snapshot	Utwórz migawkę
+cameraRaw	Before	Przed
+cameraRaw	Denoise	Odszumianie
+cameraRaw	Raw Details	Szczegóły Raw
+cameraRaw	Super Resolution	Super rozdzielczość

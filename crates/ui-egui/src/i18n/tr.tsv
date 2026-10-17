@@ -3943,3 +3943,12 @@ cameraRaw	File Name	Dosya adı
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Serbest Dönüştürme hâlâ uygulanıyor; bittiğinde yeniden deneyin.
 	The transform couldn't be applied.	Dönüştürme uygulanamadı.
+cameraRaw	Adjust	Ayarla
+cameraRaw	Content Credentials	İçerik Kimlik Bilgileri
+cameraRaw	Snapshot	Anlık Görüntü
+cameraRaw	Snapshots	Anlık Görüntüler
+cameraRaw	Create Snapshot	Anlık Görüntü Oluştur
+cameraRaw	Before	Önce
+cameraRaw	Denoise	Gürültü Giderme
+cameraRaw	Raw Details	Raw Ayrıntıları
+cameraRaw	Super Resolution	Süper Çözünürlük

@@ -54,6 +54,68 @@ fn workspace_navigation_is_view_only_and_mixed_invalid_requests_are_atomic() {
 }
 
 #[test]
+fn bypass_changes_only_the_preview_and_preserves_recipe_and_document_history() {
+    let mut h = fixture();
+    invoke(&mut h, json!({"set":{"exposure":1.0,"saturation":-20.0}})).unwrap();
+    h.run_steps(5);
+    let adjusted = inspect(&h);
+    let history = h.state().session.active().unwrap().history.past_len();
+    invoke(&mut h, json!({"workspace":{"bypassSection":"Light"}})).unwrap();
+    h.run_steps(5);
+    let bypassed = inspect(&h);
+    assert_eq!(bypassed["params"], adjusted["params"]);
+    assert_eq!(bypassed["previewBypass"], "Light");
+    assert_ne!(bypassed["histogram"]["red"], adjusted["histogram"]["red"]);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+    invoke(&mut h, json!({"workspace":{"bypassSection":null}})).unwrap();
+    h.run_steps(5);
+    let restored = inspect(&h);
+    assert_eq!(restored["histogram"], adjusted["histogram"]);
+    assert_eq!(restored["params"], adjusted["params"]);
+}
+
+#[test]
+fn all_ten_sections_are_accessible_and_unavailable_optics_controls_do_not_edit() {
+    let mut h = fixture();
+    invoke(&mut h, json!({"workspace":{"panels":{"open":[]}}})).unwrap();
+    h.run_steps(12);
+    for name in ["Light", "Color", "Effects", "Curve", "Color Mixer", "Color Grading", "Detail", "Optics", "Lens Blur", "Calibration"] {
+        assert!(h.query_all_by_label(name).next().is_some(), "missing native section {name}");
+    }
+    invoke(&mut h, json!({"workspace":{"panels":{"open":["Optics"]}}})).unwrap();
+    h.run_steps(12);
+    let before = inspect(&h)["params"].clone();
+    let checkbox = h.get_by_label("Use profile corrections").rect();
+    pointer(&mut h, checkbox.center(), true);
+    pointer(&mut h, checkbox.center(), false);
+    assert_eq!(inspect(&h)["params"], before);
+}
+
+#[test]
+fn detail_enhancements_are_explicitly_unavailable_and_manual_noise_retains_its_recipe() {
+    let mut h = fixture();
+    invoke(&mut h, json!({"set":{"noiseLuminance":27.0},"workspace":{"panels":{"open":["Detail"]}}})).unwrap();
+    h.run_steps(12);
+    let initial = inspect(&h);
+    for label in ["Denoise", "Raw Details", "Super Resolution"] {
+        let rect = h.get_by_label(label).rect();
+        pointer(&mut h, rect.center(), true);
+        pointer(&mut h, rect.center(), false);
+        assert_eq!(inspect(&h)["params"], initial["params"]);
+    }
+    assert!(h.query_by_label("Luminance").is_none());
+    h.get_by_label("Manual Noise Reduction").click();
+    h.run_steps(8);
+    assert_eq!(inspect(&h)["workspace"]["noiseDetails"], true);
+    assert!(h.query_by_label("Luminance").is_some());
+    assert_eq!(inspect(&h)["params"]["noiseLuminance"], 27.0);
+    h.get_by_label("Manual Noise Reduction").click();
+    h.run_steps(8);
+    assert!(h.query_by_label("Luminance").is_none());
+    assert_eq!(inspect(&h)["params"], initial["params"]);
+}
+
+#[test]
 fn grading_wheel_drag_changes_its_own_tone_and_undo_keeps_the_document_untouched() {
     let mut h = fixture();
     let history = h.state().session.active().unwrap().history.past_len();
@@ -144,12 +206,28 @@ fn left_aligned_camera_raw_numbers_keep_a_full_width_edit_target_and_accept_type
     h.run();
     let field = h.get_by_role(Role::SpinButton).rect();
     assert!(field.width() >= width - 2.0 * style.field_appearance.text_padding - 1.0);
+    let digits = h
+        .output()
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "0.00" => Some(text),
+            _ => None,
+        })
+        .expect("inactive numeric value was painted");
+    // Allow the button's one-point text inset and pixel snapping, not centered spare space.
+    assert!(
+        (digits.pos.x - field.left()).abs() <= 1.5,
+        "inactive digits were centered despite requesting left alignment: text x={}, field={field:?}",
+        digits.pos.x
+    );
     h.event(Event::PointerMoved(field.right_center() - vec2(1.0, 0.0)));
     for pressed in [true, false] {
         h.event(Event::PointerButton { pos: field.right_center() - vec2(1.0, 0.0), button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
         h.run_steps(2);
     }
-    assert!(h.query_by_role(Role::TextInput).is_some());
+    // egui exposes DragValue as a SpinButton in both display and text-edit modes.
+    assert!(h.ctx.memory(|m| m.focused()).is_some());
     h.event(Event::Text("-1.25".into()));
     h.key_press(egui::Key::Enter);
     h.run();

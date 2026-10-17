@@ -26,6 +26,12 @@ use crate::widgets;
 
 #[path = "camera_raw_bars_ui.rs"]
 mod bars;
+#[path = "camera_raw_extra_panels_ui.rs"]
+mod extra_panels;
+#[path = "camera_raw_info_ui.rs"]
+mod info;
+#[path = "camera_raw_snapshots_ui.rs"]
+mod snapshots;
 
 const PROXY_SIDE: usize = 900;
 
@@ -136,9 +142,11 @@ pub(crate) fn proxy_for(document: &photocraft_doc::Document) -> Option<ProxyData
 const BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
 
 pub struct CameraRawDialog {
+    snapshots: snapshots::Store,
     pub layer: LayerId,
     layer_name: String,
     pub params: CameraRaw,
+    preview_bypass: Option<String>,
     /// Settings when the dialog opened (stored settings of an edited smart filter).
     original: CameraRaw,
     target: Target,
@@ -216,6 +224,8 @@ impl CameraRawDialog {
         result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path})));
         result["view"] = json!(navigation);
         result["workspace"] = json!(workspace);
+        result["snapshots"] = json!(self.snapshots.names());
+        result["previewBypass"] = json!(self.preview_bypass);
         result["sourceSize"] = json!([self.full_w, self.full_h]);
         result["previewApproximate"] = json!(!self.detail.ready && (self.pw != self.full_w || self.ph != self.full_h));
         result["detailPending"] = json!(self.detail.pending());
@@ -269,7 +279,8 @@ impl CameraRawDialog {
         let t0 = crate::gpu_canvas::now_ms();
         let mut px = self.proxy.clone();
         let scale = (self.pw as f32 / self.full_w.max(1) as f32).min(1.0);
-        crate::raw_recipe::apply(&mut px, self.pw, self.ph, &self.params, self.raw_curve.as_deref(), scale, self.float);
+        let preview_parameters = super::camera_raw_workspace_ui::preview_without(&self.params, self.preview_bypass.as_deref());
+        crate::raw_recipe::apply(&mut px, self.pw, self.ph, &preview_parameters, self.raw_curve.as_deref(), scale, self.float);
         if let Some(mask) = &self.selection {
             for ((out, original), coverage) in px.iter_mut().zip(&self.proxy).zip(mask) {
                 for (out, original) in out.iter_mut().zip(original) {
@@ -726,9 +737,11 @@ fn open_pixels(
     }
     let float = surf.format().sample == photocraft_color::SampleType::F32;
     let mut d = CameraRawDialog {
+        snapshots: snapshots::Store::default(),
         layer,
         layer_name: name,
         original: params.clone(),
+        preview_bypass: None,
         params,
         target,
         before_histogram: RgbHistogram::from_rgba(&proxy),
@@ -1578,11 +1591,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             // Never tile a checker across the offscreen extent of a highly zoomed image.
             widgets::checker(preview.painter(), r.intersect(view), 8.0);
             preview.painter().image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-            let raw_tone = d.raw_curve.is_some() && !raw_stage(&d.params).is_neutral();
+            let preview_parameters = super::camera_raw_workspace_ui::preview_without(&d.params, d.preview_bypass.as_deref());
+            let raw_tone = d.raw_curve.is_some() && !raw_stage(&preview_parameters).is_neutral();
             // A stand-in made for browsing has no more detail to show: zoomed in, the photo is developed in full by Open.
             let detail_needed =
                 !raw_tone && (r.width() * ctx.pixels_per_point() > d.pw as f32 || r.height() * ctx.pixels_per_point() > d.ph as f32) && !d.is_stand_in();
-            d.detail.paint(&preview, r, d.preview_revision, d.show_before, &d.params, detail_needed, &d.display);
+            d.detail.paint(&preview, r, d.preview_revision, d.show_before, &preview_parameters, detail_needed, &d.display);
             if d.detail.pending() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
             }
@@ -1622,37 +1636,33 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         // selector as the texture. Both derive from the same completed preview revision.
         super::camera_raw_scope_ui::header(&mut props, d, scope);
         bars::metadata(&mut props, &d.camera_info);
-        bars::edit_bar(&mut props, d, workspace.info);
-        if !workspace.info {
+        let show_snapshots = !workspace.info && workspace.tab == super::camera_raw_workspace_ui::WorkspaceTab::Snapshots;
+        if show_snapshots {
+            snapshots::header(&mut props, &mut d.snapshots, &d.params);
+        } else if !workspace.info {
+            bars::edit_bar(&mut props, d, false);
             bars::profile_bar(&mut props);
         }
         d.scope.alt_tone = None;
+        let _ = ctx.data_mut(|data| data.remove_temp::<String>(super::camera_raw_workspace_ui::held_bypass_id()));
         let mut dirty = false;
-        egui::ScrollArea::vertical().id_salt("camera-raw-props").show(&mut props, |ui| {
+        egui::ScrollArea::vertical().id_salt("camera-raw-props").auto_shrink([false, false]).show(&mut props, |ui| {
             if workspace.info {
-                egui::Frame::new().inner_margin(14).show(ui, |ui| {
-                    ui.strong(tl!("File Name"));
-                    ui.label(&d.document_name);
-                    if let Some(model) = &d.camera_info.model {
-                        ui.strong(model);
-                    }
-                    if let Some(date) = &d.camera_info.date_taken {
-                        ui.strong(tl!("Capture Date"));
-                        ui.label(date);
-                    }
-                    if let Some(lens) = &d.camera_info.lens {
-                        ui.strong(tl!("Lens"));
-                        ui.label(lens);
-                    }
-                    ui.separator();
-                    ui.strong(tl!("Dimensions"));
-                    ui.label(format!("{} × {}", d.full_w, d.full_h));
-                    if let Some(raw) = &d.raw_open {
-                        ui.label(&raw.name);
-                    }
-                });
+                ui.set_width(right.width());
+                info::show(ui, d);
                 return;
             }
+            if show_snapshots {
+                ui.set_width(right.width());
+                if let Some(parameters) = snapshots::list(ui, &mut d.snapshots) {
+                    d.params = parameters;
+                    dirty = true;
+                }
+                return;
+            }
+            // Reserve the same dock gutter with or without an active scrollbar. Otherwise
+            // a full-height overlay changes wheel/curve widths merely because it fits.
+            ui.set_width((right.width() - design.settings_scrollbar_gutter).max(1.0));
             ui.spacing_mut().item_spacing.y = design.row_gap;
             let p = &mut d.params;
             let alt = &mut d.scope.alt_tone;
@@ -1807,6 +1817,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                     }
                     "Detail" => {
                         super::camera_raw_workspace_ui::section(ui, "Detail", &mut workspace.panels, |ui| {
+                            extra_panels::detail_enhancements(ui);
                             dirty |= super::camera_raw_workspace_ui::disclosed_slider(
                                 ui,
                                 "Sharpening",
@@ -1819,9 +1830,8 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                                 let _ = slider_default(ui, &mut dirty, "Detail", &mut p.sharpen_detail, 0.0..=100.0, None, 25.0);
                                 row(ui, &mut dirty, "Masking", &mut p.sharpen_masking, 0.0..=100.0, None);
                             }
-                            if ui.selectable_label(workspace.noise_details, tl!("Manual Noise Reduction")).clicked() {
-                                workspace.noise_details = !workspace.noise_details;
-                            }
+                            ui.add_space(design.detail_noise_gap);
+                            extra_panels::noise_disclosure(ui, &mut workspace.noise_details);
                             if workspace.noise_details {
                                 row(ui, &mut dirty, "Luminance", &mut p.noise_luminance, 0.0..=100.0, None);
                                 let _ = slider_default(ui, &mut dirty, "Luminance Detail", &mut p.noise_luminance_detail, 0.0..=100.0, None, 50.0);
@@ -1830,10 +1840,20 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                             }
                         });
                     }
+                    "Optics" | "Lens Blur" | "Calibration" => {
+                        super::camera_raw_workspace_ui::section(ui, panel_name, &mut workspace.panels, |ui| extra_panels::show(ui, panel_name));
+                    }
                     _ => {}
                 }
             }
         });
+        let bypass =
+            ctx.data_mut(|data| data.remove_temp::<String>(super::camera_raw_workspace_ui::held_bypass_id())).or_else(|| workspace.bypass_section.clone());
+        if d.preview_bypass != bypass {
+            d.preview_bypass = bypass;
+            d.dirty = true;
+            ctx.request_repaint();
+        }
         super::camera_raw_scope_ui::floating(ctx, d, scope, right);
         super::camera_raw_scope_ui::shortcuts(ctx, scope);
         if scope.sampler_tool {

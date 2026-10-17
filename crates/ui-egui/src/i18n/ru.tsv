@@ -3183,3 +3183,12 @@ curves	Smooth	Сгладить
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Свободное трансформирование ещё применяется; повторите попытку, когда оно завершится.
 	The transform couldn't be applied.	Не удалось применить трансформирование.
+cameraRaw	Adjust	Коррекция
+cameraRaw	Content Credentials	Учётные данные содержимого
+cameraRaw	Snapshot	Снимок
+cameraRaw	Snapshots	Снимки
+cameraRaw	Create Snapshot	Создать снимок
+cameraRaw	Before	До
+cameraRaw	Denoise	Удаление шума
+cameraRaw	Raw Details	Детали Raw
+cameraRaw	Super Resolution	Суперразрешение

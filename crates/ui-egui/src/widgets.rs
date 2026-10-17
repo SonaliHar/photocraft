@@ -598,7 +598,10 @@ fn value_field_box(
                 } else {
                     egui::Layout::centered_and_justified(ui.layout().main_dir())
                 };
-                ui.allocate_ui_with_layout(field.size(), layout, |ui| number_edit(ui, value, range, fine, decimals, units, wrap_drag, fixed_decimals)).inner
+                ui.allocate_ui_with_layout(field.size(), layout, |ui| {
+                    number_edit(ui, value, range, fine, decimals, units, wrap_drag, fixed_decimals, appearance.is_some_and(|a| a.left_aligned))
+                })
+                .inner
             })
             .inner
         }
@@ -819,6 +822,7 @@ fn number_edit(
     units: crate::numeric_expression::Units,
     wrap_drag: bool,
     fixed_decimals: bool,
+    left_aligned: bool,
 ) -> Response {
     let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
     // Focused before the DragValue is drawn, so it gains focus this frame and selects its text.
@@ -836,32 +840,46 @@ fn number_edit(
     let speed = if fine { 0.01 } else { 0.5 };
     let wrapping = wrap_drag && crate::scrub_wrap::active(ui);
     let wrapped_drag = wrapping && ui.input(|i| i.pointer.primary_down());
-    let mut resp = ui.add(
-        egui::DragValue::new(value)
-            .range(range.clone())
-            // Only edits are clamped (below): showing a value past the range, such as a type layer
-            // scaled to 2400 pt in a 1296 pt field, must not change it (#5717).
-            .clamp_existing_to_range(false)
-            // A warp is an absolute-position jump. The scoped scrub below removes that jump.
-            .speed(if wrapped_drag { 0.0 } else { speed })
-            .custom_formatter(move |v, _| match decimals {
-                Some(d) if fixed_decimals => format!("{:.*}", d.min(8) as usize, v),
-                Some(d) => fmt_num_prec(v, d),
-                None if fine => fmt_num2(v),
-                None => fmt_num(v),
-            })
-            .update_while_editing(!math)
-            // Focus is read when parsing, not above: Tab hands it on inside `ui.add`.
-            .custom_parser(move |s| {
-                let v = parse_num_in(s, units);
-                if ctx.memory(|m| m.has_focus(id)) && plain(s).is_none() {
-                    // Still typing arithmetic: hold it, and stop applying keystrokes once it parses.
-                    ctx.data_mut(|d| d.insert_temp(held, v.is_some()));
-                    return None;
-                }
-                v
-            }),
-    );
+    let format_value = move |v| match decimals {
+        Some(d) if fixed_decimals => format!("{:.*}", d.min(8) as usize, v),
+        Some(d) => fmt_num_prec(v, d),
+        None if fine => fmt_num2(v),
+        None => fmt_num(v),
+    };
+    // DragValue centers the number atom even in a left-aligned, justified Ui.
+    // A measured empty suffix consumes the remaining width while preserving the
+    // full button target. Remove it in text-edit mode so the input keeps that width.
+    let right_space = if left_aligned && !ui.memory(|m| m.has_focus(id)) {
+        let font = ui.style().drag_value_text_style.resolve(ui.style());
+        let text_width = ui.painter().layout_no_wrap(format_value(f64::from(*value)), font, Tokens::get(ui.ctx()).text).size().x;
+        Some((ui.available_width() - text_width).max(0.0))
+    } else {
+        None
+    };
+    let editor = egui::DragValue::new(value)
+        .range(range.clone())
+        // Only edits are clamped (below): showing a value past the range, such as a type layer
+        // scaled to 2400 pt in a 1296 pt field, must not change it (#5717).
+        .clamp_existing_to_range(false)
+        // A warp is an absolute-position jump. The scoped scrub below removes that jump.
+        .speed(if wrapped_drag { 0.0 } else { speed })
+        .custom_formatter(move |v, _| format_value(v))
+        .update_while_editing(!math)
+        // Focus is read when parsing, not above: Tab hands it on inside `ui.add`.
+        .custom_parser(move |s| {
+            let v = parse_num_in(s, units);
+            if ctx.memory(|m| m.has_focus(id)) && plain(s).is_none() {
+                // Still typing arithmetic: hold it, and stop applying keystrokes once it parses.
+                ctx.data_mut(|d| d.insert_temp(held, v.is_some()));
+                return None;
+            }
+            v
+        });
+    let editor = match right_space {
+        Some(width) => editor.suffix(egui::Atom::custom(id.with("number-right-space"), vec2(width, 0.0))),
+        None => editor,
+    };
+    let mut resp = ui.add(editor);
     if wrap_drag {
         crate::scrub_wrap::update(ui, &resp, value, before, range.clone(), speed, wrapping);
     }

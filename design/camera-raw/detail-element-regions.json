@@ -1,0 +1,192 @@
+{
+  "scope": "Reference 9 Detail: every visible enhancement, sharpening and manual-noise control. Unsupported enhancement processing is disabled; matching layout does not establish processing parity.",
+  "normalizedWidth": 540,
+  "sourceRect": [
+    10,
+    1520,
+    550,
+    2010
+  ],
+  "elements": [
+    {
+      "id": "divider",
+      "rect": [
+        0,
+        0,
+        510,
+        5
+      ]
+    },
+    {
+      "id": "disclosure",
+      "rect": [
+        34,
+        22,
+        70,
+        60
+      ]
+    },
+    {
+      "id": "title",
+      "rect": [
+        76,
+        20,
+        208,
+        66
+      ]
+    },
+    {
+      "id": "bypass",
+      "rect": [
+        454,
+        24,
+        494,
+        58
+      ]
+    },
+    {
+      "id": "denoise-checkbox",
+      "rect": [
+        42,
+        94,
+        76,
+        126
+      ]
+    },
+    {
+      "id": "denoise-label",
+      "rect": [
+        78,
+        90,
+        236,
+        128
+      ]
+    },
+    {
+      "id": "denoise-field",
+      "rect": [
+        382,
+        130,
+        474,
+        172
+      ]
+    },
+    {
+      "id": "denoise-track",
+      "rect": [
+        38,
+        172,
+        476,
+        188
+      ]
+    },
+    {
+      "id": "raw-details-checkbox",
+      "rect": [
+        42,
+        206,
+        76,
+        240
+      ]
+    },
+    {
+      "id": "raw-details-label",
+      "rect": [
+        78,
+        200,
+        270,
+        242
+      ]
+    },
+    {
+      "id": "super-resolution-checkbox",
+      "rect": [
+        42,
+        250,
+        76,
+        284
+      ]
+    },
+    {
+      "id": "super-resolution-label",
+      "rect": [
+        78,
+        244,
+        354,
+        286
+      ]
+    },
+    {
+      "id": "enhancement-divider",
+      "rect": [
+        38,
+        300,
+        476,
+        310
+      ]
+    },
+    {
+      "id": "sharpening-label",
+      "rect": [
+        38,
+        330,
+        228,
+        372
+      ]
+    },
+    {
+      "id": "sharpening-field",
+      "rect": [
+        344,
+        328,
+        434,
+        372
+      ]
+    },
+    {
+      "id": "sharpening-disclosure",
+      "rect": [
+        448,
+        330,
+        482,
+        372
+      ]
+    },
+    {
+      "id": "sharpening-track",
+      "rect": [
+        38,
+        372,
+        476,
+        392
+      ]
+    },
+    {
+      "id": "sharpening-handle",
+      "rect": [
+        136,
+        364,
+        174,
+        396
+      ]
+    },
+    {
+      "id": "manual-noise-label",
+      "rect": [
+        36,
+        414,
+        394,
+        454
+      ]
+    },
+    {
+      "id": "manual-noise-disclosure",
+      "rect": [
+        448,
+        414,
+        482,
+        454
+      ]
+    }
+  ]
+}

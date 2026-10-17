@@ -3821,3 +3821,12 @@ cameraRaw	File Name	Název souboru
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Volná transformace se stále použije; zkuste to znovu, až skončí.
 	The transform couldn't be applied.	Transformaci nelze použít.
+cameraRaw	Adjust	Upravit
+cameraRaw	Content Credentials	Údaje o původu obsahu
+cameraRaw	Snapshot	Snímek
+cameraRaw	Snapshots	Snímky
+cameraRaw	Create Snapshot	Vytvořit snímek
+cameraRaw	Before	Před
+cameraRaw	Denoise	Odstranit šum
+cameraRaw	Raw Details	Detaily RAW
+cameraRaw	Super Resolution	Super rozlišení

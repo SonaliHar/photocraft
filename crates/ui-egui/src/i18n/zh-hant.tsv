@@ -2815,3 +2815,12 @@ curves	Smooth	平滑
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	任意變形仍在套用中；請在完成後再試一次。
 	The transform couldn't be applied.	無法套用變形。
+cameraRaw	Adjust	調整
+cameraRaw	Content Credentials	內容認證
+cameraRaw	Snapshot	快照
+cameraRaw	Snapshots	快照
+cameraRaw	Create Snapshot	建立快照
+cameraRaw	Before	調整前
+cameraRaw	Denoise	去雜色
+cameraRaw	Raw Details	Raw 細節
+cameraRaw	Super Resolution	超解析度

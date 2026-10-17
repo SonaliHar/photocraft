@@ -43,6 +43,7 @@ def main():
     parser.add_argument("--candidate-rect", type=int, nargs=4, required=True, metavar=("LEFT", "TOP", "RIGHT", "BOTTOM"))
     parser.add_argument("--width", type=int, default=270)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--regions", type=Path, help="JSON element rectangles in the uniformly registered comparison coordinates")
     args = parser.parse_args()
     if not 32 <= args.width <= 4096:
         parser.error("width must be between 32 and 4096")
@@ -82,8 +83,51 @@ def main():
               "meanAbsoluteRgbDifference": ImageStat.Stat(difference).mean,
               "notes": "Top-left crop anchors aligned. Uniform scaling only. Purple marks absent coverage. Difference is diagnostic, not proof of parity; values, fonts and enabled state may differ."}
     (args.output / "alignment.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    if args.regions:
+        specification = json.loads(args.regions.read_text(encoding="utf-8"))
+        if "sourceRect" in specification and specification["sourceRect"] != args.source_rect:
+            parser.error("element specification uses a different reference registration rectangle")
+        audit = audit_elements(regions[0], regions[1], specification)
+        (args.output / "element-audit.json").write_text(json.dumps(audit, indent=2) + "\n", encoding="utf-8")
+        for element in audit["elements"]:
+            rect = element["rect"]
+            # Keep the whole registration; never realign a single control to hide its offset.
+            overlay.crop(rect).save(args.output / (element["id"] + "-overlay.png"))
+            difference.crop(rect).save(args.output / (element["id"] + "-difference.png"))
     write_viewer(args.output, args.width, height)
     print(args.output / "comparison.png")
+
+
+def audit_elements(source, candidate, specification):
+    """Pixel diagnostics per named element, with missing coverage always a failure."""
+    import re
+
+    if not isinstance(specification, dict) or not isinstance(specification.get("elements"), list):
+        raise ValueError("element specification requires an elements list")
+    if "normalizedWidth" in specification and specification["normalizedWidth"] != source.width:
+        raise ValueError("element rectangles require the specified uniform registration width")
+    elements = []
+    seen = set()
+    for element in specification["elements"]:
+        name = element.get("id", "")
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name) or name in seen:
+            raise ValueError("element IDs must be unique lowercase names separated by hyphens")
+        seen.add(name)
+        rect = element.get("rect")
+        if not isinstance(rect, list) or len(rect) != 4 or any(type(value) is not int for value in rect):
+            raise ValueError(f"{name}: rectangle requires four integer coordinates")
+        left, top, right, bottom = rect
+        if not (0 <= left < right <= source.width and 0 <= top < bottom <= source.height):
+            raise ValueError(f"{name}: rectangle is outside the reference crop")
+        covered = right <= candidate.width and bottom <= candidate.height
+        difference = ImageChops.difference(source.crop(rect).convert("RGB"), candidate.crop(rect).convert("RGB"))
+        elements.append({"id": name, "rect": rect, "candidateCoverageComplete": covered,
+                         "pixelsIdentical": covered and difference.getbbox() is None,
+                         "meanAbsoluteRgbDifference": ImageStat.Stat(difference).mean,
+                         "notes": element.get("notes", "")})
+    return {"scope": specification.get("scope", ""), "elements": elements,
+            "allListedElementsPixelIdentical": bool(elements) and all(item["pixelsIdentical"] for item in elements),
+            "notes": "Only the listed rectangles were measured. Pixel equality is an appearance diagnostic, not evidence of behavior or unlisted-element parity. No element was independently registered."}
 
 
 if __name__ == "__main__":

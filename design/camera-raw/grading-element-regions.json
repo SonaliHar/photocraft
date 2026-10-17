@@ -1,0 +1,354 @@
+{
+  "scope": "Current reference 9 (legacy 12), Color Grading section only. Full dock registration defines coordinates; lower sections, shared chrome and interaction parity remain separate work.",
+  "normalizedWidth": 540,
+  "sourceRect": [
+    10,
+    534,
+    550,
+    1520
+  ],
+  "elements": [
+    {
+      "id": "grading-disclosure",
+      "rect": [
+        34,
+        26,
+        67,
+        60
+      ]
+    },
+    {
+      "id": "grading-title",
+      "rect": [
+        80,
+        22,
+        280,
+        64
+      ]
+    },
+    {
+      "id": "grading-bypass",
+      "rect": [
+        454,
+        26,
+        494,
+        60
+      ]
+    },
+    {
+      "id": "adjust-label",
+      "rect": [
+        78,
+        86,
+        158,
+        126
+      ]
+    },
+    {
+      "id": "three-way-selector",
+      "rect": [
+        160,
+        82,
+        203,
+        124
+      ]
+    },
+    {
+      "id": "first-selector-divider",
+      "rect": [
+        208,
+        84,
+        218,
+        120
+      ]
+    },
+    {
+      "id": "shadows-selector",
+      "rect": [
+        224,
+        82,
+        266,
+        124
+      ]
+    },
+    {
+      "id": "midtones-selector",
+      "rect": [
+        276,
+        82,
+        318,
+        124
+      ]
+    },
+    {
+      "id": "highlights-selector",
+      "rect": [
+        328,
+        82,
+        370,
+        124
+      ]
+    },
+    {
+      "id": "second-selector-divider",
+      "rect": [
+        376,
+        84,
+        386,
+        120
+      ]
+    },
+    {
+      "id": "global-selector",
+      "rect": [
+        392,
+        82,
+        435,
+        124
+      ]
+    },
+    {
+      "id": "midtones-label",
+      "rect": [
+        180,
+        164,
+        335,
+        198
+      ]
+    },
+    {
+      "id": "midtones-wheel",
+      "rect": [
+        160,
+        220,
+        352,
+        412
+      ]
+    },
+    {
+      "id": "midtones-neutral-handle",
+      "rect": [
+        240,
+        300,
+        272,
+        332
+      ]
+    },
+    {
+      "id": "midtones-outer-dot",
+      "rect": [
+        356,
+        302,
+        380,
+        330
+      ]
+    },
+    {
+      "id": "midtones-luminance-track",
+      "rect": [
+        158,
+        444,
+        354,
+        464
+      ]
+    },
+    {
+      "id": "midtones-luminance-handle",
+      "rect": [
+        238,
+        442,
+        274,
+        468
+      ]
+    },
+    {
+      "id": "shadows-label",
+      "rect": [
+        76,
+        490,
+        192,
+        526
+      ]
+    },
+    {
+      "id": "highlights-label",
+      "rect": [
+        322,
+        490,
+        466,
+        526
+      ]
+    },
+    {
+      "id": "shadows-wheel",
+      "rect": [
+        32,
+        546,
+        224,
+        738
+      ]
+    },
+    {
+      "id": "highlights-wheel",
+      "rect": [
+        286,
+        546,
+        478,
+        738
+      ]
+    },
+    {
+      "id": "shadows-neutral-handle",
+      "rect": [
+        112,
+        626,
+        144,
+        658
+      ]
+    },
+    {
+      "id": "highlights-neutral-handle",
+      "rect": [
+        366,
+        626,
+        398,
+        658
+      ]
+    },
+    {
+      "id": "shadows-outer-dot",
+      "rect": [
+        224,
+        628,
+        250,
+        656
+      ]
+    },
+    {
+      "id": "highlights-outer-dot",
+      "rect": [
+        478,
+        628,
+        504,
+        656
+      ]
+    },
+    {
+      "id": "shadows-luminance-track",
+      "rect": [
+        30,
+        770,
+        226,
+        790
+      ]
+    },
+    {
+      "id": "highlights-luminance-track",
+      "rect": [
+        284,
+        770,
+        480,
+        790
+      ]
+    },
+    {
+      "id": "shadows-luminance-handle",
+      "rect": [
+        110,
+        768,
+        146,
+        794
+      ]
+    },
+    {
+      "id": "highlights-luminance-handle",
+      "rect": [
+        364,
+        768,
+        400,
+        794
+      ]
+    },
+    {
+      "id": "footer-separator",
+      "rect": [
+        40,
+        814,
+        472,
+        824
+      ]
+    },
+    {
+      "id": "blending-label",
+      "rect": [
+        42,
+        844,
+        170,
+        880
+      ]
+    },
+    {
+      "id": "blending-value",
+      "rect": [
+        384,
+        840,
+        476,
+        880
+      ]
+    },
+    {
+      "id": "blending-track",
+      "rect": [
+        40,
+        884,
+        474,
+        902
+      ]
+    },
+    {
+      "id": "blending-handle",
+      "rect": [
+        240,
+        880,
+        274,
+        910
+      ]
+    },
+    {
+      "id": "balance-label",
+      "rect": [
+        42,
+        906,
+        170,
+        942
+      ]
+    },
+    {
+      "id": "balance-value",
+      "rect": [
+        384,
+        902,
+        476,
+        942
+      ]
+    },
+    {
+      "id": "balance-track",
+      "rect": [
+        40,
+        946,
+        474,
+        964
+      ]
+    },
+    {
+      "id": "balance-handle",
+      "rect": [
+        240,
+        942,
+        274,
+        972
+      ]
+    }
+  ]
+}

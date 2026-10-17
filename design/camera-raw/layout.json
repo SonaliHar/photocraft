@@ -1,6 +1,6 @@
 {
   "panelWidth": 270,
-  "railWidth": 36,
+  "railWidth": 40,
   "headerHeight": 32,
   "navigationHeight": 32,
   "footerHeight": 48,
@@ -20,7 +20,10 @@
     "Curve",
     "Color Mixer",
     "Color Grading",
-    "Detail"
+    "Detail",
+    "Optics",
+    "Lens Blur",
+    "Calibration"
   ],
   "preview": {
     "panels": {
@@ -61,5 +64,19 @@
   "railToolSize": 28,
   "railToolGap": 4,
   "railBottomInset": 10,
-  "railSeparatorGap": 10
+  "railSeparatorGap": 10,
+  "histogramHeight": 124,
+  "metadataHeight": 24,
+  "gradingSelectorSize": 20,
+  "gradingSelectorGap": 6,
+  "gradingSelectorStart": 69,
+  "gradingSelectorGroupGap": 6,
+  "gradingSelectorBottomGap": 30.5,
+  "gradingFooterGap": 4.5,
+  "gradingLowerLabelOffsetY": -10,
+  "extraControlGap": 8.25,
+  "opticsTabsHeight": 28.75,
+  "detailEnhancementsHeight": 126,
+  "detailNoiseGap": 5,
+  "detailBottomPadding": 12
 }

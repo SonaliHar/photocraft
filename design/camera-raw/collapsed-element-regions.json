@@ -1,0 +1,372 @@
+{
+  "scope": "Current reference 11, all ten collapsed Edit sections. Individual header labels, disclosures, bypass eyes and separators share one full-dock registration. Histogram/metadata and Edit/Profile bars remain separate measurements.",
+  "normalizedWidth": 540,
+  "sourceRect": [
+    14,
+    136,
+    554,
+    1396
+  ],
+  "elements": [
+    {
+      "id": "light-disclosure",
+      "rect": [
+        34,
+        478,
+        68,
+        516
+      ]
+    },
+    {
+      "id": "light-heading",
+      "rect": [
+        80,
+        475,
+        310,
+        519
+      ]
+    },
+    {
+      "id": "light-bypass",
+      "rect": [
+        454,
+        478,
+        494,
+        516
+      ]
+    },
+    {
+      "id": "light-divider",
+      "rect": [
+        0,
+        456,
+        512,
+        461
+      ]
+    },
+    {
+      "id": "color-disclosure",
+      "rect": [
+        34,
+        558,
+        68,
+        596
+      ]
+    },
+    {
+      "id": "color-heading",
+      "rect": [
+        80,
+        555,
+        310,
+        599
+      ]
+    },
+    {
+      "id": "color-bypass",
+      "rect": [
+        454,
+        558,
+        494,
+        596
+      ]
+    },
+    {
+      "id": "color-divider",
+      "rect": [
+        0,
+        536,
+        512,
+        541
+      ]
+    },
+    {
+      "id": "effects-disclosure",
+      "rect": [
+        34,
+        638,
+        68,
+        676
+      ]
+    },
+    {
+      "id": "effects-heading",
+      "rect": [
+        80,
+        635,
+        310,
+        679
+      ]
+    },
+    {
+      "id": "effects-bypass",
+      "rect": [
+        454,
+        638,
+        494,
+        676
+      ]
+    },
+    {
+      "id": "effects-divider",
+      "rect": [
+        0,
+        616,
+        512,
+        621
+      ]
+    },
+    {
+      "id": "curve-disclosure",
+      "rect": [
+        34,
+        718,
+        68,
+        756
+      ]
+    },
+    {
+      "id": "curve-heading",
+      "rect": [
+        80,
+        715,
+        310,
+        759
+      ]
+    },
+    {
+      "id": "curve-bypass",
+      "rect": [
+        454,
+        718,
+        494,
+        756
+      ]
+    },
+    {
+      "id": "curve-divider",
+      "rect": [
+        0,
+        696,
+        512,
+        701
+      ]
+    },
+    {
+      "id": "color-mixer-disclosure",
+      "rect": [
+        34,
+        798,
+        68,
+        836
+      ]
+    },
+    {
+      "id": "color-mixer-heading",
+      "rect": [
+        80,
+        795,
+        310,
+        839
+      ]
+    },
+    {
+      "id": "color-mixer-bypass",
+      "rect": [
+        454,
+        798,
+        494,
+        836
+      ]
+    },
+    {
+      "id": "color-mixer-divider",
+      "rect": [
+        0,
+        776,
+        512,
+        781
+      ]
+    },
+    {
+      "id": "color-grading-disclosure",
+      "rect": [
+        34,
+        878,
+        68,
+        916
+      ]
+    },
+    {
+      "id": "color-grading-heading",
+      "rect": [
+        80,
+        875,
+        310,
+        919
+      ]
+    },
+    {
+      "id": "color-grading-bypass",
+      "rect": [
+        454,
+        878,
+        494,
+        916
+      ]
+    },
+    {
+      "id": "color-grading-divider",
+      "rect": [
+        0,
+        856,
+        512,
+        861
+      ]
+    },
+    {
+      "id": "detail-disclosure",
+      "rect": [
+        34,
+        958,
+        68,
+        996
+      ]
+    },
+    {
+      "id": "detail-heading",
+      "rect": [
+        80,
+        955,
+        310,
+        999
+      ]
+    },
+    {
+      "id": "detail-bypass",
+      "rect": [
+        454,
+        958,
+        494,
+        996
+      ]
+    },
+    {
+      "id": "detail-divider",
+      "rect": [
+        0,
+        936,
+        512,
+        941
+      ]
+    },
+    {
+      "id": "optics-disclosure",
+      "rect": [
+        34,
+        1038,
+        68,
+        1076
+      ]
+    },
+    {
+      "id": "optics-heading",
+      "rect": [
+        80,
+        1035,
+        310,
+        1079
+      ]
+    },
+    {
+      "id": "optics-bypass",
+      "rect": [
+        454,
+        1038,
+        494,
+        1076
+      ]
+    },
+    {
+      "id": "optics-divider",
+      "rect": [
+        0,
+        1016,
+        512,
+        1021
+      ]
+    },
+    {
+      "id": "lens-blur-disclosure",
+      "rect": [
+        34,
+        1118,
+        68,
+        1156
+      ]
+    },
+    {
+      "id": "lens-blur-heading",
+      "rect": [
+        80,
+        1115,
+        310,
+        1159
+      ]
+    },
+    {
+      "id": "lens-blur-bypass",
+      "rect": [
+        454,
+        1118,
+        494,
+        1156
+      ]
+    },
+    {
+      "id": "lens-blur-divider",
+      "rect": [
+        0,
+        1096,
+        512,
+        1101
+      ]
+    },
+    {
+      "id": "calibration-disclosure",
+      "rect": [
+        34,
+        1198,
+        68,
+        1236
+      ]
+    },
+    {
+      "id": "calibration-heading",
+      "rect": [
+        80,
+        1195,
+        310,
+        1239
+      ]
+    },
+    {
+      "id": "calibration-bypass",
+      "rect": [
+        454,
+        1198,
+        494,
+        1236
+      ]
+    },
+    {
+      "id": "calibration-divider",
+      "rect": [
+        0,
+        1176,
+        512,
+        1181
+      ]
+    }
+  ]
+}

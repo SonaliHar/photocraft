@@ -1,0 +1,849 @@
+{
+  "scope": "Current reference 10: each observed control in the Optics, Lens Blur and Calibration crop. Native processing for these three sections is unavailable and remains disabled; appearance diagnostics do not imply processing parity.",
+  "normalizedWidth": 540,
+  "sourceRect": [
+    34,
+    438,
+    574,
+    2530
+  ],
+  "elements": [
+    {
+      "id": "optics-divider",
+      "rect": [
+        0,
+        0,
+        512,
+        5
+      ]
+    },
+    {
+      "id": "optics-disclosure",
+      "rect": [
+        34,
+        22,
+        68,
+        60
+      ]
+    },
+    {
+      "id": "optics-heading",
+      "rect": [
+        80,
+        19,
+        335,
+        63
+      ]
+    },
+    {
+      "id": "optics-bypass",
+      "rect": [
+        454,
+        22,
+        494,
+        60
+      ]
+    },
+    {
+      "id": "lens-blur-divider",
+      "rect": [
+        0,
+        382,
+        512,
+        387
+      ]
+    },
+    {
+      "id": "lens-blur-disclosure",
+      "rect": [
+        34,
+        404,
+        68,
+        442
+      ]
+    },
+    {
+      "id": "lens-blur-heading",
+      "rect": [
+        80,
+        401,
+        335,
+        445
+      ]
+    },
+    {
+      "id": "lens-blur-bypass",
+      "rect": [
+        454,
+        404,
+        494,
+        442
+      ]
+    },
+    {
+      "id": "calibration-divider",
+      "rect": [
+        0,
+        1252,
+        512,
+        1257
+      ]
+    },
+    {
+      "id": "calibration-disclosure",
+      "rect": [
+        34,
+        1274,
+        68,
+        1312
+      ]
+    },
+    {
+      "id": "calibration-heading",
+      "rect": [
+        80,
+        1271,
+        335,
+        1315
+      ]
+    },
+    {
+      "id": "calibration-bypass",
+      "rect": [
+        454,
+        1274,
+        494,
+        1312
+      ]
+    },
+    {
+      "id": "optics-profile-tab",
+      "rect": [
+        40,
+        80,
+        132,
+        122
+      ]
+    },
+    {
+      "id": "optics-manual-tab",
+      "rect": [
+        136,
+        80,
+        240,
+        122
+      ]
+    },
+    {
+      "id": "optics-tab-underline",
+      "rect": [
+        40,
+        130,
+        478,
+        140
+      ]
+    },
+    {
+      "id": "chromatic-aberration-checkbox",
+      "rect": [
+        46,
+        158,
+        80,
+        198
+      ]
+    },
+    {
+      "id": "chromatic-aberration-label",
+      "rect": [
+        84,
+        158,
+        474,
+        198
+      ]
+    },
+    {
+      "id": "profile-corrections-checkbox",
+      "rect": [
+        46,
+        212,
+        80,
+        254
+      ]
+    },
+    {
+      "id": "profile-corrections-label",
+      "rect": [
+        84,
+        212,
+        430,
+        254
+      ]
+    },
+    {
+      "id": "profile-corrections-disclosure",
+      "rect": [
+        446,
+        212,
+        478,
+        254
+      ]
+    },
+    {
+      "id": "optics-inner-separator",
+      "rect": [
+        40,
+        266,
+        478,
+        274
+      ]
+    },
+    {
+      "id": "defringe-surface",
+      "rect": [
+        22,
+        290,
+        490,
+        358
+      ]
+    },
+    {
+      "id": "defringe-glyph",
+      "rect": [
+        36,
+        298,
+        86,
+        350
+      ]
+    },
+    {
+      "id": "defringe-label",
+      "rect": [
+        100,
+        302,
+        320,
+        348
+      ]
+    },
+    {
+      "id": "defringe-disclosure",
+      "rect": [
+        446,
+        302,
+        478,
+        348
+      ]
+    },
+    {
+      "id": "lens-apply-checkbox",
+      "rect": [
+        38,
+        472,
+        80,
+        512
+      ]
+    },
+    {
+      "id": "lens-apply-label",
+      "rect": [
+        80,
+        470,
+        185,
+        512
+      ]
+    },
+    {
+      "id": "blur-amount-label",
+      "rect": [
+        40,
+        542,
+        235,
+        578
+      ]
+    },
+    {
+      "id": "blur-amount-field",
+      "rect": [
+        384,
+        530,
+        478,
+        578
+      ]
+    },
+    {
+      "id": "blur-amount-track",
+      "rect": [
+        40,
+        578,
+        478,
+        598
+      ]
+    },
+    {
+      "id": "bokeh-heading",
+      "rect": [
+        40,
+        610,
+        200,
+        644
+      ]
+    },
+    {
+      "id": "cat-eye-label",
+      "rect": [
+        40,
+        750,
+        225,
+        788
+      ]
+    },
+    {
+      "id": "cat-eye-field",
+      "rect": [
+        384,
+        748,
+        478,
+        792
+      ]
+    },
+    {
+      "id": "cat-eye-track",
+      "rect": [
+        40,
+        788,
+        478,
+        808
+      ]
+    },
+    {
+      "id": "bokeh-boost-label",
+      "rect": [
+        40,
+        810,
+        240,
+        848
+      ]
+    },
+    {
+      "id": "bokeh-boost-field",
+      "rect": [
+        384,
+        808,
+        478,
+        852
+      ]
+    },
+    {
+      "id": "bokeh-boost-track",
+      "rect": [
+        40,
+        850,
+        478,
+        870
+      ]
+    },
+    {
+      "id": "focus-range-separator",
+      "rect": [
+        40,
+        896,
+        478,
+        906
+      ]
+    },
+    {
+      "id": "focus-range-heading",
+      "rect": [
+        40,
+        938,
+        270,
+        980
+      ]
+    },
+    {
+      "id": "focus-subject-glyph",
+      "rect": [
+        374,
+        928,
+        414,
+        982
+      ]
+    },
+    {
+      "id": "focus-target-glyph",
+      "rect": [
+        426,
+        928,
+        478,
+        982
+      ]
+    },
+    {
+      "id": "focus-range-strip",
+      "rect": [
+        48,
+        990,
+        468,
+        1040
+      ]
+    },
+    {
+      "id": "focus-near-label",
+      "rect": [
+        46,
+        1054,
+        180,
+        1092
+      ]
+    },
+    {
+      "id": "focus-far-label",
+      "rect": [
+        400,
+        1054,
+        478,
+        1092
+      ]
+    },
+    {
+      "id": "visualize-depth-checkbox",
+      "rect": [
+        40,
+        1110,
+        80,
+        1150
+      ]
+    },
+    {
+      "id": "visualize-depth-label",
+      "rect": [
+        84,
+        1110,
+        340,
+        1150
+      ]
+    },
+    {
+      "id": "refinement-surface",
+      "rect": [
+        22,
+        1160,
+        490,
+        1232
+      ]
+    },
+    {
+      "id": "refinement-glyph",
+      "rect": [
+        36,
+        1168,
+        86,
+        1222
+      ]
+    },
+    {
+      "id": "refinement-label",
+      "rect": [
+        100,
+        1176,
+        320,
+        1220
+      ]
+    },
+    {
+      "id": "refinement-disclosure",
+      "rect": [
+        446,
+        1176,
+        478,
+        1220
+      ]
+    },
+    {
+      "id": "process-label",
+      "rect": [
+        40,
+        1340,
+        140,
+        1380
+      ]
+    },
+    {
+      "id": "process-selector",
+      "rect": [
+        140,
+        1336,
+        478,
+        1384
+      ]
+    },
+    {
+      "id": "calibration-process-separator",
+      "rect": [
+        40,
+        1404,
+        478,
+        1412
+      ]
+    },
+    {
+      "id": "shadows-heading",
+      "rect": [
+        170,
+        1426,
+        340,
+        1458
+      ]
+    },
+    {
+      "id": "red-primary-heading",
+      "rect": [
+        170,
+        1552,
+        350,
+        1586
+      ]
+    },
+    {
+      "id": "green-primary-heading",
+      "rect": [
+        154,
+        1740,
+        366,
+        1774
+      ]
+    },
+    {
+      "id": "blue-primary-heading",
+      "rect": [
+        170,
+        1928,
+        350,
+        1962
+      ]
+    },
+    {
+      "id": "shadows-divider",
+      "rect": [
+        40,
+        1530,
+        478,
+        1538
+      ]
+    },
+    {
+      "id": "red-primary-divider",
+      "rect": [
+        40,
+        1718,
+        478,
+        1726
+      ]
+    },
+    {
+      "id": "green-primary-divider",
+      "rect": [
+        40,
+        1906,
+        478,
+        1914
+      ]
+    },
+    {
+      "id": "bokeh-circle-glyph",
+      "rect": [
+        46,
+        656,
+        118,
+        744
+      ]
+    },
+    {
+      "id": "bokeh-bubble-glyph",
+      "rect": [
+        132,
+        656,
+        204,
+        744
+      ]
+    },
+    {
+      "id": "bokeh-five-blade-glyph",
+      "rect": [
+        218,
+        656,
+        290,
+        744
+      ]
+    },
+    {
+      "id": "bokeh-ring-glyph",
+      "rect": [
+        304,
+        656,
+        376,
+        744
+      ]
+    },
+    {
+      "id": "bokeh-cat-eye-glyph",
+      "rect": [
+        390,
+        656,
+        462,
+        744
+      ]
+    },
+    {
+      "id": "shadows-tint-label",
+      "rect": [
+        40,
+        1458,
+        235,
+        1490
+      ]
+    },
+    {
+      "id": "shadows-tint-field",
+      "rect": [
+        384,
+        1456,
+        478,
+        1492
+      ]
+    },
+    {
+      "id": "shadows-tint-track",
+      "rect": [
+        40,
+        1494,
+        478,
+        1506
+      ]
+    },
+    {
+      "id": "shadows-tint-handle",
+      "rect": [
+        238,
+        1490,
+        276,
+        1512
+      ]
+    },
+    {
+      "id": "red-hue-label",
+      "rect": [
+        40,
+        1584,
+        235,
+        1616
+      ]
+    },
+    {
+      "id": "red-hue-field",
+      "rect": [
+        384,
+        1582,
+        478,
+        1618
+      ]
+    },
+    {
+      "id": "red-hue-track",
+      "rect": [
+        40,
+        1620,
+        478,
+        1632
+      ]
+    },
+    {
+      "id": "red-hue-handle",
+      "rect": [
+        238,
+        1616,
+        276,
+        1638
+      ]
+    },
+    {
+      "id": "red-saturation-label",
+      "rect": [
+        40,
+        1645,
+        235,
+        1677
+      ]
+    },
+    {
+      "id": "red-saturation-field",
+      "rect": [
+        384,
+        1643,
+        478,
+        1679
+      ]
+    },
+    {
+      "id": "red-saturation-track",
+      "rect": [
+        40,
+        1681,
+        478,
+        1693
+      ]
+    },
+    {
+      "id": "red-saturation-handle",
+      "rect": [
+        238,
+        1677,
+        276,
+        1699
+      ]
+    },
+    {
+      "id": "green-hue-label",
+      "rect": [
+        40,
+        1772,
+        235,
+        1804
+      ]
+    },
+    {
+      "id": "green-hue-field",
+      "rect": [
+        384,
+        1770,
+        478,
+        1806
+      ]
+    },
+    {
+      "id": "green-hue-track",
+      "rect": [
+        40,
+        1808,
+        478,
+        1820
+      ]
+    },
+    {
+      "id": "green-hue-handle",
+      "rect": [
+        238,
+        1804,
+        276,
+        1826
+      ]
+    },
+    {
+      "id": "green-saturation-label",
+      "rect": [
+        40,
+        1833,
+        235,
+        1865
+      ]
+    },
+    {
+      "id": "green-saturation-field",
+      "rect": [
+        384,
+        1831,
+        478,
+        1867
+      ]
+    },
+    {
+      "id": "green-saturation-track",
+      "rect": [
+        40,
+        1869,
+        478,
+        1881
+      ]
+    },
+    {
+      "id": "green-saturation-handle",
+      "rect": [
+        238,
+        1865,
+        276,
+        1887
+      ]
+    },
+    {
+      "id": "blue-hue-label",
+      "rect": [
+        40,
+        1960,
+        235,
+        1992
+      ]
+    },
+    {
+      "id": "blue-hue-field",
+      "rect": [
+        384,
+        1958,
+        478,
+        1994
+      ]
+    },
+    {
+      "id": "blue-hue-track",
+      "rect": [
+        40,
+        1996,
+        478,
+        2008
+      ]
+    },
+    {
+      "id": "blue-hue-handle",
+      "rect": [
+        238,
+        1992,
+        276,
+        2014
+      ]
+    },
+    {
+      "id": "blue-saturation-label",
+      "rect": [
+        40,
+        2021,
+        235,
+        2053
+      ]
+    },
+    {
+      "id": "blue-saturation-field",
+      "rect": [
+        384,
+        2019,
+        478,
+        2055
+      ]
+    },
+    {
+      "id": "blue-saturation-track",
+      "rect": [
+        40,
+        2057,
+        478,
+        2069
+      ]
+    },
+    {
+      "id": "blue-saturation-handle",
+      "rect": [
+        238,
+        2053,
+        276,
+        2075
+      ]
+    }
+  ]
+}

@@ -3215,3 +3215,12 @@ curves	Smooth	Glätten
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Frei transformieren wird noch angewendet; versuchen Sie es erneut, wenn es fertig ist.
 	The transform couldn't be applied.	Die Transformation konnte nicht angewendet werden.
+cameraRaw	Adjust	Anpassen
+cameraRaw	Content Credentials	Inhaltsnachweise
+cameraRaw	Snapshot	Schnappschuss
+cameraRaw	Snapshots	Schnappschüsse
+cameraRaw	Create Snapshot	Schnappschuss erstellen
+cameraRaw	Before	Vorher
+cameraRaw	Denoise	Entrauschen
+cameraRaw	Raw Details	Raw-Details
+cameraRaw	Super Resolution	Super Auflösung

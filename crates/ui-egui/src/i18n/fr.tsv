@@ -3218,3 +3218,12 @@ curves	Smooth	Lisser
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	La transformation manuelle est encore en cours d'application ; réessayez quand elle sera terminée.
 	The transform couldn't be applied.	Impossible d'appliquer la transformation.
+cameraRaw	Adjust	Régler
+cameraRaw	Content Credentials	Identifiants de contenu
+cameraRaw	Snapshot	Instantané
+cameraRaw	Snapshots	Instantanés
+cameraRaw	Create Snapshot	Créer un instantané
+cameraRaw	Before	Avant
+cameraRaw	Denoise	Réduction du bruit
+cameraRaw	Raw Details	Détails Raw
+cameraRaw	Super Resolution	Super résolution

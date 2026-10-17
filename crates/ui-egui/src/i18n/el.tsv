@@ -3913,3 +3913,12 @@ cameraRaw	File Name	Όνομα αρχείου
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Ο Ελεύθερος μετασχηματισμός εφαρμόζεται ακόμη· δοκιμάστε ξανά όταν ολοκληρωθεί.
 	The transform couldn't be applied.	Δεν ήταν δυνατή η εφαρμογή του μετασχηματισμού.
+cameraRaw	Adjust	Προσαρμογή
+cameraRaw	Content Credentials	Διαπιστευτήρια περιεχομένου
+cameraRaw	Snapshot	Στιγμιότυπο
+cameraRaw	Snapshots	Στιγμιότυπα
+cameraRaw	Create Snapshot	Δημιουργία στιγμιοτύπου
+cameraRaw	Before	Πριν
+cameraRaw	Denoise	Αποθορυβοποίηση
+cameraRaw	Raw Details	Λεπτομέρειες Raw
+cameraRaw	Super Resolution	Υπερανάλυση

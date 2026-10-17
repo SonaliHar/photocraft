@@ -1,0 +1,1083 @@
+{
+  "target": "ACR 18.6.0.2698",
+  "completion": "incomplete",
+  "references": [
+    {
+      "image": 1,
+      "file": "image-1.png",
+      "sha256": "1f604a759ad0c03ce8640b7c4c79ab0f6d9c76b1f18332ee41e9e4e9bd48a6a3",
+      "size": [
+        670,
+        2670
+      ],
+      "scope": "Snapshots: empty state and header",
+      "status": "matching native state captured; element differences remain; not a parity pass",
+      "elements": [
+        {
+          "name": "Snapshots title",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Create snapshot glyph",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Empty list surface",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "sharedElements": [
+        "Top action icons and separators",
+        "Histogram box/curves/clipping indicators",
+        "Metadata text and spacing",
+        "Tool rail: glyphs, positions, selected frames, dividers",
+        "Footer buttons and split Open control"
+      ],
+      "legacyImage": 4,
+      "nativeCaptureState": "snapshots",
+      "coverageAudit": "Native tab and empty state captured; title/glyph/typography remain different.",
+      "elementRegionsFile": "snapshots-element-regions.json",
+      "lastIndividualPixelAudit": "v6: zero listed regions pixel-identical; geometry and typography improved but differences remain."
+    },
+    {
+      "image": 2,
+      "file": "image-2.png",
+      "sha256": "b7cb9423e42a7debc9902a4784161ae4bce306ff026847ea5c801bc51b2a883b",
+      "size": [
+        660,
+        2670
+      ],
+      "scope": "Presets: groups, favorites and preset list",
+      "status": "incomplete; Presets tab and observed preset groups not implemented in Camera Raw.",
+      "elements": [
+        {
+          "name": "Presets title/create/overflow",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "None/amount slider/value",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Preset scrollbar",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Adaptive Portrait/Sky/Subject/Landscape/Blur Background",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Portraits Deep Skin/Medium Skin/Light Skin/Black & White/Edgy/Group",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Auto+: Retro",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Seasons Spring/Summer/Autumn/Winter",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Style Black & White/Cinematic/Cinematic II/Film-Inspired/Futuristic/Vintage",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Subject Concerts/Food/Landscape/Lifestyle/Travel/Travel II/Urban Architecture",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Video Creative",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Color/Creative/B&W/Portraits/Defaults/Curve/Grain/Optics groups",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Group disclosure triangles/separators",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "sharedElements": [
+        "Top action icons and separators",
+        "Histogram box/curves/clipping indicators",
+        "Metadata text and spacing",
+        "Tool rail: glyphs, positions, selected frames, dividers",
+        "Footer buttons and split Open control"
+      ],
+      "legacyImage": 5,
+      "nativeCaptureState": null,
+      "coverageAudit": "Presets tab and observed preset groups not implemented in Camera Raw."
+    },
+    {
+      "image": 3,
+      "file": "image-3.png",
+      "sha256": "1e5a324963e79927450295c8dfff646fb88a53c85d0c3bb0ef52e388fc4ca8fa",
+      "size": [
+        594,
+        1356
+      ],
+      "scope": "Settings menu: enabled/disabled commands and submenus",
+      "status": "incomplete; Reference-wide settings menu has no matching captured state yet.",
+      "elements": [
+        {
+          "name": "Menu shell/radius/shadow",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Reset to Open/Default",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Apply Previous Settings/Snapshot/Favorite Preset",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Create Snapshot/Preset",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Copy Edit Settings/Selected/Paste",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Load/Save Settings",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Update/Ignore/Flatten/Reset AI Settings",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Save Image submenu",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Render to DNG",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Export Settings to XMP",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Update DNG Previews",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Set Raw Defaults",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "AI Model Downloads",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Disabled ink/separators/shortcut alignment",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "legacyImage": 6,
+      "nativeCaptureState": null,
+      "coverageAudit": "Reference-wide settings menu has no matching captured state yet."
+    },
+    {
+      "image": 4,
+      "file": "image-4.png",
+      "sha256": "461998bf0c6b8a744b8b6e04b4eb49d46c94ee05ffc3d837fce7bc0af07dc6af",
+      "size": [
+        692,
+        2680
+      ],
+      "scope": "Info: camera, capture date, filename and content credentials",
+      "status": "matching native state captured; element differences remain; not a parity pass",
+      "elements": [
+        {
+          "name": "Camera summary card/model/dimensions/file size/type badge",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Capture Date heading/value",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "File Name heading/value",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Content Credentials heading/glyph/status/separator",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "sharedElements": [
+        "Top action icons and separators",
+        "Histogram box/curves/clipping indicators",
+        "Metadata text and spacing",
+        "Tool rail: glyphs, positions, selected frames, dividers",
+        "Footer buttons and split Open control"
+      ],
+      "legacyImage": 7,
+      "nativeCaptureState": "info",
+      "coverageAudit": "Native Info captured; headings/spacing under revision; actual synthetic metadata differs.",
+      "elementRegionsFile": "info-element-regions.json",
+      "lastIndividualPixelAudit": "v6: zero listed regions pixel-identical; geometry and typography improved but differences remain."
+    },
+    {
+      "image": 5,
+      "file": "image-5.png",
+      "sha256": "8ee8a680fa61cd07b0dd7278c72bce46bf2972900a933e89f1e2307aa36c5243",
+      "size": [
+        1574,
+        2256
+      ],
+      "scope": "Save Options dialog: naming, format, metadata, sizing and sharpening",
+      "status": "incomplete; Matching Camera Raw Save Options dialog not implemented/captured.",
+      "elements": [
+        {
+          "name": "Save Options title/window frame",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Preset selector",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Destination selector/Select Folder/path",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "File Naming document name and suffix rows/extension",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Format selector/compatibility/JPEG Preview",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Embed Fast Load Data/Lossy Compression/Embed Original Raw",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Content Credentials settings",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Color Space/bit depth/HDR",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Image Sizing dimensions/units/resolution",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Output Sharpening settings",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Save/Cancel buttons",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "legacyImage": 8,
+      "nativeCaptureState": null,
+      "coverageAudit": "Matching Camera Raw Save Options dialog not implemented/captured."
+    },
+    {
+      "image": 6,
+      "file": "image-6.png",
+      "sha256": "dc74d34ebe97916f0c7aed4d81306bf80d26fac57f1aba2d7363237fd6c2d93a",
+      "size": [
+        2004,
+        1530
+      ],
+      "scope": "Preferences dialog: pages, appearance, panels, filmstrip, zoom and shortcuts",
+      "status": "incomplete; Matching Camera Raw Preferences dialog not implemented/captured.",
+      "elements": [
+        {
+          "name": "Preferences title/version/window frame",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "General/File Handling/Performance/Defaults/Workflow/Generative AI pages",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Appearance Color Theme selector",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Edit panel behavior selector",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Multiple fit panels/compact layout/rich tooltips/Legacy Target Adjustment Tool",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Filmstrip Orientation/filenames/ratings and color labels/contextual menu hover",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Default image click zoom/Lightroom style zoom and pan",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Use legacy undo shortcuts",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "OK/Cancel buttons",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "legacyImage": 9,
+      "nativeCaptureState": null,
+      "coverageAudit": "Matching Camera Raw Preferences dialog not implemented/captured."
+    },
+    {
+      "image": 7,
+      "file": "image-7.png",
+      "sha256": "3aeac1826ea3edc00d99a98b82c963ed6274aa4a24151632f65d647b9380dd29",
+      "size": [
+        652,
+        2658
+      ],
+      "scope": "Edit: Light, Color, Effects and Curve",
+      "status": "matching native state captured; element differences remain; not a parity pass",
+      "elements": [
+        {
+          "name": "Light header/disclosure/bypass",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Exposure/Contrast/Highlights/Shadows/Whites/Blacks labels/fields/slider gradients/handles",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Color header/disclosure/bypass",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "White balance combo/picker",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Temperature/Tint/Vibrance/Saturation",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Effects header/disclosure/bypass",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Texture/Clarity/Dehaze/Vignette/Grain/Glow disclosures",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Curve header/selectors/graph partial",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "sharedElements": [
+        "Top action icons and separators",
+        "Histogram box/curves/clipping indicators",
+        "Metadata text and spacing",
+        "Tool rail: glyphs, positions, selected frames, dividers",
+        "Footer buttons and split Open control"
+      ],
+      "legacyImage": 10,
+      "nativeCaptureState": "edit",
+      "coverageAudit": "Combined Edit captured; per-element audit, Glow and downstream controls remain."
+    },
+    {
+      "image": 8,
+      "file": "image-8.png",
+      "sha256": "22459d93c466ccee5c9cb09c45f4f1047db8e670da5c71efc36a2b3fbca74c65",
+      "size": [
+        680,
+        2666
+      ],
+      "scope": "Edit: Curve, Color Mixer, Detail and Optics",
+      "status": "native layout captured; incomplete element parity",
+      "elements": [
+        {
+          "name": "Curve disclosure/bypass",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Adjust parametric/RGB/red/green/blue/targeted tool",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Curve graph/histogram/grid/diagonal",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Tone split ramp and three handles",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Highlights/Lights/Darks/Shadows sliders",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Color Mixer header/bypass",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Mixer/Point Color tabs",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Adjust Color combo",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Nine color swatches/selected blue",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Hue/Saturation/Luminance gradients/values/handles",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Collapsed Color Grading/Detail",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Optics Profile/Manual tabs",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Remove chromatic aberration/Use profile corrections",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Defringe disclosure",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Collapsed Lens Blur",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "sharedElements": [
+        "Top action icons and separators",
+        "Histogram box/curves/clipping indicators",
+        "Metadata text and spacing",
+        "Tool rail: glyphs, positions, selected frames, dividers",
+        "Footer buttons and split Open control"
+      ],
+      "legacyImage": 11,
+      "nativeCaptureState": "curve-mixer",
+      "coverageAudit": "Native Curve/Mixer/Optics neighbor-order capture exists; individual controls differ and Optics processing is disabled."
+    },
+    {
+      "image": 9,
+      "file": "image-9.png",
+      "sha256": "2237262f3311ba0b11cc7106587d249a2d57d4fdcbfe45316898527dc3ee6253",
+      "size": [
+        638,
+        2672
+      ],
+      "scope": "Edit: Color Grading, Detail, Optics and lower sections",
+      "status": "native layout captured; incomplete element parity",
+      "elements": [
+        {
+          "name": "Color Grading header/disclosure/bypass",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Five Adjust glyphs",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Midtones/Shadows/Highlights wheel labels, disks, handles, outer dots and luminance tracks",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Blending/Balance",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Detail header/bypass",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Denoise/value/track",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Raw Details/Super Resolution",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Sharpening slider/disclosure",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Manual Noise Reduction disclosure",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Optics controls",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Collapsed Lens Blur/Calibration",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "sharedElements": [
+        "Top action icons and separators",
+        "Histogram box/curves/clipping indicators",
+        "Metadata text and spacing",
+        "Tool rail: glyphs, positions, selected frames, dividers",
+        "Footer buttons and split Open control"
+      ],
+      "legacyImage": 12,
+      "nativeCaptureState": "grading-detail",
+      "coverageAudit": "Native Grading/Detail/Optics capture exists; Denoise/Raw Details/Super Resolution remain missing; Optics processing disabled.",
+      "elementRegionsFile": "grading-element-regions.json",
+      "lastIndividualPixelAudit": "v6: zero listed regions pixel-identical; geometry and typography improved but differences remain."
+    },
+    {
+      "image": 10,
+      "file": "image-10.png",
+      "sha256": "13bbea6bf5863cd9fefe0eb6a28e0f39b3abc869cf4d8c52ce87815792f2f4b8",
+      "size": [
+        666,
+        2664
+      ],
+      "scope": "Edit: Optics, Lens Blur and Calibration",
+      "status": "native layout captured; incomplete element parity",
+      "elements": [
+        {
+          "name": "Optics tabs/checks/Defringe",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Lens Blur header/bypass",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Apply/Blur Amount",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Five Bokeh glyph selectors",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Cat Eye/Bokeh Boost",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Focus Range/person/target/range strip/Near/Far",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Visualize Depth",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Refinement disclosure",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Calibration header/bypass",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Process Version 6 combo",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Shadows Tint",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Red/Green/Blue Primary Hue/Saturation",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Dividers/scrollbar",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "sharedElements": [
+        "Top action icons and separators",
+        "Histogram box/curves/clipping indicators",
+        "Metadata text and spacing",
+        "Tool rail: glyphs, positions, selected frames, dividers",
+        "Footer buttons and split Open control"
+      ],
+      "legacyImage": 13,
+      "nativeCaptureState": "lens-calibration",
+      "coverageAudit": "Native Optics/Lens Blur/Calibration layouts captured and 93 regions audited. Processing unavailable/disabled; glyph, type, field, gradient and spacing differences remain.",
+      "elementRegionsFile": "lower-panels-element-regions.json"
+    },
+    {
+      "image": 11,
+      "file": "image-11.png",
+      "sha256": "d3d3314bebbe51f53d46cd929bb3cfeb2db3b0b8ae276f1e18feac60da636c7b",
+      "size": [
+        654,
+        2672
+      ],
+      "scope": "Edit: all sections collapsed",
+      "status": "native layout captured; incomplete element parity",
+      "elements": [
+        {
+          "name": "Edit/Auto/B&W/HDR",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Profile combo/browser",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Collapsed Light/Color/Effects/Curve/Color Mixer/Color Grading/Detail/Optics/Lens Blur/Calibration",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Section separators/disclosures/bypass eyes",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "sharedElements": [
+        "Top action icons and separators",
+        "Histogram box/curves/clipping indicators",
+        "Metadata text and spacing",
+        "Tool rail: glyphs, positions, selected frames, dividers",
+        "Footer buttons and split Open control"
+      ],
+      "legacyImage": 14,
+      "nativeCaptureState": "collapsed",
+      "coverageAudit": "All ten headers/disclosures/eye glyphs captured, 40 registered regions. Seven implemented stages support temporary hold-to-bypass preview; three unsupported stages have disabled eyes. Not a visual parity pass.",
+      "elementRegionsFile": "collapsed-element-regions.json"
+    },
+    {
+      "image": 12,
+      "file": "image-12.png",
+      "sha256": "063a131976b1086ae63823b73962d03f55ea0755895bef0e120d927566a30e83",
+      "size": [
+        728,
+        2662
+      ],
+      "scope": "Crop & Expand: geometry, rotation, flip and aspect controls",
+      "status": "incomplete; Crop & Expand tab and geometry controls missing in Camera Raw workspace.",
+      "elements": [
+        {
+          "name": "Crop & Expand title/reset",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Enable Expand",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Preset combo/orientation/lock",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Angle/level tool",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Rotate left/right/flip horizontal/vertical",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Generative Expand/Trim disclosures",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Geometry disclosure/bypass",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Six Upright modes",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Lens correction advisory",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Projection/Vertical/Horizontal/Rotate/Aspect/Scale/Offset X/Offset Y sliders",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Anamorphic disclosure",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "sharedElements": [
+        "Top action icons and separators",
+        "Histogram box/curves/clipping indicators",
+        "Metadata text and spacing",
+        "Tool rail: glyphs, positions, selected frames, dividers",
+        "Footer buttons and split Open control"
+      ],
+      "legacyImage": 15,
+      "nativeCaptureState": null,
+      "coverageAudit": "Crop & Expand tab and geometry controls missing in Camera Raw workspace."
+    },
+    {
+      "image": 13,
+      "file": "image-13.png",
+      "sha256": "978b9690eaa5085b25f681b2bf5ec2a69e59f69fc572f5fb8b6c10b7cab838a9",
+      "size": [
+        724,
+        2680
+      ],
+      "scope": "Remove: modes, Generative AI, object detection, brush, distractions",
+      "status": "incomplete; Remove tab and its observed controls missing in Camera Raw workspace.",
+      "elements": [
+        {
+          "name": "Remove title/reset/bypass",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Remove/Heal/Clone selectors",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Use Generative AI/info",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Detect Objects",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Size label/value/track/handle",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Provide feedback/separators",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Show Overlay on Hover",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Visualize Spots/threshold",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Distraction Removal title/reset/bypass",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Reflections/People/Blemishes/Dust icons, eyes and disclosures",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "sharedElements": [
+        "Top action icons and separators",
+        "Histogram box/curves/clipping indicators",
+        "Metadata text and spacing",
+        "Tool rail: glyphs, positions, selected frames, dividers",
+        "Footer buttons and split Open control"
+      ],
+      "legacyImage": 1,
+      "nativeCaptureState": null,
+      "coverageAudit": "Remove tab and its observed controls missing in Camera Raw workspace."
+    },
+    {
+      "image": 14,
+      "file": "image-14.png",
+      "sha256": "e62a47b721983a5ebb1d378e832683fff74c2db28476840062926451a8e88798",
+      "size": [
+        684,
+        2674
+      ],
+      "scope": "Masking: subject, sky, background, tools and People",
+      "status": "incomplete; Masking tab and its observed controls missing in Camera Raw workspace.",
+      "elements": [
+        {
+          "name": "Create New Mask title",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Subject/Sky/Background tiles",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Landscape/Objects/Brush/Linear Gradient/Radial Gradient/Range rows",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "K/G/J shortcut badges",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "People disclosure and unavailable-message icon",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Masking help row/separators",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "sharedElements": [
+        "Top action icons and separators",
+        "Histogram box/curves/clipping indicators",
+        "Metadata text and spacing",
+        "Tool rail: glyphs, positions, selected frames, dividers",
+        "Footer buttons and split Open control"
+      ],
+      "legacyImage": 2,
+      "nativeCaptureState": null,
+      "coverageAudit": "Masking tab and its observed controls missing in Camera Raw workspace."
+    },
+    {
+      "image": 15,
+      "file": "image-15.png",
+      "sha256": "550d4cc3503e749be1153cc667cd7cb21d58e4a875fe5d3cc0e9f64e6411883c",
+      "size": [
+        656,
+        2664
+      ],
+      "scope": "Red Eye: pupil size, darken, overlay",
+      "status": "incomplete; Red Eye tab and its observed controls missing in Camera Raw workspace.",
+      "elements": [
+        {
+          "name": "Red Eye title/reset/bypass",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Type combo and Auto",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Pupil Size and Darken labels/values/tracks/handles",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Overlay checkbox",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Separators",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "sharedElements": [
+        "Top action icons and separators",
+        "Histogram box/curves/clipping indicators",
+        "Metadata text and spacing",
+        "Tool rail: glyphs, positions, selected frames, dividers",
+        "Footer buttons and split Open control"
+      ],
+      "legacyImage": 3,
+      "nativeCaptureState": null,
+      "coverageAudit": "Red Eye tab and its observed controls missing in Camera Raw workspace."
+    },
+    {
+      "image": 16,
+      "file": "image-16.png",
+      "sha256": "f94e07acb792772e3bffc9e99cc4ee4360ab1f3f8dd930b8b098dcdd0a9e8647",
+      "size": [
+        4368,
+        2666
+      ],
+      "scope": "Full window: Info, preview, header, navigation and footer",
+      "status": "full-window native capture and overlay generated; shared chrome/image bounds/filmstrip remain incomplete",
+      "elements": [
+        {
+          "name": "Full window title/header/actions",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Preview image bounds/margins",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Histogram/metadata",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Info card and metadata",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Rail top/bottom tool positions",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Fit/zoom/navigation controls",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Before/After glyphs",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Workflow footer/link/buttons",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "legacyImage": 16,
+      "nativeCaptureState": "info",
+      "coverageAudit": "Info dock exists; matching full-window dimensions and shared chrome audit pending."
+    },
+    {
+      "image": 17,
+      "file": "image-17.png",
+      "sha256": "ec56463ea082d39f3d11ed7aa71a65f7ac53c9dbeaf5d5ee5bc7551ba1732c26",
+      "size": [
+        4360,
+        2666
+      ],
+      "scope": "Full window: grid overlay and Info",
+      "status": "full-window native capture and overlay generated; shared chrome/image bounds/filmstrip remain incomplete",
+      "elements": [
+        {
+          "name": "Full window grid spacing/opacity/clipping",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Preview fit and margins",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Info panel",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Header/actions/rail/navigation/footer",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "legacyImage": 18,
+      "nativeCaptureState": "grid-info",
+      "coverageAudit": "Grid/Info view state supported; matching full-window capture and element audit pending."
+    },
+    {
+      "image": 18,
+      "file": "image-18.png",
+      "sha256": "7e1eaf2905791c2ed2162c1bc4e9fa417e93fdd4945c426697473f0a589eb5c6",
+      "size": [
+        4368,
+        2670
+      ],
+      "scope": "Full window: alternate Info/preview state",
+      "status": "full-window native capture and overlay generated; shared chrome/image bounds/filmstrip remain incomplete",
+      "elements": [
+        {
+          "name": "Full window reference 17 preview scale and margins",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Info panel content/position",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Header/actions and rail",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Fit/zoom/navigation",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Workflow footer/link/buttons",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "legacyImage": 17,
+      "nativeCaptureState": "info",
+      "coverageAudit": "Alternate Info full-window scale/margins capture and shared chrome audit pending."
+    },
+    {
+      "image": 19,
+      "file": "image-19.png",
+      "sha256": "b00a3fe24ede39382f5827adf014592d5b19eed0925b6ecfc7ad55024cb67340",
+      "size": [
+        4360,
+        2662
+      ],
+      "scope": "Full window: Edit panels, filmstrip and navigation",
+      "status": "full-window native capture and overlay generated; shared chrome/image bounds/filmstrip remain incomplete",
+      "elements": [
+        {
+          "name": "Full window Light/Color/Effects/Curve scroll state",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Filmstrip visibility/thumbnail/selected border",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Preview fit and margins",
+          "status": "pending individual overlay verification"
+        },
+        {
+          "name": "Header/actions/rail/navigation/footer",
+          "status": "pending individual overlay verification"
+        }
+      ],
+      "legacyImage": 19,
+      "nativeCaptureState": "edit",
+      "coverageAudit": "Edit view supported; reference filmstrip and full-window navigation/footer remain incomplete."
+    }
+  ],
+  "nativeSupportAuthorized": true,
+  "nativePreview": {
+    "wheelBuild": "passed; dev; 7m57s",
+    "previewPid": 65360,
+    "previewPort": 57833,
+    "captures": "target/acr18/parity-20261016/wheel-v3",
+    "photoParametersAndRevisionUnchanged": true,
+    "clippyAllTargets": "passed",
+    "cameraRawTests": "rerun in progress; first run 48 passed/2 failed, fixes applied",
+    "reference12Overlay": "target/acr18/parity-20261016/12-grading-wheel-v3/index.html"
+  },
+  "pendingNativeBatch": {
+    "features": [
+      "Info card/date/filename/credentials layout",
+      "Snapshots named in-dialog settings capture/restore/delete",
+      "Measured grading offsets, lower-wheel outset, compact track heights, outer dots and handle color",
+      "Fixed settings gutter across scrollbar presence",
+      "Offscreen inspect output for state verification"
+    ],
+    "clippyAllTargets": "passed",
+    "buildTestsAndFreshOverlays": "completed for v6; incomplete reference-wide parity remains explicit",
+    "snapshotPersistence": "current open dialog only; no durable recipe snapshot storage implemented"
+  },
+  "referenceSet": "c0f524f7-ece8-4a8b-a8f6-7f0f327cf262",
+  "numberingNote": "Current user attachment numbering. legacyImage identifies the earlier inventory and comparison-directory numbering. All 19 content hashes verified against the current references.",
+  "currentSourceValidation": {
+    "snapshotBuild": "passed",
+    "cameraRawLibTests": "58 passed",
+    "workspaceIntegrationTests": "7 passed",
+    "clippyAllTargets": "passed",
+    "layers": "30 crates passed",
+    "wasm": "passed; four existing dead-code warnings",
+    "pythonOverlayAuditorTests": "5 passed",
+    "nativeCaptureStates": [
+      "edit",
+      "curve",
+      "curve-mixer",
+      "mixer",
+      "grading",
+      "grading-detail",
+      "detail",
+      "optics",
+      "lens-calibration",
+      "collapsed",
+      "info",
+      "grid-info",
+      "snapshots"
+    ],
+    "photoParametersAndDocumentIdentityUnchanged": true,
+    "snapshotSha256": "27657465fe8e3fe49c7c4164a6aea28545180bb5eca2dbff90eb7e7b31b6dab8",
+    "layoutSha256": "01139cef2c47d38164c254243925fe2ea35dda855ab013c54895234a84979430",
+    "scope": "Native offscreen validation; no desktop/hosted promotion."
+  }
+}

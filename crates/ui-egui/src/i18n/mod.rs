@@ -1289,11 +1289,17 @@ mod tests {
     /// tl! scanner cannot see. Cover the partial catalog too, without claiming whole-app coverage.
     #[test]
     fn camera_raw_labels_are_translated_in_every_available_language() {
-        let sources = [include_str!("../camera_raw_ui.rs"), include_str!("../camera_raw_scope_ui.rs")];
+        let sources = [
+            include_str!("../camera_raw_ui.rs"),
+            include_str!("../camera_raw_scope_ui.rs"),
+            include_str!("../camera_raw_workspace_ui.rs"),
+            include_str!("../camera_raw_info_ui.rs"),
+            include_str!("../camera_raw_snapshots_ui.rs"),
+        ];
         let mut labels = std::collections::BTreeSet::new();
         for source in sources {
             let code = source.split("#[cfg(test)]").next().unwrap();
-            for marker in ["tl!(\"", "row(ui, &mut dirty, \"", "row(ui, dirty, \"", "section(ui, \"", "wheel(ui, &mut dirty, \"", "=> \""] {
+            for marker in ["tl!(\"", "row(ui, &mut dirty, \"", "row(ui, dirty, \"", "section(ui, \"", "wheel(ui, &mut dirty, \"", "tr(\"", "=> \""] {
                 for tail in code.split(marker).skip(1) {
                     labels.insert(tail.split('"').next().unwrap());
                 }
@@ -1303,6 +1309,7 @@ mod tests {
         for band in bands.split('"').skip(1).step_by(2) {
             labels.insert(band);
         }
+        labels.extend(["Denoise", "Raw Details", "Super Resolution"]);
         assert!(labels.len() >= 66, "missing Camera Raw source labels: {labels:?}");
         for lang in Lang::all().filter(|l| *l != Lang::EN) {
             let catalog = lang.catalog();

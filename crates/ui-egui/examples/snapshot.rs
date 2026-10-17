@@ -11,6 +11,8 @@
 //! `--safe-gpu` draws the canvas on the CPU path, like the app's `--safe-gpu` launch.
 //! `--wayland-notice` previews the native file drag-and-drop guidance shown in Wayland sessions.
 //! `--custom-titlebar` draws the Windows/Linux title bar (caption buttons in the top bar).
+//! `--raw-workspace` renders Camera Raw inside the offscreen root viewport, including sizes
+//! taller than the physical monitor. This uses the same native layout and live JSON as the preview.
 //!
 //! `--monitor 1366x768 --window-top 31` simulates the display the window is on (in points) and
 //! where its content starts on it, e.g. a window running under a Windows taskbar.
@@ -64,6 +66,7 @@ fn main() {
     // `--background-jobs`: long commands run as background jobs, as in the desktop app (#210).
     let background_jobs = args.iter().any(|a| a == "--background-jobs");
     let custom_titlebar = args.iter().any(|a| a == "--custom-titlebar");
+    let raw_workspace = args.iter().any(|a| a == "--raw-workspace");
     // `--settle-ms N`: keep rendering frames for N ms before the capture (e.g. mid-job).
     let settle_ms: u64 = arg(&args, "--settle-ms").and_then(|s| s.parse().ok()).unwrap_or(0);
     let mut harness =
@@ -75,6 +78,7 @@ fn main() {
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
             app.background_jobs = background_jobs;
             app.custom_titlebar = custom_titlebar;
+            app.raw_workspace.enabled = raw_workspace;
             // `--safe-gpu`: the CPU canvas, as the desktop app's `--safe-gpu` launch.
             if safe_gpu {
                 app.perf.gpu_info.selected = "cpu".into();
@@ -161,6 +165,13 @@ fn main() {
     let (req, _rx) = ControlRequest::new("ui.inspect", Value::Null);
     if let Outcome::Done(v) = handle(harness.state_mut(), &ctx, &req) {
         println!("perf: {}", v["result"]["perf"]["timings"]);
+        if let Some(path) = arg(&args, "--inspect-out") {
+            let saved = serde_json::to_vec_pretty(&v).map_err(|e| e.to_string()).and_then(|bytes| std::fs::write(&path, bytes).map_err(|e| e.to_string()));
+            if let Err(error) = saved {
+                eprintln!("could not save inspect output: {error}");
+                std::process::exit(2);
+            }
+        }
     }
     println!(
         "language: {}",

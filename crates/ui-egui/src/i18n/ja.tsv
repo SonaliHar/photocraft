@@ -3889,3 +3889,12 @@ curves	Smooth	スムーズ
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	自由変形を適用中です。完了してからもう一度お試しください。
 	The transform couldn't be applied.	変形を適用できませんでした。
+cameraRaw	Adjust	調整
+cameraRaw	Content Credentials	コンテンツ認証情報
+cameraRaw	Snapshot	スナップショット
+cameraRaw	Snapshots	スナップショット
+cameraRaw	Create Snapshot	スナップショットを作成
+cameraRaw	Before	補正前
+cameraRaw	Denoise	ノイズ除去
+cameraRaw	Raw Details	Raw ディテール
+cameraRaw	Super Resolution	スーパー解像度

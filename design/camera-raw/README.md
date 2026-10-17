@@ -135,3 +135,240 @@ The owner requested the enabling rebuild: cargo build -p photocraft -j 4
 passed in 3m08s, and the PS1 launched the new preview. Test execution and
 post-build screenshot validation remain pending. Both the section-edge
 correction and this bar batch are now in target/debug/photocraft.exe.
+
+## Reference-wide parity resumed (2026-10-16)
+
+`reference-inventory.json` tracks all 19 supplied captures by hash, dimensions,
+UI state and current audit status. Every reference remains in scope, including
+Remove, Masking, Red Eye, Snapshots, Presets, Info, Crop, menus, dialogs and
+full-window states. The seven-section JSON preset is not complete coverage.
+Missing native controls cannot be supplied by changing layout JSON alone.
+
+Current local evidence: `target/acr18/parity-20261016/`. The preview uses the
+existing debug executable, an isolated profile, a synthetic fixture and control
+port 57831. Baseline and after-heights screenshots and inspect replies are kept.
+Reference 10 registration: full dock (38,136)-(578,2542); preview dock
+(1060,32)-(1330,672), uniformly enlarged 2x to reference width 540. Missing
+vertical coverage stays purple. No vertical stretching or photo-content match.
+
+Live JSON histogramHeight 118 -> 124 and metadataHeight 26 -> 24 closed the
+8-pixel downstream offset. At normalized width 540 the source separator bands
+are 241-245, 296-299, 376-379, 456-459 and 954-957. The captured candidate bands
+are 240-245, 296-297, 376-377, 456-457 and 954-955. These cover histogram,
+metadata, Edit, Profile and Light/Color boundaries only. Border thickness,
+fonts, glyphs, histogram paint and all other elements remain unverified or
+visibly different. Both live values were confirmed through ui.inspect.
+
+Next: capture each matching edit-panel state and each non-Edit tab, measure
+its own registration, and audit every element against the reference. Keep
+unsupported controls and native-only corrections explicit; no 1:1 claim yet.
+
+### Grading native follow-up and repeatable captures
+
+The owner authorized native support for missing reference screens. Existing
+Curve, Mixer, Grading, Detail, collapsed and Info states have fresh native
+captures in `target/acr18/parity-20261016/wheel-v3`. Before overlays exist for
+references 7, 11, 12 and 14. Every observed control group in all 19 references
+remains in reference-inventory.json with its individual verification pending.
+
+Grading now has five accessible glyph selectors, display-referred HSV wheel
+artwork and compact pointer/keyboard-editable luminance tracks. Enabling builds
+passed (3m42s for glyphs; 7m57s for the wheel follow-up). This is development
+preview work, with no hosted executable promotion or upstream merge.
+
+Native JSON controls: gradingSelectorSize, gradingSelectorGap,
+gradingSelectorStart, gradingSelectorBottomGap, wheelBrightness and
+gradingWheelRowGap. Current selector gap below the row is 23 points. The full
+reference rail is 80 pixels, so railWidth is corrected from 36 to 40 points.
+Consequently the 1366px native capture dock anchor is now x1056..1326.
+
+Reference-12 rim samples at radius 85 of 94 reference pixels have max RGB near
+128 and HSV hue approximately equal to screen angle. For a fixed top-wheel
+interior ellipse (176,234)-(336,394) in the uniformly registered reference
+section, mean absolute RGB differences fell from [46.06,36.53,66.71] to
+[7.52,7.05,8.52]. This measures that region only. The full overlay still shows
+lower-wheel spacing, label offsets, handles, outer dots, section eyes and
+other differences. Exact next measurements are in grading-next-layout.json.
+
+The first Camera Raw test run had 48 passes and 2 failures: selector-height
+measurement included root spacing, and the i18n scanner missed labels moved
+to the workspace module. The selector test now checks actual accessible glyph
+rectangles for one row, the scanner covers the moved module, and Adjust is
+translated in all 20 catalogs. Current-source tests are rerunning. All-target
+clippy passed for this batch before the offscreen helper flag was added;
+current layers/wasm and offscreen rendering remain pending.
+
+`scripts/capture_camera_raw.py` captures named panel states through an existing
+isolated preview. It verifies identical photo parameters and document revision
+before/after each screenshot, writes capture-report.json, restores layout bytes
+and preserves external edits rather than overwriting them. Its six-state run
+on control port 57833 passed these checks. Token files are never copied into
+capture artifacts. Use a new output directory for each run:
+
+```powershell
+python scripts/capture_camera_raw.py --port 57833 `
+  --token-file target/acr18/parity-20261016/control-v3.token `
+  --output target/acr18/parity-20261016/new-capture
+```
+
+The physical monitor limits live captures to 768px height. The snapshot example
+now accepts --raw-workspace so taller offscreen captures use the same native
+Camera Raw layout, with --size and --scale independent of the monitor. Its
+build/render verification is pending; do not claim full-height coverage yet.
+
+### Native Info/Snapshots/layout batch (2026-10-16, building)
+
+The previous batch completed all gates:52 Camera Raw tests, all-target clippy,
+30-crate layers and every xtask wasm check passed. Four existing wasm dead-code
+warnings remain. Offscreen --raw-workspace was built and produced1440x1400;
+12-grading-full-height-before has full vertical coverage, unlike the live capture.
+
+The capture runner originally could accept a previous preview during reload.
+It now requires every requested preview field to match. A strict six-state
+recapture passed and preserved photo parameters/revision and original layout
+bytes. Five images are pixel-identical to the earlier capture; Grading differs
+only in the histogram hover/readout region, outside the section overlay.
+
+Latest source adds a camera summary card, file-kind badge, capture date,
+filename and Content Credentials area, removing the extra Info title bar.
+Unknown metadata is shown as an em dash; no credentials-verification claim.
+The Snapshots tab now captures/restores/deletes named settings within the open
+dialog; it is not yet durable across closing/switching the photo. Its empty
+reference-4 layout is awaiting native capture, not declared matched.
+
+Grading has measured lower-wheel outset/label offsets/track height and dot/handle
+paint corrections. Fixed settingsScrollbarGutter and settingsBodyRightPadding
+prevent widths changing with scrollbar visibility, while preserving top-bar
+metrics. Native sizing additions remain optional: the old live preview does not
+accept them. Keep its existing JSON until the new executable is validated.
+
+Latest all-target clippy passed after correcting one test initializer. Build,
+current-source tests and overlays for this new batch are in session82463;
+active-work.json records exact live handles. New offscreen capture runner
+scripts/capture_camera_raw_offscreen.py writes a separate layout per state and
+checks --inspect-out against requested view/photo state, without touching live
+JSON. Its Python syntax passed; real seven-state run awaits the new executable.
+
+### Current attachment numbering and v6 overlays (2026-10-16)
+
+The active reference set is `c0f524f7-ece8-4a8b-a8f6-7f0f327cf262`.
+All 19 content hashes match the earlier inventory, but the ordering changed.
+`reference-inventory.json` now uses the current image numbers and preserves
+`legacyImage` for earlier comparison folders. In particular Snapshots is now
+1, Info 4, Light/Color/Effects 7, Curve/Mixer 8, Grading 9, and collapsed Edit
+11. References 17/18 also exchanged their old grid/alternate-Info positions.
+
+The old session82463 handle and its recorded compiler/preview processes no
+longer existed on inspection. Current v6 snapshot build and validation passed:
+56 Camera Raw library tests, 5 workspace integration tests, shared widget tests,
+all-target clippy, 30-crate layers and all xtask wasm checks. Four pre-existing
+wasm dead-code warnings remain. The offscreen executable SHA256 is
+`f2832da7c1285f296ff7f4ba08c6be72a1c9ef584c9c6373da85f85fbda8ceac`.
+This is an offscreen preview build, not a rebuilt/promoted desktop or hosted editor.
+
+This iteration fixes Info/Snapshots left-aligned semibold headings, independent
+Info field/divider/credentials spacing, Snapshots heading position and sheet
+glyph, Grading selector grouping/separators, wheel antialiasing, lower label
+placement, luminance handle/track geometry and footer spacing. The shared numeric
+field now honors `valueTextLeftAligned` in its inactive presentation while retaining
+its entire edit target. Its regression test measures actual painted digits, then
+clicks the right side and types a value. Current egui exposes an editing DragValue
+as a SpinButton, so the test verifies focus and the resulting value rather than
+requiring a TextInput accessibility role.
+
+Additional live geometry: `gradingSelectorGroupGap`, `gradingFooterGap`,
+`infoFieldGap`, `infoDividerTopGap`, `infoCredentialsTopGap`,
+`infoHeadingFontSize`, `tabHeadingFontSize`, `tabHeadingInset`,
+`tabHeadingOffsetY`. They are optional and validated. Current grading JSON uses
+selector start69, bottom gap30.5, footer gap14.5 and lower label offset-10.
+
+Fresh evidence under `target/acr18/parity-20261016/`:
+
+- `native-v6-offscreen`: all11 supported named states, each verified against
+  requested view, identical photo parameters and document identity.
+- `native-v6-full-window` and `native-v6-ref17/18/19`: Info, grid/Info and Edit
+  at full-window and reference-specific dimensions.
+- `ref01-snapshots-v6-element-audit`, `ref04-info-v6-element-audit`,
+  `ref09-grading-v6-element-audit`: source, candidate, 50% overlay, difference,
+  interactive opacity viewer and per-element diagnostics.
+- `ref07-edit-v6`, `ref08-curve-mixer-v6`, `ref09-grading-detail-v6`,
+  `ref11-collapsed-v6`: combined-panel coverage, including visible missing content.
+- `ref16-info-v6`, `ref17-grid-info-v6-exact-size`,
+  `ref18-info-v6-exact-size`, `ref19-edit-v6-exact-size`: whole-window overlays.
+  OS chrome, photo content/aspect/zoom and workspace chrome differences are
+  deliberately visible. These are diagnostic comparisons, not matched-frame claims.
+
+`compare_camera_raw.py --regions <specification.json>` now measures named elements
+in the same registered coordinates. Specifications cover38 Grading,21 Info and5
+Snapshots regions, including glyphs, labels, handles, tracks and separators.
+No control is individually shifted or warped. A missing candidate area cannot
+pass even if black padding matches; wrong registration width/rectangle is rejected.
+Four Python auditor regression tests pass. Example:
+
+```powershell
+python scripts/compare_camera_raw.py --source <current-reference-9.png> `
+  --candidate target/acr18/parity-20261016/native-v6-offscreen/grading.png `
+  --source-rect 10 536 550 1520 --candidate-rect 1130 260 1400 752 `
+  --width 540 --regions design/camera-raw/grading-element-regions.json `
+  --output target/acr18/parity-20261016/new-grading-audit
+```
+
+The measured regions improve but are not pixel-identical. Reference image content,
+metadata and raster noise affect pixel differences; diagnostics do not establish
+behavior or whole-reference parity. The full19-reference goal remains incomplete.
+Every reference now records supported state and outstanding native coverage.
+Next structural gaps include section bypass eyes and Optics/Lens Blur/Calibration,
+then Crop, Remove, Masking, Red Eye, Presets and the matching menus/dialogs.
+Shared chrome and individual Curve/Mixer/Light/Color/Effects elements also remain.
+
+### v8: ten sections and temporary section bypass (2026-10-16)
+
+The native Edit stack now contains all ten observed headers, including Optics,
+Lens Blur and Calibration. Their layouts contain the observed tabs, unchecked
+correction options, Defringe row, five Bokeh glyphs, blank disabled Lens Blur
+fields, focus strip, Refinement row, process selector and primary-color rows.
+These three stages do not yet have matching processing implementations: their
+processing controls remain disabled and cannot write fictitious recipe values.
+Their enabled/disabled appearance and remaining geometry are not declared matched.
+
+Every section has a native eye glyph. Holding the eye of an implemented stage
+temporarily previews the image with just that stage neutralized. Canonical
+parameters, undo state, recipe saving and commit/export remain unchanged. Proxy
+and full-resolution detail previews use the same temporary parameters. Release
+restores the adjusted preview. Automation can request the same temporary view
+with `workspace.bypassSection` (one of the seven implemented section names, or
+null to restore). The reply reports `previewBypass`; unsupported names are rejected
+atomically. Unsupported stages retain visible, disabled eyes.
+
+New measurements:40 individual collapsed-header regions in
+`collapsed-element-regions.json`, and93 lower-panel regions in
+`lower-panels-element-regions.json`. The latter registers reference10 at
+(34,438)-(574,2530) against native (1130,260)-(1400,1306), at540px width.
+After live tuning, Lens Blur and Calibration divider bands start at382 and1252
+reference pixels in both images. Edge antialiasing, glyphs, typography, disabled
+appearance and individual control offsets still differ. The section eye's measured
+mean RGB is about87.04, versus87.05 in the source; matching this region's brightness
+does not establish glyph/interaction or full-panel parity.
+
+Additional live JSON: `sectionEyeInset`, `sectionEyeOpacity`,
+`sectionSeparatorHeight`, `extraControlGap`, `extraDisclosureHeight`,
+`extraDisclosureOutset`, `opticsTabsHeight`, `opticsCheckboxGap`,
+`opticsDividerGap`, `bokehSelectorSize`, `calibrationTitleHeight`,
+`calibrationTitleLeading`, `calibrationSectionGap`. Current live tuning uses
+extraControlGap8.25 and opticsTabsHeight28.75. All values have bounded validation.
+
+Capture ordering was corrected: starting at a later section retains the sections
+that follow it, rather than inserting Light/Color/Effects between Curve and Mixer
+or between Optics and Lens Blur. The capture runner has a regression test for this.
+Combined Curve/Mixer and Grading/Detail views now also open Optics as observed.
+
+v8 passed58 Camera Raw library tests,7 workspace integration tests, all-target
+clippy,30-crate layers, wasm (four existing warnings), and5 Python overlay tests.
+The native snapshot executable SHA256 is
+`27657465fe8e3fe49c7c4164a6aea28545180bb5eca2dbff90eb7e7b31b6dab8`.
+All13 supported named views were captured and inspected in native-v8-offscreen;
+every requested view matched and photo parameters/document identity were unchanged.
+Fresh interactive comparisons are ref11-collapsed-v8-element-audit,
+ref10-lens-calibration-v8-element-audit, ref9-grading-v8-element-audit,
+ref8-curve-mixer-v8 and ref9-grading-detail-v8. These are incomplete parity evidence,
+not complete reference passes. No desktop build or hosted executable promotion.
