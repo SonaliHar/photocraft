@@ -44,6 +44,9 @@ fn owned(histogram: bool, dir: &Directory) -> Headless {
     let mut h = Headless::trusted_local();
     drop(h.open_owned_xcf_keep_current_bounded(&dir.0.join("source.xcf")).unwrap());
     assert!(h.has_owned_filter_inspection());
+    let owner = h.session.active().unwrap().doc.accounted().unwrap();
+    assert_eq!(owner.is_readonly_threshold_storage(), histogram, "actual adopted histogram class");
+    assert_eq!(owner.is_readonly_threshold_alpha_storage(), !histogram, "actual adopted alpha class");
     h
 }
 fn request(h: &Headless) -> Value {
@@ -433,6 +436,7 @@ fn discovery_supplies_real_filter_id_for_cli_inspection_edit_and_native_continua
     }
 }
 
+#[allow(clippy::duplicate_mod, reason = "Independent test workflows reuse this data-only fixture module.")]
 #[path = "../../../../crates/xcf/tests/common/mod.rs"]
 mod plain_fixture;
 

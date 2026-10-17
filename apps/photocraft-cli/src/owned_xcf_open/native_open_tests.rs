@@ -5,6 +5,8 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 #[path = "../../../../crates/xcf/tests/common/mod.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 
 struct Directory(PathBuf);
@@ -83,15 +85,40 @@ fn real_native_info_registered_edit_and_save_as_preserve_original_archive() {
     assert!(results.contains("select.all"));
     assert_eq!(std::fs::read(&native).unwrap(), original);
     assert_eq!(std::fs::read(&xcf).unwrap(), xcf_bytes);
-    let loaded = photocraft_format::load_from_bytes(&std::fs::read(&output).unwrap()).unwrap();
+    let mut reopened = Headless::trusted_local();
+    drop(reopened.open_owned_native_keep_current_bounded(&output).unwrap());
+    let loaded = &reopened.session.active().unwrap().doc;
     assert_eq!(loaded.name, "edited.pcraft");
     assert!(loaded.selection.is_some());
     assert!(loaded.xcf_state.is_some());
     let (code, _, error) = invoke(&["info", output.to_str().unwrap(), "--native-profile-policy=keepCurrent"]);
     assert_eq!(code, 0, "{error}");
+    // Finite native backing requires the authenticated owned route; the raw
+    // loader must fail closed rather than silently turn it into a resident Doc.
     let (code, ordinary, error) = invoke(&["info", native.to_str().unwrap()]);
+    assert_ne!(code, 0);
+    assert!(error.contains("finite raster requires owned authenticated archive"), "{error}");
+    assert!(ordinary.is_empty());
+    // Independently authored resident native data retains the ordinary reader
+    // compatibility obligation; it is not a conversion of the owned source.
+    let resident = photocraft_engine::doc::Document::with_background(
+        "Ordinary resident",
+        photocraft_engine::doc::Size::new(2, 3),
+        photocraft_engine::doc::ColorMode::Rgb,
+        photocraft_engine::doc::SampleType::U8,
+        photocraft_engine::doc::Color::WHITE,
+    );
+    let resident_path = dir.0.join("ordinary.pcraft");
+    let resident_bytes = photocraft_format::save_to_bytes(&resident, &Default::default()).unwrap();
+    std::fs::write(&resident_path, &resident_bytes).unwrap();
+    let (code, ordinary, error) = invoke(&["info", resident_path.to_str().unwrap()]);
     assert_eq!(code, 0, "{error}");
-    assert!(!ordinary.contains("nativeProfilePolicy"));
+    let ordinary: Value = serde_json::from_str(&ordinary).unwrap();
+    assert_eq!(ordinary["name"], "Ordinary resident");
+    assert_eq!((ordinary["width"].as_u64(), ordinary["height"].as_u64()), (Some(2), Some(3)));
+    assert_eq!(ordinary["layers"].as_array().unwrap().len(), 1);
+    assert!(ordinary.get("nativeProfilePolicy").is_none());
+    assert_eq!(std::fs::read(resident_path).unwrap(), resident_bytes);
 }
 
 #[path = "histogram_filter_tests.rs"]

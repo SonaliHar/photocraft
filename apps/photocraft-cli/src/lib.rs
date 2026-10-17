@@ -3,8 +3,8 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use std::cell::{Cell, RefCell};
 use std::io::Write;
-use std::cell::{RefCell,Cell};
 use std::path::{Path, PathBuf};
 
 use photocraft_automation::{AuthorizedWorkspace, Headless, PhotocraftMcp, files, security};
@@ -12,9 +12,9 @@ use photocraft_engine::actions_cmds::Action;
 use photocraft_io::ExportOptions;
 use serde_json::{Value, json};
 
-mod stored_channel_run;
-mod owned_xcf_open;
 mod owned_filter_inspect;
+mod owned_xcf_open;
+mod stored_channel_run;
 
 pub const USAGE: &str = "\
 photocraft-cli: headless PhotoCraft
@@ -110,11 +110,33 @@ struct Subcommand {
 }
 
 const SUBCOMMANDS: &[Subcommand] = &[
-    Subcommand { name: "convert", values: &["--format", "--quality", "--tga-bits", "--dpx-bits"], bare: &["--tiff-layers", "--json", "--json-errors"], run: convert },
-    Subcommand { name: "info", values: &["--xcf-profile-policy", "--native-profile-policy"], bare: &["--compact", "--json-errors"], run: |a, out, _| info(a, out) },
+    Subcommand {
+        name: "convert",
+        values: &["--format", "--quality", "--tga-bits", "--dpx-bits"],
+        bare: &["--tiff-layers", "--json", "--json-errors"],
+        run: convert,
+    },
+    Subcommand {
+        name: "info",
+        values: &["--xcf-profile-policy", "--native-profile-policy"],
+        bare: &["--compact", "--json-errors"],
+        run: |a, out, _| info(a, out),
+    },
     Subcommand {
         name: "run",
-        values: &["--new", "--cmd", "--params", "--out", "--format", "--quality", "--tga-bits", "--dpx-bits", "--automation-read-root", "--xcf-profile-policy", "--native-profile-policy"],
+        values: &[
+            "--new",
+            "--cmd",
+            "--params",
+            "--out",
+            "--format",
+            "--quality",
+            "--tga-bits",
+            "--dpx-bits",
+            "--automation-read-root",
+            "--xcf-profile-policy",
+            "--native-profile-policy",
+        ],
         bare: &["--tiff-layers", "--json-errors"],
         run: run_cmds,
     },
@@ -230,41 +252,63 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             return 0;
         }
         Err(e) => {
-            if sub.bare.contains(&"--json-errors") && args.iter().any(|a|a=="--json-errors") { write_json_error(err,&e,None,false); }
-            else { let _ = writeln!(err, "error: {e}\n\n{USAGE}"); }
+            if sub.bare.contains(&"--json-errors") && args.iter().any(|a| a == "--json-errors") {
+                write_json_error(err, &e, None, false);
+            } else {
+                let _ = writeln!(err, "error: {e}\n\n{USAGE}");
+            }
             return 2;
         }
     };
     match (sub.run)(&parsed, out, err) {
         Ok(()) => 0,
         Err(e) => {
-            if parsed.has("--json-errors") { write_json_error(err,&e,parsed.error_details.borrow().as_ref(),parsed.error_details_limited.get()); }
-            else { let _ = writeln!(err, "error: {e}"); }
+            if parsed.has("--json-errors") {
+                write_json_error(err, &e, parsed.error_details.borrow().as_ref(), parsed.error_details_limited.get());
+            } else {
+                let _ = writeln!(err, "error: {e}");
+            }
             1
         }
     }
 }
 
 // Shared report fields are bounded before serializing/cloning any details.
-fn automation_error(a:&Args,error:photocraft_automation::AutomationError)->String {
-    if a.has("--json-errors") {
-        if let Some(report)=error.error_details() {
-            let bounded=report.source_format.len()<=64 && report.outcome.len()<=64 && report.diagnostics.len()<=32 && report.diagnostics.iter().all(|d|d.severity.len()<=32 && d.message.len()<=2048 && d.affected_capability.len()<=128 && d.source_offset.as_ref().is_none_or(|v|v.len()<=20) && d.recovery_actions.len()<=8 && d.recovery_actions.iter().all(|s|s.len()<=256));
-            let details=if bounded{serde_json::to_value(report).ok()}else{None};
-            a.error_details_limited.set(details.is_none());*a.error_details.borrow_mut()=details;
-        }
+fn automation_error(a: &Args, error: photocraft_automation::AutomationError) -> String {
+    if a.has("--json-errors")
+        && let Some(report) = error.error_details()
+    {
+        let bounded = report.source_format.len() <= 64
+            && report.outcome.len() <= 64
+            && report.diagnostics.len() <= 32
+            && report.diagnostics.iter().all(|d| {
+                d.severity.len() <= 32
+                    && d.message.len() <= 2048
+                    && d.affected_capability.len() <= 128
+                    && d.source_offset.as_ref().is_none_or(|v| v.len() <= 20)
+                    && d.recovery_actions.len() <= 8
+                    && d.recovery_actions.iter().all(|s| s.len() <= 256)
+            });
+        let details = if bounded { serde_json::to_value(report).ok() } else { None };
+        a.error_details_limited.set(details.is_none());
+        *a.error_details.borrow_mut() = details;
     }
     error.to_string()
 }
-fn json_error_value(message:&str,details:Option<&Value>,omitted:bool)->Value {
-    let mut reply=json!({"ok":false,"error":message.chars().take(4096).collect::<String>()});
-    if let Some(details)=details {reply["errorDetails"]=details.clone();}
-    if omitted {reply["errorDetailsOmitted"]=json!(true);}
+fn json_error_value(message: &str, details: Option<&Value>, omitted: bool) -> Value {
+    let mut reply = json!({"ok":false,"error":message.chars().take(4096).collect::<String>()});
+    if let Some(details) = details {
+        reply["errorDetails"] = details.clone();
+    }
+    if omitted {
+        reply["errorDetailsOmitted"] = json!(true);
+    }
     reply
 }
-fn write_json_error(err:&mut dyn Write,message:&str,details:Option<&Value>,omitted:bool) {
+fn write_json_error(err: &mut dyn Write, message: &str, details: Option<&Value>, omitted: bool) {
     // Maximum bounded report is below 512 KiB; no untrusted payload is included.
-    let _=serde_json::to_writer(&mut *err,&json_error_value(message,details,omitted));let _=writeln!(err);
+    let _ = serde_json::to_writer(&mut *err, &json_error_value(message, details, omitted));
+    let _ = writeln!(err);
 }
 
 fn export_opts(a: &Args) -> Result<ExportOptions, String> {
@@ -309,20 +353,27 @@ fn convert(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
         return Err("convert needs <in> <out>".into());
     };
     let opts = export_opts(a)?;
-    let o = files::open(Path::new(input)).map_err(|e| automation_error(a,e))?;
+    let o = files::open(Path::new(input)).map_err(|e| automation_error(a, e))?;
     warn_all(err, &o.warnings);
     let source = photocraft_engine::SourceIdentity::new(input, Some(input.to_string()), o.origin);
     let mut protection = photocraft_engine::WriteProtection::default();
     protection.add_document(&o.document, Some(&source))?;
-    files::validate_destination_protected(Path::new(output), &protection, a.get("--format")).map_err(|e| automation_error(a,e))?;
-    let font_warnings=photocraft_engine::type_extra_cmds::missing_font_warnings(&o.document);
+    files::validate_destination_protected(Path::new(output), &protection, a.get("--format")).map_err(|e| automation_error(a, e))?;
+    let font_warnings = photocraft_engine::type_extra_cmds::missing_font_warnings(&o.document);
     warn_all(err, &font_warnings);
-    let ws = files::save_protected(&o.document, Path::new(output), a.get("--format"), &opts, &protection).map_err(|e| automation_error(a,e))?;
+    let ws = files::save_protected(&o.document, Path::new(output), a.get("--format"), &opts, &protection).map_err(|e| automation_error(a, e))?;
     warn_all(err, &ws);
     if a.has("--json") {
-        let format=a.get("--format").map(|v|v.trim_start_matches('.').to_ascii_lowercase()).or_else(||Path::new(output).extension().map(|v|v.to_string_lossy().to_ascii_lowercase()));
-        let warnings:Vec<&str>=o.warnings.iter().chain(&font_warnings).chain(&ws).map(String::as_str).collect();
-        print_json(out,&json!({"ok":true,"input":input,"output":output,"format":format,"assessmentScope":"input-import","assessment":o.assessment,"warnings":warnings}),true)?;
+        let format = a
+            .get("--format")
+            .map(|v| v.trim_start_matches('.').to_ascii_lowercase())
+            .or_else(|| Path::new(output).extension().map(|v| v.to_string_lossy().to_ascii_lowercase()));
+        let warnings: Vec<&str> = o.warnings.iter().chain(&font_warnings).chain(&ws).map(String::as_str).collect();
+        print_json(
+            out,
+            &json!({"ok":true,"input":input,"output":output,"format":format,"assessmentScope":"input-import","assessment":o.assessment,"warnings":warnings}),
+            true,
+        )?;
     }
     Ok(())
 }
@@ -339,11 +390,11 @@ fn info(a: &Args, out: &mut dyn Write) -> R {
     };
     let mut h = Headless::trusted_local();
     if let Some(policy) = owned {
-        let reply = owned_xcf_open::open(&mut h, file, policy).map_err(|e| automation_error(a,e))?;
+        let reply = owned_xcf_open::open(&mut h, file, policy).map_err(|e| automation_error(a, e))?;
         return print_json(out, reply.value(), a.has("--compact"));
     }
-    let opened = h.open(Path::new(file)).map_err(|e| automation_error(a,e))?;
-    let mut doc = h.inspect(None).map_err(|e| automation_error(a,e))?;
+    let opened = h.open(Path::new(file)).map_err(|e| automation_error(a, e))?;
+    let mut doc = h.inspect(None).map_err(|e| automation_error(a, e))?;
     let mut warnings = opened["warnings"].as_array().cloned().unwrap_or_default();
     if let Some(st) = h.session.active() {
         warnings.extend(missing_font_warnings(photocraft_engine::type_extra_cmds::missing_fonts(&st.doc)).into_iter().map(Value::String));
@@ -354,7 +405,9 @@ fn info(a: &Args, out: &mut dyn Write) -> R {
     } else if h.session.active().is_some_and(|state| state.doc.xcf_state.as_ref().is_some_and(|xcf| xcf.provenance.format == "xcf")) {
         match h.session.execute("xcf.assess", json!({})) {
             Ok(assessment) => doc["assessment"] = assessment,
-            Err(error) => doc["assessmentError"] = json!({"code":"current_assessment_unavailable", "message":error.to_string().chars().take(512).collect::<String>()}),
+            Err(error) => {
+                doc["assessmentError"] = json!({"code":"current_assessment_unavailable", "message":error.to_string().chars().take(512).collect::<String>()})
+            }
         }
     }
     doc["file"] = json!(file);
@@ -373,9 +426,11 @@ fn command_list(a: &Args) -> Result<Vec<(String, Value)>, String> {
     for (k, v) in &a.flags {
         match (k.as_str(), v) {
             ("--cmd", Some(id)) => {
-                if id.is_empty()||id.len()>256||id.contains('\0')||id.chars().any(char::is_whitespace){return Err("bad --cmd: expected a bounded command id".into());}
+                if id.is_empty() || id.len() > 256 || id.contains('\0') || id.chars().any(char::is_whitespace) {
+                    return Err("bad --cmd: expected a bounded command id".into());
+                }
                 cmds.push((id.clone(), json!({})));
-            },
+            }
             ("--params", Some(p)) => {
                 let last = cmds.last_mut().ok_or("--params must follow a --cmd")?;
                 last.1 = serde_json::from_str(p).map_err(|e| format!("bad --params JSON for `{}`: {e}", last.0))?;
@@ -389,12 +444,14 @@ fn command_list(a: &Args) -> Result<Vec<(String, Value)>, String> {
 fn run_cmds(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
     let owned = owned_xcf_open::policy(a, true)?;
     let opts = export_opts(a)?;
-    let cmds=command_list(a)?;
-    if cmds.is_empty() && a.get("--out").is_none(){return Err("run needs at least one --cmd (or --out)".into());}
-    let new_params=match(a.positional.as_slice(),a.get("--new")) {
-        ([_],None)=>None,
-        ([],Some(new))=>Some(serde_json::from_str::<Value>(new).map_err(|e|format!("bad --new JSON: {e}"))?),
-        _=>return Err("run needs exactly one of <file> or --new <json>".into()),
+    let cmds = command_list(a)?;
+    if cmds.is_empty() && a.get("--out").is_none() {
+        return Err("run needs at least one --cmd (or --out)".into());
+    }
+    let new_params = match (a.positional.as_slice(), a.get("--new")) {
+        ([_], None) => None,
+        ([], Some(new)) => Some(serde_json::from_str::<Value>(new).map_err(|e| format!("bad --new JSON: {e}"))?),
+        _ => return Err("run needs exactly one of <file> or --new <json>".into()),
     };
     let stored_workspace = stored_channel_run::prepare(&cmds, a.get("--automation-read-root")).map_err(|error| automation_error(a, error))?;
     let mut h = Headless::trusted_local();
@@ -404,12 +461,14 @@ fn run_cmds(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
     match (a.positional.as_slice(), a.get("--new")) {
         ([file], None) => {
             if let Some(policy) = owned {
-                let reply = owned_xcf_open::open(&mut h, file, policy).map_err(|e|automation_error(a,e))?;
+                let reply = owned_xcf_open::open(&mut h, file, policy).map_err(|e| automation_error(a, e))?;
                 for warning in reply.warnings() {
-                    if reported_fonts.insert(warning.clone()) { warn_all(err, std::slice::from_ref(warning)); }
+                    if reported_fonts.insert(warning.clone()) {
+                        warn_all(err, std::slice::from_ref(warning));
+                    }
                 }
             } else {
-                let o = h.open(Path::new(file)).map_err(|e| automation_error(a,e))?;
+                let o = h.open(Path::new(file)).map_err(|e| automation_error(a, e))?;
                 let ws: Vec<String> = serde_json::from_value(o["warnings"].clone()).unwrap_or_default();
                 reported_fonts.extend(ws.iter().cloned());
                 warn_all(err, &ws);
@@ -417,15 +476,14 @@ fn run_cmds(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
             }
         }
         ([], Some(_)) => {
-            let p=new_params.ok_or("missing prepared --new JSON")?;
-            h.command_run("file.new", p).map_err(|e|format!("--new: {}",automation_error(a,e)))?;
+            let p = new_params.ok_or("missing prepared --new JSON")?;
+            h.command_run("file.new", p).map_err(|e| format!("--new: {}", automation_error(a, e)))?;
         }
         _ => return Err("run needs exactly one of <file> or --new <json>".into()),
     }
     for (id, params) in cmds {
         if owned_filter_inspect::handles(&h, &id) {
-            owned_filter_inspect::write(&mut h, &id, &params, out)
-                .map_err(|e| format!("`{id}`: {}", automation_error(a, e)))?;
+            owned_filter_inspect::write(&mut h, &id, &params, out).map_err(|e| format!("`{id}`: {}", automation_error(a, e)))?;
             // Successfully admitted current-metadata storage contains no text
             // layers, so the ordinary font walk adds no warnings to this reply.
             continue;
@@ -433,7 +491,8 @@ fn run_cmds(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
         let r = match stored_channel_run::execute(&mut h.session, stored_workspace.as_ref(), &id, &params) {
             Some(result) => result,
             None => h.command_run(&id, params),
-        }.map_err(|e| format!("`{id}`: {}",automation_error(a,e)))?;
+        }
+        .map_err(|e| format!("`{id}`: {}", automation_error(a, e)))?;
         if let Some(e) = photocraft_engine::actions_cmds::nested_failure(&id, &r) {
             return Err(format!("`{id}`: {e}"));
         }
@@ -463,7 +522,7 @@ fn run_cmds(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
         .collect();
     warn_all(err, &remaining);
     if let Some(o) = a.get("--out") {
-        let r = h.save(None, Some(Path::new(o)), a.get("--format"), &opts).map_err(|e| automation_error(a,e))?;
+        let r = h.save(None, Some(Path::new(o)), a.get("--format"), &opts).map_err(|e| automation_error(a, e))?;
         let ws: Vec<String> = serde_json::from_value(r["warnings"].clone()).unwrap_or_default();
         let ws: Vec<String> = ws.into_iter().filter(|w| reported_fonts.insert(w.clone())).collect();
         warn_all(err, &ws);
@@ -558,10 +617,14 @@ fn is_input(p: &Path) -> bool {
 }
 
 fn batch(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
-    if !a.positional.is_empty(){return Err("batch takes --actions, --in and --out instead of positional arguments".into());}
-    let opts=export_opts(a)?;
-    for flag in ["--actions","--in","--out"] {
-        if a.get(flag).is_none_or(str::is_empty){return Err(format!("batch needs {flag} with a nonempty path"));}
+    if !a.positional.is_empty() {
+        return Err("batch takes --actions, --in and --out instead of positional arguments".into());
+    }
+    let opts = export_opts(a)?;
+    for flag in ["--actions", "--in", "--out"] {
+        if a.get(flag).is_none_or(str::is_empty) {
+            return Err(format!("batch needs {flag} with a nonempty path"));
+        }
     }
     let actions_path = a.get("--actions").ok_or("batch needs --actions <file>")?;
     let in_dir = PathBuf::from(a.get("--in").ok_or("batch needs --in <dir>")?);
@@ -588,7 +651,8 @@ fn batch(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
     let format = a.get("--format").map(|f| f.strip_prefix('.').unwrap_or(f));
     for input in &inputs {
         // A report belongs to this file only, never the previous failure.
-        *a.error_details.borrow_mut()=None;a.error_details_limited.set(false);
+        *a.error_details.borrow_mut() = None;
+        a.error_details_limited.set(false);
         let ext = format.map(str::to_owned).or_else(|| input.extension().map(|e| e.to_string_lossy().into_owned())).unwrap_or_else(|| "png".into());
         let stem = input.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let target = out_dir.join(format!("{stem}.{ext}"));
@@ -599,7 +663,7 @@ fn batch(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
             // Steps that play another action find it in the set; the session's playback stack
             // stops an action that calls itself.
             h.session.actions.list = set.clone();
-            let opened = h.open(input).map_err(|e| automation_error(a,e))?;
+            let opened = h.open(input).map_err(|e| automation_error(a, e))?;
             let mut warnings: Vec<String> = serde_json::from_value(opened["warnings"].clone()).unwrap_or_default();
             if h.session.active().and_then(|state| state.source.as_ref()).is_some_and(|source| source.origin.is_read_only()) && format.is_none() {
                 return Err("XCF batch input requires --format with an existing writable output format".into());
@@ -608,13 +672,13 @@ fn batch(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
                 if photocraft_engine::actions_cmds::shell_view_command(id) || photocraft_engine::actions_cmds::shell_save_command(id) {
                     continue;
                 }
-                let r = h.command_run(id, p.clone()).map_err(|e|format!("`{id}`: {}",automation_error(a,e)))?;
+                let r = h.command_run(id, p.clone()).map_err(|e| format!("`{id}`: {}", automation_error(a, e)))?;
                 // A failed step inside a called action makes this file an error, not a saved result.
                 if let Some(e) = photocraft_engine::actions_cmds::nested_failure(id, &r) {
                     return Err(format!("`{id}`: {e}"));
                 }
             }
-            let r = h.save(None, Some(&target), Some(&ext), &opts).map_err(|e| automation_error(a,e))?;
+            let r = h.save(None, Some(&target), Some(&ext), &opts).map_err(|e| automation_error(a, e))?;
             warnings.extend(serde_json::from_value::<Vec<String>>(r["warnings"].clone()).unwrap_or_default());
             Ok(warnings)
         })();
@@ -628,16 +692,23 @@ fn batch(a: &Args, out: &mut dyn Write, err: &mut dyn Write) -> R {
             Err(e) => {
                 failed += 1;
                 if a.has("--json-errors") {
-                    let mut reply=json_error_value(&e,a.error_details.borrow().as_ref(),a.error_details_limited.get());
-                    let file=input.to_string_lossy();reply["file"]=json!(file.chars().take(4096).collect::<String>());
-                    if file.chars().nth(4096).is_some(){reply["fileTruncated"]=json!(true);}
-                    let _=serde_json::to_writer(&mut *err,&reply);let _=writeln!(err);
-                }else{let _ = writeln!(err, "FAIL  {}: {e}", input.display());}
+                    let mut reply = json_error_value(&e, a.error_details.borrow().as_ref(), a.error_details_limited.get());
+                    let file = input.to_string_lossy();
+                    reply["file"] = json!(file.chars().take(4096).collect::<String>());
+                    if file.chars().nth(4096).is_some() {
+                        reply["fileTruncated"] = json!(true);
+                    }
+                    let _ = serde_json::to_writer(&mut *err, &reply);
+                    let _ = writeln!(err);
+                } else {
+                    let _ = writeln!(err, "FAIL  {}: {e}", input.display());
+                }
             }
         }
     }
     // Aggregate failure is not any individual file's XCF assessment.
-    *a.error_details.borrow_mut()=None;a.error_details_limited.set(false);
+    *a.error_details.borrow_mut() = None;
+    a.error_details_limited.set(false);
     let _ = writeln!(out, "{ok} succeeded, {failed} failed");
     if failed > 0 { Err(format!("{failed} file(s) failed")) } else { Ok(()) }
 }
@@ -724,6 +795,8 @@ fn mcp(a: &Args) -> R {
 }
 
 #[cfg(test)]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod xcf_assessment_tests;
 
 #[cfg(test)]
@@ -888,5 +961,5 @@ mod batch_action_set_tests {
 }
 
 #[cfg(test)]
-#[path="cli_json_diagnostics_tests.rs"]
+#[path = "cli_json_diagnostics_tests.rs"]
 mod cli_json_diagnostics_tests;

@@ -20,4 +20,6 @@ pub(super) fn write(headless: &mut Headless, command: &str, params: &Value, outp
 }
 
 #[cfg(test)]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;

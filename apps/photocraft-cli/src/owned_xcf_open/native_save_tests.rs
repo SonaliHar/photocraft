@@ -5,6 +5,8 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 #[path = "../../../../crates/xcf/tests/common/mod.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod fixture;
 struct Directory(PathBuf);
 impl Directory {
@@ -51,7 +53,9 @@ fn actual_registered_selection_history_survives_owned_native_cli_output_without_
     assert!(results.contains("select.all"));
     assert!(results.contains("edit.redo"));
     assert_eq!(std::fs::read(source).unwrap(), original);
-    let loaded = photocraft_format::load_from_bytes(&std::fs::read(output).unwrap()).unwrap();
+    let mut reopened = Headless::trusted_local();
+    drop(reopened.open_owned_native_keep_current_bounded(&output).unwrap());
+    let loaded = &reopened.session.active().unwrap().doc;
     assert_eq!(loaded.name, "copy.pcraft");
     assert!(loaded.selection.is_some());
     assert!(loaded.xcf_state.is_some());

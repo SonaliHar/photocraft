@@ -1,5 +1,7 @@
 use super::*;
 #[path = "../../../crates/io/tests/common/xcf.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod fixture;
 
 fn invoke_info(path: &Path) -> Value {
@@ -13,7 +15,10 @@ fn invoke_info(path: &Path) -> Value {
 
 #[test]
 fn info_reevaluates_native_dependencies_instead_of_reusing_original_full_import() {
-    use photocraft_engine::doc::{item_identity::ResourceId, xcf_resources::{ResourceKind, ResourceReference}};
+    use photocraft_engine::doc::{
+        item_identity::ResourceId,
+        xcf_resources::{ResourceKind, ResourceReference},
+    };
     let folder = std::env::temp_dir().join(format!("photocraft-cli-xcf-assessment-{}", std::process::id()));
     std::fs::create_dir_all(&folder).unwrap();
     let source_path = folder.join("source.xcf");
@@ -24,8 +29,15 @@ fn info_reevaluates_native_dependencies_instead_of_reusing_original_full_import(
     assert_eq!(source_info["assessment"]["fidelity"], "full");
     let mut imported = photocraft_io::import("source.xcf", &bytes).unwrap();
     imported.document.xcf_state.as_mut().unwrap().resources.push(ResourceReference {
-        id: ResourceId(1), kind: ResourceKind::LinkedImage, name: "retained dependency".into(), collection: None,
-        internal: false, locator: Some("../never-read-resource.png".into()), content_hash: None, owned_bytes: None, resolution: None,
+        id: ResourceId(1),
+        kind: ResourceKind::LinkedImage,
+        name: "retained dependency".into(),
+        collection: None,
+        internal: false,
+        locator: Some("../never-read-resource.png".into()),
+        content_hash: None,
+        owned_bytes: None,
+        resolution: None,
     });
     let before = imported.document.clone();
     let native = photocraft_format::save_to_bytes(&imported.document, &Default::default()).unwrap();

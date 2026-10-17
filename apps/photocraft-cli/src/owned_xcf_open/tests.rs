@@ -1,6 +1,8 @@
 //! UNRUN CLI policy and actual owned-source workflows; no test execution claimed.
 use super::*;
 #[path = "../../../../crates/xcf/tests/common/mod.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod fixture;
 fn invoke(args: &[&str]) -> (i32, String, String) {
     let mut out = Vec::new();

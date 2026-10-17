@@ -29,14 +29,13 @@ pub(super) fn policy(args: &Args, run: bool) -> Result<Option<Policy>, String> {
         if args.flags.iter().filter(|(key, _)| key == "--out").count() > 1 || args.flags.iter().filter(|(key, _)| key == "--format").count() > 1 {
             return Err(format!("explicit owned {kind} keepCurrent accepts at most one --out and --format"));
         }
-        if let Some(output) = args.get("--out") {
-            if output.is_empty()
+        if let Some(output) = args.get("--out")
+            && (output.is_empty()
                 || output.len() > 4096
                 || output.contains('\0')
-                || !Path::new(output).extension().and_then(|s| s.to_str()).is_some_and(|s| s.eq_ignore_ascii_case("pcraft"))
-            {
-                return Err(format!("explicit owned {kind} keepCurrent output requires a bounded .pcraft destination before opening input"));
-            }
+                || !Path::new(output).extension().and_then(|s| s.to_str()).is_some_and(|s| s.eq_ignore_ascii_case("pcraft")))
+        {
+            return Err(format!("explicit owned {kind} keepCurrent output requires a bounded .pcraft destination before opening input"));
         }
         if args.get("--format").is_some_and(|value| value.len() > 16 || !value.trim_start_matches('.').eq_ignore_ascii_case("pcraft")) {
             return Err(format!("explicit owned {kind} keepCurrent supports pcraft format only"));
@@ -63,8 +62,14 @@ pub(super) fn open(
     }
 }
 #[cfg(test)]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod native_open_tests;
 #[cfg(test)]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod native_save_tests;
 #[cfg(test)]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;

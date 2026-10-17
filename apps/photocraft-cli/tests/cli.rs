@@ -150,7 +150,7 @@ fn info_prints_layer_tree_json() {
 }
 
 /// #518, #523: a truncated JPEG and an animated GIF open, but `info` lists why the image is
-/// incomplete and `convert` prints it on stderr (and still succeeds); complete files stay quiet.
+/// incomplete and `convert` prints it on stderr alongside explicit flat-export losses.
 #[test]
 fn info_and_convert_report_decode_warnings() {
     let d = tmp("decode-warnings");
@@ -175,7 +175,14 @@ fn info_and_convert_report_decode_warnings() {
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["warnings"], json!(warning.into_iter().collect::<Vec<_>>()), "{name}");
         let (_, err) = ok(bin().arg("convert").arg(&file).arg(d.join(format!("{name}.png"))));
-        assert_eq!(err.trim(), warning.map(|w| format!("warning: {w}")).unwrap_or_default(), "{name}");
+        let lines: Vec<_> = err.lines().collect();
+        let decode: Vec<_> = lines.iter().copied().filter(|line| !line.contains("flat raster export does not retain")).collect();
+        assert_eq!(decode, warning.map(|w| format!("warning: {w}")).into_iter().collect::<Vec<_>>(), "{name}");
+        assert_eq!(lines.iter().filter(|line| line.contains("flat raster export does not retain")).count(), 1, "{err}");
+        assert!(
+            lines.iter().any(|line| line.contains("independent raster layer content") && line.ends_with("only the rendered composite is exported")),
+            "{err}"
+        );
     }
     std::fs::remove_dir_all(d).unwrap();
 }
@@ -197,8 +204,8 @@ fn run_commands_and_save() {
     assert_eq!(lines[2]["result"]["name"], "Run");
     let (info, _) = ok(bin().arg("info").arg(&out_pc));
     let v: Value = serde_json::from_str(&info).unwrap();
-    // Saving a native document gives the reopened bundle its output filename.
-    assert_eq!(v["name"], "r.pcraft");
+    // Ordinary native serialization retains the document title.
+    assert_eq!(v["name"], "Run");
     let names: Vec<&str> = v["layers"].as_array().unwrap().iter().filter_map(|l| l["name"].as_str()).collect();
     assert_eq!(names, ["Ink", "Background"]);
     // Continue from the saved file and export PNG.
@@ -746,7 +753,10 @@ fn batch_plays_a_photoshop_actions_file() {
     assert!(String::from_utf8_lossy(&o.stderr).contains("--action"), "{}", String::from_utf8_lossy(&o.stderr));
     let (_, err) = ok(bin().args(["batch", "--actions"]).arg(&atn).args(["--action", "Negative", "--in"]).arg(&input).arg("--out").arg(&out_dir));
     assert!(out_dir.join("a.png").exists());
-    assert!(!err.contains("warning"), "{err}");
+    let warnings: Vec<_> = err.lines().collect();
+    assert_eq!(warnings.len(), 2, "{err}");
+    assert!(warnings[0].contains("independent raster layer content"), "{err}");
+    assert_eq!(warnings[1], "warning: Selection: flat raster export does not retain the active selection coverage surface or its stable channel identity");
     // The unsupported step is warned about, and fails the file as Photoshop would stop on it.
     let o = bin().args(["batch", "--actions"]).arg(&atn).args(["--action", "Odd", "--in"]).arg(&input).arg("--out").arg(d.join("out2")).output().unwrap();
     let err = String::from_utf8_lossy(&o.stderr);
