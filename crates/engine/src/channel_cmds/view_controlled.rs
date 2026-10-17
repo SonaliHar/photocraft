@@ -54,13 +54,14 @@ fn admission(session: &Session, command: &str, params: &Value, ctl: &Interrupt<'
     if params.get("channel").is_some() && params.get("channelId").is_some() {
         return Err(bad(command, "supply one channel selector"));
     }
-    if let Some(value) = params.get("visible") {
-        if !value.is_boolean() {
-            return Err(bad(command, "visible must be boolean"));
-        }
+    if let Some(value) = params.get("visible")
+        && !value.is_boolean()
+    {
+        return Err(bad(command, "visible must be boolean"));
     }
     let state = session.active().ok_or(EngineError::NoDocument)?;
     if state.revision == u64::MAX
+        || state.view_revision == u64::MAX
         || state.doc.channels.len() > MAX_CHANNELS
         || state.channel_view.alpha_visible.len() > MAX_CHANNELS
         || state.channel_view.color_hidden.len() > 5
@@ -102,10 +103,10 @@ fn admission(session: &Session, command: &str, params: &Value, ctl: &Interrupt<'
 }
 fn reference(session: &Session, command: &str, params: &Value) -> Result<ChanRef> {
     let state = session.active().ok_or(EngineError::NoDocument)?;
-    if let Some(value) = params.get("channel").and_then(Value::as_object) {
-        if value.len() != 1 {
-            return Err(bad(command, "channel reference requires exactly one selector"));
-        }
+    if let Some(value) = params.get("channel").and_then(Value::as_object)
+        && value.len() != 1
+    {
+        return Err(bad(command, "channel reference requires exactly one selector"));
     }
     let identity = params.get("channelId").or_else(|| params.get("channel").and_then(|v| v.as_object()).and_then(|v| v.get("channelId")));
     if let Some(value) = identity {
@@ -125,8 +126,11 @@ fn reference(session: &Session, command: &str, params: &Value) -> Result<ChanRef
     }?;
     if matches!(result, ChanRef::LayerMask | ChanRef::VectorMask) {
         let layer = state.active_layer.and_then(|id| state.doc.layer(id)).ok_or_else(|| bad(command, "no active mask layer"))?;
-        if (result == ChanRef::LayerMask && layer.mask.is_none()) || (result == ChanRef::VectorMask && layer.vector_mask.is_none()) {
-            return Err(bad(command, "the active layer has no requested mask"));
+        if result == ChanRef::LayerMask && layer.mask.is_none() {
+            return Err(bad(command, "the active layer has no layer mask"));
+        }
+        if result == ChanRef::VectorMask && layer.vector_mask.is_none() {
+            return Err(bad(command, "the active layer has no vector mask"));
         }
     }
     Ok(result)
@@ -151,7 +155,7 @@ fn slot_target(number: usize, colors: usize, channels: usize, command: &str) -> 
         return Ok(ChannelTarget::Color(index));
     }
     let alpha = index.checked_sub(shown).ok_or_else(|| bad(command, "channel shortcut overflow"))?;
-    if alpha < channels { Ok(ChannelTarget::Alpha(alpha)) } else { Err(bad(command, "no channel for shortcut")) }
+    if alpha < channels { Ok(ChannelTarget::Alpha(alpha)) } else { Err(bad(command, format!("no channel for {}{number}", super::SLOT_KEY))) }
 }
 fn booleans(source: &[bool], length: usize, fill: bool, command: &str) -> Result<Vec<bool>> {
     if length > MAX_CHANNELS {
@@ -204,6 +208,7 @@ fn run_with_interrupt(session: &mut Session, command: &str, params: &Value, ctl:
     let state = session.active().ok_or(EngineError::NoDocument)?;
     let baseline = state.doc.clone();
     let revision = state.revision;
+    let view_revision = state.view_revision;
     let weak = baseline.downgrade();
     let before = copy_view(&state.channel_view, command)?;
     let mut next = copy_view(&before, command)?;
@@ -261,6 +266,7 @@ fn run_with_interrupt(session: &mut Session, command: &str, params: &Value, ctl:
     let current = session.active().ok_or(EngineError::NoDocument)?;
     if current.doc.id != baseline.id
         || current.revision != revision
+        || current.view_revision != view_revision
         || !weak.is_current(&current.doc)
         || !current.doc.shares_state(&baseline)
         || current.channel_view != before
@@ -268,12 +274,14 @@ fn run_with_interrupt(session: &mut Session, command: &str, params: &Value, ctl:
         return Err(bad(command, "channel view changed before publication"));
     }
     let next_revision = revision.checked_add(1).ok_or_else(|| bad(command, "revision overflow"))?;
+    let next_view_revision = view_revision.checked_add(1).ok_or_else(|| bad(command, "view revision overflow"))?;
     poll(ctl)?;
     let current = session.active_mut().ok_or(EngineError::NoDocument)?;
     let clean = current.saved_revision == revision;
     current.channel_view = next;
     super::fix_view(current);
     current.revision = next_revision;
+    current.view_revision = next_view_revision;
     if clean {
         current.saved_revision = next_revision;
     }
@@ -322,12 +330,15 @@ mod tests {
         let before = s.active().unwrap().doc.clone();
         let revision = s.active().unwrap().revision;
         let saved = s.active().unwrap().saved_revision;
+        let view_revision = s.active().unwrap().view_revision;
         run(&mut s, "channel.target", &json!({"channelId":"9007199254740995"})).unwrap();
         let st = s.active().unwrap();
         assert!(st.doc.shares_state(&before));
         assert_eq!(st.doc.channels[0].surface, before.channels[0].surface);
         assert_eq!(st.channel_view.target, ChannelTarget::Alpha(0));
         assert_eq!(st.revision, revision + 1);
+        assert_eq!(st.view_revision, view_revision + 1);
+        assert_eq!(st.revision - st.view_revision, revision - view_revision);
         if saved == revision {
             assert_eq!(st.saved_revision, st.revision);
         }
@@ -348,6 +359,11 @@ mod tests {
             assert!(dispatch_preflight(&s, "channel.setVisible", &p, false).is_err());
         }
         assert_eq!(s.active().unwrap().revision, revision);
+        s.active_mut().unwrap().view_revision = u64::MAX;
+        assert!(target_slot(&mut s, 2).is_err());
+        assert_eq!(s.active().unwrap().channel_view, view);
+        assert_eq!(s.active().unwrap().revision, revision);
+        s.active_mut().unwrap().view_revision = 0;
         s.active_mut().unwrap().revision = u64::MAX;
         assert!(target_slot(&mut s, 2).is_err());
         assert_eq!(s.active().unwrap().channel_view, view);

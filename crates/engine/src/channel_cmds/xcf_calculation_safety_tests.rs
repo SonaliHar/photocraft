@@ -137,7 +137,40 @@ fn native_multiply_identity_preserves_u32_f64_words_cow_and_one_undo() {
             before.channels[1].surface.tile(photocraft_geom::TileCoord::new(0, 0)).unwrap()
         ));
         let bytes = photocraft_format::save_to_bytes(&after, &Default::default()).unwrap();
-        assert_eq!(photocraft_format::load_from_bytes(&bytes).unwrap(), *after);
+        let restored = photocraft_format::load_from_bytes(&bytes).unwrap();
+        // The fixture deliberately stores u64::MAX, so native loading follows
+        // its existing all-live-ID rekey policy rather than reserving that ID.
+        // There are no relationship fields in this exact fixture to normalize:
+        // only the document, one raster layer and three channels get new IDs.
+        assert!(after.xcf_state.is_none() && after.source_color_context.is_none());
+        assert!(after.selection_channel_id.is_none() && after.quick_mask.is_none());
+        assert!(after.paths.is_empty() && after.layer_comps.is_empty());
+        assert!(after.last_document_state.is_none() && after.timeline.is_none());
+        assert_eq!(after.layers.len(), 1);
+        assert!(matches!(after.layers[0].content, LayerContent::Raster(_)));
+        assert_eq!(restored.layers.len(), 1);
+        assert_eq!(restored.channels.len(), 3);
+        assert_ne!(restored.id, after.id);
+        assert_ne!(restored.layers[0].id, after.layers[0].id);
+        let old_ids: std::collections::BTreeSet<_> = after.channels.iter().map(|c| c.id).collect();
+        let new_ids: std::collections::BTreeSet<_> = restored.channels.iter().map(|c| c.id).collect();
+        assert_eq!(old_ids.len(), 3);
+        assert_eq!(new_ids.len(), 3, "each live channel retains its distinct identity");
+        assert!(new_ids.iter().all(|id| id.0 != 0 && !old_ids.contains(id)));
+        let mut expected = (*after).clone();
+        expected.id = restored.id;
+        expected.layers[0].id = restored.layers[0].id;
+        for (channel, restored_channel) in expected.channels.iter_mut().zip(&restored.channels) {
+            channel.id = restored_channel.id;
+        }
+        assert_eq!(restored, expected, "every non-ID native/source/metadata/sample field stays exact");
+        assert_eq!(restored.channels[2].surface.try_read_interleaved(restored.bounds()).unwrap(), base);
+        // Rekeyed IDs are now ordinary live IDs: another save/load preserves
+        // them and cannot resurrect either historical huge channel identity.
+        let again = photocraft_format::save_to_bytes(&restored, &Default::default()).unwrap();
+        let again = photocraft_format::load_from_bytes(&again).unwrap();
+        assert_eq!(again, restored);
+        assert_eq!(again.channels[2].surface.try_read_interleaved(again.bounds()).unwrap(), base);
         session.execute("edit.undo", json!({})).unwrap();
         assert_eq!(session.active().unwrap().doc, before);
         session.execute("edit.redo", json!({})).unwrap();

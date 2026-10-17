@@ -24,9 +24,11 @@ use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
 use crate::{DocState, EngineError, Result, Session};
-mod split_controlled;
+mod source_preparation;
+use source_preparation::SourcePreparation;
 mod merge_controlled;
 mod merge_spot_controlled;
+mod split_controlled;
 pub(crate) fn merge_spot_dispatch_preflight(session: &Session, params: &Value, background: bool) -> Result<()> {
     merge_spot_controlled::dispatch_preflight(session, params, background)
 }
@@ -299,7 +301,6 @@ pub(crate) fn fix_view(st: &mut DocState) {
 /// Bump the revision for a view-only change without dirtying a clean document.
 /// `"layer"` param of a source: a layer id, a layer name (the topmost of that name, as a loaded
 /// Photoshop action refers to it), or `"merged"` (default). An unknown name is an error.
-
 fn touch(st: &mut DocState) {
     let clean = st.saved_revision == st.revision;
     st.revision += 1;
@@ -700,16 +701,31 @@ fn source_format(format: PixelFormat) -> Result<()> {
     Ok(())
 }
 fn source_owner<'a>(doc: &'a Document, id: Option<LayerId>, merged: bool, control: &photocraft_raster::Interrupt<'_>) -> Result<Option<&'a Layer>> {
+    source_owner_prepared(doc, id, merged, control, None).map(|(owner, _)| owner)
+}
+fn source_owner_prepared<'a>(
+    doc: &'a Document,
+    id: Option<LayerId>,
+    merged: bool,
+    control: &photocraft_raster::Interrupt<'_>,
+    prep: Option<&SourcePreparation<'_, '_>>,
+) -> Result<(Option<&'a Layer>, usize)> {
     let mut stack = Vec::new();
     let mut found = None;
     let mut count = 0usize;
     if doc.layers.len() > 100000 {
         return Err(EngineError::Other("source layer count exceeds preparation limit".into()));
     }
+    if let Some(prep) = prep {
+        prep.pixels(doc.layers.len(), 32)?;
+    }
     stack.try_reserve(doc.layers.len()).map_err(|_| EngineError::Other("source layer allocation failed".into()))?;
     stack.extend(doc.layers.iter().map(|layer| (layer, 0usize)));
     while let Some((layer, depth)) = stack.pop() {
         source_poll(control)?;
+        if let Some(prep) = prep {
+            prep.debit(128)?;
+        }
         count = count.checked_add(1).filter(|n| *n <= 100000).ok_or_else(|| EngineError::Other("source layer count exceeds preparation limit".into()))?;
         if depth >= 100 {
             return Err(EngineError::Other("source layer depth exceeds preparation limit".into()));
@@ -735,6 +751,9 @@ fn source_owner<'a>(doc: &'a Document, id: Option<LayerId>, merged: bool, contro
             if count.checked_add(stack.len()).and_then(|n| n.checked_add(children.len())).is_none_or(|n| n > 100000) {
                 return Err(EngineError::Other("source layer count exceeds preparation limit".into()));
             }
+            if let Some(prep) = prep {
+                prep.pixels(children.len(), 32)?;
+            }
             stack.try_reserve(children.len()).map_err(|_| EngineError::Other("source layer allocation failed".into()))?;
             if stack.capacity() > 200000 {
                 return Err(EngineError::Other("source layer capacity exceeds preparation limit".into()));
@@ -743,9 +762,9 @@ fn source_owner<'a>(doc: &'a Document, id: Option<LayerId>, merged: bool, contro
         }
     }
     if let Some(id) = id {
-        return found.map(Some).ok_or(EngineError::NoLayer(id));
+        return found.map(|owner| (Some(owner), count)).ok_or(EngineError::NoLayer(id));
     }
-    Ok(None)
+    Ok((None, count))
 }
 fn source_vector(mask: &photocraft_doc::VectorMask, area: Rect, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<f32>> {
     let limits = photocraft_vector::VectorPreparationLimits::default();
@@ -854,18 +873,71 @@ fn source_reference(value: &Value, doc: &Document, cmd: &str) -> Result<ChanRef>
     }
     parse_ref(value, doc).ok_or_else(|| bad(cmd, "unknown channel reference"))
 }
+// Ordinary command-layer adapter only. Persisted ItemRef parsing stays strict.
+fn source_layer_named(doc: &Document, name: &str, cmd: &str, control: &photocraft_raster::Interrupt<'_>, prep: &SourcePreparation<'_, '_>) -> Result<LayerId> {
+    if name.len() > 4096 || name.contains('\0') {
+        return Err(bad(cmd, "invalid source layer name"));
+    }
+    if doc.layers.len() > 100000 {
+        return Err(bad(cmd, "source layer count exceeds preparation limit"));
+    }
+    let mut stack = Vec::new();
+    prep.pixels(doc.layers.len(), 32)?;
+    stack.try_reserve(doc.layers.len()).map_err(|_| bad(cmd, "source layer allocation failed"))?;
+    stack.extend(doc.layers.iter().rev().map(|layer| (layer, 0usize)));
+    let mut count = 0usize;
+    let mut compared = 0usize;
+    let mut found = None;
+    while let Some((layer, depth)) = stack.pop() {
+        source_poll(control)?;
+        count = count.checked_add(1).filter(|n| *n <= 100000).ok_or_else(|| bad(cmd, "source layer count exceeds preparation limit"))?;
+        if depth >= 100 {
+            return Err(bad(cmd, "source layer depth exceeds preparation limit"));
+        }
+        compared = compared.checked_add(layer.name.len()).filter(|n| *n <= 1 << 20).ok_or_else(|| bad(cmd, "source layer names exceed preparation limit"))?;
+        prep.pixels(layer.name.len().min(name.len()), 1)?;
+        prep.debit(128)?;
+        if layer.name == name {
+            found = Some(layer.id);
+        }
+        if let Some(children) = layer.children() {
+            if count.checked_add(stack.len()).and_then(|n| n.checked_add(children.len())).is_none_or(|n| n > 100000) {
+                return Err(bad(cmd, "source layer count exceeds preparation limit"));
+            }
+            prep.pixels(children.len(), 32)?;
+            stack.try_reserve(children.len()).map_err(|_| bad(cmd, "source layer allocation failed"))?;
+            if stack.capacity() > 200000 {
+                return Err(bad(cmd, "source layer capacity exceeds preparation limit"));
+            }
+            stack.extend(children.iter().rev().map(|layer| (layer, depth + 1)));
+        }
+    }
+    // Last match in forward preorder is the original reverse-walk first match.
+    found.ok_or_else(|| bad(cmd, format!("no source layer named \"{name}\"")))
+}
+#[cfg(test)]
 fn source_with_interrupt(s: &Session, p: &Value, cmd: &str, gray: bool, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<Vec<f32>>> {
+    let prep = SourcePreparation::new(cmd, control)?;
+    source_with_preparation(s, p, cmd, gray, control, &prep)
+}
+fn source_with_preparation(
+    s: &Session,
+    p: &Value,
+    cmd: &str,
+    gray: bool,
+    control: &photocraft_raster::Interrupt<'_>,
+    prep: &SourcePreparation<'_, '_>,
+) -> Result<Vec<Vec<f32>>> {
     source_poll(control)?;
     if !p.is_object() && !p.is_null() {
         return Err(bad(cmd, "source must be an object"));
     }
-    if let Some(value) = p.get("document") {
-        if !value.is_null()
-            && value.as_u64().and_then(|n| usize::try_from(n).ok()).is_none()
-            && value.as_f64().filter(|n| n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n < s.documents().len() as f64).is_none()
-        {
-            return Err(bad(cmd, "invalid source document index"));
-        }
+    if let Some(value) = p.get("document")
+        && !value.is_null()
+        && value.as_u64().and_then(|n| usize::try_from(n).ok()).is_none()
+        && value.as_f64().filter(|n| n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n < s.documents().len() as f64).is_none()
+    {
+        return Err(bad(cmd, "invalid source document index"));
     }
     let di = doc_index(s, p, "document")?;
     let st = s.documents().get(di).ok_or_else(|| bad(cmd, "invalid source document index"))?;
@@ -886,19 +958,31 @@ fn source_with_interrupt(s: &Session, p: &Value, cmd: &str, gray: bool, control:
         return Err(bad(cmd, "source channel count exceeds preparation limit"));
     }
     let reference = match parameter_ref(p, "channel") {
-        Some(value) => source_reference(value, &st.doc, cmd)?,
+        Some(value) => {
+            // A named ordinary channel adapter can scan every retained name.
+            // Pay this repeated search before entering the strict resolver;
+            // request preflight elsewhere is not credit for this actual pass.
+            if let Some(name) = value.as_str() {
+                for channel in &st.doc.channels {
+                    prep.debit(64)?;
+                    prep.pixels(name.len().min(channel.name.len()), 1)?;
+                }
+            }
+            source_reference(value, &st.doc, cmd)?
+        }
         None => ChanRef::Composite,
     };
     let layer = match p.get("layer") {
         None | Some(Value::Null) => None,
         Some(Value::String(text)) if text.is_empty() || text == "merged" => None,
+        Some(Value::String(name)) => Some(source_layer_named(&st.doc, name, cmd, control, prep)?),
         Some(value) => Some(LayerId(value.as_u64().filter(|id| *id != 0).ok_or_else(|| bad(cmd, "source layer must be an ID or merged"))?)),
     };
     let invert = match p.get("invert") {
         None | Some(Value::Null) => false,
         Some(value) => value.as_bool().ok_or_else(|| bad(cmd, "invert must be boolean"))?,
     };
-    source_from_snapshot_with_interrupt(&st.doc, st.active_layer, SnapshotSource { layer, channel: reference, gray, invert }, cmd, control)
+    source_from_snapshot_prepared(&st.doc, st.active_layer, SnapshotSource { layer, channel: reference, gray, invert }, cmd, control, prep)
 }
 
 /// Parsed, borrowed source selectors; no UI/runtime focus or authority is inferred.
@@ -912,12 +996,24 @@ pub(crate) struct SnapshotSource {
 /// Extract from a caller-held frozen resident document without a temporary
 /// Session or document clone. The caller fences runtime previews/jobs/target
 /// revision; this helper revalidates current source data and admission limits.
+#[cfg(test)]
 pub(crate) fn source_from_snapshot_with_interrupt(
     doc: &Document,
     active_layer: Option<LayerId>,
     source: SnapshotSource,
     cmd: &str,
     control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Vec<Vec<f32>>> {
+    let prep = SourcePreparation::new(cmd, control)?;
+    source_from_snapshot_prepared(doc, active_layer, source, cmd, control, &prep)
+}
+fn source_from_snapshot_prepared(
+    doc: &Document,
+    active_layer: Option<LayerId>,
+    source: SnapshotSource,
+    cmd: &str,
+    control: &photocraft_raster::Interrupt<'_>,
+    prep: &SourcePreparation<'_, '_>,
 ) -> Result<Vec<Vec<f32>>> {
     source_poll(control)?;
     let (area, pixels) = source_dimensions(doc, cmd)?;
@@ -933,10 +1029,10 @@ pub(crate) fn source_from_snapshot_with_interrupt(
     if colors == 0 || colors > 4 {
         return Err(bad(cmd, "unsupported source color channels"));
     }
-    if let ChanRef::Color(channel) = reference {
-        if channel >= colors {
-            return Err(bad(cmd, "source color channel out of range"));
-        }
+    if let ChanRef::Color(channel) = reference
+        && channel >= colors
+    {
+        return Err(bad(cmd, "source color channel out of range"));
     }
     match reference {
         ChanRef::Alpha(index) => {
@@ -957,16 +1053,16 @@ pub(crate) fn source_from_snapshot_with_interrupt(
     } else {
         layer
     };
-    let checked_owner = if needed_layer.is_some() || matches!(reference, ChanRef::Composite | ChanRef::Color(_)) {
-        source_owner(doc, needed_layer, needed_layer.is_none() && matches!(reference, ChanRef::Composite | ChanRef::Color(_)), control)?
+    let (checked_owner, checked_layer_count) = if needed_layer.is_some() || matches!(reference, ChanRef::Composite | ChanRef::Color(_)) {
+        source_owner_prepared(doc, needed_layer, needed_layer.is_none() && matches!(reference, ChanRef::Composite | ChanRef::Color(_)), control, Some(prep))?
     } else {
-        None
+        (None, 0)
     };
     if let Some(owner) = checked_owner {
-        if matches!(reference, ChanRef::Composite | ChanRef::Color(_) | ChanRef::Transparency) {
-            if let Some(surface) = owner.surface() {
-                source_format(surface.format())?;
-            }
+        if matches!(reference, ChanRef::Composite | ChanRef::Color(_) | ChanRef::Transparency)
+            && let Some(surface) = owner.surface()
+        {
+            source_format(surface.format())?;
         }
         if reference == ChanRef::LayerMask {
             source_format(owner.mask.as_ref().ok_or_else(|| bad(cmd, "source layer has no mask"))?.surface.format())?;
@@ -986,6 +1082,11 @@ pub(crate) fn source_from_snapshot_with_interrupt(
     if peak.checked_add(metadata).and_then(|n| n.checked_add(vector_extra)).is_none_or(|n| n > photocraft_raster::MAX_CHECKED_RASTER_BYTES) {
         return Err(bad(cmd, "source plane preparation exceeds resident limit"));
     }
+    prep.admit_peak(peak.checked_add(metadata).and_then(|n| n.checked_add(vector_extra)).ok_or_else(|| bad(cmd, "source peak overflow"))?)?;
+    // Assign whole outer native decode/store/finite/invert phase before planes:
+    // <=5 channels, fixed word buffers and bounded existing provider calls.
+    // This does not qualify private provider or legacy renderer inner Work.
+    prep.pixels(pixels, 32 + (count as u64) * 4)?;
     let mut planes = Vec::new();
     planes.try_reserve_exact(count).map_err(|_| bad(cmd, "plane allocation failed"))?;
     for _ in 0..count {
@@ -1043,6 +1144,17 @@ pub(crate) fn source_from_snapshot_with_interrupt(
                     source_poll(control)?;
                     buffer
                 } else {
+                    // This renderer already uses the same known-base admission.
+                    // It is not a complete style/backend Work forecast. Do not
+                    // transfer its admission to the retained imported branch.
+                    // Price this requirement metadata traversal independently,
+                    // then its repetition inside the existing renderer. The
+                    // count belongs to the same immutable actual tree scanned
+                    // above; its earlier Work is never reused as credit.
+                    prep.pixels(checked_layer_count, 128)?;
+                    let requirements = photocraft_compose::ordinary_render_requirements(doc, area, control)?;
+                    prep.debit(requirements.work_units)?;
+                    prep.pixels(checked_layer_count, 128)?;
                     photocraft_compose::render_with_interrupt(doc, area, control)?
                 };
                 if buffer.px.len() != pixels {
@@ -1095,6 +1207,8 @@ pub(crate) fn source_from_snapshot_with_interrupt(
                             *planes.first_mut().and_then(|plane| plane.get_mut(index)).ok_or_else(|| bad(cmd, "source plane length mismatch"))? = value;
                             Ok(())
                         })?;
+                    } else if let LayerContent::Shape(shape) = &owner.content {
+                        prep.alpha(shape, area, planes.first_mut().ok_or_else(|| bad(cmd, "missing source plane"))?)?;
                     } else {
                         for chunk in planes.first_mut().ok_or_else(|| bad(cmd, "missing source plane"))?.chunks_mut(4096) {
                             source_poll(control)?;
@@ -1268,7 +1382,18 @@ fn mask_wire(value: &Value, cmd: &str) -> Result<()> {
         _ => Err(bad(cmd, "mask parameter exceeds bounded scalar shape")),
     }
 }
+#[cfg(test)]
 fn mask_plane_with_interrupt(s: &Session, p: &Value, cmd: &str, control: &photocraft_raster::Interrupt<'_>) -> Result<Option<Vec<f32>>> {
+    let prep = SourcePreparation::new(cmd, control)?;
+    mask_plane_prepared(s, p, cmd, control, &prep)
+}
+fn mask_plane_prepared(
+    s: &Session,
+    p: &Value,
+    cmd: &str,
+    control: &photocraft_raster::Interrupt<'_>,
+    prep: &SourcePreparation<'_, '_>,
+) -> Result<Option<Vec<f32>>> {
     source_poll(control)?;
     let owned;
     let spec = if let Some(value) = p.get("mask") {
@@ -1302,7 +1427,7 @@ fn mask_plane_with_interrupt(s: &Session, p: &Value, cmd: &str, control: &photoc
             if spec.get("channel").is_none_or(|channel| channel == "none") {
                 return Ok(None);
             }
-            let planes = source_with_interrupt(s, spec, cmd, true, control)?;
+            let planes = source_with_preparation(s, spec, cmd, true, control, prep)?;
             let plane = planes.into_iter().next().ok_or_else(|| bad(cmd, "mask source has no plane"))?;
             source_poll(control)?;
             Ok(Some(plane))
@@ -1548,7 +1673,7 @@ pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
         ChannelTarget::Composite if st.doc.quick_mask.is_some() => json!("quickMask"),
         ChannelTarget::LayerMask => json!("mask"),
         // Viewing the active layer's mask (⌥-click): pixel commands edit the mask.
-        ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() => json!("mask"),
+        ChannelTarget::Composite if mask_editing_target(st).is_some() || crate::mask_view_cmds::current(st).is_some() => json!("mask"),
         _ => return params,
     };
     match params {
@@ -1703,8 +1828,8 @@ fn can_merge(s: &Session) -> std::result::Result<(), String> {
 // ---------------------------------------------------------------------------------------------
 // Save / Load Selection
 
-mod selection_storage_controlled;
 mod save_selection_controlled;
+mod selection_storage_controlled;
 
 pub(crate) fn save_selection_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
     save_selection_controlled::dispatch_preflight(s, "select.saveSelection", p, background).map(|_| ())
@@ -1719,21 +1844,27 @@ mod load_selection_controlled;
 /// Conservative metadata-only raw Load candidates for one captured same-document dialog.
 /// Dispatch still validates actual canonical storage/locks and captured revision; these IDs
 /// provide no source qualification, mutation permission, profile alias, or resource grant.
-pub fn raw_load_storage_hints(document:&crate::DocumentSnapshot,control:&photocraft_raster::Interrupt<'_>)->Result<Vec<photocraft_doc::item_identity::ChannelId>> {
-    load_selection_controlled::canonical_selection_storage::hints(document,control)
+pub fn raw_load_storage_hints(
+    document: &crate::DocumentSnapshot,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Vec<photocraft_doc::item_identity::ChannelId>> {
+    load_selection_controlled::canonical_selection_storage::hints(document, control)
 }
 
 /// Conservative same-document raw Save replacement candidates, computed only from metadata.
 /// The existing canonical selection is the source; returned saved IDs grant neither imported
 /// creation nor renaming, and dispatch still validates storage/locks/revision independently.
-pub fn raw_save_storage_hints(document:&crate::DocumentSnapshot,control:&photocraft_raster::Interrupt<'_>)->Result<Vec<photocraft_doc::item_identity::ChannelId>> {
-    load_selection_controlled::canonical_selection_storage::save_hints(document,control)
+pub fn raw_save_storage_hints(
+    document: &crate::DocumentSnapshot,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Vec<photocraft_doc::item_identity::ChannelId>> {
+    load_selection_controlled::canonical_selection_storage::save_hints(document, control)
 }
 
 /// Once-per-dialog metadata hint for explicit ordinary New Channel raw selection storage.
 /// This allocates no identity and reads no samples; full frozen command admission still applies.
-pub fn raw_new_selection_storage_hint(document:&crate::DocumentSnapshot,control:&photocraft_raster::Interrupt<'_>)->Result<bool> {
-    load_selection_controlled::canonical_selection_storage::new_hint(document,control)
+pub fn raw_new_selection_storage_hint(document: &crate::DocumentSnapshot, control: &photocraft_raster::Interrupt<'_>) -> Result<bool> {
+    load_selection_controlled::canonical_selection_storage::new_hint(document, control)
 }
 
 pub(crate) fn load_selection_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
@@ -1934,7 +2065,9 @@ fn merge_spot(s: &mut Session, p: &Value) -> Result<Value> {
 }
 /// Split Channels: one grayscale document per colour and alpha channel; closes the original.
 fn split(s: &mut Session, p: &Value) -> Result<Value> {
-    if let Some(value) = split_controlled::try_run(s, p)? { return Ok(value); }
+    if let Some(value) = split_controlled::try_run(s, p)? {
+        return Ok(value);
+    }
     let idx = s.active_index().ok_or(EngineError::NoDocument)?;
     let doc = s.documents()[idx].doc.clone();
     let area = doc.bounds();
@@ -1969,7 +2102,9 @@ fn mergeable(s: &Session) -> Vec<usize> {
 /// Merge Channels: grayscale documents of one size become the channels of an RGB, CMYK or Lab
 /// document (extra documents become alpha channels); the sources close.
 fn merge(s: &mut Session, p: &Value) -> Result<Value> {
-    if let Some(value) = merge_controlled::try_run(s, p)? { return Ok(value); }
+    if let Some(value) = merge_controlled::try_run(s, p)? {
+        return Ok(value);
+    }
     let cmd = "channel.merge";
     let mode = match p.get("mode").and_then(Value::as_str).unwrap_or("rgb") {
         "rgb" => ColorMode::Rgb,
@@ -2095,10 +2230,10 @@ fn calculation_number(p: &Value, key: &str, default: f64, cmd: &str) -> Result<f
     }
 }
 fn calculation_blend(p: &Value, cmd: &str) -> Result<(Blending, f32)> {
-    if let Some(value) = p.get("blending") {
-        if value.as_str().is_none_or(|v| v.len() > 256) {
-            return Err(bad(cmd, "blending must be a bounded string"));
-        }
+    if let Some(value) = p.get("blending")
+        && value.as_str().is_none_or(|v| v.len() > 256)
+    {
+        return Err(bad(cmd, "blending must be a bounded string"));
     }
     calculation_number(p, "scale", 1.0, cmd)?;
     calculation_number(p, "offset", 0.0, cmd)?;
@@ -2176,7 +2311,17 @@ fn calculation_buffer<T: Default + Clone>(length: usize, ctl: &photocraft_raster
     calculation_poll(ctl)?;
     Ok(data)
 }
-fn calculation_admit(s: &Session, specs: &[&Value], pixels: usize, cmd: &str, ctl: &photocraft_raster::Interrupt<'_>) -> Result<()> {
+fn calculation_admit(
+    s: &Session,
+    specs: &[&Value],
+    pixels: usize,
+    cmd: &str,
+    ctl: &photocraft_raster::Interrupt<'_>,
+    prep: &SourcePreparation<'_, '_>,
+) -> Result<()> {
+    // NEW calculation-wide bounded outer Work guard. Existing renderer/private
+    // provider qualifications are not broadened by this numerical ceiling.
+    prep.pixels(pixels, 64)?;
     let active = s.active_index().ok_or(EngineError::NoDocument)?;
     let mut indices = [None; 4];
     indices[0] = Some(active);
@@ -2202,6 +2347,9 @@ fn calculation_admit(s: &Session, specs: &[&Value], pixels: usize, cmd: &str, ct
         if matches!(doc.depth, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
             return Err(bad(cmd, "wide native source unsupported"));
         }
+        // Actual census traversals are separately charged before processing.
+        // Returned retained capacities are not Work or prior-phase credit.
+        let _ = prep.census(doc)?;
         let footprint = crate::DocumentSnapshot::resident_raster_footprint_of(doc, ctl)?;
         resident = resident.checked_add(footprint.retained_bytes).ok_or_else(|| bad(cmd, "retained byte overflow"))?;
         metadata = metadata.checked_add(footprint.clone_metadata_bytes).ok_or_else(|| bad(cmd, "COW metadata overflow"))?;
@@ -2224,6 +2372,9 @@ fn calculation_admit(s: &Session, specs: &[&Value], pixels: usize, cmd: &str, ct
         .and_then(|n| n.checked_mul(doc.pixel_format().bytes_per_pixel().max(4) as u64))
         .and_then(|n| n.checked_add(tiles.checked_mul(512)?))
         .ok_or_else(|| bad(cmd, "output charge overflow"))?;
+    // Physical tile initialization, encode/COW and pruning are distinct from
+    // logical blend arithmetic; assign full physical output bytes in advance.
+    prep.physical_output(tiles, doc.pixel_format().bytes_per_pixel().max(4) as u64)?;
     // Raster/COW plus simultaneously live native planes, decoded planes and output.
     // Non-raster metadata/blob retention is not total allocator/RSS protection.
     let peak = resident
@@ -2236,6 +2387,7 @@ fn calculation_admit(s: &Session, specs: &[&Value], pixels: usize, cmd: &str, ct
     if peak > photocraft_raster::MAX_CHECKED_RASTER_BYTES {
         return Err(bad(cmd, "calculation raster/planes/COW limit"));
     }
+    prep.admit_peak(peak)?;
     calculation_poll(ctl)
 }
 fn calculation_values(values: &[f32], pixels: usize, unit: bool, cmd: &str, ctl: &photocraft_raster::Interrupt<'_>) -> Result<()> {
@@ -2338,8 +2490,15 @@ fn calculation_weight(index: usize, opacity: f32, mask: Option<&[f32]>, selectio
     }
     Ok(weight)
 }
-fn calculation_mask(s: &Session, p: &Value, pixels: usize, cmd: &str, ctl: &photocraft_raster::Interrupt<'_>) -> Result<Option<Vec<f32>>> {
-    let mask = mask_plane_with_interrupt(s, p, cmd, ctl)?;
+fn calculation_mask(
+    s: &Session,
+    p: &Value,
+    pixels: usize,
+    cmd: &str,
+    ctl: &photocraft_raster::Interrupt<'_>,
+    prep: &SourcePreparation<'_, '_>,
+) -> Result<Option<Vec<f32>>> {
+    let mask = mask_plane_prepared(s, p, cmd, ctl, prep)?;
     if let Some(values) = &mask {
         calculation_values(values, pixels, true, cmd, ctl)?;
     }
@@ -2358,14 +2517,15 @@ pub fn apply_image_with_interrupt(s: &mut Session, p: &Value, ctl: &photocraft_r
     let maskspec = source_spec(p, "mask", "mask").unwrap_or_else(|| json!({}));
     let area = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
     let pixels = calculation_pixels(area)?;
+    let prep = SourcePreparation::new(CMD, ctl)?;
     if maskspec.get("channel").is_some_and(|channel| channel != "none") {
-        calculation_admit(s, &[&spec, &maskspec], pixels, CMD, ctl)?;
+        calculation_admit(s, &[&spec, &maskspec], pixels, CMD, ctl, &prep)?;
     } else {
-        calculation_admit(s, &[&spec], pixels, CMD, ctl)?;
+        calculation_admit(s, &[&spec], pixels, CMD, ctl, &prep)?;
     }
-    let source = source_with_interrupt(s, &spec, CMD, false, ctl)?;
+    let source = source_with_preparation(s, &spec, CMD, false, ctl, &prep)?;
     calculation_planes(&source, pixels, CMD, ctl)?;
-    let mask = calculation_mask(s, p, pixels, CMD, ctl)?;
+    let mask = calculation_mask(s, p, pixels, CMD, ctl, &prep)?;
     let layer = s.active().and_then(|d| d.active_layer);
     s.edit_with_interrupt("Apply Image", ctl, |doc, _| {
         let selection = match doc.selection.as_ref() {
@@ -2476,13 +2636,14 @@ pub fn calculations_with_interrupt(s: &mut Session, p: &Value, ctl: &photocraft_
     let maskspec = source_spec(p, "mask", "mask").unwrap_or_else(|| json!({}));
     let area = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
     let pixels = calculation_pixels(area)?;
+    let prep = SourcePreparation::new(CMD, ctl)?;
     if maskspec.get("channel").is_some_and(|channel| channel != "none") {
-        calculation_admit(s, &[&spec1, &spec2, &maskspec], pixels, CMD, ctl)?;
+        calculation_admit(s, &[&spec1, &spec2, &maskspec], pixels, CMD, ctl, &prep)?;
     } else {
-        calculation_admit(s, &[&spec1, &spec2], pixels, CMD, ctl)?;
+        calculation_admit(s, &[&spec1, &spec2], pixels, CMD, ctl, &prep)?;
     }
-    let first = source_with_interrupt(s, &spec1, CMD, true, ctl)?;
-    let second = source_with_interrupt(s, &spec2, CMD, true, ctl)?;
+    let first = source_with_preparation(s, &spec1, CMD, true, ctl, &prep)?;
+    let second = source_with_preparation(s, &spec2, CMD, true, ctl, &prep)?;
     calculation_planes(&first, pixels, CMD, ctl)?;
     calculation_planes(&second, pixels, CMD, ctl)?;
     if first.len() != 1 || second.len() != 1 {
@@ -2490,7 +2651,7 @@ pub fn calculations_with_interrupt(s: &mut Session, p: &Value, ctl: &photocraft_
     }
     let first = first.first().ok_or_else(|| bad(CMD, "missing first source"))?;
     let second = second.first().ok_or_else(|| bad(CMD, "missing second source"))?;
-    let mask = calculation_mask(s, p, pixels, CMD, ctl)?;
+    let mask = calculation_mask(s, p, pixels, CMD, ctl, &prep)?;
     let mut out = calculation_buffer::<f32>(pixels, ctl)?;
     for (index, ((&base, &top), target)) in second.iter().zip(first).zip(&mut out).enumerate() {
         calculation_poll(ctl)?;
@@ -2751,8 +2912,24 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             options
         ),
-        spec!("channel.mergeSpot", "Merge Spot Channel", [], None, r##"{"channel":index|name|{channelId:id}?=targeted or first spot,"documentId":decimal-string?,"expectedRevision":decimal-string? (captured pair)}"##, has_spot, merge_spot),
-        spec!("channel.split", "Split Channels", [], None, r##"{"closeOriginal":bool=true,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (native routes validate the captured pair)"##, can_split, split),
+        spec!(
+            "channel.mergeSpot",
+            "Merge Spot Channel",
+            [],
+            None,
+            r##"{"channel":index|name|{channelId:id}?=targeted or first spot,"documentId":decimal-string?,"expectedRevision":decimal-string? (captured pair)}"##,
+            has_spot,
+            merge_spot
+        ),
+        spec!(
+            "channel.split",
+            "Split Channels",
+            [],
+            None,
+            r##"{"closeOriginal":bool=true,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} (native routes validate the captured pair)"##,
+            can_split,
+            split
+        ),
         spec!(
             "channel.merge",
             "Merge Channels…",
@@ -2925,13 +3102,19 @@ mod canonical_channel_identity_tests {
         assert_eq!(view["alpha"][1]["channelIdString"], "9007199254740994");
         let source = state.doc.clone();
         let revision = state.revision;
+        let saved_revision = state.saved_revision;
+        let history: Vec<String> = state.history.entry_labels().map(str::to_owned).collect();
         session.execute("channel.target", json!({"channelId":"9007199254740994"})).unwrap();
         assert_eq!(session.active().unwrap().channel_view.target, ChannelTarget::Alpha(1));
         assert_eq!(session.active().unwrap().doc, source);
-        assert_eq!(session.active().unwrap().revision, revision);
+        assert_eq!(session.active().unwrap().revision, revision + 1, "successful view publication fences captured consumers");
+        assert_eq!(session.active().unwrap().saved_revision, if saved_revision == revision { revision + 1 } else { saved_revision });
+        assert_eq!(session.active().unwrap().history.entry_labels().collect::<Vec<_>>(), history.iter().map(String::as_str).collect::<Vec<_>>());
         session.execute("channel.target", json!({"channelId":"01","channel":0})).unwrap_err();
         assert_eq!(session.active().unwrap().channel_view.target, ChannelTarget::Alpha(1));
         assert_eq!(session.active().unwrap().doc, source);
+        assert_eq!(session.active().unwrap().revision, revision + 1, "malformed selectors leave the view fence unchanged");
+        assert_eq!(session.active().unwrap().history.entry_labels().collect::<Vec<_>>(), history.iter().map(String::as_str).collect::<Vec<_>>());
     }
 }
 

@@ -32,10 +32,10 @@ fn request(session: &Session, params: &Value) -> Result<Vec<LayerId>> {
     if state.selected_layers.len() > 10_000 {
         return Err(bad("mask target count limit"));
     }
-    if let Some(value) = params.get("layer") {
-        if value.as_u64().filter(|id| *id != 0).is_none() {
-            return Err(bad("layer must be a nonzero unsigned integer"));
-        }
+    if let Some(value) = params.get("layer")
+        && value.as_u64().filter(|id| *id != 0).is_none()
+    {
+        return Err(bad("layer must be a nonzero unsigned integer"));
     }
     // Use the upstream multi-selected mask eligibility and ordering policy.
     let ids = crate::layer_multi_cmds::mask_targets(session, params)?;
@@ -204,7 +204,8 @@ pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
                         crate::extra_cmds::background_to_layer_for_mask(doc, id);
                         doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.mask = Some(mask.clone());
                     }
-                    // The selection is intentionally retained, matching Reveal Selection.
+                    // Upstream Reveal Selection consumes the selection in the same undo step.
+                    doc.selection = None;
                     poll(control)?;
                     Ok(Value::Null)
                 })
@@ -249,7 +250,7 @@ mod tests {
             let mask = layer.mask.as_ref().unwrap();
             assert_eq!(mask.surface.to_interleaved(Rect::new(-1, 0, 1, 1)), raw);
             assert_eq!(mask.surface.default_bytes(), before.selection.as_ref().unwrap().default_bytes());
-            assert_eq!(current.selection, before.selection);
+            assert!(current.selection.is_none());
             assert_eq!(layer.name, "Layer 0");
             assert_eq!(layer.locks, Default::default());
             assert!(mask.enabled && mask.linked);
@@ -262,8 +263,10 @@ mod tests {
             assert_eq!(reopened.layer(id).unwrap().mask, layer.mask);
             session.execute("edit.undo", Value::Null).unwrap();
             assert_eq!(session.active().unwrap().doc.layers, before.layers);
+            assert_eq!(session.active().unwrap().doc.selection, before.selection);
             session.execute("edit.redo", Value::Null).unwrap();
             assert_eq!(session.active().unwrap().doc.layers, reopened.layers);
+            assert!(session.active().unwrap().doc.selection.is_none());
         }
     }
     #[test]
@@ -318,10 +321,18 @@ mod tests {
 }
 
 mod actions;
-pub(crate) fn reveal_all(session: &mut Session, params: &Value) -> Result<Value> { actions::run(session, params, actions::Action::Reveal) }
-pub(crate) fn hide_all(session: &mut Session, params: &Value) -> Result<Value> { actions::run(session, params, actions::Action::Hide) }
-pub(crate) fn delete(session: &mut Session, params: &Value) -> Result<Value> { actions::run(session, params, actions::Action::Delete) }
-pub(crate) fn apply(session: &mut Session, params: &Value) -> Result<Value> { actions::run(session, params, actions::Action::Apply) }
+pub(crate) fn reveal_all(session: &mut Session, params: &Value) -> Result<Value> {
+    actions::run(session, params, actions::Action::Reveal)
+}
+pub(crate) fn hide_all(session: &mut Session, params: &Value) -> Result<Value> {
+    actions::run(session, params, actions::Action::Hide)
+}
+pub(crate) fn delete(session: &mut Session, params: &Value) -> Result<Value> {
+    actions::run(session, params, actions::Action::Delete)
+}
+pub(crate) fn apply(session: &mut Session, params: &Value) -> Result<Value> {
+    actions::run(session, params, actions::Action::Apply)
+}
 pub(crate) fn actions_dispatch_preflight(session: &Session, id: &str, params: &Value, _background: bool) -> Result<()> {
     let action = match id {
         "layer.layerMask.revealAll" => actions::Action::Reveal,
@@ -335,5 +346,9 @@ pub(crate) fn actions_dispatch_preflight(session: &Session, id: &str, params: &V
     actions::dispatch_preflight(session, params, action)
 }
 
-pub(crate) fn hide_selection(session: &mut Session, params: &Value) -> Result<Value> { actions::run(session, params, actions::Action::HideSelection) }
-pub(crate) fn from_transparency(session: &mut Session, params: &Value) -> Result<Value> { actions::run(session, params, actions::Action::FromTransparency) }
+pub(crate) fn hide_selection(session: &mut Session, params: &Value) -> Result<Value> {
+    actions::run(session, params, actions::Action::HideSelection)
+}
+pub(crate) fn from_transparency(session: &mut Session, params: &Value) -> Result<Value> {
+    actions::run(session, params, actions::Action::FromTransparency)
+}

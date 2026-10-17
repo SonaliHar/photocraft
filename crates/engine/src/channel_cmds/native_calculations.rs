@@ -50,10 +50,8 @@ fn metadata(doc: &Document, id: ChannelId, area: Rect, ctl: &Interrupt<'_>) -> R
     let mut index = None;
     for (position, channel) in doc.channels.iter().enumerate() {
         calculation_poll(ctl)?;
-        if channel.id == id {
-            if index.replace(position).is_some() {
-                return Err(bad(CMD, "duplicate saved channel identity"));
-            }
+        if channel.id == id && index.replace(position).is_some() {
+            return Err(bad(CMD, "duplicate saved channel identity"));
         }
     }
     let index = index.ok_or_else(|| bad(CMD, "missing saved channel"))?;
@@ -77,10 +75,8 @@ fn metadata(doc: &Document, id: ChannelId, area: Rect, ctl: &Interrupt<'_>) -> R
         let mut item = None;
         for current in &state.items {
             calculation_poll(ctl)?;
-            if current.item == owner {
-                if item.replace(current).is_some() {
-                    return Err(bad(CMD, "ambiguous channel metadata"));
-                }
+            if current.item == owner && item.replace(current).is_some() {
+                return Err(bad(CMD, "ambiguous channel metadata"));
             }
         }
         let item = item.ok_or_else(|| bad(CMD, "native imported channel geometry unavailable"))?;
@@ -140,10 +136,10 @@ pub(super) fn preflight(s: &Session, p: &Value, ctl: &Interrupt<'_>) -> Result<P
         return Err(bad(CMD, "explicit unit coverage context required"));
     }
     for (key, expected) in [("opacity", 100.0), ("scale", 1.0), ("offset", 0.0)] {
-        if let Some(value) = p.get(key) {
-            if value.as_f64() != Some(expected) {
-                return Err(bad(CMD, "native coverage requires opacity100/scale1/offset0"));
-            }
+        if let Some(value) = p.get(key)
+            && value.as_f64() != Some(expected)
+        {
+            return Err(bad(CMD, "native coverage requires opacity100/scale1/offset0"));
         }
     }
     if p.get("result").is_some_and(|value| value.as_str() != Some("newChannel")) {
@@ -271,10 +267,7 @@ pub(super) fn run(s: &mut Session, p: &Value, ctl: &Interrupt<'_>) -> Result<Val
         ctl,
     )
     .map_err(kernel_error)?;
-    let name = match p.get("name").and_then(Value::as_str) {
-        Some(text) => text,
-        None => "Native Calculations",
-    };
+    let name = p.get("name").and_then(Value::as_str).unwrap_or("Native Calculations");
     let mut owned = String::new();
     owned.try_reserve_exact(name.len()).map_err(|_| bad(CMD, "native name allocation"))?;
     if owned.capacity() > 1 << 20 {

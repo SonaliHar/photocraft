@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent, LayerMask, Path, VectorMask};
 use photocraft_geom::{Rect, Size};
@@ -16,14 +14,14 @@ fn session(depth: SampleType, adjustment: bool) -> (Session, LayerId, LayerId) {
         if adjustment { Layer::new("Adjustment", LayerContent::Adjustment(Adjustment::Invert)) } else { Layer::raster("Pixels", doc.pixel_format()) };
     let mut surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, depth, false), &[1.0]);
     surface.fill_rect(Rect::new(1, 2, 5, 6), &[0.25]);
-    layer.mask = Some(LayerMask { surface, enabled: !adjustment, linked: false, density: 1.0, feather: 0.0 });
+    layer.mask = Some(LayerMask { surface: surface.into(), enabled: !adjustment, linked: false, density: 1.0, feather: 0.0 });
     let path = Path { inverted: true, ..Default::default() };
     layer.vector_mask = Some(VectorMask::new(path));
     let id = layer.id;
     doc.layers.push(layer);
     doc.selection = Some(Surface::with_default(PixelFormat::GRAY8, &[0.5]));
     let mut s = Session::new();
-    s.add_document(doc, None);
+    s.add_document(doc, None).unwrap();
     (s, id, background_id)
 }
 
@@ -35,7 +33,7 @@ fn edits_preserve_mask_pixels_and_layer_at_all_depths_with_undo_redo() {
             // Explicit targets work even when another layer is active.
             s.select_layer(background).unwrap();
             let before = s.active().unwrap().doc.clone();
-            let count = s.active().unwrap().history.entries().len();
+            let count = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
             let result = s.execute(EDIT, json!({"layer": id.0, "document": before.id.0, "density": 25, "feather": 2.5})).unwrap();
             assert_eq!(result, json!({"layer": id.0, "density": 25.0, "feather": 2.5}));
             let mut expected = (*before).clone();
@@ -43,7 +41,7 @@ fn edits_preserve_mask_pixels_and_layer_at_all_depths_with_undo_redo() {
             (mask.density, mask.feather) = (0.25, 2.5);
             assert_eq!(*s.active().unwrap().doc, expected, "only density and feather change");
             assert_eq!(s.active().unwrap().active_layer, Some(background));
-            assert_eq!(s.active().unwrap().history.entries().len(), count + 1);
+            assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), count + 1);
             // Properties invalidate the composite as far as their undo would (the masked layer is
             // empty here; the adjustment reaches everything).
             let damage = s.active().unwrap().last_damage;
@@ -55,8 +53,8 @@ fn edits_preserve_mask_pixels_and_layer_at_all_depths_with_undo_redo() {
             assert_eq!(*s.active().unwrap().doc, expected);
             let unchanged = s.active().unwrap().doc.clone();
             s.execute(EDIT, json!({"layer": id.0, "density": 25})).unwrap();
-            assert!(Arc::ptr_eq(&unchanged, &s.active().unwrap().doc), "same value is not an edit");
-            assert_eq!(s.active().unwrap().history.entries().len(), count + 1);
+            assert!(unchanged.shares_state(&s.active().unwrap().doc), "same value is not an edit");
+            assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), count + 1);
         }
     }
 }
@@ -79,12 +77,12 @@ fn property_commands_update_rendered_edges_without_rewriting_the_mask() {
             let mut surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, depth, false));
             surface.fill_rect(Rect::new(0, 0, 32, 8), &[1.0]);
             let raw = surface.clone();
-            layer.mask = Some(LayerMask { surface, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+            layer.mask = Some(LayerMask { surface: surface.into(), enabled: true, linked: true, density: 1.0, feather: 0.0 });
             let id = layer.id;
             doc.layers.push(layer);
             let mut s = Session::new();
-            s.add_document(doc, None);
-            let render = |s: &Session| photocraft_compose::flatten(&s.active().unwrap().doc);
+            s.add_document(doc, None).unwrap();
+            let render = |s: &Session| photocraft_compose::flatten(&s.active().unwrap().doc).unwrap();
             let original = render(&s);
             assert!(original.get(31, 4)[0] < 0.01 && original.get(32, 4)[0] > 0.99);
 
@@ -100,7 +98,7 @@ fn property_commands_update_rendered_edges_without_rewriting_the_mask() {
             }
             s.execute(EDIT, json!({"feather": 0})).unwrap();
             assert_eq!(render(&s), original, "clearing feather restores the sharp edge");
-            assert_eq!(s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap().surface, raw);
+            assert_eq!(s.active().unwrap().doc.layer(id).unwrap().mask.as_ref().unwrap().surface.as_ref(), &raw);
             s.execute("edit.undo", json!({})).unwrap();
             assert_eq!(render(&s), soft_full);
             s.execute("edit.redo", json!({})).unwrap();
@@ -113,17 +111,17 @@ fn property_commands_update_rendered_edges_without_rewriting_the_mask() {
 fn slider_updates_coalesce_without_merging_separate_gestures() {
     let (mut s, id, _) = session(SampleType::U16, false);
     let before = s.active().unwrap().doc.clone();
-    let count = s.active().unwrap().history.entries().len();
+    let count = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
     for density in [80, 50, 0] {
         s.execute(EDIT, json!({"density": density, "coalesce": "mask-density-drag"})).unwrap();
     }
     let density_only = s.active().unwrap().doc.clone();
-    assert_eq!(s.active().unwrap().history.entries().len(), count + 1);
+    assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), count + 1);
     for feather in [2.5, 1000.0] {
         s.execute(EDIT, json!({"feather": feather, "coalesce": "mask-feather-drag"})).unwrap();
     }
     let done = s.active().unwrap().doc.clone();
-    assert_eq!(s.active().unwrap().history.entries().len(), count + 2);
+    assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), count + 2);
     assert_eq!(done.layer(id).unwrap().mask.as_ref().map(|m| (m.density, m.feather)), Some((0.0, 1000.0)));
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(*s.active().unwrap().doc, *density_only);
@@ -138,7 +136,7 @@ fn slider_updates_coalesce_without_merging_separate_gestures() {
 fn malformed_params_missing_masks_and_stale_documents_do_not_edit() {
     let (mut s, _, background) = session(SampleType::U8, false);
     let before = s.active().unwrap().doc.clone();
-    let count = s.active().unwrap().history.entries().len();
+    let count = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
     let revision = s.active().unwrap().revision;
     for params in [
         Value::Null,
@@ -163,8 +161,8 @@ fn malformed_params_missing_masks_and_stale_documents_do_not_edit() {
     ] {
         assert!(s.execute(EDIT, params.clone()).is_err(), "{params}");
         let st = s.active().unwrap();
-        assert!(Arc::ptr_eq(&before, &st.doc), "{params}");
-        assert_eq!((st.history.entries().len(), st.revision), (count, revision), "{params}");
+        assert!(before.shares_state(&st.doc), "{params}");
+        assert_eq!((st.history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), st.revision), (count, revision), "{params}");
     }
     let mut empty = Session::new();
     assert!(!empty.is_enabled(EDIT));

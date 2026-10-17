@@ -147,7 +147,10 @@ fn admission(document: &Document, index: usize, control: &Interrupt<'_>) -> Resu
             || layer.video.is_some()
             || layer.fill_cache.is_some()
             || !layer.psd_blocks.is_empty()
-            || layer.effects != Default::default()
+            // Layer::new enables an empty list; that is still a neutral effect state.
+            || !layer.effects.items.is_empty()
+            || layer.effects.psd_raw.is_some()
+            || layer.effects.reference.is_some()
             || layer.advanced != Default::default()
             || layer.blend_if != Default::default()
             || layer.excluded_channels != 0
@@ -290,7 +293,7 @@ pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
         color_hidden: copy(&state.channel_view.color_hidden)?,
         alpha_visible: copy(&state.channel_view.alpha_visible)?,
         quick_mask_hidden: state.channel_view.quick_mask_hidden,
-        layer_mask: state.channel_view.layer_mask.clone(),
+        layer_mask: state.channel_view.layer_mask,
         editing_mask: state.channel_view.editing_mask,
     };
     let baseline = before.clone();
@@ -395,6 +398,25 @@ mod tests {
             assert!(candidate.channels.is_empty());
             assert_eq!(doc.channels.len(), 1);
             assert_eq!(candidate.physical_resolution, doc.physical_resolution);
+        }
+    }
+    #[test]
+    fn empty_effect_toggle_is_neutral_but_retained_effects_stay_closed() {
+        for enabled in [false, true] {
+            let mut doc = fixture(SampleType::U8);
+            doc.layers[0].effects.enabled = enabled;
+            let before = doc.clone();
+            assert!(prepare(&doc, 0, &Interrupt::NONE).is_ok());
+            assert_eq!(doc, before);
+            doc.layers[0].effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+            let before = doc.clone();
+            assert!(prepare(&doc, 0, &Interrupt::NONE).is_err());
+            assert_eq!(doc, before);
+            doc.layers[0].effects.items.clear();
+            doc.layers[0].effects.psd_raw = Some(vec![1, 2, 3].into());
+            let before = doc.clone();
+            assert!(prepare(&doc, 0, &Interrupt::NONE).is_err());
+            assert_eq!(doc, before);
         }
     }
     #[test]

@@ -131,10 +131,10 @@ fn declared_bounds(doc: &Document, target: Target, control: &Interrupt<'_>) -> R
             let mut reference = None;
             for item in &state.items {
                 poll(control)?;
-                if item.mask.as_ref().is_some_and(|mask| mask.owner == ItemRef::Layer(owner)) {
-                    if !matches!(item.item, ItemRef::Mask(_)) || reference.replace(item.item).is_some() {
-                        return Err(bad("ambiguous current mask owner"));
-                    }
+                if item.mask.as_ref().is_some_and(|mask| mask.owner == ItemRef::Layer(owner))
+                    && (!matches!(item.item, ItemRef::Mask(_)) || reference.replace(item.item).is_some())
+                {
+                    return Err(bad("ambiguous current mask owner"));
                 }
             }
             (reference.ok_or_else(|| bad("missing current mask metadata"))?, Some(owner))
@@ -143,10 +143,8 @@ fn declared_bounds(doc: &Document, target: Target, control: &Interrupt<'_>) -> R
     let mut metadata = None;
     for item in &state.items {
         poll(control)?;
-        if item.item == reference {
-            if metadata.replace(item).is_some() {
-                return Err(bad("duplicate current item identity"));
-            }
+        if item.item == reference && metadata.replace(item).is_some() {
+            return Err(bad("duplicate current item identity"));
         }
     }
     let item = metadata.ok_or_else(|| bad("missing canonical storage owner"))?;
@@ -642,10 +640,10 @@ pub(super) fn paste(
     {
         return Err(bad("requires unmanaged same-native Gray clip"));
     }
-    if let Some(center) = params.get("center") {
-        if !center.as_array().is_some_and(|a| a.len() == 2 && a.iter().all(|v| v.as_f64().is_some_and(f64::is_finite))) {
-            return Err(bad("invalid center"));
-        }
+    if let Some(center) = params.get("center")
+        && !center.as_array().is_some_and(|a| a.len() == 2 && a.iter().all(|v| v.as_f64().is_some_and(f64::is_finite)))
+    {
+        return Err(bad("invalid center"));
     }
     photocraft_raster::checked_region_byte_len(clip.bounds, format).map_err(|e| map(control, e))?;
     let (dx, dy) = crate::edit_cmds::paste_offset(clip, state.doc.bounds(), params, in_place)?;

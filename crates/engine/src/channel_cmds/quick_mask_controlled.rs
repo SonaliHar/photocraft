@@ -6,7 +6,7 @@ use photocraft_color::{
     checked_arithmetic::{self, Domain, Operand, Storage},
     read_sample, write_sample,
 };
-use photocraft_doc::{Layer, LayerContent};
+use photocraft_doc::{ColorIndicates, Layer, LayerContent};
 use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_raster::{
     Interrupt, MAX_CHECKED_RASTER_BYTES, RasterInputError, Surface,
@@ -111,7 +111,7 @@ impl StagingBudget for Budget {
         Ok(())
     }
 }
-fn admission(snapshot: &crate::DocumentSnapshot, source: Option<&Surface>, format: PixelFormat, control: &Interrupt<'_>) -> Result<Budget> {
+fn admission(snapshot: &crate::DocumentSnapshot, source: Option<&Surface>, format: PixelFormat, extra_work: u64, control: &Interrupt<'_>) -> Result<Budget> {
     poll(control)?;
     snapshot.validate_resident()?;
     let area = snapshot.bounds();
@@ -152,11 +152,19 @@ fn admission(snapshot: &crate::DocumentSnapshot, source: Option<&Surface>, forma
     }
     let samples = u64::from(snapshot.size.width).checked_mul(u64::from(snapshot.size.height)).ok_or_else(|| error("sample count overflow"))?;
     let source_tiles = source.map_or(0, Surface::tile_count) as u64;
+    // A clipped canvas still initializes every byte in each physical tile.
+    // Charge that work separately from the logical sample reads and copies.
+    let tile_initialization = tiles
+        .checked_mul((TILE_SIZE as u64).pow(2))
+        .and_then(|n| n.checked_mul(format.bytes_per_pixel() as u64))
+        .ok_or_else(|| error("tile initialization work overflow"))?;
     let work = samples
         .checked_mul(96)
+        .and_then(|n| n.checked_add(tile_initialization))
         .and_then(|n| n.checked_add(tiles.checked_mul(source_tiles)?.checked_mul(16 * 256)?))
         .and_then(|n| n.checked_add(tiles.checked_mul(1024)?))
         .and_then(|n| n.checked_add(count.checked_mul(64)?))
+        .and_then(|n| n.checked_add(extra_work))
         .ok_or_else(|| error("work overflow"))?;
     if work > 8_000_000_000 {
         return Err(error("Quick Mask native read/output work limit"));
@@ -166,15 +174,39 @@ fn admission(snapshot: &crate::DocumentSnapshot, source: Option<&Surface>, forma
 }
 /// Incoming selections remain selected coverage: indicates only changes the
 /// overlay presentation. No inversion is introduced by this transition.
-fn transfer(snapshot: &crate::DocumentSnapshot, source: Option<&Surface>, enter: bool, control: &Interrupt<'_>) -> Result<Option<Surface>> {
+struct TransferPolicy {
+    enter: bool,
+    unselected: bool,
+    indicates: ColorIndicates,
+    rewrite_empty: Option<f64>,
+}
+fn transfer(snapshot: &crate::DocumentSnapshot, source: Option<&Surface>, policy: TransferPolicy, control: &Interrupt<'_>) -> Result<Option<Surface>> {
+    let TransferPolicy { enter, unselected, indicates, rewrite_empty } = policy;
     let wide = matches!(snapshot.depth, SampleType::U32 | SampleType::F64);
     let format = if enter || wide { super::channel_format(snapshot) } else { PixelFormat::GRAY8 };
-    let mut budget = admission(snapshot, source, format, control)?;
+    let extra_work = if rewrite_empty.is_some() {
+        u64::from(snapshot.size.width)
+            .checked_mul(u64::from(snapshot.size.height))
+            .and_then(|n| n.checked_mul(64))
+            .ok_or_else(|| error("Quick Mask reorientation work"))?
+    } else {
+        0
+    };
+    let mut budget = admission(snapshot, source, format, extra_work, control)?;
     let area = snapshot.bounds();
     let bpp = format.bytes_per_pixel();
     let zero = [0u8; 8];
     let mut builder = StagedSurfaceBuilder::new(format, zero.get(..bpp).ok_or_else(|| error("output sample width"))?, area, &mut budget, control)
         .map_err(|e| controlled(control, e))?;
+    // Reorientation is a separately paid scalar pass on the same phase budget.
+    if rewrite_empty.is_some() {
+        let count = u64::from(area.width())
+            .checked_mul(u64::from(area.height()))
+            .and_then(|n| n.checked_mul(64))
+            .ok_or_else(|| error("Quick Mask reorientation work"))?;
+        budget.work(count).map_err(|e| controlled(control, e))?;
+    }
+    let mut untouched = true;
     let mut all_white = true;
     let mut any_nonzero = false;
     let mut top = area.y0;
@@ -230,9 +262,21 @@ fn transfer(snapshot: &crate::DocumentSnapshot, source: Option<&Surface>, enter:
                         }
                     }
                 } else {
-                    // Parent's no-selection entry creates an all-selected plane.
-                    photocraft_color::try_write_sample_f64(dest, format.sample, 0, 1.).map_err(|e| controlled(control, e))?;
-                    any_nonzero = true;
+                    let value = if indicates == ColorIndicates::SelectedAreas { 0. } else { 1. };
+                    photocraft_color::try_write_sample_f64(dest, format.sample, 0, value).map_err(|e| controlled(control, e))?;
+                    any_nonzero |= value != 0.;
+                }
+                if let Some(expected) = rewrite_empty {
+                    let source_format = input_format.ok_or_else(|| error("missing reorientation source"))?;
+                    let start = index.checked_mul(source_format.bytes_per_pixel()).ok_or_else(|| error("reorientation offset"))?;
+                    let word = input
+                        .as_ref()
+                        .and_then(|bytes| bytes.get(start..start.checked_add(source_format.bytes_per_pixel())?))
+                        .ok_or_else(|| error("reorientation source length"))?;
+                    let value = f64::from(read_sample(word, source_format.sample, 0));
+                    untouched &= (value - expected).abs() <= f64::from(0.5f32 / 255.0f32);
+                    let replacement = if indicates == ColorIndicates::SelectedAreas { 0. } else { 1. };
+                    photocraft_color::try_write_sample_f64(dest, format.sample, 0, replacement).map_err(|e| controlled(control, e))?;
                 }
                 output.extend_from_slice(dest);
             }
@@ -243,7 +287,21 @@ fn transfer(snapshot: &crate::DocumentSnapshot, source: Option<&Surface>, enter:
     }
     let (surface, ()) = builder.finalize(&mut budget, control).map_err(|e| controlled(control, e))?.into_parts();
     poll(control)?;
-    if !enter && (all_white || !any_nonzero) { Ok(None) } else { Ok(Some(surface)) }
+    if rewrite_empty.is_some() {
+        return Ok(if untouched { Some(surface) } else { None });
+    }
+    if !enter && (!any_nonzero || (unselected && indicates != ColorIndicates::SelectedAreas && all_white)) { Ok(None) } else { Ok(Some(surface)) }
+}
+pub(super) fn reorient_untouched(snapshot: &crate::DocumentSnapshot, indicates: ColorIndicates, control: &Interrupt<'_>) -> Result<Option<Surface>> {
+    if !snapshot.quick_mask_unselected {
+        return Ok(None);
+    }
+    let Some(channel) = &snapshot.quick_mask else { return Ok(None) };
+    if channel.indicates == indicates {
+        return Ok(None);
+    }
+    let expected = if channel.indicates == ColorIndicates::SelectedAreas { 0. } else { 1. };
+    transfer(snapshot, Some(&channel.surface), TransferPolicy { enter: true, unselected: true, indicates, rewrite_empty: Some(expected) }, control)
 }
 pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
     dispatch_preflight(session, params, false)?;
@@ -267,7 +325,9 @@ pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
         move |ctx| {
             ctx.stage(0., 0.95, label, |control| {
                 let source = if want { work_base.selection.as_ref() } else { work_base.quick_mask.as_ref().map(|channel| &channel.surface) };
-                let surface = transfer(&work_base, source, want, control)?;
+                let unselected = if want { work_base.selection.is_none() } else { work_base.quick_mask_unselected };
+                let indicates = if want { options.indicates } else { work_base.quick_mask.as_ref().ok_or_else(|| error("missing Quick Mask"))?.indicates };
+                let surface = transfer(&work_base, source, TransferPolicy { enter: want, unselected, indicates, rewrite_empty: None }, control)?;
                 poll(control)?;
                 let mut document = (*work_base).clone();
                 if want {
@@ -279,6 +339,7 @@ pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
                     channel.color = options.color;
                     channel.opacity = options.opacity;
                     channel.indicates = options.indicates;
+                    document.quick_mask_unselected = work_base.selection.is_none();
                     document.quick_mask = Some(channel);
                     document.selection = None;
                 } else {
@@ -300,11 +361,9 @@ pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
                     *current = document;
                     Ok(())
                 })?;
-                if want {
-                    if let Some(state) = session.active_mut() {
-                        state.channel_view.target = super::ChannelTarget::Composite;
-                        state.channel_view.quick_mask_hidden = false;
-                    }
+                if want && let Some(state) = session.active_mut() {
+                    state.channel_view.target = super::ChannelTarget::Composite;
+                    state.channel_view.quick_mask_hidden = false;
                 }
                 Ok(response)
             })
@@ -315,6 +374,44 @@ pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clipped_native_tiles_can_enter_and_leave_all_selected_quick_mask() {
+        for sample in SampleType::ALL {
+            for width in [2, TILE_SIZE as u32 + 1] {
+                let mut document = photocraft_doc::Document::new("Clipped Quick Mask", photocraft_doc::Size::new(width, 1), ColorMode::Rgb, sample);
+                document.layers.push(Layer::new("Pixels", LayerContent::Raster(Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true)))));
+                let mut session = Session::new();
+                session.add_document(document, None).unwrap();
+                let snapshot = session.active().unwrap().doc.clone();
+                let entered = transfer(
+                    &snapshot,
+                    None,
+                    TransferPolicy { enter: true, unselected: true, indicates: ColorIndicates::MaskedAreas, rewrite_empty: None },
+                    &Interrupt::NONE,
+                )
+                .unwrap()
+                .unwrap();
+                assert_eq!(entered.format(), super::super::channel_format(&snapshot));
+                let bytes = entered.try_read_interleaved_with(snapshot.bounds(), &Interrupt::NONE).unwrap();
+                for word in bytes.chunks_exact(entered.format().bytes_per_pixel()) {
+                    assert_eq!(photocraft_color::try_read_sample_f64(word, sample, 0).unwrap(), 1.);
+                }
+                assert!(
+                    transfer(
+                        &snapshot,
+                        Some(&entered),
+                        TransferPolicy { enter: false, unselected: true, indicates: ColorIndicates::MaskedAreas, rewrite_empty: None },
+                        &Interrupt::NONE
+                    )
+                    .unwrap()
+                    .is_none()
+                );
+                assert!(session.active().unwrap().doc.shares_state(&snapshot));
+                assert!(snapshot.selection.is_none());
+                assert!(snapshot.quick_mask.is_none());
+            }
+        }
+    }
     fn fixture(sample: SampleType, bytes: &[u8]) -> Session {
         let mut document = photocraft_doc::Document::new("Quick Mask test", photocraft_doc::Size::new(2, 1), ColorMode::Rgb, sample);
         let color = PixelFormat::new(ColorMode::Rgb, sample, true);
@@ -363,12 +460,26 @@ mod tests {
         let snapshot = &session.active().unwrap().doc;
         let source = snapshot.selection.as_ref().unwrap();
         let legacy_entry = super::super::quick_mask_from(snapshot, &super::super::QuickMaskOptions::default());
-        let entry = transfer(snapshot, Some(source), true, &Interrupt::NONE).unwrap().unwrap();
+        let entry = transfer(
+            snapshot,
+            Some(source),
+            TransferPolicy { enter: true, unselected: false, indicates: ColorIndicates::MaskedAreas, rewrite_empty: None },
+            &Interrupt::NONE,
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(
             entry.try_read_interleaved_with(snapshot.bounds(), &Interrupt::NONE).unwrap(),
             legacy_entry.surface.try_read_interleaved_with(snapshot.bounds(), &Interrupt::NONE).unwrap()
         );
-        let result = transfer(snapshot, Some(source), false, &Interrupt::NONE).unwrap().unwrap();
+        let result = transfer(
+            snapshot,
+            Some(source),
+            TransferPolicy { enter: false, unselected: false, indicates: ColorIndicates::MaskedAreas, rewrite_empty: None },
+            &Interrupt::NONE,
+        )
+        .unwrap()
+        .unwrap();
         let legacy_exit = super::super::selection_from(snapshot, &photocraft_doc::AlphaChannel::new("oracle", source.clone())).unwrap();
         let expected: Vec<u8> = bytes.as_chunks::<2>().0.iter().map(|word| (read_sample(word, SampleType::U16, 0).clamp(0., 1.) * 255. + 0.5) as u8).collect();
         assert_eq!(result.format(), PixelFormat::GRAY8);
@@ -377,8 +488,24 @@ mod tests {
             result.try_read_interleaved_with(snapshot.bounds(), &Interrupt::NONE).unwrap(),
             legacy_exit.try_read_interleaved_with(snapshot.bounds(), &Interrupt::NONE).unwrap()
         );
-        let white = transfer(snapshot, None, true, &Interrupt::NONE).unwrap().unwrap();
-        assert!(transfer(snapshot, Some(&white), false, &Interrupt::NONE).unwrap().is_none());
+        let white = transfer(
+            snapshot,
+            None,
+            TransferPolicy { enter: true, unselected: true, indicates: ColorIndicates::MaskedAreas, rewrite_empty: None },
+            &Interrupt::NONE,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            transfer(
+                snapshot,
+                Some(&white),
+                TransferPolicy { enter: false, unselected: true, indicates: ColorIndicates::MaskedAreas, rewrite_empty: None },
+                &Interrupt::NONE
+            )
+            .unwrap()
+            .is_none()
+        );
     }
     #[test]
     fn invalid_native_domain_and_cancellation_leave_source_unchanged() {
@@ -386,10 +513,26 @@ mod tests {
         let session = fixture(SampleType::F64, &bytes);
         let snapshot = session.active().unwrap().doc.clone();
         let source = snapshot.selection.as_ref().unwrap();
-        assert!(transfer(&snapshot, Some(source), true, &Interrupt::NONE).is_err());
+        assert!(
+            transfer(
+                &snapshot,
+                Some(source),
+                TransferPolicy { enter: true, unselected: false, indicates: ColorIndicates::MaskedAreas, rewrite_empty: None },
+                &Interrupt::NONE
+            )
+            .is_err()
+        );
         let cancel = || true;
         let control = Interrupt::cancel_only(&cancel);
-        assert!(matches!(transfer(&snapshot, Some(source), true, &control), Err(EngineError::Cancelled)));
+        assert!(matches!(
+            transfer(
+                &snapshot,
+                Some(source),
+                TransferPolicy { enter: true, unselected: false, indicates: ColorIndicates::MaskedAreas, rewrite_empty: None },
+                &control
+            ),
+            Err(EngineError::Cancelled)
+        ));
         assert!(session.active().unwrap().doc.shares_state(&snapshot));
         assert_eq!(source.try_read_interleaved_with(snapshot.bounds(), &Interrupt::NONE).unwrap(), bytes);
     }

@@ -44,7 +44,7 @@ fn source_surface(doc: &Document) -> Result<&Surface> {
         || layer.video.is_some()
         || layer.fill_cache.is_some()
         || !layer.psd_blocks.is_empty()
-        || layer.effects != Default::default()
+        || layer.effects != (photocraft_doc::Effects { enabled: layer.effects.enabled, ..Default::default() })
         || layer.blend_if != Default::default()
         || layer.advanced != Default::default()
         || layer.excluded_channels != 0

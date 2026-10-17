@@ -63,10 +63,10 @@ fn settings(params: &Value, spot: bool) -> Result<Settings> {
             return Err(bad(cmd(spot), "unknown channel parameter"));
         }
     }
-    if let Some(value) = params.get("name") {
-        if !value.as_str().is_some_and(|name| name.len() <= NAME_LIMIT && !name.contains('\0')) {
-            return Err(bad(cmd(spot), "bounded UTF-8 name required"));
-        }
+    if let Some(value) = params.get("name")
+        && !value.as_str().is_some_and(|name| name.len() <= NAME_LIMIT && !name.contains('\0'))
+    {
+        return Err(bad(cmd(spot), "bounded UTF-8 name required"));
     }
     let color = match params.get("color") {
         None => AlphaChannel::DEFAULT_COLOR,

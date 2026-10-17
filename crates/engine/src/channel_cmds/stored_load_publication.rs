@@ -213,6 +213,9 @@ mod tests {
         doc.xcf_state = Some(state);
         let mut session = Session::new();
         session.add_document(doc, None).unwrap();
+        // The test-only draft prepares the explicitly plain-history receipt.
+        // Byte-budgeted resident publication is exercised separately below.
+        session.active_mut().unwrap().history.max_bytes = 0;
         (session, ChannelId(19))
     }
     #[test]

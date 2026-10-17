@@ -173,14 +173,13 @@ fn prepare(source: &DocumentSnapshot, target: &DocumentSnapshot, existing: Optio
             return Err(error("canonical imported channel replacement needs an independently qualified current-state edit"));
         }
     }
-    if !raw {
-        if source.selection.as_ref().is_some_and(|s| matches!(s.format().sample, SampleType::U32 | SampleType::F64))
+    if !raw
+        && (source.selection.as_ref().is_some_and(|s| matches!(s.format().sample, SampleType::U32 | SampleType::F64))
             || matches!(target.depth, SampleType::U32 | SampleType::F64)
             || source.xcf_state.is_some()
-            || target.xcf_state.is_some()
-        {
-            return Err(error("wide or imported selection arithmetic is not qualified for legacy f32 math"));
-        }
+            || target.xcf_state.is_some())
+    {
+        return Err(error("wide or imported selection arithmetic is not qualified for legacy f32 math"));
     }
     let limits = photocraft_io::NativeSaveLimits::default().preparation;
     let mut peak = 0u64;
@@ -198,7 +197,7 @@ fn prepare(source: &DocumentSnapshot, target: &DocumentSnapshot, existing: Optio
             .and_then(|n| n.checked_add(raster.clone_metadata_bytes.checked_mul(4)?))
             .ok_or_else(|| error("snapshot/model budget overflow"))?;
     }
-    let bytes = checked_region_byte_len(area, channel_format(target)).map_err(|e| error(e))? as u64;
+    let bytes = checked_region_byte_len(area, channel_format(target)).map_err(error)? as u64;
     let pixels = area.size().area();
     let work = pixels
         .checked_mul(32)
@@ -239,7 +238,7 @@ fn string_copy(text: &str) -> Result<String> {
     Ok(name)
 }
 fn zero_surface(format: photocraft_color::PixelFormat) -> Result<Surface> {
-    Surface::try_with_default_bytes(format, [0u8; 8].get(..format.bytes_per_pixel()).ok_or_else(|| error("invalid channel format"))?).map_err(|e| error(e))
+    Surface::try_with_default_bytes(format, [0u8; 8].get(..format.bytes_per_pixel()).ok_or_else(|| error("invalid channel format"))?).map_err(error)
 }
 fn plane(source: &Document, target: &Document, existing: Option<usize>, op: &str, raw: bool, control: &Interrupt<'_>) -> Result<Surface> {
     let area = target.bounds();
@@ -262,7 +261,7 @@ fn plane(source: &Document, target: &Document, existing: Option<usize>, op: &str
         if matches!(fmt.sample, SampleType::F32 | SampleType::F64) {
             for chunk in bytes.chunks_exact(fmt.sample.bytes()) {
                 poll(control)?;
-                let v = photocraft_color::try_read_sample_f64(chunk, fmt.sample, 0).map_err(|e| error(e))?;
+                let v = photocraft_color::try_read_sample_f64(chunk, fmt.sample, 0).map_err(error)?;
                 if !v.is_finite() || !(0.0..=1.0).contains(&v) {
                     return Err(error("invalid native coverage sample"));
                 }
@@ -290,7 +289,7 @@ fn ordinary_plane(source: &Document, target: &Document, existing: Option<usize>,
     for tile in area.tiles() {
         poll(control)?;
         let r = tile.rect().intersect(&area);
-        let length = checked_region_byte_len(r, fmt).map_err(|e| error(e))?;
+        let length = checked_region_byte_len(r, fmt).map_err(error)?;
         let mut raw = Vec::new();
         raw.try_reserve_exact(length).map_err(|_| error("output allocation"))?;
         if raw.capacity() != length {

@@ -84,10 +84,10 @@ fn request(session: &Session, params: &Value) -> Result<Request> {
         None => false,
         Some(value) => value.as_bool().ok_or_else(|| bad(CMD, "invert must be boolean"))?,
     };
-    if let Some(name) = params.get("name") {
-        if !name.as_str().is_some_and(|name| name.len() <= NAME_BYTES && !name.contains('\0')) {
-            return Err(bad(CMD, "name must be bounded UTF-8 without NUL"));
-        }
+    if let Some(name) = params.get("name")
+        && !name.as_str().is_some_and(|name| name.len() <= NAME_BYTES && !name.contains('\0'))
+    {
+        return Err(bad(CMD, "name must be bounded UTF-8 without NUL"));
     }
     match (params.get("documentId"), params.get("expectedRevision")) {
         (None, None) => {}
@@ -109,10 +109,10 @@ fn request(session: &Session, params: &Value) -> Result<Request> {
         ChanRef::Alpha(index) => Some(source.doc.channels.get(index).ok_or_else(|| bad(CMD, "channel index out of range"))?.id),
         _ => None,
     };
-    if let Some(id) = source_id {
-        if id.0 == 0 || source.doc.channels.iter().filter(|channel| channel.id == id).count() != 1 {
-            return Err(bad(CMD, "ambiguous source channel identity"));
-        }
+    if let Some(id) = source_id
+        && (id.0 == 0 || source.doc.channels.iter().filter(|channel| channel.id == id).count() != 1)
+    {
+        return Err(bad(CMD, "ambiguous source channel identity"));
     }
     let metadata =
         source_id.is_some_and(|id| source.doc.xcf_state.as_ref().is_some_and(|state| state.items.iter().any(|item| item.item == ItemRef::Channel(id))));
@@ -153,12 +153,11 @@ fn request(session: &Session, params: &Value) -> Result<Request> {
         if target.doc.size != source.doc.size || target.revision == u64::MAX || target.doc.channels.len() >= 10000 {
             return Err(bad(CMD, "destination dimensions/revision/channel limit"));
         }
-        if let Some(surface) = selected {
-            if surface.format() != channel_format(&target.doc)
-                && (matches!(surface.format().sample, SampleType::U32 | SampleType::F64) || matches!(target.doc.depth, SampleType::U32 | SampleType::F64))
-            {
-                return Err(bad(CMD, "wide cross-depth channel conversion is not qualified"));
-            }
+        if let Some(surface) = selected
+            && surface.format() != channel_format(&target.doc)
+            && (matches!(surface.format().sample, SampleType::U32 | SampleType::F64) || matches!(target.doc.depth, SampleType::U32 | SampleType::F64))
+        {
+            return Err(bad(CMD, "wide cross-depth channel conversion is not qualified"));
         }
     } else if selected.is_some_and(|surface| {
         surface.format().sample != source.doc.depth
@@ -207,16 +206,26 @@ fn tiles(bounds: Rect) -> Result<u64> {
     let h = (i64::from(bounds.y1) - i64::from(bounds.y0)) as u64;
     w.div_ceil(TILE_SIZE as u64).checked_mul(h.div_ceil(TILE_SIZE as u64)).ok_or_else(|| bad(CMD, "tile count overflow"))
 }
+#[cfg(test)]
 fn admission(source: &Document, target: Option<&Document>, reference: ChanRef, ctl: &Interrupt<'_>) -> Result<()> {
+    let prep = super::SourcePreparation::new(CMD, ctl)?;
+    admission_prepared(source, target, reference, false, ctl, &prep)
+}
+fn admission_prepared(
+    source: &Document,
+    target: Option<&Document>,
+    reference: ChanRef,
+    inverted: bool,
+    ctl: &Interrupt<'_>,
+    prep: &super::SourcePreparation<'_, '_>,
+) -> Result<()> {
     poll(ctl)?;
     let (area, pixels) = source_dimensions(source, CMD)?;
     let mut retained = 16u64 << 20;
     let mut work = 0u64;
     for doc in std::iter::once(source).chain(target) {
         poll(ctl)?;
-        let limits = photocraft_io::NativeSaveLimits::default().preparation;
-        let payload = photocraft_io::retained_native_payload_bytes(doc, limits, ctl).map_err(|e| error(ctl, e))? as u64;
-        let model = photocraft_io::retained_native_model_bytes(doc, limits, ctl).map_err(|e| error(ctl, e))? as u64;
+        let (model, payload) = prep.census(doc)?;
         let raster = crate::DocumentSnapshot::resident_raster_footprint_of(doc, ctl)?;
         retained = retained
             .checked_add(payload)
@@ -265,7 +274,25 @@ fn admission(source: &Document, target: Option<&Document>, reference: ChanRef, c
         .and_then(|n| n.checked_add((pixels as u64).checked_mul(128)?))
         .filter(|n| *n <= 8_000_000_000)
         .ok_or_else(|| bad(CMD, "channel duplicate work limit"))?;
-    let _ = (retained, work);
+    prep.debit(work)?;
+    let selected = selected_channel(source, reference)?;
+    let source_format = selected.map_or(channel_format(source), |channel| channel.surface.format());
+    // Distinct actual phases: extraction, optional inversion, then destination
+    // conversion/new image. Do not hide the third output behind a two-tile sum.
+    if selected.is_none() {
+        prep.physical_output(canvas_tiles, source_format.bytes_per_pixel() as u64)?;
+    }
+    if inverted {
+        prep.physical_output(canvas_tiles, source_format.bytes_per_pixel() as u64)?;
+    }
+    match target {
+        None => prep.physical_output(canvas_tiles, (source.depth.bytes() * 2) as u64)?,
+        Some(target) if channel_format(target) != source_format => {
+            prep.physical_output(source_tiles.max(canvas_tiles), channel_format(target).bytes_per_pixel() as u64)?
+        }
+        Some(_) => {}
+    }
+    prep.admit_peak(retained)?;
     poll(ctl)
 }
 
@@ -360,7 +387,19 @@ fn plane_surface_controlled(plane: &[f32], area: Rect, format: PixelFormat, ctl:
     poll(ctl)?;
     Ok(surface)
 }
+#[cfg(test)]
 fn prepare_channel(source: &Document, active_layer: Option<LayerId>, request: Request, name: String, ctl: &Interrupt<'_>) -> Result<AlphaChannel> {
+    let prep = super::SourcePreparation::new(CMD, ctl)?;
+    prepare_channel_prepared(source, active_layer, request, name, ctl, &prep)
+}
+fn prepare_channel_prepared(
+    source: &Document,
+    active_layer: Option<LayerId>,
+    request: Request,
+    name: String,
+    ctl: &Interrupt<'_>,
+    prep: &super::SourcePreparation<'_, '_>,
+) -> Result<AlphaChannel> {
     poll(ctl)?;
     let area = source.bounds();
     let mut channel = match selected_channel(source, request.reference)? {
@@ -374,12 +413,13 @@ fn prepare_channel(source: &Document, active_layer: Option<LayerId>, request: Re
             indicates: channel.indicates,
         },
         None => {
-            let planes = super::source_from_snapshot_with_interrupt(
+            let planes = super::source_from_snapshot_prepared(
                 source,
                 active_layer,
                 super::SnapshotSource { layer: None, channel: request.reference, gray: true, invert: false },
                 CMD,
                 ctl,
+                prep,
             )?;
             let plane = planes.first().filter(|_| planes.len() == 1).ok_or_else(|| bad(CMD, "expected one source plane"))?;
             AlphaChannel::new(name, plane_surface_controlled(plane, area, channel_format(source), ctl)?)
@@ -600,11 +640,12 @@ pub(super) fn run(session: &mut Session, params: &Value) -> Result<Value> {
         true,
         move |ctx| {
             ctx.stage(0.0, 0.95, "Duplicate Channel", |ctl| {
-                admission(&source_work, target_work.as_ref().map(|(doc, _)| &**doc), request.reference, ctl)?;
+                let prep = super::SourcePreparation::new(CMD, ctl)?;
+                admission_prepared(&source_work, target_work.as_ref().map(|(doc, _)| &**doc), request.reference, request.invert, ctl, &prep)?;
                 if request.invert {
                     invert_policy(&source_work, request.source_id, ctl)?;
                 }
-                let mut channel = prepare_channel(&source_work, active_layer, request, name, ctl)?;
+                let mut channel = prepare_channel_prepared(&source_work, active_layer, request, name, ctl, &prep)?;
                 let output = match &target_work {
                     None => new_image(&source_work, &channel, ctl)?,
                     Some((target, _)) => {
@@ -659,6 +700,8 @@ pub(super) fn run(session: &mut Session, params: &Value) -> Result<Value> {
 
 // Draft regressions: intentionally not executed in the implementation-only wave.
 #[cfg(test)]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unreachable)]
 mod tests {
     use super::*;
     use photocraft_doc::Size;

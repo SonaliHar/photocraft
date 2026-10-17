@@ -698,10 +698,10 @@ fn hints_for(doc: &DocumentSnapshot, ctl: &Interrupt<'_>, save: bool) -> Result<
     if !native_ids.insert(target_id) {
         return empty(ctl);
     }
-    if let Some(quick) = &doc.quick_mask {
-        if quick.id.0 == 0 || !native_ids.insert(quick.id) {
-            return empty(ctl);
-        }
+    if let Some(quick) = &doc.quick_mask
+        && (quick.id.0 == 0 || !native_ids.insert(quick.id))
+    {
+        return empty(ctl);
     }
     for channel in &doc.channels {
         poll(ctl)?;

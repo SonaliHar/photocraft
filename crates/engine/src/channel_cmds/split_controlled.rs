@@ -43,7 +43,7 @@ fn source_surface(doc: &Document) -> Result<&Surface> {
         || layer.video.is_some()
         || layer.fill_cache.is_some()
         || !layer.psd_blocks.is_empty()
-        || layer.effects != Default::default()
+        || layer.effects != (photocraft_doc::Effects { enabled: layer.effects.enabled, ..Default::default() })
         || layer.blend_if != Default::default()
         || layer.advanced != Default::default()
         || layer.excluded_channels != 0
@@ -319,7 +319,7 @@ pub(super) fn try_run(session: &mut Session, params: &Value) -> Result<Option<Va
                     let first = label.chars().next().ok_or_else(|| bad("color component name"))?.to_ascii_uppercase();
                     let suffix = first.encode_utf8(&mut suffix_bytes);
                     let surface = output_surface(source_surface(&worker)?, component, worker.bounds(), worker.depth, ctl)?;
-                    outputs.push(make_state(&worker, output_name(&worker.name, &suffix)?, surface, ctl)?);
+                    outputs.push(make_state(&worker, output_name(&worker.name, suffix)?, surface, ctl)?);
                 }
                 for channel in &worker.channels {
                     poll(ctl)?;

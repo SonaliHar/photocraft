@@ -141,6 +141,36 @@ pub(crate) fn dispatch_preflight(session: &Session, command: &str, params: &Valu
     }
     Ok(())
 }
+// Ordinary synthetic/current canonical rows may be deleted with their real channel.
+// A retained original source row is not permission for this narrower lane.
+fn ordinary_current_channel_row(document: &Document, id: ChannelId, control: &Interrupt<'_>) -> Result<Option<usize>> {
+    let Some(state) = &document.xcf_state else { return Ok(None) };
+    if document.source_color_context.is_some()
+        || state.provenance != Default::default()
+        || !state.source_items.is_empty()
+        || !state.resources.is_empty()
+        || !state.opaque.is_empty()
+    {
+        return Ok(None);
+    }
+    let mut found = None;
+    for (at, item) in state.items.iter().enumerate() {
+        poll(control)?;
+        if item.item == ItemRef::Channel(id) {
+            if found.is_some()
+                || item.parent.is_some()
+                || item.mask.is_some()
+                || item.composition.is_some()
+                || item.source_tattoo.is_some()
+                || item.source_flags != 0
+            {
+                return Ok(None);
+            }
+            found = Some(at);
+        }
+    }
+    Ok(found)
+}
 fn relation(document: &Document, id: ChannelId, edit: Edit<'_>, command: &str, control: &Interrupt<'_>) -> Result<()> {
     poll(control)?;
     if document.selection_channel_id == Some(id) {
@@ -182,8 +212,11 @@ fn relation(document: &Document, id: ChannelId, edit: Edit<'_>, command: &str, c
         }
         Ok(())
     };
-    for item in &state.items {
-        reference(item.item)?;
+    let own_row = if deleting { ordinary_current_channel_row(document, id, control)? } else { None };
+    for (at, item) in state.items.iter().enumerate() {
+        if Some(at) != own_row {
+            reference(item.item)?;
+        }
         if let Some(parent) = item.parent {
             reference(parent)?;
         }
@@ -256,7 +289,7 @@ fn view_copy(view: &ChannelView, command: &str) -> Result<ChannelView> {
         color_hidden: copy(&view.color_hidden)?,
         alpha_visible: copy(&view.alpha_visible)?,
         quick_mask_hidden: view.quick_mask_hidden,
-        layer_mask: view.layer_mask.clone(),
+        layer_mask: view.layer_mask,
         editing_mask: view.editing_mask,
     })
 }
@@ -334,7 +367,17 @@ pub(crate) fn run(session: &mut Session, command: &str, params: &Value) -> Resul
                     return Err(error(&command, "stale channel identity"));
                 }
                 if deleting {
+                    let own_row = ordinary_current_channel_row(&before, id, control)?;
                     candidate.channels.remove(index);
+                    if let Some(at) = own_row {
+                        let state = candidate.xcf_state.as_mut().ok_or_else(|| error(&command, "missing current channel metadata"))?;
+                        if state.items.get(at).is_none_or(|item| item.item != ItemRef::Channel(id)) {
+                            return Err(error(&command, "stale current channel metadata"));
+                        }
+                        poll(control)?;
+                        state.items.remove(at);
+                        poll(control)?;
+                    }
                 } else if let Some(to) = edit_index(edit) {
                     let channel = candidate.channels.remove(index);
                     candidate.channels.insert(to, channel);
@@ -469,19 +512,36 @@ mod tests {
     fn imported_name_sync_and_referenced_delete_refusal_preserve_metadata() {
         let mut session = fixture(true);
         let id = session.active().unwrap().doc.channels[0].id;
+        session
+            .edit("Retain saved channel membership", |document, _| {
+                document.xcf_state.as_mut().unwrap().item_sets.push(photocraft_doc::xcf_editing::ItemSet {
+                    id: photocraft_doc::item_identity::ItemSetId(701),
+                    name: "Retained channel membership".into(),
+                    family: photocraft_doc::xcf_editing::ItemFamily::Channel,
+                    rule: photocraft_doc::xcf_editing::ItemSetRule::Named,
+                    members: vec![ItemRef::Channel(id)],
+                });
+                Ok(())
+            })
+            .unwrap();
+        session.active().unwrap().doc.validate_xcf_state().unwrap();
         run(&mut session, "channel.rename", &json!({"channelId":id.0.to_string(),"name":"  Current name "})).unwrap();
         let state = session.active().unwrap();
         let xcf = state.doc.xcf_state.as_ref().unwrap();
         let item = xcf.items.iter().find(|item| item.item == ItemRef::Channel(id)).unwrap();
         assert_eq!(item.name, "Current name");
         assert!(item.custom_name);
+        assert_eq!(xcf.item_sets[0].members, vec![ItemRef::Channel(id)]);
         let before = state.doc.clone();
+        let native = photocraft_format::save_to_bytes(&before, &Default::default()).unwrap();
         let view = state.channel_view.clone();
         let history = state.history.past_len();
         assert!(run(&mut session, "channel.delete", &json!({"channelId":id.0.to_string()})).is_err());
         assert!(session.active().unwrap().doc.shares_state(&before));
         assert_eq!(session.active().unwrap().channel_view, view);
         assert_eq!(session.active().unwrap().history.past_len(), history);
+        assert_eq!(photocraft_format::save_to_bytes(&session.active().unwrap().doc, &Default::default()).unwrap(), native);
+        session.active().unwrap().doc.validate_xcf_state().unwrap();
     }
     #[test]
     fn targeted_delete_and_noop_keep_legacy_view_rules() {

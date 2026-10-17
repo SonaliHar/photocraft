@@ -35,7 +35,8 @@ fn newly_created_layer_masks_follow_document_depth() {
                 }
                 let before = s.active().unwrap().doc.clone();
                 let history = s.active().unwrap().history.past_len();
-                s.execute(command, json!({"color": "#000000"})).unwrap();
+                let params = if command == "layer.newFillLayer.solidColor" { json!({"color":"#000000"}) } else { json!({}) };
+                s.execute(command, params).unwrap();
                 let d = s.active().unwrap();
                 let m = mask(&d.doc);
                 assert_eq!(m.surface.format(), PixelFormat::new(ColorMode::Grayscale, sample, false), "{command}, {depth}-bit {mode}");
@@ -84,7 +85,7 @@ fn soft_mask_edits_match_after_native_and_psd_reopen() {
             assert_eq!(photocraft_compose::flatten(&reopened), photocraft_compose::flatten(&before));
             let layer = reopened.walk().into_iter().find_map(|(_, _, l)| l.mask.as_ref().map(|_| l.id.0)).unwrap();
             let mut edited = Session::new();
-            edited.add_document(reopened, None);
+            edited.add_document(reopened, None).unwrap();
             let undo_doc = edited.active().unwrap().doc.clone();
             edited
                 .execute(
@@ -124,13 +125,14 @@ fn mask_creation_preserves_selection_coverage_and_existing_masks() {
                 selection.write_region(photocraft_geom::Rect::new(0, 0, 16, 16), &(0..256).map(|i| i as f32 / 255.0).collect::<Vec<_>>());
                 doc.selection = Some(selection);
                 let mut existing = LayerMask::reveal_all();
-                existing.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[0.123456]);
+                existing.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[0.123456]).into();
                 doc.layers[0].mask = Some(existing);
                 Ok(())
             })
             .unwrap();
             let before = s.active().unwrap().doc.clone();
-            s.execute(command, json!({"from": [0, 0], "to": [64, 48]})).unwrap();
+            let params = if command == "gradient.fill.create" { json!({"from":[0,0],"to":[64,48]}) } else { json!({}) };
+            s.execute(command, params).unwrap();
             let after = &s.active().unwrap().doc;
             let added = after.layer(s.active().unwrap().active_layer.unwrap()).unwrap().mask.as_ref().unwrap();
             assert_eq!(
