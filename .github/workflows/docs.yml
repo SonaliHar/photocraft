@@ -1,21 +1,21 @@
 name: Documentation
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "book/**"
-      - "docs/**"
-      - "README.md"
-      - "SECURITY.md"
-      - ".github/workflows/docs.yml"
-  pull_request:
-    paths:
-      - "book/**"
-      - "docs/**"
-      - "README.md"
-      - "SECURITY.md"
-      - ".github/workflows/docs.yml"
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "book/**"
+  #     - "docs/**"
+  #     - "README.md"
+  #     - "SECURITY.md"
+  #     - ".github/workflows/docs.yml"
+  # pull_request:
+  #   paths:
+  #     - "book/**"
+  #     - "docs/**"
+  #     - "README.md"
+  #     - "SECURITY.md"
+  #     - ".github/workflows/docs.yml"
   workflow_dispatch:
 
 permissions:
