@@ -43,15 +43,16 @@ pub(super) fn native(doc: &Document) -> Vec<u8> {
                 let mut pixel = [0; 16];
                 pin.read_pixel_native_into(x, y, &mut pixel, &ctl()).unwrap();
                 // Producer native captures explicitly declare little endian.
-                for (channel, word) in pixel.chunks_exact(4).enumerate() {
+                for (channel, word) in pixel.as_chunks::<4>().0.iter().enumerate() {
                     let at = (y as usize * 16 + x as usize) * 16 + channel * 4;
-                    bytes[at..at + 4].copy_from_slice(&u32::from_ne_bytes(word.try_into().unwrap()).to_le_bytes());
+                    bytes[at..at + 4].copy_from_slice(&u32::from_ne_bytes(*word).to_le_bytes());
                 }
             }
         }
     }
     bytes
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 pub(super) fn observed(doc: &Document) {
     let original = doc.source_color_context.as_ref().unwrap().original_icc.as_deref().unwrap();
     // Independent bounded ICC extraction eece3885, from actual saved XCFs;
@@ -61,17 +62,19 @@ pub(super) fn observed(doc: &Document) {
     for (offset, gamma) in [(520, 104858i32), (560, 150733), (600, 183501)] {
         assert_eq!(&original[offset..offset + 4], b"para");
         assert_eq!(u16::from_be_bytes(original[offset + 8..offset + 10].try_into().unwrap()), 4);
-        let words: Vec<_> = original[offset + 12..offset + 40].chunks_exact(4).map(|b| i32::from_be_bytes(b.try_into().unwrap())).collect();
+        let words: Vec<_> = original[offset + 12..offset + 40].as_chunks::<4>().0.iter().map(|b| i32::from_be_bytes(*b)).collect();
         assert_eq!(words, [gamma, 65536, 0, 65536, 0, 0, 0]);
     }
     assert!(doc.icc_profile.is_some());
     let native = native(doc);
     assert_eq!(hash(&native), "3102cfa5ba9eb6cf718b767257d474fc865e0b5fa93e8b3622adeebd7fefaadf");
     let outside: Vec<_> = native
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .enumerate()
         .filter_map(|(i, raw)| {
-            let bits = u32::from_le_bytes(raw.try_into().unwrap());
+            let bits = u32::from_le_bytes(*raw);
             let value = f32::from_bits(bits);
             assert!(value.is_finite());
             if i % 4 == 3 {
@@ -82,6 +85,7 @@ pub(super) fn observed(doc: &Document) {
         .collect();
     assert_eq!(outside, [(209, 0x3f80160b), (250, 0xba15c5a6), (290, 0x3f8024b8), (294, 0xbb93e671), (630, 0xb9477e7b)]);
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 pub(super) fn exact(a: &Document, b: &Document) {
     assert_eq!(a.icc_profile, b.icc_profile);
     assert_eq!(a.source_color_context, b.source_color_context);
@@ -108,6 +112,7 @@ pub(super) fn exact(a: &Document, b: &Document) {
         }
     }
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 pub(super) fn archive(owner: &photocraft_doc::accounted_document::AccountedDocument) -> photocraft_format::owned_document::OwnedDocumentArchive {
     let bytes =
         photocraft_format::owned_document::save_current_document_archive(owner.document(), Cursor::new(Vec::new()), Default::default(), owner.quota(), &ctl())

@@ -10,14 +10,18 @@ use photocraft_doc::{
     xcf_resources::{ResourceKind, ResourceReference},
 };
 use photocraft_engine::Session;
+use photocraft_raster::backing::BackingError;
 use photocraft_raster::backing::quota::{BackingQuota, QuotaKind, QuotaLease, QuotaLimits};
 use serde_json::json;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::{
     any::Any,
     io::{Cursor, Write},
     sync::Arc,
 };
 #[path = "../../xcf/tests/common/mod.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod xcf;
 
 fn control() -> ReadControl<'static> {

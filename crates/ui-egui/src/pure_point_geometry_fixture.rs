@@ -122,7 +122,7 @@ fn build(family: Family, sample: SampleType, variant: usize, offset: bool, malfo
     let model = q.reserve(QuotaKind::Index, 2 << 20).unwrap();
     // Prospectively hold profile construction/storage before encoding builtin bytes.
     let profile_fee = q.reserve(QuotaKind::Resident, 16 << 20).unwrap();
-    let profiles = Profiles { current: Arc::new(photocraft_cms::Builtin::Srgb.profile().to_bytes()), original: None, _fee: profile_fee };
+    let profiles = Profiles { current: photocraft_cms::Builtin::Srgb.profile().to_bytes(), original: None, _fee: profile_fee };
     let canvas = if variant == 0 { Size::new(257, 259) } else { Size::new(1, 257) };
     let bounds = Rect::from_xywh(if offset { 1 } else { 0 }, 0, canvas.width, canvas.height);
     let mut doc = Document::new("Synthetic origin pure-point CURRENT", canvas, ColorMode::Rgb, sample);
@@ -264,8 +264,7 @@ fn build(family: Family, sample: SampleType, variant: usize, offset: bool, malfo
     let census = photocraft_io::retained_native_model_census(&doc, Default::default(), &Interrupt::NONE).unwrap();
     assert!(census.retained_bytes() as u64 <= model.bytes());
     let guard = Arc::new((profiles, model, mask_fee));
-    let owner = AccountedDocument::new_readonly_point_storage(doc, guard, q, &ctl()).unwrap();
-    owner
+    AccountedDocument::new_readonly_point_storage(doc, guard, q, &ctl()).unwrap()
 }
 pub(super) fn archive(owner: &AccountedDocument) -> photocraft_format::owned_document::OwnedDocumentArchive {
     native::archive(owner)
@@ -278,6 +277,8 @@ pub(super) fn raw(doc: &Document) -> Vec<u8> {
 }
 #[path = "canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod native;
 pub(super) fn storage(a: &Document, b: &Document) {
     assert_eq!(a.size, b.size);

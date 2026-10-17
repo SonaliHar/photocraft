@@ -3,6 +3,8 @@
 //! producer ICC equality waiver or independent derived-display claim.
 #[path = "canvas_assigned_box_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod original;
 use photocraft_doc::{
     Document,
@@ -52,13 +54,13 @@ pub(super) fn observed(path: &Path, doc: &Document) {
     for (offset, gamma) in [(520, 104858i32), (560, 150733), (600, 183501)] {
         assert_eq!(&original[offset..offset + 4], b"para");
         assert_eq!(u16::from_be_bytes(original[offset + 8..offset + 10].try_into().unwrap()), 4);
-        let words: Vec<_> = original[offset + 12..offset + 40].chunks_exact(4).map(|b| i32::from_be_bytes(b.try_into().unwrap())).collect();
+        let words: Vec<_> = original[offset + 12..offset + 40].as_chunks::<4>().0.iter().map(|b| i32::from_be_bytes(*b)).collect();
         assert_eq!(words, [gamma, 65536, 0, 65536, 0, 0, 0]);
     }
     let bytes = original::native(doc);
     assert_eq!(original::hash(&bytes), native_hash(path));
-    for (i, word) in bytes.chunks_exact(4).enumerate() {
-        let value = f32::from_bits(u32::from_le_bytes(word.try_into().unwrap()));
+    for (i, word) in bytes.as_chunks::<4>().0.iter().enumerate() {
+        let value = f32::from_bits(u32::from_le_bytes(*word));
         assert!(value.is_finite());
         if i % 4 == 3 {
             assert!((0.0..=1.0).contains(&value));

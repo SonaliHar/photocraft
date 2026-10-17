@@ -12,6 +12,8 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 #[path = "canvas_flat_translate_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod current;
 pub(super) fn ctl() -> photocraft_raster::backing::ReadControl<'static> {
     current::ctl()
@@ -152,7 +154,7 @@ pub(super) fn observed(root: &Path, case: &Case, doc: &Document) {
         }
         let mut expected = std::fs::read(root.join(row["native"]["file"].as_str().unwrap())).unwrap();
         if cfg!(target_endian = "big") {
-            for word in expected.chunks_exact_mut(4) {
+            for word in expected.as_chunks_mut::<4>().0 {
                 word.reverse();
             }
         }
@@ -196,7 +198,7 @@ pub(super) fn zero_y_archive(owner: &photocraft_doc::accounted_document::Account
     let LayerContent::BackedRaster(base) = &mut doc.layers[0].content else { panic!("native base") };
     let bounds = base.operative_bounds();
     let mut bytes = vec![0; bounds.width() as usize * bounds.height() as usize * 16];
-    for pixel in bytes.chunks_exact_mut(16) {
+    for pixel in bytes.as_chunks_mut::<16>().0 {
         pixel[12..16].copy_from_slice(&1f32.to_ne_bytes());
     }
     base.try_write_native(bounds, &bytes, &ctl()).unwrap();

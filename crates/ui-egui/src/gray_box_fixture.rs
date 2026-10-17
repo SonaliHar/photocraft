@@ -4,9 +4,13 @@
 //! GIMP effective/Babl profile byte roles are not equated or normalized.
 #[path = "observed_box_move_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod current;
 #[path = "canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod native;
 use photocraft_doc::{Document, LayerContent, SampleType};
 use sha2::{Digest, Sha256};
@@ -18,6 +22,49 @@ pub(super) fn archive(owner: &photocraft_doc::accounted_document::AccountedDocum
 }
 pub(super) fn exact(a: &Document, b: &Document, dx: i32, dy: i32) {
     current::exact(a, b, dx, dy)
+}
+// External oracle storage only: this bound is per logical buffer, not whole peak or quota.
+fn bulk_gray_linear_reference(bounds: photocraft_doc::Rect, values: &[f64]) -> photocraft_raster::Surface {
+    let format = photocraft_doc::PixelFormat::new(photocraft_doc::ColorMode::Rgb, SampleType::F64, true);
+    let bytes = photocraft_raster::checked_region_byte_len(bounds, format).unwrap();
+    assert!(bounds.width() <= 1024 && bounds.height() <= 1024 && bytes <= 16 << 20);
+    assert_eq!(values.len().checked_mul(std::mem::size_of::<f64>()), Some(bytes));
+    let mut linear = photocraft_raster::Surface::new(format);
+    linear.try_write_region_f64(bounds, values).unwrap();
+    linear
+}
+#[test]
+fn bulk_gray_box_reference_preserves_cross_tile_raw_words_and_padding() {
+    let bounds = photocraft_doc::Rect::new(-1, 255, 2, 258);
+    let format = photocraft_doc::PixelFormat::new(photocraft_doc::ColorMode::Rgb, SampleType::F64, true);
+    let mut old = photocraft_raster::Surface::new(format);
+    let mut values = Vec::new();
+    for y in bounds.y0..bounds.y1 {
+        for x in bounds.x0..bounds.x1 {
+            let gray = if x == -1 {
+                -0.0
+            } else if x == 0 {
+                f64::from_bits(0x3fd0000000000001)
+            } else {
+                1.125
+            };
+            let alpha = if y == 256 { -0.0 } else { 0.75 };
+            let pixel = [gray, gray, gray, alpha];
+            old.try_write_pixel_f64(x, y, &pixel).unwrap();
+            values.extend_from_slice(&pixel);
+        }
+    }
+    let bulk = bulk_gray_linear_reference(bounds, &values);
+    assert_eq!(old.format(), bulk.format());
+    assert_eq!(old.default_bytes(), bulk.default_bytes());
+    assert_eq!(
+        old.try_content_bounds_with_interrupt(&photocraft_raster::Interrupt::NONE).unwrap(),
+        bulk.try_content_bounds_with_interrupt(&photocraft_raster::Interrupt::NONE).unwrap()
+    );
+    assert_eq!(old.try_read_interleaved(bounds).unwrap(), bulk.try_read_interleaved(bounds).unwrap());
+    let old_tiles: Vec<_> = old.tiles().map(|(coord, tile)| (*coord, tile.bytes().to_vec())).collect();
+    let bulk_tiles: Vec<_> = bulk.tiles().map(|(coord, tile)| (*coord, tile.bytes().to_vec())).collect();
+    assert_eq!(old_tiles, bulk_tiles);
 }
 pub(super) fn reference(doc: &Document) -> photocraft_compose::Buffer {
     use photocraft_doc::import_compositing::{GimpOperator, GimpSpace};
@@ -32,13 +79,18 @@ pub(super) fn reference(doc: &Document) -> photocraft_compose::Buffer {
     // Existing full Surface kernel runs anew over independently shifted raw
     // samples. Never translate a previously filtered bitmap: global256 resets
     // are observable for unaligned moves. All reference buffers are external.
-    let mut linear = photocraft_raster::Surface::new(photocraft_doc::PixelFormat::new(photocraft_doc::ColorMode::Rgb, SampleType::F64, true));
+    let format = photocraft_doc::PixelFormat::new(photocraft_doc::ColorMode::Rgb, SampleType::F64, true);
+    let bytes = photocraft_raster::checked_region_byte_len(literal.bounds, format).unwrap();
+    assert!(literal.bounds.width() <= 1024 && literal.bounds.height() <= 1024 && bytes <= 16 << 20);
+    let mut values = Vec::new();
+    values.try_reserve_exact(bytes / std::mem::size_of::<f64>()).unwrap();
     for y in literal.bounds.y0..literal.bounds.y1 {
         for x in literal.bounds.x0..literal.bounds.x1 {
             let p = gray_sample(&literal, x, y);
-            linear.try_write_pixel_f64(x, y, &[gray_curve.eval64(p[0]), gray_curve.eval64(p[1]), gray_curve.eval64(p[2]), p[3]]).unwrap();
+            values.extend_from_slice(&[gray_curve.eval64(p[0]), gray_curve.eval64(p[1]), gray_curve.eval64(p[2]), p[3]]);
         }
     }
+    let linear = bulk_gray_linear_reference(literal.bounds, &values);
     let extent = if node.enabled { photocraft_algo::gimp::neighborhood::box_blur_extent(literal.bounds, radius as u32).unwrap() } else { literal.bounds };
     let filtered = node.enabled.then(|| {
         photocraft_algo::gimp::neighborhood::try_box_blur(

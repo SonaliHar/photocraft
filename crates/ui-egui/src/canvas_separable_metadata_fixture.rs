@@ -82,8 +82,8 @@ pub(super) fn reference(root: &std::path::Path, case: &Case, doc: &Document) -> 
                 }
                 let p = doc.xcf_state.as_ref().unwrap().items.iter().find(|p| p.item == ItemRef::Layer(layer.id)).unwrap().composition.as_ref().unwrap();
                 let resolved = p.checked_resolved().unwrap();
-                let space = WorkingSpace::new(&profile, doc.sample_encoding.unwrap(), resolved.composite_space).unwrap();
-                let blend = WorkingSpace::new(&profile, doc.sample_encoding.unwrap(), resolved.blend_space).unwrap();
+                let space = WorkingSpace::new(profile, doc.sample_encoding.unwrap(), resolved.composite_space).unwrap();
+                let blend = WorkingSpace::new(profile, doc.sample_encoding.unwrap(), resolved.blend_space).unwrap();
                 let opacity = if inside { f64::from(layer.opacity) } else { 0. };
                 bg = if p.source_mode == 28 {
                     space.normal(bg, pixel, opacity, resolved.operator).unwrap()

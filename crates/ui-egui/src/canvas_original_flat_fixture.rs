@@ -13,6 +13,8 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 #[path = "canvas_flat_current_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod current;
 pub(super) fn ctl() -> photocraft_raster::backing::ReadControl<'static> {
     current::ctl()
@@ -191,7 +193,7 @@ pub(super) fn observed(case: &Case, doc: &Document) {
             }
         }
         if cfg!(target_endian = "big") {
-            for word in native.chunks_exact_mut(4) {
+            for word in native.as_chunks_mut::<4>().0 {
                 word.reverse();
             }
         }

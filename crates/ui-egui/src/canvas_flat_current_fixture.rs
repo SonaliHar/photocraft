@@ -71,7 +71,7 @@ fn build(all_normal: bool, malformed: bool) -> (AccountedDocument, Vec<Literal>)
     let profile = q.reserve(QuotaKind::Resident, 65536).unwrap();
     let mut doc = Document::new("Synthetic current five-layer flat", Size::new(263, 19), ColorMode::Rgb, SampleType::F32);
     doc.sample_encoding = Some(SampleEncoding::NonlinearProfile);
-    doc.icc_profile = Some(Arc::new(photocraft_cms::Builtin::Srgb.profile().to_bytes()));
+    doc.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
     doc.working_profile_interpretation = WorkingProfileInterpretation::implicit_srgb(doc.icc_profile.as_ref().unwrap());
     doc.source_color_context = Some(SourceColorContext { source_precision: 650, original_icc: None });
     let mut state = XcfState::default();

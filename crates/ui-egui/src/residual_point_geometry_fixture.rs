@@ -16,6 +16,8 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 #[path = "canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod native;
 #[derive(Clone, Copy)]
 pub(super) struct Case {
@@ -212,10 +214,10 @@ pub(super) fn changed(doc: &Document) -> Option<serde_json::Value> {
                     let n = bits.as_u64().unwrap();
                     *bits = serde_json::json!(format!("0x{n:016x}"));
                 }
-                if let Some(encoding) = map.get_mut("encoding") {
-                    if *encoding == "NonlinearProfile" {
-                        *encoding = serde_json::json!("nonlinear_profile");
-                    }
+                if let Some(encoding) = map.get_mut("encoding")
+                    && *encoding == "NonlinearProfile"
+                {
+                    *encoding = serde_json::json!("nonlinear_profile");
                 }
                 for value in map.values_mut() {
                     wire(value)

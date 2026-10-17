@@ -1,6 +1,8 @@
 //! Deferred pathless native11 marker routing and deterministic native continuation.
 use super::*;
 #[path = "../../engine/src/accounted_exposure_masked_test_support.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 #[test]
 #[ignore = "UNRUN genuine6 Source→UIactualPoint→v11 pathless nativeadoption, exactmask/native/current display andsource bytes. Internal continuation only, no producer display or visual acceptance."]
@@ -13,7 +15,7 @@ fn masked_native_marker_routes_to_point_and_preserves_display() {
         fixture::observed(&before, &case);
         let display = app.session.color.canvas_display_for(&before, None).unwrap();
         let (image, fee) =
-            crate::canvas_backed_preview::backed_snapshot_display_image(&before, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+            crate::canvas::test_backed_snapshot_display_image(&before, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
         let expected = image.pixels.clone();
         drop((image, fee));
         let mut reopened = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -23,7 +25,7 @@ fn masked_native_marker_routes_to_point_and_preserves_display() {
         fixture::same(&before, &after);
         let display = reopened.session.color.canvas_display_for(&after, None).unwrap();
         let (image, fee) =
-            crate::canvas_backed_preview::backed_snapshot_display_image(&after, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+            crate::canvas::test_backed_snapshot_display_image(&after, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
         assert_eq!(image.pixels, expected);
         drop((image, fee));
         assert_eq!(fixture::bytes(&case), std::fs::read(fixture::workspace().join(case["source"].as_str().unwrap())).unwrap());

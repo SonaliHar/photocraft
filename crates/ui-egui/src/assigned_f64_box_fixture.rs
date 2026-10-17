@@ -1,9 +1,13 @@
 //! Actual authored assigned-F64 sources; raw storage and derived display differ.
 #[path = "observed_box_move_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod current;
 #[path = "canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod native;
 use photocraft_doc::{Document, LayerContent, SampleType};
 use sha2::{Digest, Sha256};
@@ -55,7 +59,7 @@ pub(super) fn observed(doc: &Document) {
     assert_eq!(format!("{:x}", Sha256::digest(original.as_slice())), "abae4941f28e3558cb648775352364b2978e07a3b49e78228836b98a4ac05f46");
     let words = native::native(doc);
     assert_eq!(words.len(), 2130016);
-    let little: Vec<u8> = words.chunks_exact(8).flat_map(|w| u64::from_ne_bytes(w.try_into().unwrap()).to_le_bytes()).collect();
+    let little: Vec<u8> = words.as_chunks::<8>().0.iter().flat_map(|w| u64::from_ne_bytes(*w).to_le_bytes()).collect();
     assert_eq!(format!("{:x}", Sha256::digest(&little)), "a72a5c127254c9c6310ca8d4da3c9e4b0b15db50d7602e6e6cd4fef6fda08cfe");
     for (offset, bits) in [
         (825600, 0xbfc0000000000000u64),

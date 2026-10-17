@@ -48,7 +48,7 @@ fn bounds(row: &Value) -> Rect {
 }
 fn native_order(mut bytes: Vec<u8>) -> Vec<u8> {
     if cfg!(target_endian = "big") {
-        for word in bytes.chunks_exact_mut(4) {
+        for word in bytes.as_chunks_mut::<4>().0 {
             word.reverse();
         }
     }

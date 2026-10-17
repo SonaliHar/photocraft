@@ -13,7 +13,7 @@ fn masked_scalar_source_and_native_display_continue() {
         let before = app.session.active().unwrap().doc.clone();
         fixture::observed(&before, &case);
         let display = app.session.color.canvas_display_for(&before, None).unwrap();
-        let (image, fee) = crate::canvas_backed_preview::backed_snapshot_display_image(
+        let (image, fee) = crate::canvas::test_backed_snapshot_display_image(
             &before,
             before.size.width,
             before.size.height,
@@ -29,7 +29,7 @@ fn masked_scalar_source_and_native_display_continue() {
         assert!(after.accounted().unwrap().is_readonly_point_storage());
         fixture::storage(&before, &after);
         let display = reopened.session.color.canvas_display_for(&after, None).unwrap();
-        let (image, fee) = crate::canvas_backed_preview::backed_snapshot_display_image(
+        let (image, fee) = crate::canvas::test_backed_snapshot_display_image(
             &after,
             after.size.width,
             after.size.height,

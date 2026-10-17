@@ -203,7 +203,7 @@ pub(super) fn observed(case: &Case, doc: &Document) {
         assert_eq!(p.compatibility_epoch, epoch);
         let mut expected = checked(&case.root, &row["native"]);
         if cfg!(target_endian = "big") {
-            for word in expected.chunks_exact_mut(4) {
+            for word in expected.as_chunks_mut::<4>().0 {
                 word.reverse();
             }
         }

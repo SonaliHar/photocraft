@@ -1,36 +1,41 @@
 //! Test-only real authored mixed-root input custody plus explicitly synthetic
 //! larger CURRENT storage. Producer projection/profile/Float HOLDs are not oracles.
 use photocraft_doc::{BackedLayer, Document, Layer, LayerContent, Size, accounted_document::AccountedDocument, item_identity::ItemRef};
-use photocraft_raster::{
-    Interrupt,
-    backing::{
-        BackedRaster, BackingError, NativePlaneDescriptor, NativePlaneStore, ReadControl,
-        quota::{BackingQuota, QuotaKind, QuotaLease, QuotaLimits},
-    },
+use photocraft_raster::backing::{
+    BackedRaster, BackingError, NativePlaneDescriptor, NativePlaneStore, ReadControl,
+    quota::{BackingQuota, QuotaKind, QuotaLease, QuotaLimits},
 };
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 #[path = "canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, clippy::module_inception, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod native;
 pub(super) fn ctl() -> ReadControl<'static> {
     native::ctl()
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 pub(super) fn archive(o: &AccountedDocument) -> photocraft_format::owned_document::OwnedDocumentArchive {
     native::archive(o)
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 pub(super) fn encoded(o: &AccountedDocument) -> Vec<u8> {
     native::encoded(o)
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 pub(super) fn workspace() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 pub(super) fn path(index: usize) -> std::path::PathBuf {
     workspace().join(format!("temp/root-filtered-flat-gimp-20261016/author-v1/outputs/f{}-plain-semi-hue-vibrance.xcf", if index == 0 { 32 } else { 64 }))
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 fn hash(b: &[u8]) -> String {
     format!("{:x}", Sha256::digest(b))
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 pub(super) fn import(index: usize) -> photocraft_io::OwnedXcfImport {
     let bytes = std::fs::read(path(index)).unwrap();
     let (length, expected) = if index == 0 {
@@ -54,6 +59,7 @@ pub(super) fn import(index: usize) -> photocraft_io::OwnedXcfImport {
     observed(imported.document().document(), index);
     imported
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 pub(super) fn raw(layer: &Layer) -> Vec<u8> {
     let LayerContent::BackedRaster(b) = &layer.content else { panic!("backed") };
     let r = b.operative_bounds();
@@ -71,6 +77,7 @@ pub(super) fn raw(layer: &Layer) -> Vec<u8> {
     }
     bytes
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 pub(super) fn observed(doc: &Document, index: usize) {
     assert_eq!(doc.size, Size::new(8, 6));
     assert_eq!(doc.layers.len(), 4);
@@ -128,6 +135,7 @@ pub(super) fn observed(doc: &Document, index: usize) {
     }
 }
 #[derive(Debug)]
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 struct Pattern {
     bytes: Vec<u8>,
     descriptor: NativePlaneDescriptor,
@@ -162,11 +170,13 @@ impl NativePlaneStore for Pattern {
         Ok(())
     }
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 struct Guard {
     _source: Arc<photocraft_io::OwnedXcfImport>,
     _index: QuotaLease,
     _resident: QuotaLease,
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 pub(super) fn larger(source: Arc<photocraft_io::OwnedXcfImport>) -> AccountedDocument {
     let old = source.document().document();
     let q = source.document().quota().clone();
@@ -234,10 +244,12 @@ pub(super) fn current(owner: &AccountedDocument, change: impl FnOnce(&mut Docume
     )
     .unwrap()
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 pub(super) fn same(a: &Document, b: &Document) {
     assert_eq!(a.name, b.name);
     storage(a, b);
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 pub(super) fn storage(a: &Document, b: &Document) {
     assert_eq!(a.size, b.size);
     assert_eq!(a.mode, b.mode);
@@ -259,6 +271,7 @@ pub(super) fn storage(a: &Document, b: &Document) {
         assert_eq!(a.default_bytes(), b.default_bytes());
     }
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 pub(super) fn activity(owner: &AccountedDocument) -> AccountedDocument {
     current(owner, |doc| {
         doc.layers[1].visible = false;

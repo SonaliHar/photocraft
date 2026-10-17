@@ -41,7 +41,7 @@ fn pure_point_standard_preview_save_and_retained_query_preserve_host_fences() {
             let display = app.session.color.canvas_display_for(&before, None).unwrap();
             let cancelled = || true;
             assert!(
-                crate::canvas_backed_preview::backed_snapshot_display_image(
+                crate::canvas::test_backed_snapshot_display_image(
                     &before,
                     1,
                     257,
@@ -52,8 +52,7 @@ fn pure_point_standard_preview_save_and_retained_query_preserve_host_fences() {
             );
             assert!(app.session.active().unwrap().doc.shares_state(&before));
             let (image, fee) =
-                crate::canvas_backed_preview::backed_snapshot_display_image(&before, 1, 257, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE)
-                    .unwrap();
+                crate::canvas::test_backed_snapshot_display_image(&before, 1, 257, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
             assert_eq!(image.pixels.len(), 257);
             drop((image, fee));
             app.save_to("policy-saved.pcraft".into(), None).unwrap();

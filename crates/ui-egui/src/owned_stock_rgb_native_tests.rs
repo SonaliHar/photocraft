@@ -1,6 +1,8 @@
 //! Deferred pathless native continuation; no producer or visual acceptance.
 use super::*;
 #[path = "../../engine/src/accounted_filtered_flat_stock_rgb_test_support.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 
 #[test]
@@ -15,7 +17,7 @@ fn stock_rgb_pathless_native_keeps_storage_and_display() {
         assert!(before.accounted().unwrap().is_readonly_filtered_flat_point_storage());
         fixture::storage(owner.document(), &before);
         let display = app.session.color.canvas_display_for(&before, None).unwrap();
-        let (image, fee) = crate::canvas_backed_preview::backed_snapshot_display_image(
+        let (image, fee) = crate::canvas::test_backed_snapshot_display_image(
             &before,
             before.size.width,
             before.size.height,
@@ -30,7 +32,7 @@ fn stock_rgb_pathless_native_keeps_storage_and_display() {
         let after = reopened.session.active().unwrap().doc.clone();
         fixture::storage(&before, &after);
         let display = reopened.session.color.canvas_display_for(&after, None).unwrap();
-        let (image, fee) = crate::canvas_backed_preview::backed_snapshot_display_image(
+        let (image, fee) = crate::canvas::test_backed_snapshot_display_image(
             &after,
             after.size.width,
             after.size.height,

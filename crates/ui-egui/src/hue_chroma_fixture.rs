@@ -2,9 +2,13 @@
 //! profile date differences, RGB/LCh boundary rounding and HDR output remain HOLD.
 #[path = "linear_box_fixture.rs"]
 #[allow(dead_code)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod ingress;
 #[path = "canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod native;
 use photocraft_doc::{
     Document, LayerContent, SampleEncoding, SampleType,
@@ -149,7 +153,7 @@ pub(super) fn cases() -> Vec<Case> {
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(bytes.len(), len);
         assert_eq!(format!("{:x}", Sha256::digest(&bytes)), hash);
-        Case { path, bytes, native_hash, mask_hash, args, raw: raw as i32 }
+        Case { path, bytes, native_hash, mask_hash, args, raw }
     })
     .collect()
 }

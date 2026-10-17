@@ -60,6 +60,7 @@ pub(super) struct Literal {
 pub(super) fn fixture(sample: SampleType, assigned: bool, variant: usize) -> (AccountedDocument, Literal) {
     build(sample, assigned, variant, false)
 }
+#[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
 pub(super) fn malformed_fixture(sample: SampleType, assigned: bool) -> AccountedDocument {
     build(sample, assigned, 1, true).0
 }
@@ -84,7 +85,7 @@ fn build(sample: SampleType, assigned: bool, variant: usize, malformed: bool) ->
             _fee: profile_fee,
         }
     } else {
-        Profiles { current: Arc::new(photocraft_cms::Builtin::Srgb.profile().to_bytes()), original: None, _fee: profile_fee }
+        Profiles { current: photocraft_cms::Builtin::Srgb.profile().to_bytes(), original: None, _fee: profile_fee }
     };
     let canvas = if variant == 0 { Size::new(263, 19) } else { Size::new(17, 13) };
     let bounds = if variant == 0 { Rect::new(-7, -3, 271, 23) } else { Rect::new(253, -2, 266, 9) };

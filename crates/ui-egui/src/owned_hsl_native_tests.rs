@@ -1,6 +1,8 @@
 //! Deferred pathless HSL native storage and internal display continuation.
 use super::*;
 #[path = "../../engine/src/accounted_filtered_flat_hsl_test_support.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 
 #[test]
@@ -14,7 +16,7 @@ fn hsl_pathless_native_retains_internal_display() {
         let before = app.session.active().unwrap().doc.clone();
         fixture::storage(owner.document(), &before);
         let display = app.session.color.canvas_display_for(&before, None).unwrap();
-        let (image, fee) = crate::canvas_backed_preview::backed_snapshot_display_image(
+        let (image, fee) = crate::canvas::test_backed_snapshot_display_image(
             &before,
             before.size.width,
             before.size.height,
@@ -30,7 +32,7 @@ fn hsl_pathless_native_retains_internal_display() {
         fixture::storage(&before, &after);
         assert!(after.accounted().unwrap().is_readonly_filtered_flat_point_storage());
         let display = reopened.session.color.canvas_display_for(&after, None).unwrap();
-        let (image, fee) = crate::canvas_backed_preview::backed_snapshot_display_image(
+        let (image, fee) = crate::canvas::test_backed_snapshot_display_image(
             &after,
             after.size.width,
             after.size.height,

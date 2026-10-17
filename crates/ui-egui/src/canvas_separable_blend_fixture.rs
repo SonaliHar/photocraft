@@ -14,6 +14,7 @@ pub(super) fn hash(bytes: &[u8]) -> String {
 pub(super) struct Case {
     pub file: String,
     pub state: Value,
+    #[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
     pub png: String,
 }
 pub(super) fn cases() -> (PathBuf, Vec<Case>) {
@@ -56,7 +57,7 @@ fn blob(root: &Path, pin: &Value) -> Vec<u8> {
     assert_eq!(bytes.len() as u64, pin["bytes"].as_u64().unwrap());
     assert_eq!(pin["byte_order"], "little");
     if cfg!(target_endian = "big") {
-        for word in bytes.chunks_exact_mut(4) {
+        for word in bytes.as_chunks_mut::<4>().0 {
             word.reverse();
         }
     }
