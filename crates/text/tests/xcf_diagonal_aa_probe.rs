@@ -71,7 +71,7 @@ fn independent_diagonal_aa_single_glyphs() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol1-xcf-text/diagonal-aa-evidence");
     let a: serde_json::Value = serde_json::from_slice(&std::fs::read(base.join("observations.json")).unwrap()).unwrap();
     let b: serde_json::Value = serde_json::from_slice(&std::fs::read(base.join("round2/observations.json")).unwrap()).unwrap();
-    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
+    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
     let size = Size::new(32.);
     let loc = LocationRef::default();
     let baseline = f64::from(face.metrics(size, loc).ascent.ceil());

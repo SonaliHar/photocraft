@@ -40,6 +40,15 @@ pub(super) fn supports(doc: &Document) -> bool {
                 && matches!(s.source_items.first().map(|s| &s.source), Some(EditableSource::Text { source_modified: false, .. }))
         })
 }
+// The admitted v19 Normal28 Auto tuple (0,-1,-1) resolves to Linear in
+// the existing importer. Stored nonlinear pixel encoding is a separate role.
+fn normal_text_resolution(policy: &photocraft_doc::import_compositing::GimpComposition) -> bool {
+    policy.resolved.as_ref().is_some_and(|resolved| {
+        resolved.blend_space == photocraft_doc::import_compositing::GimpSpace::LinearRgb
+            && resolved.composite_space == photocraft_doc::import_compositing::GimpSpace::LinearRgb
+            && resolved.operator == photocraft_doc::import_compositing::GimpOperator::Union
+    })
+}
 fn text_bytes(text: &str, budget: &mut impl PreparationBudget) -> Result<u64> {
     if text.len() > 1 << 20 {
         return Err(invalid());
@@ -101,11 +110,7 @@ pub(super) fn reserve<B: PreparationBudget>(doc: &Document, font: &PreparedRunti
         return Err(invalid());
     }
     let policy = state.items.first().and_then(|item| item.composition.as_ref()).ok_or_else(invalid)?;
-    if !policy.resolved.as_ref().is_some_and(|r| {
-        r.blend_space == photocraft_doc::import_compositing::GimpSpace::ProfileRgb
-            && r.composite_space == photocraft_doc::import_compositing::GimpSpace::ProfileRgb
-            && r.operator == photocraft_doc::import_compositing::GimpOperator::Union
-    }) {
+    if !normal_text_resolution(policy) {
         return Err(invalid());
     }
     let EditableSource::Text { content, markup, configuration, .. } = &source.source else { return Err(invalid()) };

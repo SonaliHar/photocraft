@@ -127,7 +127,7 @@ fn signed_clipping_quadratic_and_hole_geometry() {
 fn original_quadratic_diagonal_controls() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol1-xcf-text/diagonal-aa-evidence");
     let observations: serde_json::Value = serde_json::from_slice(&std::fs::read(base.join("observations.json")).unwrap()).unwrap();
-    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
+    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
     let size = Size::new(32.);
     let loc = LocationRef::default();
     let baseline = f64::from(face.metrics(size, loc).ascent.ceil());
@@ -179,7 +179,7 @@ fn original_quadratic_diagonal_controls() {
 fn documented_26_6_outline_grid_hypothesis() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol1-xcf-text/diagonal-aa-evidence");
     let observations: serde_json::Value = serde_json::from_slice(&std::fs::read(base.join("observations.json")).unwrap()).unwrap();
-    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
+    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
     let size = Size::new(32.);
     let loc = LocationRef::default();
     let baseline = f64::from(face.metrics(size, loc).ascent.ceil());
@@ -236,7 +236,7 @@ fn public_text_path_geometry_vs_exact_font_outline() {
     let bytes = std::fs::read(base.join("paths.json")).unwrap();
     assert_eq!(bytes, std::fs::read(base.join("round2/paths.json")).unwrap());
     let observations: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
+    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
     let size = Size::new(32.);
     let loc = LocationRef::default();
     let baseline = f64::from(face.metrics(size, loc).ascent.ceil());

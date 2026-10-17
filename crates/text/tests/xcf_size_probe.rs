@@ -110,8 +110,8 @@ fn integral(segment: [[f64; 2]; 3], x: f64, y: f64) -> f64 {
 fn original_scaled_orthogonal_controls() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol1-xcf-text/size-evidence");
     let observations: serde_json::Value = serde_json::from_slice(&std::fs::read(base.join("observations.json")).unwrap()).unwrap();
-    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
-    let sf = harfrust::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
+    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
+    let sf = harfrust::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
     let data = harfrust::ShaperData::new(&sf);
     let shaper = data.shaper(&sf).build();
     let mut worst = 0;

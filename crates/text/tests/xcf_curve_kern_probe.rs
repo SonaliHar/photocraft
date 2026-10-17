@@ -13,7 +13,7 @@ fn ordinary_text_pipeline_independent_curve_kern_controls() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol1-xcf-text/curve-kern-evidence");
     let data: serde_json::Value = serde_json::from_slice(&std::fs::read(base.join("observations.json")).unwrap()).unwrap();
     let repeat: serde_json::Value = serde_json::from_slice(&std::fs::read(base.join("round2/observations.json")).unwrap()).unwrap();
-    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
+    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
     let mut report = Vec::new();
     let mut worst = 0u8;
     for (row, second) in data["rows"].as_array().unwrap().iter().zip(repeat["rows"].as_array().unwrap()) {
@@ -38,7 +38,7 @@ fn ordinary_text_pipeline_independent_curve_kern_controls() {
             ..Default::default()
         };
         let layout = photocraft_text::TextEngine::new().layout(&layer, 72.);
-        assert!(layout.faces.iter().all(|f| f.font.data.as_ref() == photocraft_text::fonts::INTER_REGULAR));
+        assert!(layout.faces.iter().all(|f| f.font.data.as_ref() == photocraft_text::fonts::INTER_REGULAR.as_slice()));
         let reference = std::fs::read(base.join(format!("{case}.projection.bin"))).unwrap();
         assert_eq!(format!("{:x}", Sha256::digest(&reference)), row["state"]["projection"]["sha256"].as_str().unwrap());
         for rounded in [false, true] {

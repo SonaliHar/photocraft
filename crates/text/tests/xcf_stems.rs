@@ -192,7 +192,7 @@ fn spacing_canonical_mismatch_duplicates_budget_and_cancel_are_atomic() {
 #[test]
 fn authority_bounds_budget_and_cancel_are_explicit() {
     let ctl = Interrupt::NONE;
-    assert!(matches!(ExactFont::authorize(photocraft_text::fonts::INTER_REGULAR, &[0; 32], &ctl), Err(TextSourceError::FontIdentity)));
+    assert!(matches!(ExactFont::authorize(photocraft_text::fonts::INTER_REGULAR.as_slice(), &[0; 32], &ctl), Err(TextSourceError::FontIdentity)));
     let font = ExactFont::bundled_inter(&ctl).unwrap();
     let mut request = StemText { content: "II", origin: [8, 4] };
     assert!(matches!(render_stems(&font, request, 0, &ctl), Err(TextSourceError::Budget)));
@@ -204,8 +204,8 @@ fn authority_bounds_budget_and_cancel_are_explicit() {
     let cancelled = Interrupt::cancel_only(&|| true);
     assert!(matches!(ExactFont::bundled_inter(&cancelled), Err(TextSourceError::Cancelled)));
     use sha2::{Digest, Sha256};
-    let retained: [u8; 32] = Sha256::digest(photocraft_text::fonts::INTER_REGULAR).into();
-    let mut corrupt = photocraft_text::fonts::INTER_REGULAR.to_vec();
+    let retained: [u8; 32] = Sha256::digest(photocraft_text::fonts::INTER_REGULAR.as_slice()).into();
+    let mut corrupt = photocraft_text::fonts::INTER_REGULAR.as_slice().to_vec();
     corrupt[100] ^= 1;
     assert!(matches!(ExactFont::authorize(&corrupt, &retained, &ctl), Err(TextSourceError::FontIdentity)));
     let mut charged = 0;

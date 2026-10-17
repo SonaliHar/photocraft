@@ -7,7 +7,7 @@ use skrifa::{MetadataProvider, instance::Size};
 #[ignore = "requires own public GIMP exact bundled Inter native source/edit observations"]
 fn exact_face_unhinted_stem_layout_matches_independent_stock() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol1-xcf-text/simple");
-    let font = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
+    let font = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
     let metrics = font.metrics(Size::new(32.), skrifa::instance::LocationRef::default());
     println!("exact face metrics {metrics:?}");
     for (phase, text) in [("source", "I"), ("edit", "II")] {
@@ -30,12 +30,14 @@ fn exact_face_unhinted_stem_layout_matches_independent_stock() {
             previous = original;
         }
         let rendered = photocraft_text::render::rasterize(&layout, &layer.transform, PixelFormat::RGBA8, layer.antialias);
-        assert!(layout.faces.iter().all(|face| face.font.data.as_ref() == photocraft_text::fonts::INTER_REGULAR));
+        assert!(layout.faces.iter().all(|face| face.font.data.as_ref() == photocraft_text::fonts::INTER_REGULAR.as_slice()));
         println!("{phase}: lines={:?} glyphs={:?} rect={:?}", layout.lines, layout.glyphs, rendered.rect);
         let actual = rendered.surface.try_read_interleaved(Rect::new(0, 0, 128, 64)).unwrap();
         let expected = std::fs::read(base.join(format!("{phase}-reopened.projection.bin"))).unwrap();
         let differences: Vec<_> = actual
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .zip(expected.as_chunks::<4>().0.iter())
             .enumerate()
             .filter(|(_, (a, b))| a != b)
@@ -51,7 +53,7 @@ fn exact_face_unhinted_stem_layout_matches_independent_stock() {
 fn rectilinear_glyph_and_spacing_controls() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol1-xcf-text/rectilinear-controls");
     let observations: serde_json::Value = serde_json::from_slice(&std::fs::read(base.join("observations.json")).unwrap()).unwrap();
-    let font = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
+    let font = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
     let ascent = font.metrics(Size::new(32.), skrifa::instance::LocationRef::default()).ascent.ceil();
     for (index, row) in observations["rows"].as_array().unwrap().iter().enumerate() {
         let text = row["text"].as_str().unwrap();
@@ -73,14 +75,16 @@ fn rectilinear_glyph_and_spacing_controls() {
             g.x = current;
             previous = original;
         }
-        assert!(layout.faces.iter().all(|face| face.font.data.as_ref() == photocraft_text::fonts::INTER_REGULAR));
+        assert!(layout.faces.iter().all(|face| face.font.data.as_ref() == photocraft_text::fonts::INTER_REGULAR.as_slice()));
         let rendered = photocraft_text::render::rasterize(&layout, &layer.transform, PixelFormat::RGBA8, layer.antialias);
         let actual = rendered.surface.try_read_interleaved(Rect::new(0, 0, 128, 64)).unwrap();
         let expected = std::fs::read(base.join(format!("control-{index}.projection.bin"))).unwrap();
         let repeat = std::fs::read(base.join(format!("round2/control-{index}.projection.bin"))).unwrap();
         assert_eq!(expected, repeat);
         let differences: Vec<_> = actual
-            .as_chunks::<4>().0.iter()
+            .as_chunks::<4>()
+            .0
+            .iter()
             .zip(expected.as_chunks::<4>().0.iter())
             .enumerate()
             .filter(|(_, (a, b))| a != b)
@@ -146,7 +150,7 @@ fn pixel_area(points: &[[f64; 2]], x: f64, y: f64) -> f64 {
 fn rectilinear_exact_area_is_not_stock_noaa_rule() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol1-xcf-text/rectilinear-controls");
     let data: serde_json::Value = serde_json::from_slice(&std::fs::read(base.join("observations.json")).unwrap()).unwrap();
-    let font = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
+    let font = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
     let size = Size::new(32.);
     let loc = skrifa::instance::LocationRef::default();
     let mut total = 0;
@@ -200,7 +204,7 @@ fn point_inside(p: &[[f64; 2]], x: f64, y: f64) -> bool {
 fn rectilinear_center_controls() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol1-xcf-text/rectilinear-controls");
     let data: serde_json::Value = serde_json::from_slice(&std::fs::read(base.join("observations.json")).unwrap()).unwrap();
-    let font = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
+    let font = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
     let size = Size::new(32.);
     let loc = skrifa::instance::LocationRef::default();
     let mut total = 0;
@@ -247,7 +251,7 @@ fn rectilinear_center_controls() {
 fn rectilinear_analytic_aa_controls() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol1-xcf-text/aa-controls");
     let data: serde_json::Value = serde_json::from_slice(&std::fs::read(base.join("observations.json")).unwrap()).unwrap();
-    let font = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
+    let font = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
     let size = Size::new(32.);
     let loc = skrifa::instance::LocationRef::default();
     for (index, row) in data["rows"].as_array().unwrap().iter().enumerate() {
@@ -255,7 +259,7 @@ fn rectilinear_analytic_aa_controls() {
         let layer =
             TextLayer { text: text.into(), font_family: "Inter".into(), size_pt: 32., color: Color::WHITE, antialias: AntiAlias::None, ..Default::default() };
         let layout = TextEngine::new().layout(&layer, 72.);
-        assert!(layout.faces.iter().all(|f| f.font.data.as_ref() == photocraft_text::fonts::INTER_REGULAR));
+        assert!(layout.faces.iter().all(|f| f.font.data.as_ref() == photocraft_text::fonts::INTER_REGULAR.as_slice()));
         let mut polys = Vec::new();
         let mut previous = 0.;
         let mut current = 0.;
@@ -366,7 +370,7 @@ fn contour_distance(p: &[[f64; 2]], x: f64, y: f64) -> f64 {
 fn general_quadratic_glyph_controls() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol1-xcf-text/general-controls");
     let data: serde_json::Value = serde_json::from_slice(&std::fs::read(base.join("observations.json")).unwrap()).unwrap();
-    let font = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
+    let font = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
     let size = Size::new(32.);
     let loc = skrifa::instance::LocationRef::default();
     // Public FT_Vector uses 26.6 pixel coordinates for scaled outlines. This
@@ -387,7 +391,7 @@ fn general_quadratic_glyph_controls() {
                 ..Default::default()
             };
             let layout = TextEngine::new().layout(&layer, 72.);
-            assert!(layout.faces.iter().all(|f| f.font.data.as_ref() == photocraft_text::fonts::INTER_REGULAR));
+            assert!(layout.faces.iter().all(|f| f.font.data.as_ref() == photocraft_text::fonts::INTER_REGULAR.as_slice()));
             let mut polys = Vec::new();
             let mut previous = 0.;
             let mut current = 0.;

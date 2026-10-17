@@ -45,8 +45,8 @@ fn exact_authority_quantized_outline_commands_match_public_decomposition() {
     use sha2::{Digest, Sha256};
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol1-xcf-text");
     let data: Value = serde_json::from_slice(&std::fs::read(base.join("curve-kern-freetype-evidence/outlines.json")).unwrap()).unwrap();
-    assert_eq!(format!("{:x}", Sha256::digest(photocraft_text::fonts::INTER_REGULAR)), data["font_sha256"].as_str().unwrap());
-    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
+    assert_eq!(format!("{:x}", Sha256::digest(photocraft_text::fonts::INTER_REGULAR.as_slice())), data["font_sha256"].as_str().unwrap());
+    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
     let mut results = Vec::new();
     let mut mismatch = 0usize;
     for row in data["rows"].as_array().unwrap() {
@@ -78,10 +78,10 @@ fn portable_whole_string_advances_clusters_and_baselines_match_controls() {
     let evidence = std::fs::read(base.join("curve-kern-freetype-evidence/outlines.json")).unwrap();
     assert_eq!(format!("{:x}", Sha256::digest(&evidence)), "dea7aefa140f4778318c7f21a01692fc9bc0ecc608516e33ea3921737476a453");
     let data: Value = serde_json::from_slice(&evidence).unwrap();
-    let font = harfrust::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
+    let font = harfrust::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
     let shaping = harfrust::ShaperData::new(&font);
     let shaper = shaping.shaper(&font).build();
-    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
+    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
     let mut results = Vec::new();
     for row in data["rows"].as_array().unwrap() {
         let case = row["case"].as_str().unwrap();

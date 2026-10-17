@@ -110,8 +110,8 @@ fn integral(segment: [[f64; 2]; 3], x: f64, y: f64) -> f64 {
 fn original_letter_spacing_orthogonal_controls() {
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol1-xcf-text/spacing-evidence");
     let observations: serde_json::Value = serde_json::from_slice(&std::fs::read(base.join("observations.json")).unwrap()).unwrap();
-    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
-    let sf = harfrust::FontRef::new(photocraft_text::fonts::INTER_REGULAR).unwrap();
+    let face = skrifa::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
+    let sf = harfrust::FontRef::new(photocraft_text::fonts::INTER_REGULAR.as_slice()).unwrap();
     let data = harfrust::ShaperData::new(&sf);
     let shaper = data.shaper(&sf).build();
     let mut worst = 0;
@@ -147,7 +147,7 @@ fn original_letter_spacing_orthogonal_controls() {
             advance += (f64::from(pos.x_advance) * pixels / f64::from(shaper.units_per_em())).round() + row["state"]["letter_spacing"].as_f64().unwrap();
         }
         advance -= row["state"]["letter_spacing"].as_f64().unwrap();
-        assert_eq!(advance,row["state"]["size"][0].as_f64().unwrap(),"independent layout width {name}");
+        assert_eq!(advance, row["state"]["size"][0].as_f64().unwrap(), "independent layout width {name}");
         let expected = std::fs::read(base.join(format!("{name}.projection.bin"))).unwrap();
         assert_eq!(expected, std::fs::read(base.join(format!("round2/{name}.projection.bin"))).unwrap());
         let mut max = 0;

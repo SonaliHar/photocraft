@@ -112,7 +112,7 @@ fn fresh_curve_kern_quadratic_integral() {
     use sha2::{Digest, Sha256};
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/sol1-xcf-text/curve-kern-evidence");
     let data: serde_json::Value = serde_json::from_slice(&std::fs::read(base.join("observations.json")).unwrap()).unwrap();
-    let bytes = photocraft_text::fonts::INTER_REGULAR;
+    let bytes = photocraft_text::fonts::INTER_REGULAR.as_slice();
     assert_eq!(format!("{:x}", Sha256::digest(bytes)), "40d692fce188e4471e2b3cba937be967878f631ad3ebbbdcd587687c7ebe0c82");
     let face = skrifa::FontRef::new(bytes).unwrap();
     let hfont = harfrust::FontRef::new(bytes).unwrap();
