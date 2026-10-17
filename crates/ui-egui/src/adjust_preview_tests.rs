@@ -140,7 +140,7 @@ fn preview_composite_matches_the_destructive_command() {
         }
     }
     eprintln!("worst preview difference {:.3}/255 ({})", worst.0 * 255.0, worst.1);
-    assert!(fails.is_empty(), "{}", fails.join(""));
+    assert!(fails.is_empty(), "{}", fails.join("\n"));
 }
 
 #[test]
