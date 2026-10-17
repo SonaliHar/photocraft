@@ -499,7 +499,9 @@ fn channel_options_and_spot_channels() {
     let r = s.execute("channel.newSpot", json!({"color": "#ff00ff", "solidity": 100})).unwrap();
     let i = r["channel"].as_u64().unwrap() as usize;
     assert_eq!(doc(&s).channels[i].name, "Spot Color 1");
-    assert_eq!(chan(&s, i, 5, 5), 1.0, "from the selection");
+    // Stored as the Channels panel shows it (#6123): the selection is ink, black; the rest paper.
+    assert_eq!(chan(&s, i, 5, 5), 0.0, "from the selection");
+    assert_eq!(chan(&s, i, 20, 15), 1.0, "paper outside it");
     // Merge spot: flattens and prints the ink (solid magenta) into the image.
     s.execute("channel.mergeSpot", json!({"channel": i})).unwrap();
     let d = doc(&s);
@@ -914,4 +916,124 @@ fn layers_panel_mask_target_isolates_the_curve_channel() {
     s.execute("select.editInQuickMaskMode", json!({"on": true})).unwrap();
     let row = isolated_curve_channel_for(s.active().unwrap(), true).expect("quick mask wins");
     assert_eq!((row.name.as_str(), row.gray), ("Quick Mask", Some(GraySurface::QuickMask)));
+}
+
+/// #6123: spot channels are stored as Photoshop shows them, black = solid ink (checked in
+/// Photoshop): a new spot channel without a selection is all ink, painting white takes the ink
+/// away, Merge Spot Channel prints what is left, and space added to the canvas is paper, at every
+/// depth.
+#[test]
+fn spot_channels_take_white_as_paper_and_grow_as_paper() {
+    for depth in [8, 16, 32] {
+        let mut s = session_depth(depth);
+        let r = s.execute("channel.newSpot", json!({"color": "#ff00ff", "solidity": 100})).unwrap();
+        let i = r["channel"].as_u64().unwrap() as usize;
+        assert_eq!((chan(&s, i, 7, 7), chan(&s, i, 30, 15)), (0.0, 0.0), "{depth}: a new spot channel is all ink");
+        // White inside a selection takes the ink away.
+        rect(&mut s, 5, 5, 10, 5, "replace");
+        s.execute("paint.bucket", json!({"x": 7, "y": 7, "color": "#ffffff", "target": {"channel": i}, "tolerance": 0})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        assert_eq!((chan(&s, i, 7, 7), chan(&s, i, 30, 15)), (1.0, 0.0), "{depth}: paper inside, ink outside");
+        // The canvas grows by 10 px on every side: the new space is paper, the rest moves with it.
+        s.execute("image.canvasSize", json!({"width": 60, "height": 40, "anchor": "center"})).unwrap();
+        assert_eq!(chan(&s, i, 1, 1), 1.0, "{depth}: added space holds no ink");
+        assert_eq!((chan(&s, i, 17, 17), chan(&s, i, 40, 25)), (1.0, 0.0), "{depth}: the channel moved with the canvas");
+        // Merge Spot Channel prints solid magenta where the channel is black, nothing elsewhere.
+        s.execute("channel.mergeSpot", json!({"channel": i})).unwrap();
+        let ink = px(&s, 40, 25);
+        assert!((ink[0] - 1.0).abs() < 0.01 && ink[1] < 0.01 && (ink[2] - 1.0).abs() < 0.01, "{depth}: {ink:?}");
+        for (x, y) in [(17, 17), (1, 1)] {
+            let paper = px(&s, x, y);
+            assert!(paper[..3].iter().all(|v| (v - 1.0).abs() < 0.01), "{depth}: ({x},{y}) {paper:?}");
+        }
+    }
+}
+
+/// ⌘-clicking a spot channel (Load Selection) selects its ink, the black pixels, as Photoshop
+/// does; an alpha channel still selects its white.
+#[test]
+fn loading_a_spot_channel_selects_its_ink() {
+    let mut s = session();
+    rect(&mut s, 0, 0, 10, 10, "replace");
+    let r = s.execute("channel.newSpot", json!({"color": "#00ff00"})).unwrap();
+    let spot = r["channel"].as_u64().unwrap() as usize;
+    s.execute("channel.new", json!({"fill": "selection"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    assert_eq!((chan(&s, spot, 5, 5), chan(&s, spot, 20, 15)), (0.0, 1.0));
+    for target in [json!(spot), json!("Spot Color 1")] {
+        s.execute("select.loadSelection", json!({"channel": target})).unwrap();
+        assert_eq!((sel_at(&s, 5, 5), sel_at(&s, 20, 15)), (1.0, 0.0), "the ink is selected ({target})");
+        s.execute("select.deselect", json!({})).unwrap();
+    }
+    s.execute("select.loadSelection", json!({"channel": spot + 1})).unwrap();
+    assert_eq!((sel_at(&s, 5, 5), sel_at(&s, 20, 15)), (1.0, 0.0), "an alpha channel's white is selected");
+}
+
+/// Channel Options keeps a channel's values when it becomes a spot channel or an alpha channel
+/// again, as Photoshop shows them; only space added later follows the kind (paper for a spot
+/// channel, black for an alpha channel).
+#[test]
+fn alpha_and_spot_channels_keep_their_values_and_grow_by_kind() {
+    let mut s = session();
+    rect(&mut s, 0, 0, 10, 10, "replace");
+    s.execute("channel.new", json!({"fill": "selection"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (1.0, 0.0));
+    s.execute("channel.options", json!({"channel": 0, "indicates": "spot"})).unwrap();
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (1.0, 0.0), "same values: the black becomes ink");
+    s.execute("image.canvasSize", json!({"width": 50, "height": 20, "anchor": "left"})).unwrap();
+    assert_eq!(chan(&s, 0, 45, 10), 1.0, "added space of a spot channel is paper");
+    s.execute("channel.options", json!({"channel": 0, "indicates": "masked"})).unwrap();
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15), chan(&s, 0, 45, 10)), (1.0, 0.0, 1.0), "values kept");
+    s.execute("image.canvasSize", json!({"width": 60, "height": 20, "anchor": "left"})).unwrap();
+    assert_eq!(chan(&s, 0, 55, 10), 0.0, "added space of an alpha channel is black");
+}
+
+/// From @FredApps' review of #6687: Save Selection into a spot channel, Duplicate Channel with
+/// Invert and Apply Image onto a spot channel keep it on paper (canvas added afterwards holds no
+/// ink), and a selection saved into a spot channel is stored as ink, black, as ⌘-click loads it.
+#[test]
+fn every_rewrite_of_a_spot_channel_keeps_it_on_paper() {
+    let grow = |s: &mut Session| {
+        let (w, h) = (doc(s).size.width + 10, doc(s).size.height);
+        s.execute("image.canvasSize", json!({"width": w, "height": h, "anchor": "left"})).unwrap();
+    };
+    // Save Selection, replacing then adding, into a spot channel.
+    let mut s = session();
+    let r = s.execute("channel.newSpot", json!({"color": "#ff0000", "fromSelection": false})).unwrap();
+    let i = r["channel"].as_u64().unwrap() as usize;
+    rect(&mut s, 0, 0, 10, 10, "replace");
+    s.execute("select.saveSelection", json!({"channel": i, "operation": "replace"})).unwrap();
+    assert_eq!((chan(&s, i, 5, 5), chan(&s, i, 20, 15)), (0.0, 1.0), "the selection is ink, the rest paper");
+    rect(&mut s, 20, 10, 10, 10, "replace");
+    s.execute("select.saveSelection", json!({"channel": i, "operation": "add"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    assert_eq!((chan(&s, i, 5, 5), chan(&s, i, 25, 15), chan(&s, i, 15, 5)), (0.0, 0.0, 1.0), "added as ink");
+    s.execute("select.loadSelection", json!({"channel": i})).unwrap();
+    assert_eq!((sel_at(&s, 5, 5), sel_at(&s, 25, 15), sel_at(&s, 15, 5)), (1.0, 1.0, 0.0), "and loads back as saved");
+    s.execute("select.deselect", json!({})).unwrap();
+    grow(&mut s);
+    assert_eq!(chan(&s, i, 45, 5), 1.0, "Save Selection: added space is paper");
+
+    // Duplicate Channel with Invert.
+    let mut s = session();
+    rect(&mut s, 0, 0, 10, 10, "replace");
+    let r = s.execute("channel.newSpot", json!({"color": "#00ff00"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    let i = r["channel"].as_u64().unwrap() as usize;
+    let r = s.execute("channel.duplicate", json!({"channel": i, "invert": true})).unwrap();
+    let j = r["channel"].as_u64().unwrap() as usize;
+    assert!(doc(&s).channels[j].spot.is_some());
+    assert_eq!((chan(&s, j, 5, 5), chan(&s, j, 20, 15)), (1.0, 0.0), "inverted");
+    grow(&mut s);
+    assert_eq!(chan(&s, j, 45, 5), 1.0, "Duplicate with Invert: added space is paper");
+
+    // Apply Image onto a spot channel.
+    let mut s = session();
+    let r = s.execute("channel.newSpot", json!({"color": "#0000ff", "fromSelection": false})).unwrap();
+    let i = r["channel"].as_u64().unwrap() as usize;
+    s.execute("image.applyImage", json!({"blending": "screen", "target": {"channel": i}})).unwrap();
+    assert_eq!(chan(&s, i, 5, 5), 1.0, "screened with the white image: paper");
+    grow(&mut s);
+    assert_eq!(chan(&s, i, 45, 5), 1.0, "Apply Image: added space is paper");
 }
