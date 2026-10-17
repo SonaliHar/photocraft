@@ -4,7 +4,7 @@
 use photocraft_doc::{LayerContent, vector::Path};
 use photocraft_paint::{
     StrokePoint,
-    symmetry::{PresetSymmetry, SymmetryMode},
+    symmetry::{self, PresetSymmetry, SymmetryMode},
 };
 use serde_json::{Value, json};
 
@@ -55,13 +55,20 @@ impl PaintingSymmetry {
     pub fn inspect(&self) -> Value {
         match self {
             Self::Path(axis) => json!({"mode":"path", "source":axis.source, "segments":axis.segments.len()}),
+            Self::Preset(p) if p.has_axes() => json!({"mode":p.mode.id(), "center":p.center, "rotation":p.rotation, "axes":p.axes}),
             Self::Preset(p) => json!({"mode":p.mode.id(), "center":p.center, "rotation":p.rotation}),
         }
     }
 }
 
 fn set_preset(s: &mut Session, p: &Value) -> Result<Value> {
-    let fail = || EngineError::Other("symmetry requires a valid mode, a finite [x,y] centre and a finite rotation".into());
+    let fail = || {
+        EngineError::Other(format!(
+            "symmetry requires a valid mode, a finite [x,y] centre, a finite rotation and {}..={} mandala axes",
+            symmetry::MIN_AXES,
+            symmetry::MAX_AXES
+        ))
+    };
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let mode = p.get("mode").and_then(Value::as_str).and_then(SymmetryMode::from_id).ok_or_else(fail)?;
     let center = match p.get("center") {
@@ -75,7 +82,16 @@ fn set_preset(s: &mut Session, p: &Value) -> Result<Value> {
         None => 0.0,
         Some(v) => v.as_f64().ok_or_else(fail)?,
     };
-    let preset = PresetSymmetry::new(mode, center, rotation).ok_or_else(fail)?;
+    let mut preset = PresetSymmetry::new(mode, center, rotation).ok_or_else(fail)?;
+    if preset.has_axes() {
+        // Re-picking Mandala or Radial without a count keeps the document's current one.
+        let current = st.symmetry.as_ref().and_then(PaintingSymmetry::preset).filter(|c| c.mode == mode).map(|c| c.axes);
+        let axes = match p.get("axes") {
+            None => current.unwrap_or(symmetry::DEFAULT_AXES),
+            Some(v) => v.as_u64().and_then(|n| u8::try_from(n).ok()).ok_or_else(fail)?,
+        };
+        preset = preset.with_axes(axes).ok_or_else(fail)?;
+    }
     let symmetry = PaintingSymmetry::Preset(preset);
     let result = symmetry.inspect();
     s.active_mut().ok_or(EngineError::NoDocument)?.symmetry = Some(symmetry);
@@ -191,7 +207,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Set Painting Symmetry",
             menu: &[],
             shortcut: None,
-            params: r#"{"mode":"vertical|horizontal|dual|diagonal","center":[x,y]?,"rotation":degrees=0}"#,
+            params: r#"{"mode":"vertical|horizontal|dual|diagonal|radial|mandala","center":[x,y]?,"rotation":degrees=0,"axes":2..16=5} — axes: mandala mirror lines (2 × axes copies) or radial segments (axes turned copies)"#,
             enabled: |s| s.active().map(|_| ()).ok_or_else(|| "no document open".into()),
             run: set_preset,
             journal: true,
