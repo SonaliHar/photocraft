@@ -222,7 +222,8 @@ impl LensMap {
         if w <= 0.05 {
             return None;
         }
-        let (ux, uy) = (nx / w, ny / w);
+        // The whole matrix: Upright's rotation ([`Self::then_homography`]) fills its top rows.
+        let (ux, uy) = ((m[0] * nx + m[1] * ny + m[2]) / w, (m[3] * nx + m[4] * ny + m[5]) / w);
         // Lens distortion (Brown–Conrady).
         let r2 = ux * ux + uy * uy;
         let radial = 1.0 + self.k1 * r2 + self.k2 * r2 * r2;

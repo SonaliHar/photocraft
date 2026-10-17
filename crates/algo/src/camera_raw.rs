@@ -1870,6 +1870,22 @@ mod tests {
         assert_ne!(run(&base, 60, 40, &p), base);
     }
 
+    /// Guides that lean the same way (a camera rolled, not pitched) are mostly a rotation, which
+    /// lives in the homography's top rows: the warp must apply those, not only its last row.
+    #[test]
+    fn guided_upright_rotates_a_rolled_picture() {
+        let (w, h) = (600usize, 400usize);
+        let guides = vec![[[0.49f32, 0.51], [0.50, 0.74]], [[0.67, 0.48], [0.69, 0.75]]];
+        let p = CameraRaw { upright: "guided".into(), upright_guides: guides.clone(), ..Default::default() };
+        let up = upright::homography(&p.upright, &p.upright_guides, &[], w, h).expect("a correction");
+        let map = GeometryMap::new(&p, w, h, Some(&up)).unwrap();
+        for g in &guides {
+            let [a, b] = g.map(|q| map.output_of(f64::from(q[0]) * w as f64, f64::from(q[1]) * h as f64).unwrap());
+            let lean = (b[0] - a[0]).atan2(b[1] - a[1]).to_degrees();
+            assert!(lean.abs() < 0.2, "{lean}° off plumb");
+        }
+    }
+
     #[test]
     fn new_controls_default_to_identity_and_placeholders_change_nothing() {
         assert!(CameraRaw::default().is_identity());
