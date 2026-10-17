@@ -438,9 +438,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         // menus. Explicit params from Actions, CLI, MCP and control channel execute directly.
         // Selection menu › Object to Layer…: its options dialog (the plain row runs the command).
         crate::fill_dialog::COMMAND => {
-            if let Err(why) = (|| photocraft_engine::commands::find("layer.objectToLayer").map_or(Ok(()), |c| (c.enabled)(&app.session)))() {
-                return Err(why);
-            }
+            photocraft_engine::commands::find("layer.objectToLayer").map_or(Ok(()), |c| (c.enabled)(&app.session))?;
             Ok(json!({"dialog": crate::fill_dialog::open(app)}))
         }
         crate::stroke_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
