@@ -95,6 +95,8 @@ impl PhotocraftApp {
             if !found.is_empty() {
                 photocraft_engine::link_find::relink(std::sync::Arc::make_mut(&mut st.doc), &found);
             }
+            let doc = st.doc.id;
+            self.remember_stamp(doc, path);
         }
         self.push_recent(path);
     }
