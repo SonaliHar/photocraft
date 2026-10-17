@@ -761,7 +761,7 @@ fn moving_multiple_panels_into_one_group_renders_clean_tabs_with_scrollbar() {
     let members = group_members(layout, "color");
     assert_eq!(members.len(), 6, "Color group now has 6 panels");
 
-    let mut h = harness(app, vec2(1280.0, 800.0));
+    let h = harness(app, vec2(1280.0, 800.0));
     let mut tab_rects = Vec::new();
     for panel in &members {
         let resp = h.ctx.read_response(egui::Id::new("photocraft-panel-docking").with(("tab", panel)));
@@ -790,7 +790,7 @@ fn tab_strip_wheel_and_scrollbar_interaction_switches_active_panel() {
 
     let tab_strip = h.ctx.read_response(egui::Id::new("photocraft-panel-docking").with(("tab", &"color".to_string()))).unwrap().rect;
     h.hover_at(tab_strip.center());
-    h.event(Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(-5.0, 0.0), modifiers: Modifiers::NONE });
+    h.event(Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(-5.0, 0.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE });
     h.run_steps(2);
 
     let scroll_id = egui::Id::new("photocraft-panel-tab-scrollbar").with("adjustments");
