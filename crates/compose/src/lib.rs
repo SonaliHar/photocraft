@@ -553,7 +553,8 @@ struct Ctx<'a> {
 struct LayerKeys {
     /// Addresses of every layer in the document tree, collected on first use.
     in_doc: std::sync::OnceLock<std::collections::HashSet<usize>>,
-    ids: std::sync::Mutex<std::collections::HashMap<usize, u64>>,
+    /// One slot per layer, so parallel tiles reaching the same layer compute it once.
+    ids: std::sync::Mutex<std::collections::HashMap<usize, std::sync::Arc<std::sync::OnceLock<u64>>>>,
     /// Identities computed (tests count them).
     #[cfg(test)]
     built: std::sync::atomic::AtomicUsize,
@@ -563,14 +564,15 @@ impl LayerKeys {
     fn identity(&self, layer: &Layer, doc: Option<&Document>) -> u64 {
         let addr = std::ptr::from_ref(layer) as usize;
         let in_doc = doc.is_some_and(|d| self.in_doc.get_or_init(|| doc_layer_addresses(d)).contains(&addr));
-        if in_doc {
-            let mut ids = self.ids.lock().unwrap_or_else(|e| e.into_inner());
-            // Computing an identity only hashes immutable layer data; it does not run Rayon
-            // work or re-enter this memo. Keep the miss and insertion atomic across callers.
-            *ids.entry(addr).or_insert_with(|| self.compute(layer))
-        } else {
-            self.compute(layer)
+        if !in_doc {
+            return self.compute(layer);
         }
+        // The first tile to reach a layer initializes its slot and the others wait on it, so each
+        // identity is built once. Holding the map lock while hashing would do the same but make
+        // every layer wait on every other; a slot per layer lets different layers hash in
+        // parallel. Hashing is sequential (no Rayon), so a waiting tile cannot re-enter the slot.
+        let slot = self.ids.lock().unwrap_or_else(|e| e.into_inner()).entry(addr).or_default().clone();
+        *slot.get_or_init(|| self.compute(layer))
     }
 
     fn compute(&self, layer: &Layer) -> u64 {
