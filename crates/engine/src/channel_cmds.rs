@@ -940,14 +940,23 @@ fn save_selection(s: &mut Session, p: &Value) -> Result<Value> {
                 Ok(doc.channels.len() - 1)
             }
             (Some(i), op) => {
-                let old = read_plane(&doc.channels[i].surface, area);
+                // A spot channel's selection is its ink, black (as ⌘-clicking it loads it, #6123):
+                // combined as a selection, then stored as ink on paper.
+                let spot = doc.channels[i].spot.is_some();
+                let as_sel = |v: f32| if spot { AlphaChannel::ink(v) } else { v };
+                let old: Vec<f32> = read_plane(&doc.channels[i].surface, area).into_iter().map(as_sel).collect();
                 let vals: Vec<f32> = match op {
                     "add" => old.iter().zip(&selection).map(|(a, b)| a.max(*b)).collect(),
                     "subtract" => old.iter().zip(&selection).map(|(a, b)| (a - b).max(0.0)).collect(),
                     "intersect" => old.iter().zip(&selection).map(|(a, b)| a.min(*b)).collect(),
                     _ => selection.clone(),
                 };
-                doc.channels[i].surface = plane_surface(&vals, area, fmt);
+                doc.channels[i].surface = if spot {
+                    let ink: Vec<f32> = vals.iter().map(|&v| AlphaChannel::ink(v)).collect();
+                    AlphaChannel::on_paper(&plane_surface(&ink, area, fmt), area)
+                } else {
+                    plane_surface(&vals, area, fmt)
+                };
                 if let Some(n) = &name {
                     doc.channels[i].name = n.clone();
                 }
@@ -1182,6 +1191,10 @@ fn duplicate_channel(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("invert").and_then(Value::as_bool).unwrap_or(false) {
         let v: Vec<f32> = read_plane(&ch.surface, area).into_iter().map(|v| 1.0 - v).collect();
         ch.surface = plane_surface(&v, area, ch.surface.format());
+        // A spot copy stays on paper: canvas added later holds no ink (#6123).
+        if ch.spot.is_some() {
+            ch.surface = AlphaChannel::on_paper(&ch.surface, area);
+        }
     }
     match p.get("document") {
         Some(Value::String(x)) if x == "new" => {
@@ -1695,10 +1708,15 @@ fn apply_image(s: &mut Session, p: &Value) -> Result<Value> {
             // A grayscale target gets the luminosity of a colour source (one plane).
             let srcp =
                 if src.len() == 1 { src[0].clone() } else { (0..src[0].len()).map(|i| src.iter().map(|pl| pl[i]).sum::<f32>() / src.len() as f32).collect() };
+            // A spot channel target stays on paper: canvas added later holds no ink (#6123).
+            let spot = matches!(target_of(p), Target::Alpha(i) if doc.channels.get(i).is_some_and(|c| c.spot.is_some()));
             let (surf, _) = target_surface(doc, None, p)?;
             let base = read_plane(surf, area);
             let out: Vec<f32> = base.iter().enumerate().map(|(i, &b)| b + (blending.apply(b, srcp[i]) - b) * weight(i)).collect();
             *surf = plane_surface(&out, area, surf.format());
+            if spot {
+                *surf = AlphaChannel::on_paper(surf, area);
+            }
             return Ok(());
         }
         let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;

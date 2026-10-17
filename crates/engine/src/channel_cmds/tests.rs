@@ -988,3 +988,52 @@ fn alpha_and_spot_channels_keep_their_values_and_grow_by_kind() {
     s.execute("image.canvasSize", json!({"width": 60, "height": 20, "anchor": "left"})).unwrap();
     assert_eq!(chan(&s, 0, 55, 10), 0.0, "added space of an alpha channel is black");
 }
+
+/// From @FredApps' review of #6687: Save Selection into a spot channel, Duplicate Channel with
+/// Invert and Apply Image onto a spot channel keep it on paper (canvas added afterwards holds no
+/// ink), and a selection saved into a spot channel is stored as ink, black, as ⌘-click loads it.
+#[test]
+fn every_rewrite_of_a_spot_channel_keeps_it_on_paper() {
+    let grow = |s: &mut Session| {
+        let (w, h) = (doc(s).size.width + 10, doc(s).size.height);
+        s.execute("image.canvasSize", json!({"width": w, "height": h, "anchor": "left"})).unwrap();
+    };
+    // Save Selection, replacing then adding, into a spot channel.
+    let mut s = session();
+    let r = s.execute("channel.newSpot", json!({"color": "#ff0000", "fromSelection": false})).unwrap();
+    let i = r["channel"].as_u64().unwrap() as usize;
+    rect(&mut s, 0, 0, 10, 10, "replace");
+    s.execute("select.saveSelection", json!({"channel": i, "operation": "replace"})).unwrap();
+    assert_eq!((chan(&s, i, 5, 5), chan(&s, i, 20, 15)), (0.0, 1.0), "the selection is ink, the rest paper");
+    rect(&mut s, 20, 10, 10, 10, "replace");
+    s.execute("select.saveSelection", json!({"channel": i, "operation": "add"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    assert_eq!((chan(&s, i, 5, 5), chan(&s, i, 25, 15), chan(&s, i, 15, 5)), (0.0, 0.0, 1.0), "added as ink");
+    s.execute("select.loadSelection", json!({"channel": i})).unwrap();
+    assert_eq!((sel_at(&s, 5, 5), sel_at(&s, 25, 15), sel_at(&s, 15, 5)), (1.0, 1.0, 0.0), "and loads back as saved");
+    s.execute("select.deselect", json!({})).unwrap();
+    grow(&mut s);
+    assert_eq!(chan(&s, i, 45, 5), 1.0, "Save Selection: added space is paper");
+
+    // Duplicate Channel with Invert.
+    let mut s = session();
+    rect(&mut s, 0, 0, 10, 10, "replace");
+    let r = s.execute("channel.newSpot", json!({"color": "#00ff00"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    let i = r["channel"].as_u64().unwrap() as usize;
+    let r = s.execute("channel.duplicate", json!({"channel": i, "invert": true})).unwrap();
+    let j = r["channel"].as_u64().unwrap() as usize;
+    assert!(doc(&s).channels[j].spot.is_some());
+    assert_eq!((chan(&s, j, 5, 5), chan(&s, j, 20, 15)), (1.0, 0.0), "inverted");
+    grow(&mut s);
+    assert_eq!(chan(&s, j, 45, 5), 1.0, "Duplicate with Invert: added space is paper");
+
+    // Apply Image onto a spot channel.
+    let mut s = session();
+    let r = s.execute("channel.newSpot", json!({"color": "#0000ff", "fromSelection": false})).unwrap();
+    let i = r["channel"].as_u64().unwrap() as usize;
+    s.execute("image.applyImage", json!({"blending": "screen", "target": {"channel": i}})).unwrap();
+    assert_eq!(chan(&s, i, 5, 5), 1.0, "screened with the white image: paper");
+    grow(&mut s);
+    assert_eq!(chan(&s, i, 45, 5), 1.0, "Apply Image: added space is paper");
+}
