@@ -83,7 +83,7 @@ fn actual_spare_nested_capacity_is_counted_without_widening_plain_or_threshold()
     let budget = Budget::new(limits(), None);
     let mut doc = census_fixture();
     let first = census::measure(&doc, &budget, &Interrupt::NONE).unwrap();
-    assert!(super::super::owned_plain_source::census::measure(&doc, &budget, &Interrupt::NONE).is_err());
+    assert!(super::super::owned_plain_source::census::measure_plain_for_test(&doc, &budget, &Interrupt::NONE).is_err());
     assert!(super::super::owned_plain_source::census::measure_threshold(&doc, &budget, &Interrupt::NONE).is_err());
     let node = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
     node.arguments.reserve_exact(32);
@@ -111,13 +111,13 @@ fn negative_drawable_rectangle_is_not_canvas_or_sparse_occupancy() {
     assert!(store::validate(surface, canvas, &control(), &|| Ok(())).is_err());
 }
 #[test]
-fn flat_argument_and_mask_identity_refusals_precede_any_promotion() {
+fn malformed_argument_name_and_mask_identity_refusals_precede_any_promotion() {
     let budget = Budget::new(limits(), None);
     for change in 0..4 {
         let mut doc = census_fixture();
         let state = doc.xcf_state.as_mut().unwrap();
         match change {
-            0 => state.filter_stacks[0].nodes[0].arguments[0].value = FilterValue::Config(Vec::new()),
+            0 => state.filter_stacks[0].nodes[0].arguments[0].name.clear(),
             1 => state.filter_stacks[0].nodes[0].mask = None,
             2 => state.filter_masks[0].bounds = Rect::new(1, 0, 9, 6),
             _ => state.items.push(state.items[0].clone()),
@@ -259,7 +259,7 @@ fn point_name_is_not_authority_and_refusal_never_retries_or_resets_catalog() {
     };
     let options = DecodeOptions { progress: Some(&progress), ..Default::default() };
     assert!(super::super::owned_xcf_source::import_owned_xcf_bytes_in_quota("not-qualified.xcf", bytes, &options, &limits(), q.clone(), &control()).is_err());
-    assert_eq!(starts.load(Ordering::Relaxed), 1);
+    assert_eq!(starts.load(Ordering::Relaxed), 2, "one immutable metadata preplan plus one selected decode; no family retry");
     assert_eq!(q.usage().unwrap(), baseline);
     let stopped = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(BackingError::Work) };
     assert!(
@@ -300,7 +300,15 @@ fn exact_color_capacity_is_paid_but_profile_encoding_and_word_shape_are_not_infe
             _ => components[0] = ExactNumber::Float32Bits(f32::NAN.to_bits()),
         }
         doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].arguments[0].value = value;
-        assert!(census::measure(&doc, &budget, &Interrupt::NONE).is_err());
+        let measured = census::measure(&doc, &budget, &Interrupt::NONE);
+        if matches!(malformed, 0 | 1 | 3 | 4) {
+            assert!(measured.is_err(), "Color requires exactly four finite F32 words without a profile reference");
+        } else {
+            // Linear four-component F32 is a valid lower storage shape; the
+            // source family/working interpretation is still proved by the sealed
+            // mapper and complete prepared programme before adoption.
+            measured.unwrap();
+        }
     }
 }
 
@@ -351,7 +359,9 @@ fn remaining_fifteen_existing_source_families_promote_once_with_unchanged_native
             assert!(std::fs::metadata(root.join(path)).unwrap().len() <= 16 << 20);
             let bytes = Arc::new(std::fs::read(root.join(path)).unwrap());
             assert_eq!(hash(&bytes), asset["sha256"].as_str().unwrap());
-            let raw = photocraft_xcf::decode(&bytes, &Default::default()).unwrap();
+            // Inspection-only comparison: finite AlphaClip source alpha is retained.
+            // The actual importer below still performs its unchanged exact family proof.
+            let raw = photocraft_xcf::decode(&bytes, &DecodeOptions { allow_finite_drawable_alpha: true, ..Default::default() }).unwrap();
             let Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(family)) =
                 crate::xcf_point_replace_source::classify(&raw, &Interrupt::NONE, None).unwrap()
             else {
@@ -373,7 +383,7 @@ fn remaining_fifteen_existing_source_families_promote_once_with_unchanged_native
             let options = DecodeOptions { progress: Some(&progress), ..Default::default() };
             let owned =
                 super::super::owned_xcf_source::import_owned_xcf_bytes_in_quota(path, bytes.clone(), &options, &limits(), q.clone(), &control()).unwrap();
-            assert_eq!(starts.load(Ordering::Relaxed), 1);
+            assert_eq!(starts.load(Ordering::Relaxed), 2, "one immutable metadata preplan plus one selected decode; no family retry");
             assert!(matches!(&owned, super::super::owned_xcf_source::OwnedXcfImport::Point(_)));
             assert!(owned.document().quota().shares_ledger(&q));
             owned.document().validate_readonly_point_storage(&control()).unwrap();
@@ -421,7 +431,6 @@ fn remaining_fifteen_existing_source_families_promote_once_with_unchanged_native
     drop(outside);
 }
 
-
 #[test]
 fn configured_nested_vectors_and_curve_spare_capacity_are_real_model_fees() {
     let budget = Budget::new(limits(), None);
@@ -429,10 +438,20 @@ fn configured_nested_vectors_and_curve_spare_capacity_are_real_model_fees() {
     let node = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
     node.arguments = vec![FilterArgument {
         name: "config".into(),
-        value: FilterValue::Config(["value", "red", "green", "blue", "alpha"].into_iter().map(|name| FilterArgument {
-            name: name.into(),
-            value: FilterValue::Curve { free: true, points_f64_bits: Vec::new(), point_types: Vec::new(), samples_f64_bits: vec![0.5f64.to_bits(); 256] },
-        }).collect()),
+        value: FilterValue::Config(
+            ["value", "red", "green", "blue", "alpha"]
+                .into_iter()
+                .map(|name| FilterArgument {
+                    name: name.into(),
+                    value: FilterValue::Curve {
+                        free: true,
+                        points_f64_bits: Vec::new(),
+                        point_types: Vec::new(),
+                        samples_f64_bits: vec![0.5f64.to_bits(); 256],
+                    },
+                })
+                .collect(),
+        ),
     }];
     let first = census::measure(&doc, &budget, &Interrupt::NONE).unwrap();
     let node = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
@@ -448,7 +467,7 @@ fn configured_nested_vectors_and_curve_spare_capacity_are_real_model_fees() {
     assert_eq!(*samples_f64_bits, words);
     let next = census::measure(&doc, &budget, &Interrupt::NONE).unwrap();
     assert_eq!(next.model, first.model + extra as u64);
-    assert!(super::super::owned_plain_source::census::measure(&doc, &budget, &Interrupt::NONE).is_err());
+    assert!(super::super::owned_plain_source::census::measure_plain_for_test(&doc, &budget, &Interrupt::NONE).is_err());
     assert!(super::super::owned_plain_source::census::measure_threshold(&doc, &budget, &Interrupt::NONE).is_err());
     let node = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
     let FilterValue::Config(channels) = &mut node.arguments[0].value else { panic!() };
@@ -456,7 +475,6 @@ fn configured_nested_vectors_and_curve_spare_capacity_are_real_model_fees() {
     samples_f64_bits[0] = f64::NAN.to_bits();
     assert!(census::measure(&doc, &budget, &Interrupt::NONE).is_err());
 }
-
 
 #[test]
 fn bounded_stack_mask_correspondence_allows_absence_but_never_orphans_or_shared_owners() {
@@ -470,10 +488,13 @@ fn bounded_stack_mask_correspondence_allows_absence_but_never_orphans_or_shared_
     assert!(census::measure(&doc, &budget, &Interrupt::NONE).is_ok());
     let state = doc.xcf_state.as_mut().unwrap();
     let mut mask = state.filter_masks[0].clone();
-    mask.id = MaskId(10); mask.owner = FilterId(9);
+    mask.id = MaskId(10);
+    mask.owner = FilterId(9);
     state.filter_stacks[0].nodes[1].mask = Some(ItemRef::Mask(mask.id));
-    let mut item = state.items[1].clone(); item.item = ItemRef::Mask(mask.id);
-    state.items.push(item); state.filter_masks.push(mask);
+    let mut item = state.items[1].clone();
+    item.item = ItemRef::Mask(mask.id);
+    state.items.push(item);
+    state.filter_masks.push(mask);
     let both = census::measure(&doc, &budget, &Interrupt::NONE).unwrap();
     let state = doc.xcf_state.as_mut().unwrap();
     state.filter_stacks[0].nodes[1].mask = state.filter_stacks[0].nodes[0].mask;
@@ -484,23 +505,26 @@ fn bounded_stack_mask_correspondence_allows_absence_but_never_orphans_or_shared_
     assert!(census::measure(&doc, &budget, &Interrupt::NONE).is_err());
     let state = doc.xcf_state.as_mut().unwrap();
     state.filter_stacks[0].nodes[1].id = FilterId(9);
-    for node in &mut state.filter_stacks[0].nodes { node.mask = None; }
-    state.filter_masks.clear(); state.items.retain(|item| matches!(item.item, ItemRef::Layer(_)));
+    for node in &mut state.filter_stacks[0].nodes {
+        node.mask = None;
+    }
+    state.filter_masks.clear();
+    state.items.retain(|item| matches!(item.item, ItemRef::Layer(_)));
     let absent = census::measure(&doc, &budget, &Interrupt::NONE).unwrap();
     assert!(absent.model < both.model);
     let state = doc.xcf_state.as_mut().unwrap();
-    let mut extra = state.filter_stacks[0].nodes[0].clone(); extra.id = FilterId(11);
+    let mut extra = state.filter_stacks[0].nodes[0].clone();
+    extra.id = FilterId(11);
     state.filter_stacks[0].nodes.push(extra);
     assert!(census::measure(&doc, &budget, &Interrupt::NONE).is_err());
 }
-
 
 #[test]
 #[ignore = "requires reviewed unpublished filter-stack-edits-evidence originals; UNRUN"]
 fn five_original_witnessed_stacks_decode_once_with_order_raw_words_masks_and_catalog_retained() {
     use sha2::{Digest, Sha256};
     use std::sync::atomic::{AtomicU64, Ordering};
-    let hash = |bytes: &[u8]| format!("{:x}", Sha256::digest(bytes));
+    let hash = |bytes: &[u8]| Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>();
     let root = std::path::PathBuf::from(std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS").unwrap()).join("filter-stack-edits-evidence");
     let observations = std::fs::read(root.join("observations.json")).unwrap();
     assert_eq!(hash(&observations), "104ba73e04806be7547efae7f6362b0ecad66dbb02e7973eda26d499b0d63386");
@@ -515,13 +539,19 @@ fn five_original_witnessed_stacks_decode_once_with_order_raw_words_masks_and_cat
         let raw = photocraft_xcf::decode(&bytes, &DecodeOptions::default()).unwrap();
         assert!(super::super::qualified_point_stack_edits(&raw));
         let eager = crate::import("stack.xcf", &bytes).unwrap().document;
-        let q = quota(); let retained = q.reserve(QuotaKind::Index, 4096).unwrap();
+        let q = quota();
+        let retained = q.reserve(QuotaKind::Index, 4096).unwrap();
         let baseline = q.usage().unwrap();
         let starts = AtomicU64::new(0);
-        let progress = |p: f32| { if p.to_bits() == 0.05f32.to_bits() { starts.fetch_add(1, Ordering::Relaxed); } };
+        let progress = |p: f32| {
+            if p.to_bits() == 0.05f32.to_bits() {
+                starts.fetch_add(1, Ordering::Relaxed);
+            }
+        };
         let options = DecodeOptions { progress: Some(&progress), ..Default::default() };
-        let selected = super::super::owned_xcf_source::import_owned_xcf_bytes_in_quota("stack.xcf", bytes.clone(), &options, &limits(), q.clone(), &control()).unwrap();
-        assert_eq!(starts.load(Ordering::Relaxed), 1);
+        let selected = super::super::owned_xcf_source::import_owned_xcf_bytes_in_quota("stack.xcf", bytes.clone(), &options, &limits(), q.clone(), &control())
+            .unwrap_or_else(|error| panic!("{}: {error}; quota {:?}", row["id"], q.usage().unwrap()));
+        assert_eq!(starts.load(Ordering::Relaxed), 2, "one immutable metadata preplan plus one selected decode; no family retry");
         assert!(matches!(&selected, super::super::owned_xcf_source::OwnedXcfImport::Point(_)));
         selected.document().validate_readonly_point_storage(&control()).unwrap();
         assert!(selected.document().quota().shares_ledger(&q));
@@ -529,24 +559,32 @@ fn five_original_witnessed_stacks_decode_once_with_order_raw_words_masks_and_cat
         let LayerContent::BackedRaster(layer) = &doc.layers[0].content else { panic!() };
         let original = raw.layers[0].plane.as_ref().unwrap();
         let mut actual = vec![0u8; 192];
-        for y in 0..6 { for x in 0..8 {
-            let at = (y as usize * 8 + x as usize) * 4;
-            layer.checked_view().read_logical_pixel_native_into(x, y, &mut actual[at..at+4], &control()).unwrap();
-        }}
+        for y in 0..6 {
+            for x in 0..8 {
+                let at = (y as usize * 8 + x as usize) * 4;
+                layer.checked_view().read_logical_pixel_native_into(x, y, &mut actual[at..at + 4], &control()).unwrap();
+            }
+        }
         assert_eq!(actual, original.bytes);
-        let current = doc.xcf_state.as_ref().unwrap(); let old = eager.xcf_state.as_ref().unwrap();
+        let current = doc.xcf_state.as_ref().unwrap();
+        let old = eager.xcf_state.as_ref().unwrap();
         assert_eq!(current.filter_stacks[0].nodes.len(), raw.layers[0].effects.len());
         assert_eq!(current.filter_masks.len(), raw.layers[0].effects.len()); // Actual five proofs all Some; optional absence is not newly observed.
         for (node, expected) in current.filter_stacks[0].nodes.iter().zip(&old.filter_stacks[0].nodes) {
-            assert_eq!(node.operation, expected.operation); assert_eq!(node.arguments, expected.arguments);
+            assert_eq!(node.operation, expected.operation);
+            assert_eq!(node.arguments, expected.arguments);
             assert_eq!(node.operation.schema_epoch, "xcf-22-stock-point-stack-edits-v1");
-            assert_eq!(node.composition, expected.composition); assert_eq!(node.enabled, expected.enabled);
+            assert_eq!(node.composition, expected.composition);
+            assert_eq!(node.enabled, expected.enabled);
             assert_eq!(node.opacity_f64_bits, expected.opacity_f64_bits);
             let ItemRef::Mask(id) = node.mask.unwrap() else { panic!() };
             let mask = current.filter_masks.iter().find(|mask| mask.id == id).unwrap();
             assert_eq!(mask.owner, node.id);
             let ordinal = current.filter_stacks[0].nodes.iter().position(|n| n.id == node.id).unwrap();
-            assert_eq!(mask.surface.try_read_interleaved(doc.bounds()).unwrap(), raw.layers[0].effects[ordinal].mask.as_ref().unwrap().plane.as_ref().unwrap().bytes);
+            assert_eq!(
+                mask.surface.try_read_interleaved(doc.bounds()).unwrap(),
+                raw.layers[0].effects[ordinal].mask.as_ref().unwrap().plane.as_ref().unwrap().bytes
+            );
         }
         drop(selected);
         assert_eq!(q.usage().unwrap(), baseline);

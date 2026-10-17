@@ -81,7 +81,12 @@ fn poll(ctl: &Interrupt<'_>, budget: Option<&photocraft_xcf::Budget<'_>>, units:
 // Exact existing qualified_opaque_neighborhood metadata and alpha predicate,
 // using bounded real native visitors instead of materializing an eager Plane.
 // Existing eager/default function remains unchanged for all its old callers.
-pub(super) fn opaque_original<P: ExactParsedPlane>(file: &XcfFile<P>, operation: &str, ctl: &Interrupt<'_>, budget: Option<&photocraft_xcf::Budget<'_>>) -> Result<bool, IoError> {
+pub(super) fn opaque_original<P: ExactParsedPlane>(
+    file: &XcfFile<P>,
+    operation: &str,
+    ctl: &Interrupt<'_>,
+    budget: Option<&photocraft_xcf::Budget<'_>>,
+) -> Result<bool, IoError> {
     poll(ctl, budget, 32)?;
     if !(file.version == 22
         && file.precision == 150
@@ -137,7 +142,7 @@ pub(super) fn opaque_original<P: ExactParsedPlane>(file: &XcfFile<P>, operation:
         }
         seen = seen.checked_add(bytes.len()).filter(|n| *n <= 4096).ok_or_else(|| IoError::Unsupported("opaque Point extra bytes".into()))?;
         poll(ctl, budget, (bytes.len() + bytes.len() / 4) as u64)?;
-        valid &= bytes.chunks_exact(4).all(|pixel| pixel.last() == Some(&255));
+        valid &= bytes.as_chunks::<4>().0.iter().all(|pixel| pixel.last() == Some(&255));
         Ok(())
     })?;
     if seen != 4096 {
@@ -149,4 +154,6 @@ pub(super) fn opaque_original<P: ExactParsedPlane>(file: &XcfFile<P>, operation:
 
 #[cfg(test)]
 #[path = "staged_residual_point_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unreachable)]
 mod tests;

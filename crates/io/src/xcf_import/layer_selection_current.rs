@@ -428,8 +428,7 @@ mod tests {
     }
     #[test]
     fn unsupported_base_modes_and_nonfinite_opacity_are_not_normalized() {
-        let mut layer = Drawable::default();
-        layer.mode = 28;
+        let mut layer = Drawable { mode: 28, ..Default::default() };
         assert!(supported(&layer).is_ok());
         layer.mode = 99;
         assert!(supported(&layer).is_err());

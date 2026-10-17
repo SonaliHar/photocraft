@@ -899,7 +899,7 @@ mod tests {
         let bytes = b"metadata witness only, not a valid implicit profile".to_vec();
         doc.sample_encoding = Some(SampleEncoding::NonlinearProfile);
         doc.source_color_context = Some(photocraft_doc::SourceColorContext { original_icc: None, source_precision: 750 });
-        doc.icc_profile = Some(bytes.clone());
+        doc.icc_profile = Some(Arc::new(bytes.clone()));
         assert!(current_gray_metadata(&doc, SampleType::F64, 750).is_err());
         doc.working_profile_interpretation = photocraft_doc::WorkingProfileInterpretation::implicit_sgray(&bytes);
         assert_eq!(current_gray_metadata(&doc, SampleType::F64, 750).unwrap(), bytes);
@@ -926,7 +926,7 @@ mod tests {
         doc.mode = ColorMode::Grayscale;
         doc.icc_profile = None;
         assert!(current_gray_metadata(&doc, SampleType::F64, 750).is_err());
-        doc.icc_profile = Some(bytes);
+        doc.icc_profile = Some(Arc::new(bytes));
         doc.source_color_context.as_mut().unwrap().original_icc = Some(std::sync::Arc::new(vec![1]));
         assert!(current_gray_metadata(&doc, SampleType::F64, 750).is_err());
     }

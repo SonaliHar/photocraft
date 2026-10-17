@@ -356,7 +356,7 @@ pub fn map<'a, P>(
             8 | 44 => 1,
             33 => 1f32.to_bits(),
             7 => 62,
-            35 | 36 | 37 => 239108689,
+            35..=37 => 239108689,
             46 => 0,
             _ => return Err(bad("unknown outer effect property")),
         };

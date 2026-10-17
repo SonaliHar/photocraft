@@ -73,10 +73,10 @@ fn paths<P>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &photocraft_xcf::Budget<'_>) -
         if depth > 32 || d.group && depth >= 32 || ordinal == 0 && depth != 0 || depth > previous.saturating_add(1) {
             return Ok(None);
         }
-        if depth > previous {
-            if let Some(n) = next.get_mut(depth) {
-                *n = 0;
-            }
+        if depth > previous
+            && let Some(n) = next.get_mut(depth)
+        {
+            *n = 0;
         }
         for p in 0..depth {
             if !groups.get(p).copied().unwrap_or(false) || d.path.get(p) != index.get(p) {
@@ -116,19 +116,48 @@ pub(super) fn intrinsic_old_partition<P>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &
 }
 /// Explicit modern implicit plain identity, disjoint from every successful
 /// old fixed source (assigned ICC>=132 and raw0,1,1). No validator retry.
-pub(super) fn modern_plain_old_partition<P>(f:&XcfFile<P>,i:&Interrupt<'_>,b:&photocraft_xcf::Budget<'_>)->Result<bool,IoError>{
- if !staged_accounted_group::hint(f){return Ok(false);}
- work(i,b,512)?;
- if !matches!(f.version,12|13|22)||f.model!=Model::Rgb||f.encoding!=Encoding::NonlinearProfile||!f.icc.is_empty()
-  ||!matches!((f.sample,f.precision),(Sample::U8,150)|(Sample::U16,250)|(Sample::U32,350)|(Sample::F32,650)|(Sample::F64,750))
-  ||f.width==0||f.height==0||f.width>262144||f.height>262144||u64::from(f.width).checked_mul(u64::from(f.height)).is_none_or(|n|n>1<<30){return Ok(false);}
- let Some((groups,leaves,_))=paths(f,i,b)? else{return Ok(false)};
- if groups==0||leaves==0{return Ok(false);}
- for d in &f.layers {
-  if !d.effects.is_empty()||d.mask.is_some()||d.model!=Model::Rgb||!d.alpha||d.mode!=28||(d.blend_space,d.composite_space,d.composite_mode)!=(0,-1,-1)||d.offset!=(0,0){return Ok(false);}
-  if d.group {if d.group_flags!=1||d.plane.is_some(){return Ok(false)}}else if d.group_flags!=0||(d.width,d.height)!=(f.width,f.height){return Ok(false)}
- }
- Ok(true)
+pub(super) fn modern_plain_old_partition<P>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
+    if !staged_accounted_group::hint(f) {
+        return Ok(false);
+    }
+    work(i, b, 512)?;
+    if !matches!(f.version, 12 | 13 | 22)
+        || f.model != Model::Rgb
+        || f.encoding != Encoding::NonlinearProfile
+        || !f.icc.is_empty()
+        || !matches!((f.sample, f.precision), (Sample::U8, 150) | (Sample::U16, 250) | (Sample::U32, 350) | (Sample::F32, 650) | (Sample::F64, 750))
+        || f.width == 0
+        || f.height == 0
+        || f.width > 262144
+        || f.height > 262144
+        || u64::from(f.width).checked_mul(u64::from(f.height)).is_none_or(|n| n > 1 << 30)
+    {
+        return Ok(false);
+    }
+    let Some((groups, leaves, _)) = paths(f, i, b)? else { return Ok(false) };
+    if groups == 0 || leaves == 0 {
+        return Ok(false);
+    }
+    for d in &f.layers {
+        if !d.effects.is_empty()
+            || d.mask.is_some()
+            || d.model != Model::Rgb
+            || !d.alpha
+            || d.mode != 28
+            || (d.blend_space, d.composite_space, d.composite_mode) != (0, -1, -1)
+            || d.offset != (0, 0)
+        {
+            return Ok(false);
+        }
+        if d.group {
+            if d.group_flags != 1 || d.plane.is_some() {
+                return Ok(false);
+            }
+        } else if d.group_flags != 0 || (d.width, d.height) != (f.width, f.height) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 pub(super) fn hint<P>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
     if f.layers.len() > 4096 {
@@ -145,7 +174,7 @@ pub(super) fn descriptors<'b, 'a>(
 ) -> Result<Option<super::staged_masked_filtered_flat::DescriptorPlan<'b, 'a>>, IoError> {
     if !matches!(f.version, 12 | 13 | 22)
         || f.model != Model::Rgb
-        || !matches!((f.sample, f.precision), (Sample::U8,150)|(Sample::U16,250)|(Sample::U32,350)|(Sample::F32, 650) | (Sample::F64, 750))
+        || !matches!((f.sample, f.precision), (Sample::U8, 150) | (Sample::U16, 250) | (Sample::U32, 350) | (Sample::F32, 650) | (Sample::F64, 750))
         || f.encoding != Encoding::NonlinearProfile
         || !f.icc.is_empty()
         || f.width == 0
@@ -160,12 +189,14 @@ pub(super) fn descriptors<'b, 'a>(
     if ng == 0 || nl == 0 {
         return Ok(None);
     }
-    if staged_accounted_group::hint(f) && !intrinsic_old_partition(f, i, b)? && !modern_plain_old_partition(f,i,b)? {
+    if staged_accounted_group::hint(f) && !intrinsic_old_partition(f, i, b)? && !modern_plain_old_partition(f, i, b)? {
         return Ok(None);
     }
     // Not a new Source admission: on semantic metadata miss preserve only
     // existing strict routes. No descriptor permission or retry is granted.
-    if super::staged_normal_hierarchy_quantized::exact_depth(f)&&!super::staged_normal_hierarchy_quantized::plan_eligible(f,i,b)?{return Ok(None);}
+    if super::staged_normal_hierarchy_quantized::exact_depth(f) && !super::staged_normal_hierarchy_quantized::plan_eligible(f, i, b)? {
+        return Ok(None);
+    }
     let tiles = u64::from(f.width).div_ceil(256).checked_mul(u64::from(f.height).div_ceil(256)).ok_or_else(|| IoError::Unsupported("hierarchy grid".into()))?;
     let one = tiles
         .checked_mul(65536)
@@ -231,12 +262,14 @@ pub(super) fn descriptors<'b, 'a>(
         work(i, b, 32)?;
         out.push(d.plane.as_ref().ok_or_else(|| IoError::Unsupported("hierarchy descriptor raster".into()))?.clone());
     }
-    let mut coverage=false;
-    if f.version==22 {
-        for d in &f.layers {for e in &d.effects {
-            work(i,b,512)?;
-            coverage |= crate::xcf_filters::masked_mixed_source::parameters(e).is_some();
-        }}
+    let mut coverage = false;
+    if f.version == 22 {
+        for d in &f.layers {
+            for e in &d.effects {
+                work(i, b, 512)?;
+                coverage |= crate::xcf_filters::masked_mixed_source::parameters(e).is_some();
+            }
+        }
     }
     Ok(Some(super::staged_masked_filtered_flat::DescriptorPlan::hierarchy(out, fee, coverage)))
 }
@@ -246,17 +279,31 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
     if !SOURCE_RELEASED {
         return Err(IoError::Unsupported("normal hierarchy Source packet policy not released".into()));
     }
-    validate_source_body(f, i, b, false,false)
+    validate_source_body(f, i, b, false, false)
 }
-pub(super) fn validate_source_body<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &photocraft_xcf::Budget<'_>, masked:bool,quantized:bool) -> Result<(), IoError> {
+pub(super) fn validate_source_body<P: ExactParsedPlane>(
+    f: &XcfFile<P>,
+    i: &Interrupt<'_>,
+    b: &photocraft_xcf::Budget<'_>,
+    masked: bool,
+    quantized: bool,
+) -> Result<(), IoError> {
     work(i, b, 128)?;
-    if quantized {if !super::staged_normal_hierarchy_quantized::exact_depth(f){return Err(IoError::Unsupported("integer hierarchy precision".into()));}super::staged_normal_hierarchy_quantized::preflight(f,i,b)?;}
-    else if !matches!((f.sample,f.precision),(Sample::F32,650)|(Sample::F64,750)){return Err(IoError::Unsupported("float hierarchy precision".into()));}
-    if masked && f.version!=22{return Err(IoError::Unsupported("masked hierarchy Source version".into()));}
+    if quantized {
+        if !super::staged_normal_hierarchy_quantized::exact_depth(f) {
+            return Err(IoError::Unsupported("integer hierarchy precision".into()));
+        }
+        super::staged_normal_hierarchy_quantized::preflight(f, i, b)?;
+    } else if !matches!((f.sample, f.precision), (Sample::F32, 650) | (Sample::F64, 750)) {
+        return Err(IoError::Unsupported("float hierarchy precision".into()));
+    }
+    if masked && f.version != 22 {
+        return Err(IoError::Unsupported("masked hierarchy Source version".into()));
+    }
     if !matches!(f.version, 12 | 13 | 22)
         || f.model != Model::Rgb
         || f.encoding != Encoding::NonlinearProfile
-        || !matches!((f.sample, f.precision), (Sample::U8,150)|(Sample::U16,250)|(Sample::U32,350)|(Sample::F32, 650) | (Sample::F64, 750))
+        || !matches!((f.sample, f.precision), (Sample::U8, 150) | (Sample::U16, 250) | (Sample::U32, 350) | (Sample::F32, 650) | (Sample::F64, 750))
         || !f.icc.is_empty()
         || f.width == 0
         || f.height == 0
@@ -342,10 +389,19 @@ pub(super) fn validate_source_body<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Inte
             return Err(IoError::Unsupported("hierarchy Source nodes".into()));
         }
         let p = d.plane.as_ref().ok_or_else(|| IoError::Unsupported("hierarchy Source pixels".into()))?;
-        if !p.allows_normal_hierarchy_source() || !(if quantized{super::staged_normal_hierarchy_quantized::native(p,f.sample,f.width,f.height,i,b)?}else{staged_filtered_flat::native(p, f.sample, f.width, f.height, 4, false, i, Some(b))?}) {
+        if !p.allows_normal_hierarchy_source()
+            || !(if quantized {
+                super::staged_normal_hierarchy_quantized::native(p, f.sample, f.width, f.height, i, b)?
+            } else {
+                staged_filtered_flat::native(p, f.sample, f.width, f.height, 4, false, i, Some(b))?
+            })
+        {
             return Err(IoError::Unsupported("hierarchy Source nativeunit/plan".into()));
         }
-        if masked { super::staged_normal_hierarchy_masked::validate_leaf(d,f,i,b)?; continue; }
+        if masked {
+            super::staged_normal_hierarchy_masked::validate_leaf(d, f, i, b)?;
+            continue;
+        }
         staged_filtered_flat::root_domain(d, i, b)?;
         for e in &d.effects {
             let m = e.mask.as_ref().ok_or_else(|| IoError::Unsupported("hierarchy Source mask".into()))?;

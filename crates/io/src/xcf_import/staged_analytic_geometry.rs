@@ -56,10 +56,10 @@ pub(super) fn qualify<P: ExactParsedPlane>(file: &XcfFile<P>, ctl: &Interrupt<'_
         if !native(layer, file.sample, ctl, budget)? {
             return Ok(false);
         }
-        if let Some(mask) = &layer.mask {
-            if !native(mask, file.sample, ctl, budget)? {
-                return Ok(false);
-            }
+        if let Some(mask) = &layer.mask
+            && !native(mask, file.sample, ctl, budget)?
+        {
+            return Ok(false);
         }
     }
     Ok(true)

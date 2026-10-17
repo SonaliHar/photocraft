@@ -2,12 +2,12 @@
 //! Rc/map publication uses bounded prepaid standard allocations, not a complete
 //! fallible allocator or process RSS guarantee. No consumed storage DTO escapes.
 use super::*;
-#[path="staged_normal_hierarchy.rs"]
+#[path = "staged_normal_hierarchy.rs"]
 pub(in crate::xcf_import) mod staged_normal_hierarchy;
-#[path="staged_normal_hierarchy_quantized.rs"]
-pub(in crate::xcf_import) mod staged_normal_hierarchy_quantized;
-#[path="staged_normal_hierarchy_masked.rs"]
+#[path = "staged_normal_hierarchy_masked.rs"]
 pub(in crate::xcf_import) mod staged_normal_hierarchy_masked;
+#[path = "staged_normal_hierarchy_quantized.rs"]
+pub(in crate::xcf_import) mod staged_normal_hierarchy_quantized;
 use photocraft_raster::staged::{StagedSurfaceBuilder, StagingBudget};
 use photocraft_xcf::{BudgetKind, PlaneDescriptor, PlaneRole, PlaneSink, PlaneSinkControl, Reservation};
 use std::{cell::RefCell, marker::PhantomData, rc::Rc};
@@ -20,10 +20,10 @@ use residual::ResidualPointFamily;
 #[path = "staged_configured_point.rs"]
 mod configured;
 use configured::ConfiguredPointFamily;
-#[path = "staged_point_stack.rs"]
-mod point_stack;
 #[path = "staged_legacy_scalar.rs"]
 mod legacy_scalar;
+#[path = "staged_point_stack.rs"]
+mod point_stack;
 use legacy_scalar::LegacyScalarFamily;
 #[path = "staged_neighborhood.rs"]
 mod neighborhood;
@@ -39,7 +39,13 @@ trait StagePolicy {
     const THRESHOLD_ALPHA: bool;
     const SOURCE_SELECTED: bool = false;
     fn accepts(d: &PlaneDescriptor) -> bool;
-    fn family_controlled<Q:ExactParsedPlane>(file:&XcfFile<Q>,_:&Interrupt<'_>,_:Option<&photocraft_xcf::Budget<'_>>)->Result<SelectedStagedFamily,IoError>{Ok(Self::family(file))}
+    fn family_controlled<Q: ExactParsedPlane>(
+        file: &XcfFile<Q>,
+        _: &Interrupt<'_>,
+        _: Option<&photocraft_xcf::Budget<'_>>,
+    ) -> Result<SelectedStagedFamily, IoError> {
+        Ok(Self::family(file))
+    }
     fn family<Q: ExactParsedPlane>(_: &XcfFile<Q>) -> SelectedStagedFamily {
         if Self::THRESHOLD_ALPHA { SelectedStagedFamily::ThresholdAlpha } else { SelectedStagedFamily::Plain }
     }
@@ -68,7 +74,18 @@ pub(super) enum SelectedStagedFamily {
     Neighborhood(NeighborhoodSourceFamily),
 }
 impl SelectedStagedFamily {
-    pub(super) fn assigned_point_storage(self)->bool { matches!(self,Self::Neighborhood(NeighborhoodSourceFamily::BoxGeometryAssignedF32 | NeighborhoodSourceFamily::BoxGeometryAssignedF64 | NeighborhoodSourceFamily::BoxAssignedF32 | NeighborhoodSourceFamily::MedianAssignedF32 | NeighborhoodSourceFamily::GaussianAssignedF32)) }
+    pub(super) fn assigned_point_storage(self) -> bool {
+        matches!(
+            self,
+            Self::Neighborhood(
+                NeighborhoodSourceFamily::BoxGeometryAssignedF32
+                    | NeighborhoodSourceFamily::BoxGeometryAssignedF64
+                    | NeighborhoodSourceFamily::BoxAssignedF32
+                    | NeighborhoodSourceFamily::MedianAssignedF32
+                    | NeighborhoodSourceFamily::GaussianAssignedF32
+            )
+        )
+    }
 }
 impl std::fmt::Debug for SelectedStagedFamily {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -104,43 +121,90 @@ impl StagePolicy for SourceSelectedPolicy {
     fn accepts(d: &PlaneDescriptor) -> bool {
         PlainPolicy::accepts(d) || ThresholdAlphaPolicy::accepts(d) || point_plane(d)
     }
-    fn family_controlled<Q:ExactParsedPlane>(file:&XcfFile<Q>,ctl:&Interrupt<'_>,shared:Option<&photocraft_xcf::Budget<'_>>)->Result<SelectedStagedFamily,IoError>{
-        if file.layers.len()==1 && file.layers.first().is_some_and(|d|d.effects.len()>=2) {
-            let budget=shared.ok_or_else(||IoError::Unsupported("selected source requires accounting".into()))?;
-            if staged_filtered_flat::hint(file,ctl,budget)?{if staged_masked_filtered_flat::hint(file,ctl,budget)?{return Ok(SelectedStagedFamily::MaskedFilteredFlat);}return Ok(if staged_filtered_flat::opacity::has_nonunit(file,ctl,budget)? {SelectedStagedFamily::FilteredFlatOpacity}else{SelectedStagedFamily::FilteredFlat})}
+    fn family_controlled<Q: ExactParsedPlane>(
+        file: &XcfFile<Q>,
+        ctl: &Interrupt<'_>,
+        shared: Option<&photocraft_xcf::Budget<'_>>,
+    ) -> Result<SelectedStagedFamily, IoError> {
+        if file.layers.len() == 1 && file.layers.first().is_some_and(|d| d.effects.len() >= 2) {
+            let budget = shared.ok_or_else(|| IoError::Unsupported("selected source requires accounting".into()))?;
+            if staged_filtered_flat::hint(file, ctl, budget)? {
+                if staged_masked_filtered_flat::hint(file, ctl, budget)? {
+                    return Ok(SelectedStagedFamily::MaskedFilteredFlat);
+                }
+                return Ok(if staged_filtered_flat::opacity::has_nonunit(file, ctl, budget)? {
+                    SelectedStagedFamily::FilteredFlatOpacity
+                } else {
+                    SelectedStagedFamily::FilteredFlat
+                });
+            }
         }
-        let old=Self::family(file);
-        if old==SelectedStagedFamily::IsolatedNormalGroup {
-            let budget=shared.ok_or_else(||IoError::Unsupported("hierarchy priority accounting".into()))?;
-            if staged_normal_hierarchy::intrinsic_old_partition(file,ctl,budget)?||staged_normal_hierarchy::modern_plain_old_partition(file,ctl,budget)?{return staged_normal_hierarchy_masked::select(file,ctl,budget)}
+        let old = Self::family(file);
+        if old == SelectedStagedFamily::IsolatedNormalGroup {
+            let budget = shared.ok_or_else(|| IoError::Unsupported("hierarchy priority accounting".into()))?;
+            if staged_normal_hierarchy::intrinsic_old_partition(file, ctl, budget)? || staged_normal_hierarchy::modern_plain_old_partition(file, ctl, budget)? {
+                return staged_normal_hierarchy_masked::select(file, ctl, budget);
+            }
         }
 
-        if old==SelectedStagedFamily::Point(crate::xcf_filters::PointReplaceFamily::Exposure) {
-            let budget=shared.ok_or_else(||IoError::Unsupported("masked source selection accounting".into()))?;
-            if crate::xcf_point_replace_source::masked_exposure_source::hint(file,ctl,budget)? {return Ok(SelectedStagedFamily::Point(crate::xcf_filters::PointReplaceFamily::MaskedExposure));}
+        if old == SelectedStagedFamily::Point(crate::xcf_filters::PointReplaceFamily::Exposure) {
+            let budget = shared.ok_or_else(|| IoError::Unsupported("masked source selection accounting".into()))?;
+            if crate::xcf_point_replace_source::masked_exposure_source::hint(file, ctl, budget)? {
+                return Ok(SelectedStagedFamily::Point(crate::xcf_filters::PointReplaceFamily::MaskedExposure));
+            }
         }
-        if matches!(old,SelectedStagedFamily::Point(crate::xcf_filters::PointReplaceFamily::InvertLinear|crate::xcf_filters::PointReplaceFamily::InvertGamma|crate::xcf_filters::PointReplaceFamily::Brightness|crate::xcf_filters::PointReplaceFamily::Levels)){
-            let budget=shared.ok_or_else(||IoError::Unsupported("masked singleton4 selection accounting".into()))?;
-            if crate::xcf_point_replace_source::masked_stock_source::hint(file,ctl,budget)?{
-                let effect=file.layers.first().and_then(|d|d.effects.first()).ok_or_else(||IoError::Unsupported("masked singleton4 effect".into()))?;
-                let kind=crate::xcf_point_replace_source::masked_stock_source::kind(effect).ok_or_else(||IoError::Unsupported("masked singleton4 kind".into()))?;
+        if matches!(
+            old,
+            SelectedStagedFamily::Point(
+                crate::xcf_filters::PointReplaceFamily::InvertLinear
+                    | crate::xcf_filters::PointReplaceFamily::InvertGamma
+                    | crate::xcf_filters::PointReplaceFamily::Brightness
+                    | crate::xcf_filters::PointReplaceFamily::Levels
+            )
+        ) {
+            let budget = shared.ok_or_else(|| IoError::Unsupported("masked singleton4 selection accounting".into()))?;
+            if crate::xcf_point_replace_source::masked_stock_source::hint(file, ctl, budget)? {
+                let effect = file.layers.first().and_then(|d| d.effects.first()).ok_or_else(|| IoError::Unsupported("masked singleton4 effect".into()))?;
+                let kind =
+                    crate::xcf_point_replace_source::masked_stock_source::kind(effect).ok_or_else(|| IoError::Unsupported("masked singleton4 kind".into()))?;
                 return Ok(SelectedStagedFamily::Point(kind.family()));
             }
         }
-        if old!=SelectedStagedFamily::Plain{return Ok(old)}
-        let hierarchy_budget=shared.ok_or_else(||IoError::Unsupported("hierarchy selection accounting".into()))?;
-        if staged_normal_hierarchy::hint(file,ctl,hierarchy_budget)?{return staged_normal_hierarchy_masked::select(file,ctl,hierarchy_budget)}
-        let budget=shared.ok_or_else(||IoError::Unsupported("selected source requires accounting".into()))?;
-        if staged_filtered_flat::hint(file,ctl,budget)?{if staged_masked_filtered_flat::hint(file,ctl,budget)?{return Ok(SelectedStagedFamily::MaskedFilteredFlat);}return Ok(if staged_filtered_flat::opacity::has_nonunit(file,ctl,budget)? {SelectedStagedFamily::FilteredFlatOpacity}else{SelectedStagedFamily::FilteredFlat})}
-        if separable_blend::general_hint(file,ctl,budget)?{Ok(SelectedStagedFamily::SeparableBlend)}else{Ok(old)}
+        if old != SelectedStagedFamily::Plain {
+            return Ok(old);
+        }
+        let hierarchy_budget = shared.ok_or_else(|| IoError::Unsupported("hierarchy selection accounting".into()))?;
+        if staged_normal_hierarchy::hint(file, ctl, hierarchy_budget)? {
+            return staged_normal_hierarchy_masked::select(file, ctl, hierarchy_budget);
+        }
+        let budget = shared.ok_or_else(|| IoError::Unsupported("selected source requires accounting".into()))?;
+        if staged_filtered_flat::hint(file, ctl, budget)? {
+            if staged_masked_filtered_flat::hint(file, ctl, budget)? {
+                return Ok(SelectedStagedFamily::MaskedFilteredFlat);
+            }
+            return Ok(if staged_filtered_flat::opacity::has_nonunit(file, ctl, budget)? {
+                SelectedStagedFamily::FilteredFlatOpacity
+            } else {
+                SelectedStagedFamily::FilteredFlat
+            });
+        }
+        if separable_blend::general_hint(file, ctl, budget)? { Ok(SelectedStagedFamily::SeparableBlend) } else { Ok(old) }
     }
     fn family<Q: ExactParsedPlane>(file: &XcfFile<Q>) -> SelectedStagedFamily {
         // Select exactly one old gate, before mapping or mutation. A refusal
         // never retries the other gate. This is not eligibility by name/epoch.
-        if separable_blend::hint(file) { return SelectedStagedFamily::SeparableBlend; }
-        if gaussian_group::hint(file) { return SelectedStagedFamily::IsolatedGaussianGroup; }
-        if staged_accounted_group::hint(file) { return SelectedStagedFamily::IsolatedNormalGroup; }
-        if analytic_geometry::hint(file) { return SelectedStagedFamily::AnalyticGeometry; }
+        if separable_blend::hint(file) {
+            return SelectedStagedFamily::SeparableBlend;
+        }
+        if gaussian_group::hint(file) {
+            return SelectedStagedFamily::IsolatedGaussianGroup;
+        }
+        if staged_accounted_group::hint(file) {
+            return SelectedStagedFamily::IsolatedNormalGroup;
+        }
+        if analytic_geometry::hint(file) {
+            return SelectedStagedFamily::AnalyticGeometry;
+        }
         if file.layers.len() == 1 && file.layers.first().is_some_and(|layer| !layer.effects.is_empty()) {
             // This chooses a strict validator only. admissions() must obtain
             // the SAME family from the original whole-file classifier before
@@ -222,8 +286,8 @@ enum Storage {
 struct StagedPlane<'b, 'a, P: StagePolicy = PlainPolicy> {
     descriptor: PlaneDescriptor,
     masked_mixed_plan: bool,
-    hierarchy_plan:bool,
-    hierarchy_coverage:bool,
+    hierarchy_plan: bool,
+    hierarchy_coverage: bool,
     // Actual raster must die before its last reservation token.
     storage: Storage,
     _token: Token<'b, 'a>,
@@ -282,8 +346,8 @@ impl<'b, 'a> StagingBudget for BuilderBudget<'b, 'a> {
 struct Sink<'b, 'a, 'c, 'i, P: StagePolicy = PlainPolicy> {
     // All completed storage returned to parser drops before this final registry.
     active: Option<(PlaneDescriptor, StagedSurfaceBuilder<Reservation<'b, 'a>>)>,
-    descriptor_plan: Option<staged_masked_filtered_flat::DescriptorPlan<'b,'a>>,
-    planned_descriptor:Option<PlaneDescriptor>,
+    descriptor_plan: Option<staged_masked_filtered_flat::DescriptorPlan<'b, 'a>>,
+    planned_descriptor: Option<PlaneDescriptor>,
     tokens: Vec<Token<'b, 'a>>,
     registry_lease: Option<Reservation<'b, 'a>>,
     budget: &'b photocraft_xcf::Budget<'a>,
@@ -292,13 +356,27 @@ struct Sink<'b, 'a, 'c, 'i, P: StagePolicy = PlainPolicy> {
 }
 impl<'b, 'a, P: StagePolicy> PlaneSink for Sink<'b, 'a, '_, '_, P> {
     type Plane = StagedPlane<'b, 'a, P>;
-    fn validate_plane_descriptor(&mut self,d:&PlaneDescriptor,control:&mut PlaneSinkControl<'_, '_, '_>)->Result<(),XcfError>{
+    fn validate_plane_descriptor(&mut self, d: &PlaneDescriptor, control: &mut PlaneSinkControl<'_, '_, '_>) -> Result<(), XcfError> {
         control.poll()?;
-        if let Some(plan)=&mut self.descriptor_plan{plan.verify(d,self.budget).map_err(|e|match e{IoError::Xcf(error)=>error,IoError::Cancelled=>stage_error(ErrorKind::Cancelled,"masked descriptor cancelled"),other=>stage_error(ErrorKind::Unsupported,other.to_string())})?;self.planned_descriptor=Some(d.clone());}
+        if let Some(plan) = &mut self.descriptor_plan {
+            plan.verify(d, self.budget).map_err(|e| match e {
+                IoError::Xcf(error) => error,
+                IoError::Cancelled => stage_error(ErrorKind::Cancelled, "masked descriptor cancelled"),
+                other => stage_error(ErrorKind::Unsupported, other.to_string()),
+            })?;
+            self.planned_descriptor = Some(d.clone());
+        }
         Ok(())
     }
-    fn mask_coverage_policy(&self,d:&PlaneDescriptor)->photocraft_xcf::MaskCoveragePolicy{
-        if self.descriptor_plan.as_ref().is_some_and(|p|!p.hierarchy_upgrade()||p.hierarchy_coverage())&&d.role==photocraft_xcf::PlaneRole::Mask&&self.active.as_ref().is_some_and(|(actual,_)|actual==d){photocraft_xcf::MaskCoveragePolicy::CheckedF32Preimage}else{photocraft_xcf::MaskCoveragePolicy::StrictUnit}
+    fn mask_coverage_policy(&self, d: &PlaneDescriptor) -> photocraft_xcf::MaskCoveragePolicy {
+        if self.descriptor_plan.as_ref().is_some_and(|p| !p.hierarchy_upgrade() || p.hierarchy_coverage())
+            && d.role == photocraft_xcf::PlaneRole::Mask
+            && self.active.as_ref().is_some_and(|(actual, _)| actual == d)
+        {
+            photocraft_xcf::MaskCoveragePolicy::CheckedF32Preimage
+        } else {
+            photocraft_xcf::MaskCoveragePolicy::StrictUnit
+        }
     }
     fn begin(&mut self, d: &PlaneDescriptor, control: &mut PlaneSinkControl<'_, '_, '_>) -> Result<(), XcfError> {
         control.poll()?;
@@ -312,7 +390,9 @@ impl<'b, 'a, P: StagePolicy> PlaneSink for Sink<'b, 'a, '_, '_, P> {
                 },
             ));
         }
-        if self.descriptor_plan.is_some()&&self.planned_descriptor.take().as_ref()!=Some(d){return Err(stage_error(ErrorKind::Unsupported,"masked source descriptor was not prevalidated"));}
+        if self.descriptor_plan.is_some() && self.planned_descriptor.take().as_ref() != Some(d) {
+            return Err(stage_error(ErrorKind::Unsupported, "masked source descriptor was not prevalidated"));
+        }
         let width = i32::try_from(d.width).map_err(|_| stage_error(ErrorKind::Limit, "staged width"))?;
         let height = i32::try_from(d.height).map_err(|_| stage_error(ErrorKind::Limit, "staged height"))?;
         let right = d.offset.0.checked_add(width).ok_or_else(|| stage_error(ErrorKind::Limit, "staged horizontal extent"))?;
@@ -397,7 +477,15 @@ impl<'b, 'a, P: StagePolicy> PlaneSink for Sink<'b, 'a, '_, '_, P> {
         let (surface, lease) = staged.into_parts();
         let token = Rc::new(LeaseToken { _surface: lease, _metadata: metadata, budget: self.budget });
         self.tokens.push(Rc::clone(&token));
-        Ok(StagedPlane { descriptor, masked_mixed_plan:self.descriptor_plan.as_ref().is_some_and(|p|p.mixed_upgrade()),hierarchy_plan:self.descriptor_plan.as_ref().is_some_and(|p|p.hierarchy_upgrade()),hierarchy_coverage:self.descriptor_plan.as_ref().is_some_and(|p|p.hierarchy_coverage()), storage: Storage::Ready(surface), _token: token, _policy: PhantomData })
+        Ok(StagedPlane {
+            descriptor,
+            masked_mixed_plan: self.descriptor_plan.as_ref().is_some_and(|p| p.mixed_upgrade()),
+            hierarchy_plan: self.descriptor_plan.as_ref().is_some_and(|p| p.hierarchy_upgrade()),
+            hierarchy_coverage: self.descriptor_plan.as_ref().is_some_and(|p| p.hierarchy_coverage()),
+            storage: Storage::Ready(surface),
+            _token: token,
+            _policy: PhantomData,
+        })
     }
     fn abort(&mut self) {
         self.active.take();
@@ -481,10 +569,130 @@ impl<P: StagePolicy> StagedPlane<'_, '_, P> {
         Ok(())
     }
 }
+// Private immutable custody witness. Constructed only in admissions after the
+// selected masked Source's full original-file qualifier has succeeded.
+struct QualifiedEffectMask<'f, 'b, 'a, P: StagePolicy> {
+    file: &'f XcfFile<StagedPlane<'b, 'a, P>>,
+    owner_ordinal: usize,
+    owner: &'f Drawable<StagedPlane<'b, 'a, P>>,
+    node_ordinal: usize,
+    effect: &'f photocraft_xcf::Effect<StagedPlane<'b, 'a, P>>,
+    mask: &'f Drawable<StagedPlane<'b, 'a, P>>,
+    plane: &'f StagedPlane<'b, 'a, P>,
+    descriptor: &'f PlaneDescriptor,
+}
+impl<P: StagePolicy> QualifiedEffectMask<'_, '_, '_, P> {
+    fn validate(&self, ctl: &Interrupt<'_>, budget: &photocraft_xcf::Budget<'_>) -> Result<(), IoError> {
+        // All identity comparisons/descriptor fields and repeated arithmetic are
+        // independently charged. No earlier qualifier/decoder fee is credit.
+        staged_filtered_flat::work(ctl, budget, 256)?;
+        let exact = self.file.layers.get(self.owner_ordinal).is_some_and(|v| std::ptr::eq(v, self.owner))
+            && self.owner.effects.get(self.node_ordinal).is_some_and(|v| std::ptr::eq(v, self.effect))
+            && self.effect.mask.as_deref().is_some_and(|v| std::ptr::eq(v, self.mask))
+            && self.mask.plane.as_ref().is_some_and(|v| std::ptr::eq(v, self.plane))
+            && std::ptr::eq(&self.plane.descriptor, self.descriptor)
+            && matches!(&self.plane.storage, Storage::Ready(_))
+            && self.descriptor.role == PlaneRole::Mask
+            && self.descriptor.model == Model::Gray
+            && !self.descriptor.alpha
+            && self.descriptor.channels == 1
+            && self.descriptor.source_sample == self.file.sample
+            && self.descriptor.sample == decoded_sample(self.file.sample)
+            && self.descriptor.width == self.mask.width
+            && self.descriptor.height == self.mask.height
+            && self.descriptor.offset == self.mask.offset
+            && self.mask.mask.is_none()
+            && self.mask.effects.is_empty();
+        if !exact {
+            return Err(unsupported(self.mask, "qualified mask immutable identity changed"));
+        }
+        self.plane.visit_native(ctl, &mut |block| {
+            let width = self.descriptor.sample.source_bytes();
+            if !matches!(width, 4 | 8) || block.len() % width != 0 {
+                return Err(unsupported(self.mask, "qualified mask native width"));
+            }
+            let samples = u64::try_from(block.len() / width).map_err(|_| unsupported(self.mask, "qualified mask sample count"))?;
+            let work =
+                samples.checked_mul(16).and_then(|v| v.checked_add(block.len() as u64)).ok_or_else(|| unsupported(self.mask, "qualified mask repeat work"))?;
+            staged_filtered_flat::work(ctl, budget, work)?;
+            for bytes in block.chunks_exact(width) {
+                let raw = if width == 8 {
+                    f64::from_ne_bytes(bytes.try_into().map_err(|_| unsupported(self.mask, "qualified mask double"))?)
+                } else {
+                    f64::from(f32::from_ne_bytes(bytes.try_into().map_err(|_| unsupported(self.mask, "qualified mask float"))?))
+                };
+                let effective = raw as f32;
+                if !raw.is_finite() || raw < 0.0 || !effective.is_finite() || !(0.0..=1.0).contains(&effective) {
+                    return Err(unsupported(self.mask, "qualified mask F32 coverage"));
+                }
+            }
+            Ok(())
+        })
+    }
+}
+
+fn validate_qualified_masked_owner<'f, 'b, 'a, P: StagePolicy>(
+    file: &'f XcfFile<StagedPlane<'b, 'a, P>>,
+    owner_ordinal: usize,
+    owner: &'f Drawable<StagedPlane<'b, 'a, P>>,
+    ctl: &Interrupt<'_>,
+    budget: &photocraft_xcf::Budget<'_>,
+) -> Result<(), IoError> {
+    staged_filtered_flat::work(ctl, budget, 256)?;
+    if !file.layers.get(owner_ordinal).is_some_and(|v| std::ptr::eq(v, owner)) || owner.mask.is_some() {
+        return Err(unsupported(owner, "qualified masked owner identity"));
+    }
+    // The full qualifier already requires native-unit source RGBA. Rechecking
+    // leaf alpha stays strict; a filter-mask witness never waives leaf alpha.
+    let source = owner.plane.as_ref().ok_or_else(|| unsupported(owner, "qualified masked source plane"))?;
+    let width = source.descriptor.sample.source_bytes();
+    let stride = source.descriptor.channels.checked_mul(width).filter(|v| *v != 0).ok_or_else(|| unsupported(owner, "qualified masked source stride"))?;
+    source.visit_native(ctl, &mut |block| {
+        if !matches!(width, 4 | 8) || block.len() % stride != 0 {
+            return Err(unsupported(owner, "qualified source alpha layout"));
+        }
+        let work = u64::try_from(block.len() / stride)
+            .ok()
+            .and_then(|v| v.checked_mul(16))
+            .and_then(|v| v.checked_add(block.len() as u64))
+            .ok_or_else(|| unsupported(owner, "qualified source alpha work"))?;
+        staged_filtered_flat::work(ctl, budget, work)?;
+        for pixel in block.chunks_exact(stride) {
+            let bytes = pixel.get(stride - width..).ok_or_else(|| unsupported(owner, "qualified source alpha word"))?;
+            let value = if width == 8 {
+                f64::from_ne_bytes(bytes.try_into().map_err(|_| unsupported(owner, "qualified source alpha double"))?)
+            } else {
+                f64::from(f32::from_ne_bytes(bytes.try_into().map_err(|_| unsupported(owner, "qualified source alpha float"))?))
+            };
+            if !value.is_finite() || !(0.0..=1.0).contains(&value) {
+                return Err(unsupported(owner, "qualified source alpha unit"));
+            }
+        }
+        Ok(())
+    })?;
+    for (node_ordinal, effect) in owner.effects.iter().enumerate() {
+        staged_filtered_flat::work(ctl, budget, 256)?;
+        let bytes =
+            std::mem::size_of::<QualifiedEffectMask<'_, '_, '_, P>>().checked_add(128).ok_or_else(|| unsupported(owner, "qualified mask witness bytes"))?;
+        let _scratch = budget.reserve(BudgetKind::Resident, bytes as u64, "qualified immutable mask witness").map_err(accounting_error)?;
+        let mask = effect.mask.as_deref().ok_or_else(|| unsupported(owner, "qualified effect mask missing"))?;
+        let plane = mask.plane.as_ref().ok_or_else(|| unsupported(mask, "qualified mask pixels missing"))?;
+        let witness = QualifiedEffectMask { file, owner_ordinal, owner, node_ordinal, effect, mask, plane, descriptor: &plane.descriptor };
+        witness.validate(ctl, budget)?;
+    }
+    Ok(())
+}
+
 impl<P: StagePolicy> ExactParsedPlane for StagedPlane<'_, '_, P> {
-    fn allows_normal_hierarchy_source(&self)->bool{self.hierarchy_plan}
-    fn allows_normal_hierarchy_coverage(&self)->bool{self.hierarchy_coverage}
-    fn allows_masked_mixed_source_upgrade(&self)->bool{self.masked_mixed_plan}
+    fn allows_normal_hierarchy_source(&self) -> bool {
+        self.hierarchy_plan
+    }
+    fn allows_normal_hierarchy_coverage(&self) -> bool {
+        self.hierarchy_coverage
+    }
+    fn allows_masked_mixed_source_upgrade(&self) -> bool {
+        self.masked_mixed_plan
+    }
     fn descriptor(&self) -> plane::ParsedPlaneDescriptor {
         StagedPlane::descriptor(self)
     }
@@ -499,8 +707,11 @@ impl<P: StagePolicy> ExactParsedPlane for StagedPlane<'_, '_, P> {
     }
 }
 impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
-    fn retained_filter_mask_tiles(&self)->Option<usize>{
-        match &self.storage {Storage::Ready(surface)=>Some(surface.tile_count()),Storage::Transferred=>None}
+    fn retained_filter_mask_tiles(&self) -> Option<usize> {
+        match &self.storage {
+            Storage::Ready(surface) => Some(surface.tile_count()),
+            Storage::Transferred => None,
+        }
     }
 
     fn requires_budgeted_rendering_preparation() -> bool {
@@ -509,78 +720,184 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     fn requires_budgeted_rendering_preparation_for(threshold_alpha_domain: bool) -> bool {
         if P::SOURCE_SELECTED { threshold_alpha_domain } else { Self::requires_budgeted_rendering_preparation() }
     }
-    fn requires_budgeted_filtered_flat_preparation(domain:bool)->bool{P::SOURCE_SELECTED && domain}
-    fn requires_budgeted_normal_hierarchy_preparation(domain:bool)->bool{P::SOURCE_SELECTED && domain}
+    fn requires_budgeted_filtered_flat_preparation(domain: bool) -> bool {
+        P::SOURCE_SELECTED && domain
+    }
+    fn requires_budgeted_normal_hierarchy_preparation(domain: bool) -> bool {
+        P::SOURCE_SELECTED && domain
+    }
     fn requires_budgeted_point_preparation(point_domain: bool) -> bool {
         P::SOURCE_SELECTED && point_domain
     }
-    fn requires_budgeted_observed_box_geometry_preparation(domain:bool)->bool{P::SOURCE_SELECTED && domain}
-    fn requires_budgeted_assigned_box_preparation(domain: bool) -> bool {P::SOURCE_SELECTED && domain}
-    fn requires_budgeted_assigned_median_preparation(domain: bool) -> bool {P::SOURCE_SELECTED && domain}
-    fn requires_budgeted_assigned_gaussian_preparation(domain: bool) -> bool {P::SOURCE_SELECTED && domain}
-    fn requires_budgeted_neighborhood_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
-    fn requires_budgeted_gaussian_group_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
-    fn requires_budgeted_lab_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
-    fn requires_budgeted_alpha_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
-    fn requires_budgeted_component_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
-    fn requires_budgeted_legacy_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
-    fn requires_budgeted_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
-    fn requires_budgeted_general_separable_preparation(domain: bool) -> bool { P::SOURCE_SELECTED && domain }
-    fn effective_profile(file: &XcfFile<Self>, space: photocraft_cms::ColorSpace, ce: photocraft_cms::xcf_color::Encoding, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<photocraft_cms::Profile, IoError> {
-        if P::SOURCE_SELECTED && matches!(P::family_controlled(file,ctl,shared)?,SelectedStagedFamily::NormalHierarchy|SelectedStagedFamily::MaskedNormalHierarchy|SelectedStagedFamily::PlainQuantizedNormalHierarchy) {
-            return photocraft_cms::xcf_color::effective_profile(None,space,ce).map_err(|e|IoError::Unsupported(format!("hierarchy implicit effective profile: {e}")));
+    fn requires_budgeted_observed_box_geometry_preparation(domain: bool) -> bool {
+        P::SOURCE_SELECTED && domain
+    }
+    fn requires_budgeted_assigned_box_preparation(domain: bool) -> bool {
+        P::SOURCE_SELECTED && domain
+    }
+    fn requires_budgeted_assigned_median_preparation(domain: bool) -> bool {
+        P::SOURCE_SELECTED && domain
+    }
+    fn requires_budgeted_assigned_gaussian_preparation(domain: bool) -> bool {
+        P::SOURCE_SELECTED && domain
+    }
+    fn requires_budgeted_neighborhood_preparation(domain: bool) -> bool {
+        P::SOURCE_SELECTED && domain
+    }
+    fn requires_budgeted_gaussian_group_preparation(domain: bool) -> bool {
+        P::SOURCE_SELECTED && domain
+    }
+    fn requires_budgeted_lab_separable_preparation(domain: bool) -> bool {
+        P::SOURCE_SELECTED && domain
+    }
+    fn requires_budgeted_alpha_separable_preparation(domain: bool) -> bool {
+        P::SOURCE_SELECTED && domain
+    }
+    fn requires_budgeted_component_separable_preparation(domain: bool) -> bool {
+        P::SOURCE_SELECTED && domain
+    }
+    fn requires_budgeted_legacy_separable_preparation(domain: bool) -> bool {
+        P::SOURCE_SELECTED && domain
+    }
+    fn requires_budgeted_separable_preparation(domain: bool) -> bool {
+        P::SOURCE_SELECTED && domain
+    }
+    fn requires_budgeted_general_separable_preparation(domain: bool) -> bool {
+        P::SOURCE_SELECTED && domain
+    }
+    fn effective_profile(
+        file: &XcfFile<Self>,
+        space: photocraft_cms::ColorSpace,
+        ce: photocraft_cms::xcf_color::Encoding,
+        ctl: &Interrupt<'_>,
+        shared: Option<&photocraft_xcf::Budget<'_>>,
+    ) -> Result<photocraft_cms::Profile, IoError> {
+        if P::SOURCE_SELECTED
+            && matches!(
+                P::family_controlled(file, ctl, shared)?,
+                SelectedStagedFamily::NormalHierarchy | SelectedStagedFamily::MaskedNormalHierarchy | SelectedStagedFamily::PlainQuantizedNormalHierarchy
+            )
+        {
+            return photocraft_cms::xcf_color::effective_profile(None, space, ce)
+                .map_err(|e| IoError::Unsupported(format!("hierarchy implicit effective profile: {e}")));
         }
-        if matches!(P::family(file), SelectedStagedFamily::Neighborhood(NeighborhoodSourceFamily::BoxGeometryGrayF32 | NeighborhoodSourceFamily::BoxGeometryGrayF64 | NeighborhoodSourceFamily::BoxGeometryGrayLinearF32 | NeighborhoodSourceFamily::BoxGeometryGrayLinearF64 | NeighborhoodSourceFamily::BoxGeometryGrayPerceptualF32 | NeighborhoodSourceFamily::BoxGeometryGrayPerceptualF64 | NeighborhoodSourceFamily::BoxGeometryLinearF32 | NeighborhoodSourceFamily::BoxGeometryLinearF64 | NeighborhoodSourceFamily::BoxGeometryPerceptualF32 | NeighborhoodSourceFamily::BoxGeometryPerceptualF64)) {
-            return implicit_box_effective(file,space,ce,ctl,shared.ok_or_else(||IoError::Unsupported("implicit transfer Box profile needs accounting".into()))?);
+        if matches!(
+            P::family(file),
+            SelectedStagedFamily::Neighborhood(
+                NeighborhoodSourceFamily::BoxGeometryGrayF32
+                    | NeighborhoodSourceFamily::BoxGeometryGrayF64
+                    | NeighborhoodSourceFamily::BoxGeometryGrayLinearF32
+                    | NeighborhoodSourceFamily::BoxGeometryGrayLinearF64
+                    | NeighborhoodSourceFamily::BoxGeometryGrayPerceptualF32
+                    | NeighborhoodSourceFamily::BoxGeometryGrayPerceptualF64
+                    | NeighborhoodSourceFamily::BoxGeometryLinearF32
+                    | NeighborhoodSourceFamily::BoxGeometryLinearF64
+                    | NeighborhoodSourceFamily::BoxGeometryPerceptualF32
+                    | NeighborhoodSourceFamily::BoxGeometryPerceptualF64
+            )
+        ) {
+            return implicit_box_effective(
+                file,
+                space,
+                ce,
+                ctl,
+                shared.ok_or_else(|| IoError::Unsupported("implicit transfer Box profile needs accounting".into()))?,
+            );
         }
-        if matches!(P::family(file), SelectedStagedFamily::AnalyticGeometry | SelectedStagedFamily::IsolatedNormalGroup | SelectedStagedFamily::Neighborhood(NeighborhoodSourceFamily::BoxGeometryAssignedF32 | NeighborhoodSourceFamily::BoxGeometryAssignedF64 | NeighborhoodSourceFamily::BoxAssignedF32 | NeighborhoodSourceFamily::MedianAssignedF32 | NeighborhoodSourceFamily::GaussianAssignedF32)) {
-            analytic_geometry::effective(file,space,ce,ctl,shared.ok_or_else(||IoError::Unsupported("geometry profile needs accounting".into()))?)
-        }else{
-            photocraft_cms::xcf_color::effective_profile(if file.icc.is_empty(){None}else{Some(&file.icc)},space,ce).map_err(|e|IoError::Unsupported(format!("XCF source profile/encoding: {e}")))
+        if matches!(
+            P::family(file),
+            SelectedStagedFamily::AnalyticGeometry
+                | SelectedStagedFamily::IsolatedNormalGroup
+                | SelectedStagedFamily::Neighborhood(
+                    NeighborhoodSourceFamily::BoxGeometryAssignedF32
+                        | NeighborhoodSourceFamily::BoxGeometryAssignedF64
+                        | NeighborhoodSourceFamily::BoxAssignedF32
+                        | NeighborhoodSourceFamily::MedianAssignedF32
+                        | NeighborhoodSourceFamily::GaussianAssignedF32
+                )
+        ) {
+            analytic_geometry::effective(file, space, ce, ctl, shared.ok_or_else(|| IoError::Unsupported("geometry profile needs accounting".into()))?)
+        } else {
+            photocraft_cms::xcf_color::effective_profile(if file.icc.is_empty() { None } else { Some(&file.icc) }, space, ce)
+                .map_err(|e| IoError::Unsupported(format!("XCF source profile/encoding: {e}")))
         }
     }
     fn admissions(file: &XcfFile<Self>, ctl: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>) -> Result<admission::AdmissionDomains, IoError> {
-        let family = P::family_controlled(file,ctl,shared)?;
-        let masked_hierarchy=family==SelectedStagedFamily::MaskedNormalHierarchy;
-        let quantized_hierarchy=family==SelectedStagedFamily::PlainQuantizedNormalHierarchy;
-        let hierarchy=quantized_hierarchy||masked_hierarchy||family==SelectedStagedFamily::NormalHierarchy;
-        if quantized_hierarchy{staged_normal_hierarchy_quantized::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("quantized hierarchy accounting".into()))?)?;}
-        else if masked_hierarchy{staged_normal_hierarchy_masked::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("masked hierarchy accounting".into()))?)?;}
-        else if hierarchy{staged_normal_hierarchy::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("hierarchy Source accounting".into()))?)?;}
-        let masked_filtered_flat=family==SelectedStagedFamily::MaskedFilteredFlat;
-        if masked_filtered_flat{staged_masked_filtered_flat::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("masked mixed source accounting".into()))?)?;}
-        let filtered_flat_opacity=family==SelectedStagedFamily::FilteredFlatOpacity;
-        let filtered_flat=filtered_flat_opacity || family==SelectedStagedFamily::FilteredFlat;
-        if filtered_flat_opacity {staged_filtered_flat::opacity::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("filtered flat opacity accounting".into()))?)?;}
-        else if filtered_flat {staged_filtered_flat::qualify(file,ctl,shared.ok_or_else(||IoError::Unsupported("filtered flat accounting".into()))?)?;}
+        let family = P::family_controlled(file, ctl, shared)?;
+        let masked_hierarchy = family == SelectedStagedFamily::MaskedNormalHierarchy;
+        let quantized_hierarchy = family == SelectedStagedFamily::PlainQuantizedNormalHierarchy;
+        let hierarchy = quantized_hierarchy || masked_hierarchy || family == SelectedStagedFamily::NormalHierarchy;
+        if quantized_hierarchy {
+            staged_normal_hierarchy_quantized::qualify(file, ctl, shared.ok_or_else(|| IoError::Unsupported("quantized hierarchy accounting".into()))?)?;
+        } else if masked_hierarchy {
+            staged_normal_hierarchy_masked::qualify(file, ctl, shared.ok_or_else(|| IoError::Unsupported("masked hierarchy accounting".into()))?)?;
+        } else if hierarchy {
+            staged_normal_hierarchy::qualify(file, ctl, shared.ok_or_else(|| IoError::Unsupported("hierarchy Source accounting".into()))?)?;
+        }
+        let masked_filtered_flat = family == SelectedStagedFamily::MaskedFilteredFlat;
+        if masked_filtered_flat {
+            staged_masked_filtered_flat::qualify(file, ctl, shared.ok_or_else(|| IoError::Unsupported("masked mixed source accounting".into()))?)?;
+        }
+        let filtered_flat_opacity = family == SelectedStagedFamily::FilteredFlatOpacity;
+        let filtered_flat = filtered_flat_opacity || family == SelectedStagedFamily::FilteredFlat;
+        if filtered_flat_opacity {
+            staged_filtered_flat::opacity::qualify(file, ctl, shared.ok_or_else(|| IoError::Unsupported("filtered flat opacity accounting".into()))?)?;
+        } else if filtered_flat {
+            staged_filtered_flat::qualify(file, ctl, shared.ok_or_else(|| IoError::Unsupported("filtered flat accounting".into()))?)?;
+        }
         let separable = family == SelectedStagedFamily::SeparableBlend;
         let separable_domain = if separable {
-            Some(separable_blend::qualify_selected(file,ctl,shared.ok_or_else(||IoError::Unsupported("separable source requires accounting".into()))?)?
-                .ok_or_else(||IoError::Unsupported("separable source outside exact original predicate".into()))?)
-        } else { None };
+            Some(
+                separable_blend::qualify_selected(file, ctl, shared.ok_or_else(|| IoError::Unsupported("separable source requires accounting".into()))?)?
+                    .ok_or_else(|| IoError::Unsupported("separable source outside exact original predicate".into()))?,
+            )
+        } else {
+            None
+        };
         let gaussian_group = family == SelectedStagedFamily::IsolatedGaussianGroup;
-        if gaussian_group && !gaussian_group::qualify(file, ctl, shared.ok_or_else(||IoError::Unsupported("Gaussian group requires persistent accounting".into()))?)? {
+        if gaussian_group
+            && !gaussian_group::qualify(file, ctl, shared.ok_or_else(|| IoError::Unsupported("Gaussian group requires persistent accounting".into()))?)?
+        {
             return Err(IoError::Unsupported("staged Gaussian group is outside its exact original source predicate".into()));
         }
         let geometry = family == SelectedStagedFamily::AnalyticGeometry;
         let group = family == SelectedStagedFamily::IsolatedNormalGroup;
-        if group && !accounted_group::qualifies_with(file, ctl, Some(shared.ok_or_else(|| IoError::Unsupported("group requires persistent source accounting".into()))?))? {
+        if group
+            && !accounted_group::qualifies_with(
+                file,
+                ctl,
+                Some(shared.ok_or_else(|| IoError::Unsupported("group requires persistent source accounting".into()))?),
+            )?
+        {
             return Err(IoError::Unsupported("staged group is outside its exact original source predicate".into()));
         }
-        if geometry && !analytic_geometry::qualify(file, ctl, shared.ok_or_else(|| IoError::Unsupported("geometry requires persistent source accounting".into()))?)? {
+        if geometry
+            && !analytic_geometry::qualify(file, ctl, shared.ok_or_else(|| IoError::Unsupported("geometry requires persistent source accounting".into()))?)?
+        {
             return Err(IoError::Unsupported("staged geometry is outside exact original analytic geometry predicate".into()));
         }
         let histogram = family == SelectedStagedFamily::Threshold;
         let threshold = family == SelectedStagedFamily::ThresholdAlpha || histogram;
         let point = match family {
             SelectedStagedFamily::Point(crate::xcf_filters::PointReplaceFamily::MaskedExposure) => {
-                if !crate::xcf_point_replace_source::masked_exposure_source::qualify(file,ctl,shared)? {return Err(IoError::Unsupported("masked source outside exact original predicate".into()));}
+                if !crate::xcf_point_replace_source::masked_exposure_source::qualify(file, ctl, shared)? {
+                    return Err(IoError::Unsupported("masked source outside exact original predicate".into()));
+                }
                 Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(crate::xcf_filters::PointReplaceFamily::MaskedExposure))
             }
-            SelectedStagedFamily::Point(expected) if crate::xcf_point_replace_source::masked_stock_source::selected(expected)=>{
-                if !crate::xcf_point_replace_source::masked_stock_source::qualify(file,ctl,shared)?{return Err(IoError::Unsupported("masked singleton4 outside exact source".into()));}
-                let actual=file.layers.first().and_then(|d|d.effects.first()).and_then(crate::xcf_point_replace_source::masked_stock_source::parameters).ok_or_else(||IoError::Unsupported("masked singleton4 identity".into()))?;
-                if actual.family()!=expected{return Err(IoError::Unsupported("masked singleton4 selected identity".into()));}
+            SelectedStagedFamily::Point(expected) if crate::xcf_point_replace_source::masked_stock_source::selected(expected) => {
+                if !crate::xcf_point_replace_source::masked_stock_source::qualify(file, ctl, shared)? {
+                    return Err(IoError::Unsupported("masked singleton4 outside exact source".into()));
+                }
+                let actual = file
+                    .layers
+                    .first()
+                    .and_then(|d| d.effects.first())
+                    .and_then(crate::xcf_point_replace_source::masked_stock_source::parameters)
+                    .ok_or_else(|| IoError::Unsupported("masked singleton4 identity".into()))?;
+                if actual.family() != expected {
+                    return Err(IoError::Unsupported("masked singleton4 selected identity".into()));
+                }
                 Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(expected))
             }
             SelectedStagedFamily::Point(expected) => {
@@ -615,14 +932,28 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
                 return Err(IoError::Unsupported("staged legacy scalar source is outside its exact whole-file predicate".into()));
             }
             Some(family.domain())
-        } else { None };
+        } else {
+            None
+        };
         let neighborhood = if let SelectedStagedFamily::Neighborhood(expected) = family {
             if !expected.qualify(file, ctl, shared)? {
                 return Err(IoError::Unsupported("staged neighborhood source is outside its exact whole-file predicate".into()));
             }
             Some(expected)
-        } else { None };
-        if hierarchy || filtered_flat || separable || gaussian_group || group || geometry || point.is_some() || owned_point.is_some() || neighborhood.is_some() {
+        } else {
+            None
+        };
+        if hierarchy
+            || masked_filtered_flat
+            || filtered_flat
+            || separable
+            || gaussian_group
+            || group
+            || geometry
+            || point.is_some()
+            || owned_point.is_some()
+            || neighborhood.is_some()
+        {
             // Full original source, precision, geometry, mask flags and unit
             // domains were just checked by the unchanged classifier policy.
         } else if histogram {
@@ -649,9 +980,11 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         {
             return Err(IoError::Unsupported("staged endpoint only supports implicit nonlinear plain RGB/Gray layers".into()));
         }
-        for d in &file.layers {
+        for (owner_ordinal, d) in file.layers.iter().enumerate() {
             ctl.check().map_err(|_| IoError::Cancelled)?;
-            if !hierarchy && !filtered_flat
+            if !hierarchy
+                && !masked_filtered_flat
+                && !filtered_flat
                 && !threshold
                 && !geometry
                 && !group
@@ -678,7 +1011,9 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             // The parser deliberately skips the non-authoritative group projection.
             // The exact shared predicate above requires it absent; only leaves
             // and the optional physical mask retain real staged storage.
-            if (hierarchy || group || gaussian_group) && d.group { continue; }
+            if (hierarchy || group || gaussian_group) && d.group {
+                continue;
+            }
             let p = d.plane.as_ref().ok_or_else(|| unsupported(d, "staged owner missing pixels"))?;
             if p.descriptor.width != d.width
                 || p.descriptor.height != d.height
@@ -696,14 +1031,29 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
                 }
                 Ok(())
             })?;
-            validate_drawable_alpha(d, point.is_some(), false, ctl, 0)?;
+            // Only branches that completed the exact full masked qualifier above
+            // may mint direct-effect witnesses. No raw/eager caller can opt in.
+            let qualified_masked_point = matches!(family, SelectedStagedFamily::Point(f)
+                if f == crate::xcf_filters::PointReplaceFamily::MaskedExposure
+                    || crate::xcf_point_replace_source::masked_stock_source::selected(f));
+            if masked_filtered_flat || qualified_masked_point {
+                validate_qualified_masked_owner(
+                    file,
+                    owner_ordinal,
+                    d,
+                    ctl,
+                    shared.ok_or_else(|| IoError::Unsupported("qualified mask original accounting".into()))?,
+                )?;
+            } else {
+                validate_drawable_alpha(d, point.is_some(), false, ctl, 0)?;
+            }
         }
         let mut domains = admission::AdmissionDomains {
-            normal_hierarchy_domain:hierarchy,
-            masked_normal_hierarchy_domain:masked_hierarchy,
-            filtered_flat_domain:filtered_flat && !filtered_flat_opacity,
-            masked_filtered_flat_domain:masked_filtered_flat,
-            filtered_flat_opacity_domain:filtered_flat_opacity,
+            normal_hierarchy_domain: hierarchy,
+            masked_normal_hierarchy_domain: masked_hierarchy,
+            filtered_flat_domain: filtered_flat && !filtered_flat_opacity,
+            masked_filtered_flat_domain: masked_filtered_flat,
+            filtered_flat_opacity_domain: filtered_flat_opacity,
             lab_separable_domain: separable_domain == Some(separable_blend::SourceKind::LabStrict),
             alpha_separable_domain: separable_domain == Some(separable_blend::SourceKind::AlphaStrict),
             component_separable_domain: separable_domain == Some(separable_blend::SourceKind::ComponentStrict),
@@ -722,7 +1072,9 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
             unpremultiply_domain: matches!(family, SelectedStagedFamily::LegacyScalar(LegacyScalarFamily::Unpremultiply)),
             ..Default::default()
         };
-        if let Some(family) = neighborhood { family.set_admission(&mut domains); }
+        if let Some(family) = neighborhood {
+            family.set_admission(&mut domains);
+        }
         Ok(domains)
     }
     fn late_admissions(file: &XcfFile<Self>) -> admission::LateAdmissionDomains {
@@ -731,11 +1083,17 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
         // type, and its admissions above propagate the shared exact predicate.
         let mut domains = admission::LateAdmissionDomains::default();
         if P::family(file) == SelectedStagedFamily::SeparableBlend {
-            if separable_blend::legacy_domain(file) || separable_blend::component_domain(file) || separable_blend::alpha_domain(file) || separable_blend::lab_domain(file) { domains.basic_blend_domain = true; }
+            if separable_blend::legacy_domain(file)
+                || separable_blend::component_domain(file)
+                || separable_blend::alpha_domain(file)
+                || separable_blend::lab_domain(file)
+            {
+                domains.basic_blend_domain = true;
+            }
             match separable_blend::domain(file) {
-                Some(separable_blend::Domain::Basic) => domains.basic_blend_domain=true,
-                Some(separable_blend::Domain::MultiplyAuto) => domains.multiply_domain=true,
-                _ => {},
+                Some(separable_blend::Domain::Basic) => domains.basic_blend_domain = true,
+                Some(separable_blend::Domain::MultiplyAuto) => domains.multiply_domain = true,
+                _ => {}
             }
         }
         if let SelectedStagedFamily::ResidualPoint(family) = P::family(file) {
@@ -767,40 +1125,69 @@ impl<P: StagePolicy> MappingPlane for StagedPlane<'_, '_, P> {
     }
     fn current_layer_mask_surface(&mut self, rect: Rect, budget: &mut Budget<'_>, ctl: &Interrupt<'_>) -> Result<Surface, IoError> {
         let d = &self.descriptor;
-        if !P::SOURCE_SELECTED || d.role != PlaneRole::Mask || d.offset != (0,0) || !point_plane(d)
-            || rect.is_empty() || rect.width()!=d.width || rect.height()!=d.height
-            || u64::from(d.width).checked_mul(u64::from(d.height)).is_none_or(|n|n>4096) {
+        if !P::SOURCE_SELECTED
+            || d.role != PlaneRole::Mask
+            || d.offset != (0, 0)
+            || !point_plane(d)
+            || rect.is_empty()
+            || rect.width() != d.width
+            || rect.height() != d.height
+            || u64::from(d.width).checked_mul(u64::from(d.height)).is_none_or(|n| n > 4096)
+        {
             return Err(IoError::Unsupported("staged ordinary mask placement".into()));
         }
         let format = PixelFormat::new(ColorMode::Grayscale, depth(d.sample), false);
-        let length = usize::try_from(self.native_byte_len().ok_or_else(||IoError::Unsupported("mask native length".into()))?).map_err(|_|IoError::Unsupported("mask length".into()))?;
+        let length = usize::try_from(self.native_byte_len().ok_or_else(|| IoError::Unsupported("mask native length".into()))?)
+            .map_err(|_| IoError::Unsupported("mask length".into()))?;
         // Both the old local Surface and this world-positioned Surface stay
         // charged concurrently. Include actual padded tiles, map nodes and
         // ingestion temporary buffers before constructing either destination.
-        let tiles=rect.tiles().count();
-        let tile_bytes=65536usize.checked_mul(format.bytes_per_pixel()).ok_or_else(||IoError::Unsupported("mask tile bytes".into()))?;
-        let envelope=tiles.checked_mul(tile_bytes.checked_mul(3).and_then(|n|n.checked_add(1024)).ok_or_else(||IoError::Unsupported("mask envelope".into()))?)
-            .and_then(|n|n.checked_add(4096)).ok_or_else(||IoError::Unsupported("mask envelope".into()))?;
+        let tiles = rect.tiles().count();
+        let tile_bytes = 65536usize.checked_mul(format.bytes_per_pixel()).ok_or_else(|| IoError::Unsupported("mask tile bytes".into()))?;
+        let envelope = tiles
+            .checked_mul(tile_bytes.checked_mul(3).and_then(|n| n.checked_add(1024)).ok_or_else(|| IoError::Unsupported("mask envelope".into()))?)
+            .and_then(|n| n.checked_add(4096))
+            .ok_or_else(|| IoError::Unsupported("mask envelope".into()))?;
         budget.charge(envelope)?;
-        budget.charge(length.checked_mul(2).and_then(|n|n.checked_add(std::mem::size_of::<Vec<u8>>())).ok_or_else(||IoError::Unsupported("mask capture fee".into()))?)?;
-        let mut bytes=Vec::new();
-        bytes.try_reserve_exact(length).map_err(|_|IoError::Unsupported("mask capture allocation".into()))?;
-        if bytes.capacity()>length.checked_mul(2).ok_or_else(||IoError::Unsupported("mask capture capacity".into()))? {return Err(IoError::Unsupported("mask capture capacity".into()));}
+        budget.charge(
+            length.checked_mul(2).and_then(|n| n.checked_add(std::mem::size_of::<Vec<u8>>())).ok_or_else(|| IoError::Unsupported("mask capture fee".into()))?,
+        )?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(length).map_err(|_| IoError::Unsupported("mask capture allocation".into()))?;
+        if bytes.capacity() > length.checked_mul(2).ok_or_else(|| IoError::Unsupported("mask capture capacity".into()))? {
+            return Err(IoError::Unsupported("mask capture capacity".into()));
+        }
 
-        analytic_geometry::pay(self._token.budget,length as u64)?;
-        for _ in 0..length.div_ceil(65536) { ctl.check().map_err(|_|IoError::Cancelled)?; let n=length.saturating_sub(bytes.len()).min(65536);bytes.resize(bytes.len()+n,0); }
-        let mut cursor=0usize;
-        analytic_geometry::pay(self._token.budget,length as u64)?;
-        self.visit_native(ctl,&mut |block|{
-            let end=cursor.checked_add(block.len()).ok_or_else(||IoError::Unsupported("mask copy overflow".into()))?;
-            bytes.get_mut(cursor..end).ok_or_else(||IoError::Unsupported("mask copy bounds".into()))?.copy_from_slice(block);
-            cursor=end;Ok(())
+        analytic_geometry::pay(self._token.budget, length as u64)?;
+        for _ in 0..length.div_ceil(65536) {
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+            let n = length.saturating_sub(bytes.len()).min(65536);
+            bytes.resize(bytes.len() + n, 0);
+        }
+        let mut cursor = 0usize;
+        analytic_geometry::pay(self._token.budget, length as u64)?;
+        self.visit_native(ctl, &mut |block| {
+            let end = cursor.checked_add(block.len()).ok_or_else(|| IoError::Unsupported("mask copy overflow".into()))?;
+            bytes.get_mut(cursor..end).ok_or_else(|| IoError::Unsupported("mask copy bounds".into()))?.copy_from_slice(block);
+            cursor = end;
+            Ok(())
         })?;
-        if cursor!=length {return Err(IoError::Unsupported("mask capture incomplete".into()));}
-        let physical=(tiles as u64).checked_mul(tile_bytes as u64).and_then(|n|n.checked_mul(4)).and_then(|n|n.checked_add(length as u64)).ok_or_else(||IoError::Unsupported("mask ingestion work".into()))?;
-        analytic_geometry::pay(self._token.budget,physical)?;
-        let result=Surface::try_from_interleaved_with(format,rect,&bytes,ctl).map_err(|e| if e==photocraft_raster::RasterInputError::Cancelled {IoError::Cancelled}else{IoError::Unsupported(format!("mask world ingestion: {e}"))})?;
-        if result.tile_count()>tiles || result.resident_accounted_bytes().map_err(|_|IoError::Unsupported("mask capacity census".into()))?>envelope as u64 {return Err(IoError::Unsupported("mask actual capacity".into()));}
+        if cursor != length {
+            return Err(IoError::Unsupported("mask capture incomplete".into()));
+        }
+        let physical = (tiles as u64)
+            .checked_mul(tile_bytes as u64)
+            .and_then(|n| n.checked_mul(4))
+            .and_then(|n| n.checked_add(length as u64))
+            .ok_or_else(|| IoError::Unsupported("mask ingestion work".into()))?;
+        analytic_geometry::pay(self._token.budget, physical)?;
+        let result = Surface::try_from_interleaved_with(format, rect, &bytes, ctl).map_err(|e| {
+            if e == photocraft_raster::RasterInputError::Cancelled { IoError::Cancelled } else { IoError::Unsupported(format!("mask world ingestion: {e}")) }
+        })?;
+        if result.tile_count() > tiles || result.resident_accounted_bytes().map_err(|_| IoError::Unsupported("mask capacity census".into()))? > envelope as u64
+        {
+            return Err(IoError::Unsupported("mask actual capacity".into()));
+        }
         Ok(result)
     }
     fn current_filter_mask_surface(&mut self, rect: Rect, _: &mut Budget<'_>, ctl: &Interrupt<'_>) -> Result<Surface, IoError> {
@@ -1025,14 +1412,25 @@ fn complete_staged_source<'b, 'a, P: StagePolicy>(
     control.check().map_err(|_| IoError::Cancelled)?;
     // Sink registry is declared before decoded/mapped storage so errors destroy
     // actual Surfaces before their final token/registry refunds.
-    let descriptor_plan=if P::SOURCE_SELECTED{staged_masked_filtered_flat::preplan(source,options,budget,accounting,control)?}else{None};
-    let mut sink = Sink::<P> { active: None, descriptor_plan,planned_descriptor:None, tokens: Vec::new(), registry_lease: None, budget, interrupt: control, _policy: PhantomData };
+    let descriptor_plan = if P::SOURCE_SELECTED { staged_masked_filtered_flat::preplan(source, options, budget, accounting, control)? } else { None };
+    let mut sink = Sink::<P> {
+        active: None,
+        descriptor_plan,
+        planned_descriptor: None,
+        tokens: Vec::new(),
+        registry_lease: None,
+        budget,
+        interrupt: control,
+        _policy: PhantomData,
+    };
     let strict = DecodeOptions { limits: options.limits.clone(), allow_finite_drawable_alpha: false, cancelled: options.cancelled, progress: options.progress };
     let photocraft_xcf::BudgetDecodedImport { decoded, reservations } =
         photocraft_xcf::decode_plain_source_into_sink_with_budget(source, &strict, budget, accounting, &mut sink).map_err(accounting_error)?;
-    if let Some(plan)=&sink.descriptor_plan{plan.complete()?;}
+    if let Some(plan) = &sink.descriptor_plan {
+        plan.complete()?;
+    }
     let mut file = decoded.file;
-    let family = P::family_controlled(&file,control,Some(budget))?;
+    let family = P::family_controlled(&file, control, Some(budget))?;
     let encoded = usize::try_from(decoded.encoded_bytes).map_err(|_| IoError::Unsupported("staged source address space".into()))?;
     file.charged_bytes = file.charged_bytes.checked_sub(encoded).ok_or_else(|| IoError::Unsupported("staged source accounting mismatch".into()))?;
     let previous = std::cell::Cell::new(file.charged_bytes);
@@ -1053,7 +1451,7 @@ fn complete_staged_source<'b, 'a, P: StagePolicy>(
         .limits
         .resident_bytes
         .min(usize::try_from(budget.limits().get(BudgetKind::Resident)).map_err(|_| IoError::Unsupported("staged resident address space".into()))?);
-    let (mut result, _) = map_accounted(name,file,control,maximum,Some(&account),Some((budget,&leases)))?;
+    let (mut result, _) = map_accounted(name, file, control, maximum, Some(&account), Some((budget, &leases)))?;
     provenance::stamp(&mut result, source, decoded.encoded_bytes, control, budget, previous.get(), &account)?;
     // Mapping and provenance have finished. The completed transaction owns the
     // actual surface registry and source/mapping receipts until explicit transfer.
@@ -1099,7 +1497,9 @@ mod tests {
             let budget = photocraft_xcf::Budget::new(photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(), None);
             let mut source = Bytes(encoded);
             let mut sink = Sink::<PlainPolicy> {
-                active: None,descriptor_plan:None,planned_descriptor:None,
+                active: None,
+                descriptor_plan: None,
+                planned_descriptor: None,
                 tokens: Vec::new(),
                 registry_lease: None,
                 budget: &budget,
@@ -1160,8 +1560,16 @@ mod tests {
     fn actual_surface_move_keeps_token_after_owner_drop_and_late_native_reads_fail() {
         let budget = photocraft_xcf::Budget::new(photocraft_xcf::ResourceLimits::for_policy(photocraft_xcf::ResourcePolicy::NativeStandard).unwrap(), None);
         let mut source = Bytes(fixture::image(12, 150, 0, 1, 1, &[11, 31, 97, 0]));
-        let mut sink =
-            Sink::<PlainPolicy> { active: None, descriptor_plan:None,planned_descriptor:None, tokens: Vec::new(), registry_lease: None, budget: &budget, interrupt: &Interrupt::NONE, _policy: PhantomData };
+        let mut sink = Sink::<PlainPolicy> {
+            active: None,
+            descriptor_plan: None,
+            planned_descriptor: None,
+            tokens: Vec::new(),
+            registry_lease: None,
+            budget: &budget,
+            interrupt: &Interrupt::NONE,
+            _policy: PhantomData,
+        };
         let mut parsed = photocraft_xcf::decode_plain_source_into_sink_with_budget(
             &mut source,
             &DecodeOptions::default(),
@@ -1205,62 +1613,102 @@ mod point_source_tests;
 
 // Only the selected implicit transfer Box role reaches this controlled constructor.
 // The mapping preparation holder separately covers the returned encoded profile.
-fn implicit_box_effective<P>(file:&XcfFile<P>,space:photocraft_cms::ColorSpace,ce:photocraft_cms::xcf_color::Encoding,ctl:&Interrupt<'_>,budget:&photocraft_xcf::Budget<'_>)->Result<photocraft_cms::Profile,IoError>{
+fn implicit_box_effective<P>(
+    file: &XcfFile<P>,
+    space: photocraft_cms::ColorSpace,
+    ce: photocraft_cms::xcf_color::Encoding,
+    ctl: &Interrupt<'_>,
+    budget: &photocraft_xcf::Budget<'_>,
+) -> Result<photocraft_cms::Profile, IoError> {
     use photocraft_cms::{control, xcf_color};
-    let rgb=file.model==Model::Rgb && space==photocraft_cms::ColorSpace::Rgb
-        && matches!((file.sample,file.precision,file.encoding,ce),
-            (Sample::F32,600,Encoding::Linear,xcf_color::Encoding::Linear)
-            |(Sample::F64,700,Encoding::Linear,xcf_color::Encoding::Linear)
-            |(Sample::F32,675,Encoding::Perceptual,xcf_color::Encoding::Perceptual)
-            |(Sample::F64,775,Encoding::Perceptual,xcf_color::Encoding::Perceptual));
-    let gray=file.model==Model::Gray && space==photocraft_cms::ColorSpace::Gray
-        && matches!((file.sample,file.precision,file.encoding,ce),
-            (Sample::F32,650,Encoding::NonlinearProfile,xcf_color::Encoding::NonlinearProfile)
-            |(Sample::F64,750,Encoding::NonlinearProfile,xcf_color::Encoding::NonlinearProfile)
-            |(Sample::F32,600,Encoding::Linear,xcf_color::Encoding::Linear)
-            |(Sample::F64,700,Encoding::Linear,xcf_color::Encoding::Linear)
-            |(Sample::F32,675,Encoding::Perceptual,xcf_color::Encoding::Perceptual)
-            |(Sample::F64,775,Encoding::Perceptual,xcf_color::Encoding::Perceptual));
-    if !file.icc.is_empty() || !(rgb || gray) { return Err(IoError::Unsupported("implicit Box profile role".into())); }
-    let stop=||ctl.cancelled();
-    let cms=|e| if matches!(e,control::Error::Cancelled){IoError::Cancelled}else{IoError::Unsupported("implicit transfer Box effective profile".into())};
-    ctl.check().map_err(|_|IoError::Cancelled)?;
-    let basis=if gray{photocraft_cms::Builtin::SGray.profile()}else{photocraft_cms::Builtin::Srgb.profile()};
-    ctl.check().map_err(|_|IoError::Cancelled)?;
+    let rgb = file.model == Model::Rgb
+        && space == photocraft_cms::ColorSpace::Rgb
+        && matches!(
+            (file.sample, file.precision, file.encoding, ce),
+            (Sample::F32, 600, Encoding::Linear, xcf_color::Encoding::Linear)
+                | (Sample::F64, 700, Encoding::Linear, xcf_color::Encoding::Linear)
+                | (Sample::F32, 675, Encoding::Perceptual, xcf_color::Encoding::Perceptual)
+                | (Sample::F64, 775, Encoding::Perceptual, xcf_color::Encoding::Perceptual)
+        );
+    let gray = file.model == Model::Gray
+        && space == photocraft_cms::ColorSpace::Gray
+        && matches!(
+            (file.sample, file.precision, file.encoding, ce),
+            (Sample::F32, 650, Encoding::NonlinearProfile, xcf_color::Encoding::NonlinearProfile)
+                | (Sample::F64, 750, Encoding::NonlinearProfile, xcf_color::Encoding::NonlinearProfile)
+                | (Sample::F32, 600, Encoding::Linear, xcf_color::Encoding::Linear)
+                | (Sample::F64, 700, Encoding::Linear, xcf_color::Encoding::Linear)
+                | (Sample::F32, 675, Encoding::Perceptual, xcf_color::Encoding::Perceptual)
+                | (Sample::F64, 775, Encoding::Perceptual, xcf_color::Encoding::Perceptual)
+        );
+    if !file.icc.is_empty() || !(rgb || gray) {
+        return Err(IoError::Unsupported("implicit Box profile role".into()));
+    }
+    let stop = || ctl.cancelled();
+    let cms =
+        |e| if matches!(e, control::Error::Cancelled) { IoError::Cancelled } else { IoError::Unsupported("implicit transfer Box effective profile".into()) };
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    let basis = if gray { photocraft_cms::Builtin::SGray.profile() } else { photocraft_cms::Builtin::Srgb.profile() };
+    ctl.check().map_err(|_| IoError::Cancelled)?;
     // Same bounded implicit planning envelope as the controlled CURRENT binder.
-    analytic_geometry::pay(budget,65536*64)?;
-    let limits=control::Limits{resident_bytes:65536,work_units:65536*64};
-    let req=xcf_color::effective_profile_requirements_with_control(basis,ce,limits,&stop).map_err(cms)?;
-    let _fee=budget.reserve(BudgetKind::Resident,req.peak_resident_bytes as u64,"implicit transfer Box effective construction").map_err(accounting_error)?;
-    let work=req.work_units.checked_mul(4).ok_or_else(||IoError::Unsupported("implicit transfer Box profile work".into()))?;
-    if req.peak_resident_bytes>limits.resident_bytes || work>limits.work_units { return Err(IoError::Unsupported("implicit transfer Box effective bounds".into())); }
-    analytic_geometry::pay(budget,work)?;
-    xcf_color::effective_profile_from_definition_with_control(basis,ce,control::Limits{work_units:work,..limits},&stop).map_err(cms)
+    analytic_geometry::pay(budget, 65536 * 64)?;
+    let limits = control::Limits { resident_bytes: 65536, work_units: 65536 * 64 };
+    let req = xcf_color::effective_profile_requirements_with_control(basis, ce, limits, &stop).map_err(cms)?;
+    let _fee =
+        budget.reserve(BudgetKind::Resident, req.peak_resident_bytes as u64, "implicit transfer Box effective construction").map_err(accounting_error)?;
+    let work = req.work_units.checked_mul(4).ok_or_else(|| IoError::Unsupported("implicit transfer Box profile work".into()))?;
+    if req.peak_resident_bytes > limits.resident_bytes || work > limits.work_units {
+        return Err(IoError::Unsupported("implicit transfer Box effective bounds".into()));
+    }
+    analytic_geometry::pay(budget, work)?;
+    xcf_color::effective_profile_from_definition_with_control(basis, ce, control::Limits { work_units: work, ..limits }, &stop).map_err(cms)
 }
 
-#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
-#[path="staged_neighborhood/box_geometry_linear_profile_tests.rs"]
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "staged_neighborhood/box_geometry_linear_profile_tests.rs"]
 mod linear_box_profile_tests;
 
-#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
-#[path="staged_neighborhood/box_geometry_perceptual_profile_tests.rs"]
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "staged_neighborhood/box_geometry_perceptual_profile_tests.rs"]
 mod perceptual_box_profile_tests;
 
-#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
-#[path="staged_neighborhood/box_geometry_gray_profile_tests.rs"]
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "staged_neighborhood/box_geometry_gray_profile_tests.rs"]
 mod gray_box_profile_tests;
 
-#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
-#[path="staged_neighborhood/box_geometry_gray_transfer_profile_tests.rs"]
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "staged_neighborhood/box_geometry_gray_transfer_profile_tests.rs"]
 mod gray_transfer_box_profile_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_masked_exposure_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod masked_exposure_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_masked_stock_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod masked_stock_tests;
 
-#[path="staged_masked_filtered_flat.rs"]
+#[path = "staged_masked_filtered_flat.rs"]
 pub(super) mod staged_masked_filtered_flat;
+
+#[cfg(test)]
+pub(in crate::xcf_import) fn test_configured_qualify<P: ExactParsedPlane>(file: &XcfFile<P>) -> Result<bool, IoError> {
+    configured::ConfiguredPointFamily::hint(file).ok_or_else(|| IoError::Unsupported("test configured family missing".into()))?.qualify(
+        file,
+        &Interrupt::NONE,
+        None,
+    )
+}
+#[cfg(test)]
+pub(in crate::xcf_import) fn test_residual_qualify<P: ExactParsedPlane>(file: &XcfFile<P>, yuv: bool) -> Result<bool, IoError> {
+    let family = if yuv {
+        residual::ResidualPointFamily::SaturationYuv
+    } else {
+        residual::ResidualPointFamily::hint(file).ok_or_else(|| IoError::Unsupported("test residual family missing".into()))?
+    };
+    family.qualify(file, &Interrupt::NONE, None)
+}

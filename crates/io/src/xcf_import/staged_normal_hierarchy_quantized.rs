@@ -70,8 +70,12 @@ pub(super) fn native<P: ExactParsedPlane>(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_normal_hierarchy_quantized_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="staged_normal_hierarchy_u32_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "staged_normal_hierarchy_u32_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod u32_tests;

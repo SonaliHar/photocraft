@@ -29,15 +29,10 @@ pub struct GraphSourceAuthority<'a> {
     pub external_domain: ExecutionDomain,
     pub provenance: ExceptionalGraphProvenance,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct GraphSourceLimits {
     pub envelope: CurvesMappingLimits,
     pub graph: xcf_graph_candidate::Limits,
-}
-impl Default for GraphSourceLimits {
-    fn default() -> Self {
-        Self { envelope: Default::default(), graph: Default::default() }
-    }
 }
 #[derive(Clone, Copy, Debug)]
 pub struct GraphSourceRequirements {

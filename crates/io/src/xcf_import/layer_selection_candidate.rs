@@ -463,10 +463,8 @@ pub fn map_layer_selection_with_outer_policy<'a>(
             pass_through: false,
         }),
     };
-    let mut state = photocraft_doc::XcfState::default();
-    state.items = l.vec(2, &mut b)?;
-    state.filter_stacks = l.vec(1, &mut b)?;
-    state.filter_masks = l.vec(1, &mut b)?;
+    let mut state =
+        photocraft_doc::XcfState { items: l.vec(2, &mut b)?, filter_stacks: l.vec(1, &mut b)?, filter_masks: l.vec(1, &mut b)?, ..Default::default() };
     state.items.push(item(layer, ItemRef::Layer(ids.layer), None, &mut l, &mut b)?);
     state.items.push(item(
         mask,

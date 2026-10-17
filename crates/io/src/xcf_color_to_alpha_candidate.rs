@@ -163,8 +163,8 @@ pub fn bind<'a, P>(effect: &'a Effect<P>, limits: Limits, c: &Interrupt<'_>) -> 
                     return Err(bad("observed literal zero tail framing"));
                 }
                 let mut bits = [0u32; 4];
-                for (out, chunk) in bits.iter_mut().zip(raw.chunks_exact(4)) {
-                    let x: [u8; 4] = chunk.try_into().map_err(|_| bad("sample width"))?;
+                for (out, chunk) in bits.iter_mut().zip(raw.as_chunks::<4>().0) {
+                    let x = *chunk;
                     *out = u32::from_le_bytes(x);
                     if !f32::from_bits(*out).is_finite() || !(0.0..=1.0).contains(&f32::from_bits(*out)) {
                         return Err(bad("finite unit color"));

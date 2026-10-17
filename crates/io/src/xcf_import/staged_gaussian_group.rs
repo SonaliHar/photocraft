@@ -195,8 +195,8 @@ fn native<P: ExactParsedPlane>(
         }
         seen = seen.checked_add(bytes.len() as u64).filter(|v| *v <= n).ok_or_else(|| IoError::Unsupported("Gaussian group extra native".into()))?;
         poll(ctl, b, bytes.len() as u64)?;
-        for word in bytes.chunks_exact(4) {
-            let raw: [u8; 4] = word.try_into().map_err(|_| IoError::Unsupported("Gaussian group word".into()))?;
+        for word in bytes.as_chunks::<4>().0 {
+            let raw: [u8; 4] = *word;
             let v = f32::from_ne_bytes(raw);
             valid &= v.is_finite() && (0.0..=1.0).contains(&v) && (!zero || v == 0.0);
         }
@@ -211,4 +211,6 @@ fn native<P: ExactParsedPlane>(
 
 #[cfg(all(test, feature = "corpus"))]
 #[path = "staged_gaussian_group_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod tests;

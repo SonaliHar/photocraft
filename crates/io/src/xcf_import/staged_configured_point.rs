@@ -135,8 +135,8 @@ fn configured_raster<P: ExactParsedPlane>(
         poll(ctl, budget, (bytes.len() + bytes.len() / width) as u64)?;
         if levels {
             for pixel in bytes.chunks_exact(stride) {
-                for (channel, raw) in pixel.chunks_exact(4).enumerate() {
-                    let value = f32::from_ne_bytes(raw.try_into().map_err(|_| IoError::Unsupported("configured Point native sample".into()))?);
+                for (channel, raw) in pixel.as_chunks::<4>().0.iter().enumerate() {
+                    let value = f32::from_ne_bytes(*raw);
                     valid &= value.is_finite() && (channel != 3 || (0.0..=1.0).contains(&value));
                 }
             }
@@ -152,4 +152,6 @@ fn configured_raster<P: ExactParsedPlane>(
 
 #[cfg(test)]
 #[path = "staged_configured_point_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unreachable)]
 mod tests;

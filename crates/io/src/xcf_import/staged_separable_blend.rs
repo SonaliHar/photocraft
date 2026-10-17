@@ -1,13 +1,13 @@
 //! One sealed original-source intersection for flat modern separable blends.
 use super::*;
-#[path = "staged_legacy_separable_blend.rs"]
-mod legacy;
-#[path = "staged_component_separable_blend.rs"]
-mod component;
 #[path = "staged_alpha_separable_blend.rs"]
 mod alpha;
+#[path = "staged_component_separable_blend.rs"]
+mod component;
 #[path = "staged_lab_separable_blend.rs"]
 mod lab;
+#[path = "staged_legacy_separable_blend.rs"]
+mod legacy;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Domain {
     Basic,
@@ -18,7 +18,10 @@ pub(super) fn mode(mode: i32) -> bool {
     matches!(mode,23|30..=36|41..=53)
 }
 pub(super) fn hint<P>(f: &XcfFile<P>) -> bool {
-    f.layers.len() == 2 && f.layers.first().is_some_and(|d| !d.group && (mode(d.mode) || legacy::mode(d.mode) || component::mode(d.mode) || alpha::mode(d.mode) || lab::mode(d.mode)))
+    f.layers.len() == 2
+        && f.layers
+            .first()
+            .is_some_and(|d| !d.group && (mode(d.mode) || legacy::mode(d.mode) || component::mode(d.mode) || alpha::mode(d.mode) || lab::mode(d.mode)))
 }
 pub(super) fn domain<P: ExactParsedPlane>(f: &XcfFile<P>) -> Option<Domain> {
     if f.model != Model::Rgb
@@ -107,9 +110,9 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, 
             if block.is_empty() || block.len() > 64 * 16 || block.len() % 16 != 0 {
                 return Err(IoError::Unsupported("separable native block".into()));
             }
-            for pixel in block.chunks_exact(16) {
-                for (channel, raw) in pixel.chunks_exact(4).enumerate() {
-                    let bytes = <[u8; 4]>::try_from(raw).map_err(|_| IoError::Unsupported("separable word".into()))?;
+            for pixel in block.as_chunks::<16>().0 {
+                for (channel, raw) in pixel.as_chunks::<4>().0.iter().enumerate() {
+                    let bytes = *raw;
                     let value = f32::from_ne_bytes(bytes);
                     valid &= value.is_finite() && (!(unit || channel == 3) || (0.0..=1.0).contains(&value));
                     if owner == 0 && channel != 3 {
@@ -175,10 +178,18 @@ pub(super) fn qualify_selected<P: ExactParsedPlane>(
     if domain(f).is_some() {
         return qualify(f, ctl, budget).map(|kind| kind.map(SourceKind::Strict));
     }
-    if legacy::domain(f) { return legacy::qualify(f, ctl, budget).map(|ok| ok.then_some(SourceKind::LegacyStrict)); }
-    if component::domain(f) { return component::qualify(f, ctl, budget).map(|ok| ok.then_some(SourceKind::ComponentStrict)); }
-    if alpha::domain(f) { return alpha::qualify(f, ctl, budget).map(|ok| ok.then_some(SourceKind::AlphaStrict)); }
-    if lab::domain(f) { return lab::qualify(f, ctl, budget).map(|ok| ok.then_some(SourceKind::LabStrict)); }
+    if legacy::domain(f) {
+        return legacy::qualify(f, ctl, budget).map(|ok| ok.then_some(SourceKind::LegacyStrict));
+    }
+    if component::domain(f) {
+        return component::qualify(f, ctl, budget).map(|ok| ok.then_some(SourceKind::ComponentStrict));
+    }
+    if alpha::domain(f) {
+        return alpha::qualify(f, ctl, budget).map(|ok| ok.then_some(SourceKind::AlphaStrict));
+    }
+    if lab::domain(f) {
+        return lab::qualify(f, ctl, budget).map(|ok| ok.then_some(SourceKind::LabStrict));
+    }
     qualify_general(f, ctl, budget).map(|ok| ok.then_some(SourceKind::General))
 }
 fn qualify_general<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, budget: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
@@ -257,9 +268,9 @@ fn qualify_general<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, bud
             }
             seen = seen.checked_add(block.len() as u64).filter(|n| *n <= expected).ok_or_else(|| IoError::Unsupported("general flat excess native".into()))?;
             pay(ctl, budget, block.len() as u64)?;
-            for pixel in block.chunks_exact(16) {
-                for (channel, word) in pixel.chunks_exact(4).enumerate() {
-                    let raw = <[u8; 4]>::try_from(word).map_err(|_| IoError::Unsupported("general flat native word".into()))?;
+            for pixel in block.as_chunks::<16>().0 {
+                for (channel, word) in pixel.as_chunks::<4>().0.iter().enumerate() {
+                    let raw = *word;
                     let value = f64::from(f32::from_ne_bytes(raw));
                     valid &= if channel == 3 { value.is_finite() && (0.0..=1.0).contains(&value) } else { rule.source_rgb_domain.accepts(value) };
                 }
@@ -276,32 +287,52 @@ fn qualify_general<P: ExactParsedPlane>(f: &XcfFile<P>, ctl: &Interrupt<'_>, bud
 
 #[cfg(all(test, feature = "corpus"))]
 #[path = "staged_separable_blend_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod tests;
 
 #[cfg(all(test, feature = "corpus"))]
 #[path = "staged_general_separable_blend_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod general_tests;
 
-pub(super) fn legacy_domain<P:ExactParsedPlane>(f:&XcfFile<P>)->bool{legacy::domain(f)}
+pub(super) fn legacy_domain<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
+    legacy::domain(f)
+}
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "staged_legacy_separable_blend_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod legacy_tests;
 
-pub(super) fn component_domain<P:ExactParsedPlane>(f:&XcfFile<P>)->bool{component::domain(f)}
+pub(super) fn component_domain<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
+    component::domain(f)
+}
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "staged_component_separable_blend_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod component_tests;
 
-pub(super) fn alpha_domain<P:ExactParsedPlane>(f:&XcfFile<P>)->bool{alpha::domain(f)}
+pub(super) fn alpha_domain<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
+    alpha::domain(f)
+}
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "staged_alpha_separable_blend_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod alpha_tests;
 
-pub(super) fn lab_domain<P:ExactParsedPlane>(f:&XcfFile<P>)->bool{lab::domain(f)}
+pub(super) fn lab_domain<P: ExactParsedPlane>(f: &XcfFile<P>) -> bool {
+    lab::domain(f)
+}
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "staged_lab_separable_blend_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod lab_tests;

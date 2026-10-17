@@ -246,12 +246,12 @@ pub(in crate::xcf_import) fn promote_storage<'b, 'a, S: PromotionSource<'b, 'a>>
     }
     let mut incoming = Incoming { source, model: None, payload: None, bridge: None };
     let measured = match class {
-        StorageClass::Alpha => census::measure_threshold(incoming.source.document(), &budget, control.interrupt)?,
-        StorageClass::Histogram => census::measure_histogram_threshold(incoming.source.document(), &budget, control.interrupt)?,
+        StorageClass::Alpha => census::measure_threshold(incoming.source.document(), budget, control.interrupt)?,
+        StorageClass::Histogram => census::measure_histogram_threshold(incoming.source.document(), budget, control.interrupt)?,
     };
     // The holder's result is exposed only as borrowed fields; this sibling
     // report census does not acquire a public extraction or source grant.
-    let reports = incoming.source.report_capacity_with_budget(&budget)?;
+    let reports = incoming.source.report_capacity_with_budget(budget)?;
     incoming.model =
         Some(budget.reserve(BudgetKind::Index, add(measured.model, reports)?, "threshold actual model/report capacities").map_err(accounting_error)?);
     incoming.payload = Some(budget.reserve(BudgetKind::Resident, measured.payload, "threshold raw/profile capacities").map_err(accounting_error)?);
@@ -266,8 +266,8 @@ pub(in crate::xcf_import) fn promote_storage<'b, 'a, S: PromotionSource<'b, 'a>>
         add(std::mem::size_of::<store::SurfaceStore<Retention>>() as u64, 4096)?,
     )?;
     incoming.bridge = Some(budget.reserve(BudgetKind::Index, bridge_bytes, "threshold owned bridge headers").map_err(accounting_error)?);
-    let phase = phase_work(incoming.source.document(), measured.model, measured.payload, incoming.source.original_bytes().len() as u64, &budget)?;
-    prepay(&budget, phase)?;
+    let phase = phase_work(incoming.source.document(), measured.model, measured.payload, incoming.source.original_bytes().len() as u64, budget)?;
+    prepay(budget, phase)?;
     let remaining = AtomicU64::new(phase);
     let work = |units| remaining.try_update(Ordering::AcqRel, Ordering::Relaxed, |left| left.checked_sub(units)).map(|_| ()).map_err(|_| BackingError::Work);
     let poll = || {
@@ -292,7 +292,7 @@ pub(in crate::xcf_import) fn promote_storage<'b, 'a, S: PromotionSource<'b, 'a>>
             incoming.payload.as_mut().ok_or_else(|| invalid("threshold payload fee missing"))?,
             incoming.bridge.as_mut().ok_or_else(|| invalid("threshold bridge fee missing"))?,
         ],
-        &budget,
+        budget,
     )?;
     let mut physical = owned.surface_batch.physical_usage();
     let header = owned.surface_batch.ledger_header();

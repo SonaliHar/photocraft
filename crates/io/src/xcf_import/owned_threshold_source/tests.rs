@@ -69,7 +69,7 @@ fn synthetic() -> Document {
 fn threshold_capacity_census_prices_spare_nested_storage_without_widening_plain() {
     let budget = photocraft_xcf::Budget::new(limits(), None);
     let mut doc = synthetic();
-    assert!(census::measure(&doc, &budget, &Interrupt::NONE).is_err());
+    assert!(census::measure_plain_for_test(&doc, &budget, &Interrupt::NONE).is_err());
     let a = census::measure_threshold(&doc, &budget, &Interrupt::NONE).unwrap();
     let node = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
     node.arguments.reserve_exact(37);
@@ -83,7 +83,7 @@ fn threshold_capacity_census_prices_spare_nested_storage_without_widening_plain(
     state.items.push(state.items[0].clone());
     let c = census::measure_threshold(&doc, &budget, &Interrupt::NONE).unwrap();
     assert!(c.model > b.model + 256);
-    assert!(census::measure(&doc, &budget, &Interrupt::NONE).is_err());
+    assert!(census::measure_plain_for_test(&doc, &budget, &Interrupt::NONE).is_err());
     // Full padded F64 mask, not its 48 logical samples, raises native phase work.
     let withmask = phase_work(&doc, c.model, c.payload, 0, &budget).unwrap();
     state_ref_remove_mask(&mut doc);

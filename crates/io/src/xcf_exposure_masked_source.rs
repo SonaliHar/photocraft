@@ -156,6 +156,8 @@ pub(crate) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
     let (valid, nonempty) = visit(p, f.sample, f.width, f.height, 1, true, i, b)?;
     Ok(valid && nonempty)
 }
+// Keep the fixed parameter contract: source identity, limits, control and original budget remain explicit.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn visit<P: ExactParsedPlane>(
     p: &P,
     sample: Sample,

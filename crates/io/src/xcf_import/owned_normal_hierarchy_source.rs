@@ -191,7 +191,7 @@ fn promote_with_purpose<'b, 'a, S: PromotionSource<'b, 'a>>(
     let measured = census::measure_normal_hierarchy(incoming.source.document(), budget, control.interrupt)?;
     // The holder's result is exposed only as borrowed fields; this sibling
     // report census does not acquire a public extraction or source grant.
-    let reports = incoming.source.report_capacity_with_budget(&budget)?;
+    let reports = incoming.source.report_capacity_with_budget(budget)?;
     incoming.model =
         Some(budget.reserve(BudgetKind::Index, add(measured.model, reports)?, "hierarchy actual model/report capacities").map_err(accounting_error)?);
     incoming.payload = Some(budget.reserve(BudgetKind::Resident, measured.payload, "hierarchy raw/profile capacities").map_err(accounting_error)?);
@@ -205,7 +205,7 @@ fn promote_with_purpose<'b, 'a, S: PromotionSource<'b, 'a>>(
         )?,
     )?;
     incoming.bridge = Some(budget.reserve(BudgetKind::Index, bridge_bytes, "hierarchy owned bridge headers").map_err(accounting_error)?);
-    let mut phase = phase_work(incoming.source.document(), measured.model, measured.payload, incoming.source.original_bytes().len() as u64, &budget)?;
+    let mut phase = phase_work(incoming.source.document(), measured.model, measured.payload, incoming.source.original_bytes().len() as u64, budget)?;
     let doc = incoming.source.document();
     let planning = |n: u64| {
         budget
@@ -254,7 +254,7 @@ fn promote_with_purpose<'b, 'a, S: PromotionSource<'b, 'a>>(
         let scans = combined.coverage_work_units;
         phase = add(phase, add(scans, add(associations, add(combined.validation_work_units, combined.proof_index_bytes)?)?)?)?;
     }
-    prepay(&budget, phase)?;
+    prepay(budget, phase)?;
     let remaining = AtomicU64::new(phase);
     let work = |units| {
         // Zero-unit enclosing checks preserve its dynamic controls without
@@ -287,7 +287,7 @@ fn promote_with_purpose<'b, 'a, S: PromotionSource<'b, 'a>>(
             incoming.payload.as_mut().ok_or_else(|| invalid("hierarchy payload fee missing"))?,
             incoming.bridge.as_mut().ok_or_else(|| invalid("hierarchy bridge fee missing"))?,
         ],
-        &budget,
+        budget,
     )?;
     let mut physical = owned.surface_batch.physical_usage();
     let header = owned.surface_batch.ledger_header();

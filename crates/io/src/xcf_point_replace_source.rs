@@ -32,18 +32,18 @@ pub(crate) mod red_eye_source;
 #[path = "xcf_video_degradation_source.rs"]
 pub(crate) mod video_degradation_source;
 
-#[path="xcf_semi_flatten_source.rs"]
-pub(crate) mod semi_flatten_source;
-#[path="xcf_hue_chroma_source.rs"]
+#[path = "xcf_hue_chroma_source.rs"]
 pub(crate) mod hue_chroma_source;
-#[path="xcf_vibrance_source.rs"]
-pub(crate) mod vibrance_source;
-#[path="xcf_exposure_loaded_source.rs"]
+#[path = "xcf_exposure_loaded_source.rs"]
 pub(crate) mod loaded_exposure_source;
-#[path="xcf_exposure_masked_source.rs"]
+#[path = "xcf_exposure_masked_source.rs"]
 pub(crate) mod masked_exposure_source;
-#[path="xcf_masked_stock_point_source.rs"]
+#[path = "xcf_masked_stock_point_source.rs"]
 pub(crate) mod masked_stock_source;
+#[path = "xcf_semi_flatten_source.rs"]
+pub(crate) mod semi_flatten_source;
+#[path = "xcf_vibrance_source.rs"]
+pub(crate) mod vibrance_source;
 
 /// Exact source argument validation without allocating a mapped filter stack.
 fn finite_alpha_operation<P>(effect: &photocraft_xcf::Effect<P>) -> Option<photocraft_algo::gimp::alpha_clip_finite::AlphaClipFinite> {
@@ -81,6 +81,34 @@ fn poll(control: &Interrupt<'_>, shared: Option<&photocraft_xcf::Budget<'_>>, by
             .map_err(|error| if error.kind == photocraft_xcf::ErrorKind::Cancelled { IoError::Cancelled } else { IoError::Xcf(error) })?;
     }
     Ok(())
+}
+
+// Bind retained raw transport to its typed view without interpreting opaque words.
+fn typed_raw_composition_matches<P>(
+    effect: &photocraft_xcf::Effect<P>,
+    control: &Interrupt<'_>,
+    shared: Option<&photocraft_xcf::Budget<'_>>,
+) -> Result<bool, IoError> {
+    poll(control, shared, 128)?;
+    let (mut mode, mut composite, mut blend) = (None, None, None);
+    for property in &effect.properties {
+        poll(control, shared, 128)?;
+        let slot = match property.tag {
+            35 => &mut mode,
+            36 => &mut composite,
+            37 => &mut blend,
+            _ => continue,
+        };
+        if slot.is_some() || property.declared_bytes != 4 || property.payload.len() != 4 {
+            return Ok(false);
+        }
+        let Ok(bytes) = property.payload.as_slice().try_into() else { return Ok(false) };
+        *slot = Some(i32::from_be_bytes(bytes));
+    }
+    Ok(mode.is_some()
+        && composite.is_some()
+        && blend.is_some()
+        && (mode, composite, blend) == (effect.state.composite_mode, effect.state.composite_space, effect.state.blend_space))
 }
 
 /// Bounded route hint only; it never supplies whole-file source authority.
@@ -132,7 +160,7 @@ pub(crate) fn classify_family_hint<P>(file: &XcfFile<P>) -> Option<PointReplaceF
         }
         "gegl:brightness-contrast" => PointReplaceFamily::Brightness,
         "gegl:levels" => PointReplaceFamily::Levels,
-        "gegl:exposure" if file.layers.len()==1 && owner.effects.len()==1 && loaded_exposure_source::envelope(effect) => PointReplaceFamily::LoadedExposure,
+        "gegl:exposure" if file.layers.len() == 1 && owner.effects.len() == 1 && loaded_exposure_source::envelope(effect) => PointReplaceFamily::LoadedExposure,
         "gegl:exposure" => PointReplaceFamily::Exposure,
         "gegl:color-temperature" => PointReplaceFamily::Temperature,
         "gegl:sepia" => PointReplaceFamily::Sepia,
@@ -145,10 +173,10 @@ pub(crate) fn classify_family_hint<P>(file: &XcfFile<P>) -> Option<PointReplaceF
     })
 }
 
-fn prepared_transfer_error(error:photocraft_cms::control::Error)->IoError {
+fn prepared_transfer_error(error: photocraft_cms::control::Error) -> IoError {
     match error {
-        photocraft_cms::control::Error::Cancelled=>IoError::Cancelled,
-        _=>IoError::Unsupported("point Replace prepared implicit transfer".into()),
+        photocraft_cms::control::Error::Cancelled => IoError::Cancelled,
+        _ => IoError::Unsupported("point Replace prepared implicit transfer".into()),
     }
 }
 
@@ -163,10 +191,21 @@ pub(crate) fn classify<P: ExactParsedPlane>(
     let Some(owner) = file.layers.first() else { return Ok(None) };
     let Some(effect) = owner.effects.first() else { return Ok(None) };
     let Some(family) = classify_family_hint(file) else { return Ok(None) };
-    if family==PointReplaceFamily::LoadedExposure { return Ok(loaded_exposure_source::qualify(file,control,shared)?.then_some(NeighborhoodDomain::PointReplace(family))); }
-    if family==PointReplaceFamily::Vibrance { return Ok(vibrance_source::qualify(file,control,shared)?.then_some(NeighborhoodDomain::PointReplace(family))); }
-    if family==PointReplaceFamily::HueChroma { return Ok(hue_chroma_source::qualify(file,control,shared)?.then_some(NeighborhoodDomain::PointReplace(family))); }
-    if family==PointReplaceFamily::SemiFlatten { return Ok(semi_flatten_source::qualify(file,control,shared)?.then_some(NeighborhoodDomain::PointReplace(family))); }
+    if !typed_raw_composition_matches(effect, control, shared)? {
+        return Ok(None);
+    }
+    if family == PointReplaceFamily::LoadedExposure {
+        return Ok(loaded_exposure_source::qualify(file, control, shared)?.then_some(NeighborhoodDomain::PointReplace(family)));
+    }
+    if family == PointReplaceFamily::Vibrance {
+        return Ok(vibrance_source::qualify(file, control, shared)?.then_some(NeighborhoodDomain::PointReplace(family)));
+    }
+    if family == PointReplaceFamily::HueChroma {
+        return Ok(hue_chroma_source::qualify(file, control, shared)?.then_some(NeighborhoodDomain::PointReplace(family)));
+    }
+    if family == PointReplaceFamily::SemiFlatten {
+        return Ok(semi_flatten_source::qualify(file, control, shared)?.then_some(NeighborhoodDomain::PointReplace(family)));
+    }
     if matches!(family, PointReplaceFamily::ComponentExtractCmyk | PointReplaceFamily::ComponentExtractYcbcr)
         && (effect.state.blend_space, effect.state.composite_space, effect.state.composite_mode) != (Some(-305954223), Some(-305954223), Some(-305954223))
     {
@@ -334,10 +373,16 @@ pub(crate) fn classify<P: ExactParsedPlane>(
         Encoding::NonlinearProfile => photocraft_cms::xcf_color::Encoding::NonlinearProfile,
         Encoding::Perceptual => photocraft_cms::xcf_color::Encoding::Perceptual,
     };
-    let working_encoding = if absolute || channel_mixer || mono_signed || overlay.is_some_and(|(_,srgb)|!srgb)
-        || alpha_clip && (file.model == Model::Gray || file.encoding != Encoding::NonlinearProfile) {
+    let working_encoding = if absolute
+        || channel_mixer
+        || mono_signed
+        || overlay.is_some_and(|(_, srgb)| !srgb)
+        || alpha_clip && (file.model == Model::Gray || file.encoding != Encoding::NonlinearProfile)
+    {
         photocraft_cms::xcf_color::Encoding::Linear
-    } else {photocraft_cms::xcf_color::Encoding::NonlinearProfile};
+    } else {
+        photocraft_cms::xcf_color::Encoding::NonlinearProfile
+    };
     // The new token borrows the same immutable implicit basis as the legacy
     // calls. Only the nine expanded roles remove repeated profile validation.
     // Declare the phase fee first so token state dies before its accounting;
@@ -346,34 +391,47 @@ pub(crate) fn classify<P: ExactParsedPlane>(
     let prepared_transfer = if absolute || channel_mixer || mono_signed || overlay.is_some() || component && !component_geometry || alpha_clip {
         use photocraft_cms::xcf_color::prepared_implicit_transfer as transfer;
         let cancelled = || control.cancelled();
-        let pay = |units:u64| -> Result<(),IoError> {
-            poll(control,shared,usize::try_from(units).map_err(|_|IoError::Unsupported("point Replace transfer work size".into()))?)
+        let pay = |units: u64| -> Result<(), IoError> {
+            poll(control, shared, usize::try_from(units).map_err(|_| IoError::Unsupported("point Replace transfer work size".into()))?)
         };
         pay(transfer::planning_work_ceiling())?;
-        let space=if file.model==Model::Gray {photocraft_cms::ColorSpace::Gray}else{photocraft_cms::ColorSpace::Rgb};
-        let required=transfer::requirements_with_control(space,photocraft_cms::control::Limits{resident_bytes:65536,work_units:65536*64},&cancelled)
-            .map_err(prepared_transfer_error)?;
+        let space = if file.model == Model::Gray { photocraft_cms::ColorSpace::Gray } else { photocraft_cms::ColorSpace::Rgb };
+        let required =
+            transfer::requirements_with_control(space, photocraft_cms::control::Limits { resident_bytes: 65536, work_units: 65536 * 64 }, &cancelled)
+                .map_err(prepared_transfer_error)?;
         // The source Option, copied requirements/planning facts, and reservation
         // header coexist with the CMS conversion scratch. The global borrowed
         // profile is disclosed by CMS but is not a new source-owned allocation.
-        let phase_bytes=std::mem::size_of::<Option<(transfer::PreparedImplicitTransfer,transfer::Requirements)>>()
+        let phase_bytes = std::mem::size_of::<Option<(transfer::PreparedImplicitTransfer, transfer::Requirements)>>()
             .checked_add(std::mem::size_of::<transfer::Requirements>())
-            .and_then(|n|n.checked_add(std::mem::size_of::<Option<photocraft_xcf::Reservation<'static,'static>>>()))
-            .and_then(|n|n.checked_add(required.conversion_scratch_bytes))
-            .filter(|n|*n>=required.peak_resident_bytes)
-            .ok_or_else(||IoError::Unsupported("point Replace transfer phase size".into()))?;
-        if let Some(budget)=shared {
-            _transfer_phase_fee=Some(budget.reserve(photocraft_xcf::BudgetKind::Resident,
-                u64::try_from(phase_bytes).map_err(|_|IoError::Unsupported("point Replace transfer state size".into()))?,
-                "point Replace prepared implicit transfer state/scratch")
-                .map_err(|error|if error.kind==photocraft_xcf::ErrorKind::Cancelled {IoError::Cancelled}else{IoError::Xcf(error)})?);
+            .and_then(|n| n.checked_add(std::mem::size_of::<Option<photocraft_xcf::Reservation<'static, 'static>>>()))
+            .and_then(|n| n.checked_add(required.conversion_scratch_bytes))
+            .filter(|n| *n >= required.peak_resident_bytes)
+            .ok_or_else(|| IoError::Unsupported("point Replace transfer phase size".into()))?;
+        if let Some(budget) = shared {
+            _transfer_phase_fee = Some(
+                budget
+                    .reserve(
+                        photocraft_xcf::BudgetKind::Resident,
+                        u64::try_from(phase_bytes).map_err(|_| IoError::Unsupported("point Replace transfer state size".into()))?,
+                        "point Replace prepared implicit transfer state/scratch",
+                    )
+                    .map_err(|error| if error.kind == photocraft_xcf::ErrorKind::Cancelled { IoError::Cancelled } else { IoError::Xcf(error) })?,
+            );
         }
         pay(required.preparation_work_units)?;
-        let prepared=transfer::construct_with_control(space,source_encoding,working_encoding,
-            photocraft_cms::control::Limits{resident_bytes:required.component_resident_bytes,work_units:required.preparation_work_units},&cancelled)
-            .map_err(prepared_transfer_error)?;
-        Some((prepared,required))
-    } else {None};
+        let prepared = transfer::construct_with_control(
+            space,
+            source_encoding,
+            working_encoding,
+            photocraft_cms::control::Limits { resident_bytes: required.component_resident_bytes, work_units: required.preparation_work_units },
+            &cancelled,
+        )
+        .map_err(prepared_transfer_error)?;
+        Some((prepared, required))
+    } else {
+        None
+    };
     let mut admitted = true;
     let mut visited = 0u64;
     plane.visit_native(control, &mut |chunk| {
@@ -425,21 +483,30 @@ pub(crate) fn classify<P: ExactParsedPlane>(
                         return Ok(false);
                     }
                     let mut working = [0f64; 3];
-                    if let Some((prepared,required))=&prepared_transfer {
-                        let work=required.conversion_work_units.checked_add(128).ok_or_else(||IoError::Unsupported("point Replace transfer work".into()))?;
-                        poll(control,shared,usize::try_from(work).map_err(|_|IoError::Unsupported("point Replace transfer work size".into()))?)?;
-                        prepared.convert_with_control(
-                            values.get(..color_count).ok_or_else(||IoError::Unsupported("Color Exchange source channels".into()))?,
-                            working.get_mut(..color_count).ok_or_else(||IoError::Unsupported("Color Exchange working channels".into()))?,
-                            photocraft_cms::control::Limits{resident_bytes:required.conversion_scratch_bytes,work_units:required.conversion_work_units},
-                            &||control.cancelled()).map_err(prepared_transfer_error)?;
+                    if let Some((prepared, required)) = &prepared_transfer {
+                        let work = required.conversion_work_units.checked_add(128).ok_or_else(|| IoError::Unsupported("point Replace transfer work".into()))?;
+                        poll(control, shared, usize::try_from(work).map_err(|_| IoError::Unsupported("point Replace transfer work size".into()))?)?;
+                        prepared
+                            .convert_with_control(
+                                values.get(..color_count).ok_or_else(|| IoError::Unsupported("Color Exchange source channels".into()))?,
+                                working.get_mut(..color_count).ok_or_else(|| IoError::Unsupported("Color Exchange working channels".into()))?,
+                                photocraft_cms::control::Limits {
+                                    resident_bytes: required.conversion_scratch_bytes,
+                                    work_units: required.conversion_work_units,
+                                },
+                                &|| control.cancelled(),
+                            )
+                            .map_err(prepared_transfer_error)?;
                     } else {
                         poll(control, shared, 128)?;
                         photocraft_cms::xcf_color::convert_encoding_f64(
-                            profile,source_encoding,working_encoding,
+                            profile,
+                            source_encoding,
+                            working_encoding,
                             values.get(..color_count).ok_or_else(|| IoError::Unsupported("Color Exchange source channels".into()))?,
                             working.get_mut(..color_count).ok_or_else(|| IoError::Unsupported("Color Exchange working channels".into()))?,
-                        ).map_err(|_| IoError::Unsupported("Color Exchange source transfer".into()))?;
+                        )
+                        .map_err(|_| IoError::Unsupported("Color Exchange source transfer".into()))?;
                     }
                     if working.iter().take(color_count).any(|value| {
                         let value = *value as f32;
@@ -967,9 +1034,83 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path="xcf_point_replace_origin_geometry_tests.rs"]
+#[path = "xcf_point_replace_origin_geometry_tests.rs"]
 mod origin_geometry_tests;
 
 #[cfg(test)]
-#[path="xcf_point_replace_prepared_transfer_tests.rs"]
+#[path = "xcf_point_replace_prepared_transfer_tests.rs"]
 mod prepared_transfer_tests;
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+mod raw_composition_tests {
+    use super::*;
+    fn effect() -> photocraft_xcf::Effect {
+        let words = [(35, -2103934383_i32), (36, -1), (37, 0)];
+        photocraft_xcf::Effect {
+            name: String::new(),
+            icon: String::new(),
+            operation: "gegl:exposure".into(),
+            version: Some("1:0".into()),
+            properties: words
+                .into_iter()
+                .map(|(tag, word)| photocraft_xcf::RawProperty { tag, offset: 0, declared_bytes: 4, payload: word.to_be_bytes().to_vec() })
+                .collect(),
+            arguments: Vec::new(),
+            mask: None,
+            state: photocraft_xcf::EffectState {
+                composite_mode: Some(words[0].1),
+                composite_space: Some(words[1].1),
+                blend_space: Some(words[2].1),
+                ..Default::default()
+            },
+        }
+    }
+    #[test]
+    fn point_raw_composition_requires_unique_exact_typed_correspondence() {
+        let original = effect();
+        // This helper proves transport correspondence only, never Source admission
+        // or the mathematical meaning of an arbitrary opaque word.
+        assert!(typed_raw_composition_matches(&original, &Interrupt::NONE, None).unwrap());
+        for slot in 0..3 {
+            for fault in 0..6 {
+                let mut changed = original.clone();
+                match fault {
+                    0 => {
+                        changed.properties.remove(slot);
+                    }
+                    1 => changed.properties.push(changed.properties[slot].clone()),
+                    2 => changed.properties[slot].declared_bytes = 3,
+                    3 => {
+                        changed.properties[slot].payload.pop();
+                    }
+                    4 => changed.properties[slot].payload[0] ^= 1,
+                    _ => match slot {
+                        0 => changed.state.composite_mode = None,
+                        1 => changed.state.composite_space = None,
+                        _ => changed.state.blend_space = None,
+                    },
+                }
+                assert!(!typed_raw_composition_matches(&changed, &Interrupt::NONE, None).unwrap(), "slot{slot} fault{fault}");
+            }
+        }
+    }
+    #[test]
+    fn point_raw_composition_charges_original_work_and_cancellation() {
+        let original = effect();
+        let budget = photocraft_xcf::Budget::new(photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(), None);
+        budget.consume_work(9, "external caller work").unwrap();
+        assert!(typed_raw_composition_matches(&original, &Interrupt::NONE, Some(&budget)).unwrap());
+        let performed = budget.used(photocraft_xcf::BudgetKind::Work);
+        assert!(performed > 9);
+        assert_eq!(budget.used(photocraft_xcf::BudgetKind::Resident), 0);
+        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap().lowered(&[("sampleWorkUnits", 0)]).unwrap();
+        let denied = photocraft_xcf::Budget::new(limits, None);
+        assert!(
+            matches!(typed_raw_composition_matches(&original, &Interrupt::NONE, Some(&denied)), Err(IoError::Xcf(e)) if e.kind == photocraft_xcf::ErrorKind::Limit)
+        );
+        let cancelled = || true;
+        assert!(matches!(typed_raw_composition_matches(&original, &Interrupt::cancel_only(&cancelled), Some(&budget)), Err(IoError::Cancelled)));
+        assert_eq!(budget.used(photocraft_xcf::BudgetKind::Work), performed);
+    }
+}

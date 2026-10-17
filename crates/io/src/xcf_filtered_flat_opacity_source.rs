@@ -1,7 +1,9 @@
 //! Fresh mixed-source opacity only; never an ordinary Point admission.
 use super::*;
 pub(crate) fn raw_opacity<P>(effect: &Effect<P>) -> Option<u32> {
-    if effect.properties.len() > 16 || effect.state.opacity_u8.is_some() {
+    // Alien Map has eight common fields plus its released ten typed arguments.
+    let property_limit = if effect.operation == "gegl:alien-map" { 18 } else { 16 };
+    if effect.properties.len() > property_limit || effect.state.opacity_u8.is_some() {
         return None;
     }
     let mut found = None;
@@ -24,7 +26,8 @@ pub(crate) fn raw_opacity<P>(effect: &Effect<P>) -> Option<u32> {
     found.filter(|bits| effect.state.opacity_bits == Some(*bits))
 }
 pub(crate) fn envelope<P>(effect: &Effect<P>) -> bool {
-    if effect.properties.len() > 16 {
+    let property_limit = if effect.operation == "gegl:alien-map" { 18 } else { 16 };
+    if effect.properties.len() > property_limit {
         return false;
     }
     let parameters = match effect.operation.as_str() {

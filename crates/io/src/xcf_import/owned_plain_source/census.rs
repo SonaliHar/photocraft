@@ -88,13 +88,13 @@ impl Walk<'_, '_> {
     }
 }
 pub(super) fn measure(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>) -> Result<Census, IoError> {
-    measure_inner(doc, budget, control, false, false, false, false,std::iter::empty())
+    measure_inner(doc, budget, control, false, false, false, false, std::iter::empty())
 }
 /// Only the sealed staged Threshold Alpha producer may call this sibling seam.
 /// Its original source/Surface receipts remain mandatory; this measures storage.
 pub(in crate::xcf_import) fn measure_threshold(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>) -> Result<Census, IoError> {
     threshold_shape(doc)?;
-    measure_inner(doc, budget, control, true, false, false, false,std::iter::empty())
+    measure_inner(doc, budget, control, true, false, false, false, std::iter::empty())
 }
 /// Closed Histogram Threshold source promotion only; not a caller source proof.
 pub(in crate::xcf_import) fn measure_histogram_threshold(
@@ -105,16 +105,18 @@ pub(in crate::xcf_import) fn measure_histogram_threshold(
     control.check().map_err(|_| IoError::Cancelled)?;
     budget.consume_work(32, "histogram threshold census shape").map_err(accounting_error)?;
     histogram_threshold_shape(doc)?;
-    measure_inner(doc, budget, control, true, false, false, false,std::iter::empty())
+    measure_inner(doc, budget, control, true, false, false, false, std::iter::empty())
 }
 /// Storage-only shared walker, reached after the sealed Point shape gate.
 pub(in crate::xcf_import) fn measure_point_storage(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>) -> Result<Census, IoError> {
-    measure_inner(doc, budget, control, true, false, false, false,std::iter::empty())
+    measure_inner(doc, budget, control, true, false, false, false, std::iter::empty())
 }
-pub(in crate::xcf_import) fn measure_normal_hierarchy(doc:&Document,budget:&photocraft_xcf::Budget<'_>,control:&Interrupt<'_>)->Result<Census,IoError>{
- measure_inner(doc,budget,control,true,false,false,true,super::super::staged_source::staged_normal_hierarchy::layers(doc))
+pub(in crate::xcf_import) fn measure_normal_hierarchy(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>) -> Result<Census, IoError> {
+    measure_inner(doc, budget, control, true, false, false, true, super::super::staged_source::staged_normal_hierarchy::layers(doc))
 }
-fn measure_inner<'d,I:Iterator<Item=Result<&'d Layer,IoError>>>(
+// Keep the fixed parameter contract: source identity, limits, control and original budget remain explicit.
+#[allow(clippy::too_many_arguments)]
+fn measure_inner<'d, I: Iterator<Item = Result<&'d Layer, IoError>>>(
     doc: &'d Document,
     budget: &photocraft_xcf::Budget<'_>,
     control: &Interrupt<'_>,
@@ -122,7 +124,7 @@ fn measure_inner<'d,I:Iterator<Item=Result<&'d Layer,IoError>>>(
     geometry: bool,
     isolated_group: bool,
     hierarchy: bool,
-    mut tree:I,
+    mut tree: I,
 ) -> Result<Census, IoError> {
     use photocraft_doc::{WorkingProfileInterpretation, physical_resolution::PhysicalUnit, xcf_editing::ItemSetRule};
     control.check().map_err(|_| IoError::Cancelled)?;
@@ -212,12 +214,12 @@ fn measure_inner<'d,I:Iterator<Item=Result<&'d Layer,IoError>>>(
     w.string(&doc.slices.group_name)?;
     w.vector(&doc.variables.defs)?;
     w.vector(&doc.variables.data_sets)?;
-    if let Some(p) = &doc.physical_resolution {
-        if let PhysicalUnit::Custom(v) = &p.unit {
-            w.string(&v.name)?;
-            w.string(&v.symbol)?;
-            w.string(&v.abbreviation)?;
-        }
+    if let Some(p) = &doc.physical_resolution
+        && let PhysicalUnit::Custom(v) = &p.unit
+    {
+        w.string(&v.name)?;
+        w.string(&v.symbol)?;
+        w.string(&v.abbreviation)?;
     }
     match &doc.working_profile_interpretation {
         WorkingProfileInterpretation::Icc => {}
@@ -261,12 +263,18 @@ fn measure_inner<'d,I:Iterator<Item=Result<&'d Layer,IoError>>>(
     } else {
         &[]
     };
-    let mut flat=doc.layers.iter().chain(children.iter());
-    let mut actual_layers=0usize;
+    let mut flat = doc.layers.iter().chain(children.iter());
+    let mut actual_layers = 0usize;
     loop {
-        let layer=if hierarchy{tree.next().transpose()?}else{flat.next()};
-        let Some(layer)=layer else{break};
-        if hierarchy{control.check().map_err(|_|IoError::Cancelled)?;actual_layers=actual_layers.checked_add(1).ok_or_else(||invalid("hierarchy census count"))?;if actual_layers>4096{return Err(invalid("hierarchy census count"))}}
+        let layer = if hierarchy { tree.next().transpose()? } else { flat.next() };
+        let Some(layer) = layer else { break };
+        if hierarchy {
+            control.check().map_err(|_| IoError::Cancelled)?;
+            actual_layers = actual_layers.checked_add(1).ok_or_else(|| invalid("hierarchy census count"))?;
+            if actual_layers > 4096 {
+                return Err(invalid("hierarchy census count"));
+            }
+        }
 
         if isolated_group {
             control.check().map_err(|_| IoError::Cancelled)?;
@@ -283,29 +291,32 @@ fn measure_inner<'d,I:Iterator<Item=Result<&'d Layer,IoError>>>(
         }
         let surface = match &layer.content {
             LayerContent::Raster(surface) => Some(surface),
-            LayerContent::Group(group) if hierarchy && group.artboard.is_none()=>{w.vector(&group.children)?;None},
+            LayerContent::Group(group) if hierarchy && group.artboard.is_none() => {
+                w.vector(&group.children)?;
+                None
+            }
             LayerContent::Group(_) if isolated_group && layer.id == doc.layers.get(1).ok_or_else(|| invalid("group census root"))?.id => None,
             _ => return Err(invalid("owned plain layer requires genuine staged Surface")),
         };
-        if geometry || isolated_group {
-            if let Some(mask) = &layer.mask {
-                w.visit()?;
-                if isolated_group {
-                    // Native payload stays in the original Sink receipts. Visit
-                    // every retained map entry, including padded/default tiles.
-                    for _ in mask.surface.tiles() {
-                        control.check().map_err(|_| IoError::Cancelled)?;
-                        w.visit()?;
-                    }
+        if (geometry || isolated_group)
+            && let Some(mask) = &layer.mask
+        {
+            w.visit()?;
+            if isolated_group {
+                // Native payload stays in the original Sink receipts. Visit
+                // every retained map entry, including padded/default tiles.
+                for _ in mask.surface.tiles() {
+                    control.check().map_err(|_| IoError::Cancelled)?;
+                    w.visit()?;
                 }
-                w.add(
-                    size_of::<LayerMask>()
-                        .checked_add(size_of::<Surface>() + 128)
-                        .and_then(|n| mask.surface.tile_count().checked_mul(256).and_then(|m| n.checked_add(m)))
-                        .and_then(|n| mask.surface.default_bytes().len().checked_mul(2).and_then(|d| n.checked_add(d)))
-                        .ok_or_else(|| invalid("geometry mask metadata"))?,
-                )?;
             }
+            w.add(
+                size_of::<LayerMask>()
+                    .checked_add(size_of::<Surface>() + 128)
+                    .and_then(|n| mask.surface.tile_count().checked_mul(256).and_then(|m| n.checked_add(m)))
+                    .and_then(|n| mask.surface.default_bytes().len().checked_mul(2).and_then(|d| n.checked_add(d)))
+                    .ok_or_else(|| invalid("geometry mask metadata"))?,
+            )?;
         }
         w.string(&layer.name)?;
         w.vector(&layer.effects.items)?;
@@ -608,7 +619,7 @@ pub(in crate::xcf_import) fn measure_analytic_geometry(
     {
         return Err(invalid("analytic geometry census shape"));
     }
-    measure_inner(doc, budget, control, false, true, false, false,std::iter::empty())
+    measure_inner(doc, budget, control, false, true, false, false, std::iter::empty())
 }
 
 /// Exact one-level isolated Normal group storage census. The sealed source
@@ -645,7 +656,7 @@ pub(in crate::xcf_import) fn measure_isolated_normal_group(
             return Err(invalid("isolated group census child"));
         }
     }
-    measure_inner(doc, budget, control, false, false, true, false,std::iter::empty())
+    measure_inner(doc, budget, control, false, false, true, false, std::iter::empty())
 }
 
 #[cfg(test)]
@@ -655,7 +666,9 @@ mod group_tests;
 /// Fixed one-level Gaussian group storage only. Eligibility belongs to the
 /// sealed original-source selector and the independent CURRENT renderer.
 pub(in crate::xcf_import) fn measure_isolated_gaussian_group(
-    doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>,
+    doc: &Document,
+    budget: &photocraft_xcf::Budget<'_>,
+    control: &Interrupt<'_>,
 ) -> Result<Census, IoError> {
     use photocraft_doc::xcf_filters::{ExactNumber, FilterValue};
     control.check().map_err(|_| IoError::Cancelled)?;
@@ -664,11 +677,21 @@ pub(in crate::xcf_import) fn measure_isolated_gaussian_group(
     let top = doc.layers.get(1).ok_or_else(|| invalid("Gaussian group census top"))?;
     let LayerContent::Group(group) = &top.content else { return Err(invalid("Gaussian group census tree")) };
     let state = doc.xcf_state.as_ref().ok_or_else(|| invalid("Gaussian group census state"))?;
-    if doc.layers.len() != 2 || doc.size != Size::new(16, 12) || doc.mode != ColorMode::Rgb || doc.depth != SampleType::F32
-        || !matches!(bottom.content, LayerContent::Raster(_)) || bottom.mask.is_some() || top.mask.is_none()
-        || group.children.len() != 2 || group.artboard.is_some()
-        || state.items.len() != 6 || state.filter_stacks.len() != 1 || state.filter_masks.len() != 1
-    { return Err(invalid("Gaussian group census closed shape")); }
+    if doc.layers.len() != 2
+        || doc.size != Size::new(16, 12)
+        || doc.mode != ColorMode::Rgb
+        || doc.depth != SampleType::F32
+        || !matches!(bottom.content, LayerContent::Raster(_))
+        || bottom.mask.is_some()
+        || top.mask.is_none()
+        || group.children.len() != 2
+        || group.artboard.is_some()
+        || state.items.len() != 6
+        || state.filter_stacks.len() != 1
+        || state.filter_masks.len() != 1
+    {
+        return Err(invalid("Gaussian group census closed shape"));
+    }
     for child in &group.children {
         control.check().map_err(|_| IoError::Cancelled)?;
         budget.consume_work(1, "Gaussian group child census").map_err(accounting_error)?;
@@ -678,10 +701,14 @@ pub(in crate::xcf_import) fn measure_isolated_gaussian_group(
     }
     let stack = state.filter_stacks.first().ok_or_else(|| invalid("Gaussian group census stack"))?;
     let node = stack.nodes.first().ok_or_else(|| invalid("Gaussian group census node"))?;
-    if stack.owner != photocraft_doc::item_identity::ItemRef::Layer(top.id) || stack.nodes.len() != 1
-        || node.arguments.len() != 5 || !node.auxiliary.is_empty()
+    if stack.owner != photocraft_doc::item_identity::ItemRef::Layer(top.id)
+        || stack.nodes.len() != 1
+        || node.arguments.len() != 5
+        || !node.auxiliary.is_empty()
         || state.filter_masks.iter().any(|mask| mask.bounds != doc.bounds())
-    { return Err(invalid("Gaussian group census filter shape")); }
+    {
+        return Err(invalid("Gaussian group census filter shape"));
+    }
     for argument in &node.arguments {
         control.check().map_err(|_| IoError::Cancelled)?;
         budget.consume_work(1, "Gaussian group argument census").map_err(accounting_error)?;
@@ -692,5 +719,10 @@ pub(in crate::xcf_import) fn measure_isolated_gaussian_group(
     // Existing threshold storage is the bounded flat-node/filter-mask census;
     // existing isolated storage is the four-header/three-store tree census.
     // Their original entry points keep their original flags and shape gates.
-    measure_inner(doc, budget, control, true, false, true, false,std::iter::empty())
+    measure_inner(doc, budget, control, true, false, true, false, std::iter::empty())
+}
+
+#[cfg(test)]
+pub(in crate::xcf_import) fn measure_plain_for_test(doc: &Document, budget: &photocraft_xcf::Budget<'_>, control: &Interrupt<'_>) -> Result<Census, IoError> {
+    measure(doc, budget, control)
 }

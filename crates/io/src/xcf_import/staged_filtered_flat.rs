@@ -7,26 +7,40 @@ pub(super) fn work(i: &Interrupt<'_>, b: &photocraft_xcf::Budget<'_>, n: u64) ->
     i.check().map_err(|_| IoError::Cancelled)
 }
 pub(super) fn hint<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &photocraft_xcf::Budget<'_>) -> Result<bool, IoError> {
-    if !(1..=4096).contains(&f.layers.len()) || f.layers.len()==1 && f.layers.first().is_none_or(|d|d.effects.len()<2) {
+    if !(1..=4096).contains(&f.layers.len()) || f.layers.len() == 1 && f.layers.first().is_none_or(|d| d.effects.len() < 2) {
         return Ok(false);
     }
     // Preserve the exact existing staged_source::point_stack::hint identity
     // before new mixed-name claims. The old selector/strict qualifier remains
     // final; this is metadata identity, never an acceptance/native fallback.
-    work(i,b,8)?;
-    if f.layers.len()==1 && f.layers.first().is_some_and(|d| !d.effects.is_empty()
-        && (d.blend_space,d.composite_space,d.composite_mode)==(0,2,1)) {
+    work(i, b, 8)?;
+    if f.layers.len() == 1 && f.layers.first().is_some_and(|d| !d.effects.is_empty() && (d.blend_space, d.composite_space, d.composite_mode) == (0, 2, 1)) {
         return Ok(false);
     }
-    let mut count=0usize;
-    let mut known=false;
+    let mut count = 0usize;
+    let mut known = false;
     for d in &f.layers {
-        work(i,b,8)?;
-        count=count.checked_add(d.effects.len()).ok_or_else(||IoError::Unsupported("filtered flat node count".into()))?;
-        if count>4096 {return Err(IoError::Unsupported("filtered flat node count".into()));}
+        work(i, b, 8)?;
+        count = count.checked_add(d.effects.len()).ok_or_else(|| IoError::Unsupported("filtered flat node count".into()))?;
+        if count > 4096 {
+            return Err(IoError::Unsupported("filtered flat node count".into()));
+        }
         for e in &d.effects {
-            work(i,b,e.operation.len() as u64+1)?;
-            known |= matches!(e.operation.as_str(),"gimp:semi-flatten"|"gegl:hue-chroma"|"gegl:vibrance"|"gegl:exposure"|"gegl:invert-linear"|"gegl:invert-gamma"|"gegl:brightness-contrast"|"gegl:levels"|"gegl:color-temperature"|"gegl:sepia"|"gegl:alien-map");
+            work(i, b, e.operation.len() as u64 + 1)?;
+            known |= matches!(
+                e.operation.as_str(),
+                "gimp:semi-flatten"
+                    | "gegl:hue-chroma"
+                    | "gegl:vibrance"
+                    | "gegl:exposure"
+                    | "gegl:invert-linear"
+                    | "gegl:invert-gamma"
+                    | "gegl:brightness-contrast"
+                    | "gegl:levels"
+                    | "gegl:color-temperature"
+                    | "gegl:sepia"
+                    | "gegl:alien-map"
+            );
         }
     }
     Ok(known)
@@ -36,16 +50,19 @@ pub(super) fn root_domain<P>(d: &Drawable<P>, i: &Interrupt<'_>, b: &photocraft_
     if d.effects.is_empty() {
         return Ok(None);
     }
-    if d.effects.len()>1024 {return Err(IoError::Unsupported("filtered flat per-stack node count".into()));}
-    let mut first=None;
+    if d.effects.len() > 1024 {
+        return Err(IoError::Unsupported("filtered flat per-stack node count".into()));
+    }
+    let mut first = None;
     for e in &d.effects {
-        work(i,b,e.operation.len() as u64+128+crate::xcf_filters::mixed_stock_source::parsing_work(&e.operation))?;
-        let family=crate::xcf_filters::filtered_flat_source_family(e).ok_or_else(||IoError::Unsupported("filtered flat leaf envelope".into()))?;
-        if family==crate::xcf_filters::PointReplaceFamily::MixedExposure
-            && !crate::xcf_filters::mixed_exposure_source::source_geometry(d.width,d.height) {
+        work(i, b, e.operation.len() as u64 + 128 + crate::xcf_filters::mixed_stock_source::parsing_work(&e.operation))?;
+        let family = crate::xcf_filters::filtered_flat_source_family(e).ok_or_else(|| IoError::Unsupported("filtered flat leaf envelope".into()))?;
+        if family == crate::xcf_filters::PointReplaceFamily::MixedExposure && !crate::xcf_filters::mixed_exposure_source::source_geometry(d.width, d.height) {
             return Err(IoError::Unsupported("mixed Exposure source geometry".into()));
         }
-        if first.is_none(){first=Some(NeighborhoodDomain::PointReplace(family));}
+        if first.is_none() {
+            first = Some(NeighborhoodDomain::PointReplace(family));
+        }
     }
     Ok(first)
 }
@@ -69,14 +86,20 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
     {
         return Err(IoError::Unsupported("filtered flat source header".into()));
     }
-    let mut nodes=0usize;
+    let mut nodes = 0usize;
     for d in &f.layers {
-        work(i,b,1)?;
-        if d.effects.len()>1024 {return Err(IoError::Unsupported("filtered flat per-stack node count".into()));}
-        nodes=nodes.checked_add(d.effects.len()).ok_or_else(||IoError::Unsupported("filtered flat node count".into()))?;
-        if nodes>4096 {return Err(IoError::Unsupported("filtered flat node count".into()));}
+        work(i, b, 1)?;
+        if d.effects.len() > 1024 {
+            return Err(IoError::Unsupported("filtered flat per-stack node count".into()));
+        }
+        nodes = nodes.checked_add(d.effects.len()).ok_or_else(|| IoError::Unsupported("filtered flat node count".into()))?;
+        if nodes > 4096 {
+            return Err(IoError::Unsupported("filtered flat node count".into()));
+        }
     }
-    if nodes==0 || f.layers.len()==1 && nodes<2 {return Err(IoError::Unsupported("filtered flat closed topology".into()));}
+    if nodes == 0 || f.layers.len() == 1 && nodes < 2 {
+        return Err(IoError::Unsupported("filtered flat closed topology".into()));
+    }
     let mut filtered = 0usize;
     for d in &f.layers {
         work(i, b, 64)?;
@@ -117,9 +140,11 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
         if domain.is_some() {
             filtered += 1;
             for e in &d.effects {
-                work(i,b,8)?;
-                let m=e.mask.as_ref().ok_or_else(||IoError::Unsupported("filtered flat physical mask".into()))?;
-                if !mask(m,f,i,b)? {return Err(IoError::Unsupported("filtered flat mask".into()));}
+                work(i, b, 8)?;
+                let m = e.mask.as_ref().ok_or_else(|| IoError::Unsupported("filtered flat physical mask".into()))?;
+                if !mask(m, f, i, b)? {
+                    return Err(IoError::Unsupported("filtered flat mask".into()));
+                }
             }
         }
     }
@@ -166,6 +191,8 @@ fn scan_work(i: &Interrupt<'_>, b: Option<&photocraft_xcf::Budget<'_>>, n: usize
     }
     i.check().map_err(|_| IoError::Cancelled)
 }
+// Keep the fixed parameter contract: source identity, limits, control and original budget remain explicit.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn native<P: ExactParsedPlane>(
     p: &P,
     sample: Sample,
@@ -219,21 +246,29 @@ mod tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_filtered_flat_activity_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod activity_tests;
 
 #[cfg(test)]
 use crate::xcf_filters::PointReplaceFamily;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="staged_filtered_flat_ordered_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "staged_filtered_flat_ordered_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod ordered_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_filtered_flat_exposure_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod exposure_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_filtered_flat_invert_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod invert_tests;
 
 #[path = "staged_filtered_flat_opacity.rs"]
@@ -241,16 +276,24 @@ pub(super) mod opacity;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_filtered_flat_opacity_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod opacity_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_filtered_flat_affine_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod affine_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_filtered_flat_stock_rgb_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod stock_rgb_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_filtered_flat_hsl_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod hsl_tests;

@@ -141,8 +141,8 @@ fn native<P: ExactParsedPlane>(p: &P, channels: usize, empty: bool, ctl: &Interr
         }
         seen = seen.checked_add(b.len()).filter(|n| *n <= size).ok_or_else(|| IoError::Unsupported("assigned Median native excess".into()))?;
         poll(ctl, budget, b.len() as u64)?;
-        for (index, word) in b.chunks_exact(4).enumerate() {
-            let v = f32::from_ne_bytes(word.try_into().map_err(|_| IoError::Unsupported("assigned Median native word".into()))?);
+        for (index, word) in b.as_chunks::<4>().0.iter().enumerate() {
+            let v = f32::from_ne_bytes(*word);
             valid &= v.is_finite() && if empty { v == 0.0 } else { index % channels != channels - 1 || (0.0..=1.0).contains(&v) };
         }
         Ok(())
@@ -156,4 +156,6 @@ fn native<P: ExactParsedPlane>(p: &P, channels: usize, empty: bool, ctl: &Interr
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "assigned_median_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod tests;

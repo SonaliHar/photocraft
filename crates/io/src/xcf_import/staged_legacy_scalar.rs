@@ -146,8 +146,8 @@ fn hdr_clip<P: ExactParsedPlane>(file: &XcfFile<P>, ctl: &Interrupt<'_>, budget:
         return Ok(false);
     }
     visit(plane, 768, 16, ctl, budget, |bytes| {
-        for (index, raw) in bytes.chunks_exact(4).enumerate() {
-            let value = f32::from_ne_bytes(raw.try_into().map_err(|_| IoError::Unsupported("RGB clip native word".into()))?);
+        for (index, raw) in bytes.as_chunks::<4>().0.iter().enumerate() {
+            let value = f32::from_ne_bytes(*raw);
             if !value.is_finite() || index % 4 == 3 && value.to_bits() != 1.0f32.to_bits() {
                 return Ok(false);
             }
@@ -231,10 +231,10 @@ fn unpremultiply<P: ExactParsedPlane>(file: &XcfFile<P>, ctl: &Interrupt<'_>, bu
         return Ok(false);
     }
     visit(plane, 768, 16, ctl, budget, |bytes| {
-        for raw in bytes.chunks_exact(16) {
+        for raw in bytes.as_chunks::<16>().0 {
             let mut rgba = [0f32; 4];
-            for (value, word) in rgba.iter_mut().zip(raw.chunks_exact(4)) {
-                *value = f32::from_ne_bytes(word.try_into().map_err(|_| IoError::Unsupported("Unpremultiply native word".into()))?);
+            for (value, word) in rgba.iter_mut().zip(raw.as_chunks::<4>().0) {
+                *value = f32::from_ne_bytes(*word);
             }
             let [r, g, b, a] = rgba;
             if rgba.iter().any(|v| !v.is_finite())

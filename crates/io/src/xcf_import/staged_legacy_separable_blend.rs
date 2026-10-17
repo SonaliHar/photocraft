@@ -102,8 +102,8 @@ pub(super) fn native_layout<P: ExactParsedPlane>(
             seen =
                 seen.checked_add(block.len() as u64).filter(|n| *n <= expected).ok_or_else(|| IoError::Unsupported("legacy separable native excess".into()))?;
             pay(ctl, budget, block.len() as u64)?;
-            for raw in block.chunks_exact(4) {
-                let word = <[u8; 4]>::try_from(raw).map_err(|_| IoError::Unsupported("legacy separable native word".into()))?;
+            for raw in block.as_chunks::<4>().0 {
+                let word = *raw;
                 let value = f32::from_ne_bytes(word);
                 valid &= value.is_finite() && (0.0..=1.0).contains(&value);
             }

@@ -3,7 +3,9 @@ use super::staged_masked_filtered_flat::{MaskClass, mask_class};
 use super::*;
 use crate::xcf_import::staged_filtered_flat::work;
 pub(super) fn select<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b: &photocraft_xcf::Budget<'_>) -> Result<SelectedStagedFamily, IoError> {
-    if super::staged_normal_hierarchy_quantized::exact_depth(f){return Ok(SelectedStagedFamily::PlainQuantizedNormalHierarchy);}
+    if super::staged_normal_hierarchy_quantized::exact_depth(f) {
+        return Ok(SelectedStagedFamily::PlainQuantizedNormalHierarchy);
+    }
     if f.version != 22 {
         return Ok(SelectedStagedFamily::NormalHierarchy);
     }
@@ -46,9 +48,11 @@ pub(super) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
     if select(f, i, b)? != SelectedStagedFamily::MaskedNormalHierarchy {
         return Err(IoError::Unsupported("hierarchy coverage Source requires nonempty".into()));
     }
-    super::staged_normal_hierarchy::validate_source_body(f, i, b, true,false)
+    super::staged_normal_hierarchy::validate_source_body(f, i, b, true, false)
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "staged_normal_hierarchy_masked_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;

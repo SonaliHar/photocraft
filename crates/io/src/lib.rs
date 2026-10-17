@@ -53,20 +53,24 @@ pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};
 mod kra;
 pub mod linked;
 mod multichannel_map;
+mod native_open;
 pub mod native_plane_store;
 mod native_save;
-mod native_open;
 pub use native_open::import_native_stream_candidate;
 mod native_save_model;
 mod native_scene_preview;
+pub use native_save::{
+    NativeCensusVisits, NativeCurrentCensus, NativeModelCensus, NativePayloadCensus, retained_native_model_census, retained_native_model_census_with_work,
+    retained_native_payload_census, retained_native_payload_census_with_work,
+};
+pub use native_save::{
+    NativeSaveLimits, NativeSaveResult, PreparedNativeStream, prepare_native_stream, retained_native_input_bytes, retained_native_model_bytes,
+    retained_native_payload_bytes, save_native_bytes, save_native_stream,
+};
 #[cfg(not(target_arch = "wasm32"))]
 pub use native_save::{save_native_path, save_native_path_guarded, save_native_path_guarded_with_resident_guard};
-pub use native_save::{NativeSaveLimits, NativeSaveResult, PreparedNativeStream, prepare_native_stream, retained_native_input_bytes, retained_native_model_bytes, retained_native_payload_bytes, save_native_bytes, save_native_stream};
-pub use native_save::{
-    NativeCensusVisits, NativeCurrentCensus, NativeModelCensus, NativePayloadCensus, retained_native_model_census, retained_native_payload_census,
-};
-mod origin;
 mod ora;
+mod origin;
 pub use ora::losses as ora_losses;
 pub mod pattern_map;
 pub mod pdf;
@@ -93,63 +97,66 @@ mod xcf_export;
 mod xcf_export_loss;
 mod xcf_export_precision;
 mod xcf_filters;
-pub use xcf_filters::{CurvesMappingLimits, CurvesMappingRequirements, MappedCurvesSource, map_retained_curves_source};
-pub use xcf_filters::{LevelsMappingLimits, LevelsMappingRequirements, MappedLevelsSource, map_retained_levels_source};
-pub use xcf_filters::{
-    ExceptionalGraphProvenance, GraphOuterMetadata, GraphSourceAuthority, GraphSourceLimits, GraphSourceRequirements,
-    MappedGraphSource, map_exceptional_graph_source,
-};
 pub use xcf_filters::{
     BRIGHTNESS_CONTRAST_SCHEMA, BRIGHTNESS_CONTRAST_SCHEMA_308, BrightnessContrastMappingLimits, BrightnessContrastMappingRequirements,
-    BrightnessContrastSourceIdentity, MappedBrightnessContrastSource, map_retained_brightness_contrast_source,
-    HUE_SATURATION_SCHEMA, HueSaturationMappingLimits, HueSaturationMappingRequirements,
-    HueSaturationSourceIdentity, MappedHueSaturationSource, map_retained_hue_saturation_source,
-    SceneChannelBinding, SceneChannelLimits, SceneChannelRequirements, SceneChannelStorage,
-    StoredSceneChannel, StoredSceneEffect, assemble_scene_channel_storage,
-    ConfiguredEffectBinding, ConfiguredEffectIdentity, ConfiguredSceneStacks,
-    SceneConfiguredLimits, SceneConfiguredRequirements, map_scene_channel_configured,
+    BrightnessContrastSourceIdentity, ConfiguredEffectBinding, ConfiguredEffectIdentity, ConfiguredSceneStacks, HUE_SATURATION_SCHEMA,
+    HueSaturationMappingLimits, HueSaturationMappingRequirements, HueSaturationSourceIdentity, MappedBrightnessContrastSource, MappedHueSaturationSource,
+    SceneChannelBinding, SceneChannelLimits, SceneChannelRequirements, SceneChannelStorage, SceneConfiguredLimits, SceneConfiguredRequirements,
+    StoredSceneChannel, StoredSceneEffect, assemble_scene_channel_storage, map_retained_brightness_contrast_source, map_retained_hue_saturation_source,
+    map_scene_channel_configured,
 };
+pub use xcf_filters::{CurvesMappingLimits, CurvesMappingRequirements, MappedCurvesSource, map_retained_curves_source};
+pub use xcf_filters::{
+    ExceptionalGraphProvenance, GraphOuterMetadata, GraphSourceAuthority, GraphSourceLimits, GraphSourceRequirements, MappedGraphSource,
+    map_exceptional_graph_source,
+};
+pub use xcf_filters::{LevelsMappingLimits, LevelsMappingRequirements, MappedLevelsSource, map_retained_levels_source};
 #[cfg(test)]
 #[path = "../tests/common/xcf.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 pub(crate) mod xcf_fixture;
-pub mod xcf_graphs;
 pub mod xcf_graph_candidate;
-pub use xcf_filters::graph_argument_candidate;
-pub use xcf_filters::scene_channel_preparation_candidate;
-pub use xcf_filters::scene_channel_input_candidate;
-pub use xcf_filters::colorize_source;
-pub use xcf_filters::stretch_contrast_source;
+pub mod xcf_graphs;
 pub use xcf_filters::checkerboard_source;
+pub use xcf_filters::colorize_source;
+pub use xcf_filters::graph_argument_candidate;
+pub use xcf_filters::scene_channel_input_candidate;
+pub use xcf_filters::scene_channel_preparation_candidate;
+pub use xcf_filters::stretch_contrast_source;
 pub use xcf_filters::{
-    STRETCH_HSV_SCHEMA, MappedStretchHsvSource, StretchHsvMappingLimits,
-    StretchHsvMappingRequirements, StretchHsvSourceIdentity, map_retained_stretch_hsv_source,
+    MappedStretchHsvSource, STRETCH_HSV_SCHEMA, StretchHsvMappingLimits, StretchHsvMappingRequirements, StretchHsvSourceIdentity,
+    map_retained_stretch_hsv_source,
 };
 pub mod xcf_import;
-pub use xcf_import::{OwnedPlainXcfImport, import_owned_staged_plain_bytes, import_owned_staged_plain_bytes_in_quota, import_owned_staged_plain_from_reader_in_quota};
-pub use xcf_import::{OwnedThresholdAlphaXcfImport, import_owned_staged_threshold_alpha_bytes_in_quota};
-pub use xcf_import::{OwnedHistogramThresholdXcfImport, OwnedPointXcfImport, OwnedAnalyticGeometryXcfImport, OwnedIsolatedNormalGroupXcfImport, OwnedIsolatedGaussianGroupXcfImport};
-pub use xcf_import::OwnedSeparableBlendXcfImport;
 pub use xcf_import::OwnedFilteredFlatXcfImport;
 pub use xcf_import::OwnedMaskedFilteredFlatXcfImport;
 pub use xcf_import::OwnedNormalHierarchyXcfImport;
-pub use xcf_import::{OwnedXcfImport, import_owned_xcf_bytes_in_quota, import_owned_xcf_from_reader_in_quota};
+pub use xcf_import::OwnedSeparableBlendXcfImport;
 pub use xcf_import::{
-    AssembledStoredChannel, CorrespondenceRequirements, NamespaceBacking, StoredChannelCorrespondence, assemble_owned_stored_channel,
+    AssembledLayerSelection, LayerCorrespondenceRequirements, LayerCurrentLimits, LayerCurrentRequirements, LayerOriginalPlanesProof, LayerProfilePolicy,
+    LayerProfileRequirements, SelectedCurrentLayer, assemble_owned_layer_selection, assemble_owned_layer_selection_with_outer_policy,
+    layer_profile_requirements, select_layer_current, select_layer_current_with_profile_policy,
 };
+pub use xcf_import::{AssembledStoredChannel, CorrespondenceRequirements, NamespaceBacking, StoredChannelCorrespondence, assemble_owned_stored_channel};
 pub use xcf_import::{
     CurrentProfilePolicy, SelectedCurrentChannel, SelectedLimits, SelectedProfileRequirements, SelectedRequirements, select_current,
     select_current_with_profile_policy, selected_profile_requirements,
 };
 pub use xcf_import::{
-    LayerOuterPolicy, LayerSelectionCandidate, LayerSelectionIds, LayerSelectionLimits, LayerSelectionNamespace, LayerSelectionRequirements,
-    LAYER_SELECTION_EPOCH, map_layer_selection, map_layer_selection_with_outer_policy,
-};
-pub use xcf_import::{
-    AssembledLayerSelection, LayerCorrespondenceRequirements, LayerCurrentLimits, LayerCurrentRequirements, LayerOriginalPlanesProof,
-    LayerProfilePolicy, LayerProfileRequirements, SelectedCurrentLayer, assemble_owned_layer_selection,
-    assemble_owned_layer_selection_with_outer_policy, layer_profile_requirements, select_layer_current, select_layer_current_with_profile_policy,
+    LAYER_SELECTION_EPOCH, LayerOuterPolicy, LayerSelectionCandidate, LayerSelectionIds, LayerSelectionLimits, LayerSelectionNamespace,
+    LayerSelectionRequirements, map_layer_selection, map_layer_selection_with_outer_policy,
 };
 pub use xcf_import::{LayerStorageRequirements, PrivateLayerCurrent, assemble_private_layer_current, layer_storage_requirements};
+pub use xcf_import::{
+    OwnedAnalyticGeometryXcfImport, OwnedHistogramThresholdXcfImport, OwnedIsolatedGaussianGroupXcfImport, OwnedIsolatedNormalGroupXcfImport,
+    OwnedPointXcfImport,
+};
+pub use xcf_import::{
+    OwnedPlainXcfImport, import_owned_staged_plain_bytes, import_owned_staged_plain_bytes_in_quota, import_owned_staged_plain_from_reader_in_quota,
+};
+pub use xcf_import::{OwnedThresholdAlphaXcfImport, import_owned_staged_threshold_alpha_bytes_in_quota};
+pub use xcf_import::{OwnedXcfImport, import_owned_xcf_bytes_in_quota, import_owned_xcf_from_reader_in_quota};
 mod xcf_link_sources;
 pub mod xcf_modified_sources;
 mod xcf_ordinary_source;
@@ -381,7 +388,9 @@ pub fn import_with_svg_group_depth_and_interrupt(
         r.origin = ImportOrigin::detected(bytes);
     }
     r.source_read_only |= r.origin.is_read_only();
-    if r.source_read_only {r.origin.source_policy=SourcePolicy::ReadOnlySource;}
+    if r.source_read_only {
+        r.origin.source_policy = SourcePolicy::ReadOnlySource;
+    }
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
     ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -398,7 +407,14 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, m
     if has_extension(name, photocraft_format::EXTENSION) || photocraft_format::is_pcraft(bytes) {
         let document = photocraft_format::load_from_bytes_with_interrupt(bytes, &Default::default(), ctl)?;
         xcf_export::active_implicit_profile(&document).map_err(|e| IoError::Unsupported(format!("native working profile: {e}")))?;
-        return Ok(ImportResult { document, warnings: Vec::new(), origin: ImportOrigin::writable(ImportFormat::Pcraft), assessment: None , source_read_only: (ImportOrigin::writable(ImportFormat::Pcraft)).is_read_only(), preview_only: false});
+        return Ok(ImportResult {
+            document,
+            warnings: Vec::new(),
+            origin: ImportOrigin::writable(ImportFormat::Pcraft),
+            assessment: None,
+            source_read_only: (ImportOrigin::writable(ImportFormat::Pcraft)).is_read_only(),
+            preview_only: false,
+        });
     }
     if is_psd(bytes) {
         // A merged image the import reads is decoded with the parse: a ZIP one is inflated once.
@@ -412,10 +428,17 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, m
         psd_import::check_group_depth(&file)?;
         ctl.check().map_err(|_| IoError::Cancelled)?;
         ctl.progress(0.05);
-        let (mut document, warnings) = psd_import::psd_to_document_decoded(&file, ctl, merged).ok_or(IoError::Cancelled)?;
+        let (mut document, warnings) = psd_import::psd_to_document_decoded(&file, ctl, merged)?.ok_or(IoError::Cancelled)?;
         document.name = name.to_string();
         text_import::prepare(&mut document)?;
-        return Ok(ImportResult { document, warnings, origin: ImportOrigin::detected(bytes), assessment: None , source_read_only: (ImportOrigin::detected(bytes)).is_read_only(), preview_only: false});
+        return Ok(ImportResult {
+            document,
+            warnings,
+            origin: ImportOrigin::detected(bytes),
+            assessment: None,
+            source_read_only: (ImportOrigin::detected(bytes)).is_read_only(),
+            preview_only: false,
+        });
     }
     if affinity::is_affinity(bytes) || affinity::has_extension(name) {
         return affinity::import(name, bytes);
@@ -514,10 +537,6 @@ pub(crate) fn with_span<R>(ctl: &photocraft_raster::Interrupt, lo: f32, hi: f32,
     f(&photocraft_raster::Interrupt::new(&cancelled, &progress))
 }
 
-/// Where a .pcraft save's progress stands once its thumbnail, then its 1024 px composite preview,
-/// are rendered (the bundle itself is written after them).
-
-
 /// The share of a PSD/PSB export spent converting the document (layers, then the composite)
 /// before its bytes are assembled: about 2.7 s of 3.0 s for a 24 MP, 5-layer RGB/8 document.
 const PSD_MODEL_DONE: f32 = 0.9;
@@ -544,46 +563,60 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
         return pdf::export(doc);
     }
     if ext == photocraft_format::EXTENSION {
-        let mut limits=NativeSaveLimits::default();
-        let leaf=name_or_ext.contains(['/', '\\', '.']).then(|| name_or_ext.rsplit(['/', '\\']).next().unwrap_or(name_or_ext));
-        if leaf.is_some_and(|name| !name.is_empty() && name!=doc.name) {
+        let mut limits = NativeSaveLimits::default();
+        let leaf = name_or_ext.contains(['/', '\\', '.']).then(|| name_or_ext.rsplit(['/', '\\']).next().unwrap_or(name_or_ext));
+        if leaf.is_some_and(|name| !name.is_empty() && name != doc.name) {
             // The upstream filename-name behavior needs a private snapshot. Admit
             // its known model/map copies before cloning, retaining shared payloads.
-            let retained=retained_native_input_bytes(doc,limits.preparation,ctl)?;
-            let model=retained_native_model_bytes(doc,limits.preparation,ctl)?;
-            let maps=native_save::retained_native_map_bytes(doc,limits.preparation,ctl)?;
-            let copy=model.checked_add(maps)
-                .and_then(|n|n.checked_add(name_or_ext.len())).ok_or_else(||IoError::Unsupported("native name snapshot size overflow".into()))?;
-            if retained.checked_add(copy).is_none_or(|n|n>limits.preparation.resident_bytes) {
+            let retained = retained_native_input_bytes(doc, limits.preparation, ctl)?;
+            let model = retained_native_model_bytes(doc, limits.preparation, ctl)?;
+            let maps = native_save::retained_native_map_bytes(doc, limits.preparation, ctl)?;
+            let copy = model
+                .checked_add(maps)
+                .and_then(|n| n.checked_add(name_or_ext.len()))
+                .ok_or_else(|| IoError::Unsupported("native name snapshot size overflow".into()))?;
+            if retained.checked_add(copy).is_none_or(|n| n > limits.preparation.resident_bytes) {
                 return Err(IoError::Unsupported("native name snapshot exceeds standard preparation budget".into()));
             }
-            limits.preparation.resident_bytes=limits.preparation.resident_bytes.checked_sub(copy)
-                .ok_or_else(||IoError::Unsupported("native name snapshot exceeds standard preparation budget".into()))?;
-            ctl.check().map_err(|_|IoError::Cancelled)?;
+            limits.preparation.resident_bytes = limits
+                .preparation
+                .resident_bytes
+                .checked_sub(copy)
+                .ok_or_else(|| IoError::Unsupported("native name snapshot exceeds standard preparation budget".into()))?;
+            ctl.check().map_err(|_| IoError::Cancelled)?;
         }
         let named = named_for_file(doc, name_or_ext);
         let (bytes, result) = save_native_bytes(named.as_ref(), limits, ctl)?;
-        let mut warnings=result.warnings;
-        warnings.extend(xcf_export_loss::warnings_for(doc,xcf_export_loss::Destination::Native));
+        let mut warnings = result.warnings;
+        warnings.extend(xcf_export_loss::warnings_for(doc, xcf_export_loss::Destination::Native));
         return Ok(ExportResult { bytes, warnings });
     }
     if ext == "psd" || ext == "psb" {
-        let precision = xcf_export_precision::preflight(doc, if opts.force_psb || ext == "psb" { xcf_export_precision::Destination::Psb } else { xcf_export_precision::Destination::Psd })?;
+        let precision = xcf_export_precision::preflight(
+            doc,
+            if opts.force_psb || ext == "psb" { xcf_export_precision::Destination::Psb } else { xcf_export_precision::Destination::Psd },
+        )?;
         require_layered_filter_export(doc)?;
         xcf_export::effective_icc(doc).map_err(|error| IoError::Unsupported(format!("cannot represent imported sample interpretation in PSD: {error}")))?;
         let o = PsdExportOptions { force_psb: opts.force_psb || ext == "psb", maximize_compatibility: opts.psd_maximize_compatibility, ..Default::default() };
         // The checked ink serializer converts from exact original samples once,
         // including PSD's inverted ink encoding. Pre-staging here would round first.
         let converted = if doc.mode == photocraft_doc::ColorMode::Multichannel { None } else { wide_export::psd_document(doc)? };
-        let (mut file, mut warnings) = with_span(ctl, 0.0, PSD_MODEL_DONE, |ctl| psd_export::document_to_psd_interruptible(converted.as_ref().unwrap_or(doc), &o, ctl))?;
+        let (mut file, mut warnings) =
+            with_span(ctl, 0.0, PSD_MODEL_DONE, |ctl| psd_export::document_to_psd_interruptible(converted.as_ref().unwrap_or(doc), &o, ctl))?;
         if converted.is_some() {
             warnings.push("PSD export converts U32/F64 samples to F32; save as .pcraft to retain exact source samples".into());
         }
-        if !doc.metadata.text.is_empty() { warnings.push("free-form text metadata is not supported by PSD/PSB; it will be dropped".into()); }
+        if !doc.metadata.text.is_empty() {
+            warnings.push("free-form text metadata is not supported by PSD/PSB; it will be dropped".into());
+        }
         if opts.image_previews {
-            ctl.check().map_err(|_|IoError::Cancelled)?;
+            ctl.check().map_err(|_| IoError::Cancelled)?;
             match psd_thumbnail::resource(doc) {
-                Ok(resource) => {let at=file.resources.iter().position(|r|r.id==photocraft_psd::resources::ids::VERSION_INFO).unwrap_or(file.resources.len());file.resources.insert(at,resource);},
+                Ok(resource) => {
+                    let at = file.resources.iter().position(|r| r.id == photocraft_psd::resources::ids::VERSION_INFO).unwrap_or(file.resources.len());
+                    file.resources.insert(at, resource);
+                }
                 Err(error) => warnings.push(format!("image preview not saved: {error}")),
             }
         }
@@ -597,16 +630,26 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
     }
     let format = photocraft_codecs::from_extension(&ext).ok_or_else(|| IoError::UnknownFormat(name_or_ext.to_string()))?;
     let layered = format == photocraft_codecs::Format::Tiff && opts.tiff_layers && tiff_layers::would_write_layers(doc);
-    let precision = xcf_export_precision::preflight(doc, if layered { xcf_export_precision::Destination::LayeredTiff } else { xcf_export_precision::Destination::Flat(format) })?;
+    let precision = xcf_export_precision::preflight(
+        doc,
+        if layered { xcf_export_precision::Destination::LayeredTiff } else { xcf_export_precision::Destination::Flat(format) },
+    )?;
     if layered {
         require_layered_filter_export(doc)?;
         let mut result = tiff_layers::export_layered(doc, opts, ctl)?;
-        result.warnings.extend(xcf_export_loss::warnings_for(doc,if tiff_layers::layered_mode(doc){xcf_export_loss::Destination::Layered}else{xcf_export_loss::Destination::Flat}));
+        result.warnings.extend(xcf_export_loss::warnings_for(
+            doc,
+            if tiff_layers::layered_mode(doc) { xcf_export_loss::Destination::Layered } else { xcf_export_loss::Destination::Flat },
+        ));
         result.warnings.extend(precision);
         return Ok(result);
     }
-    let mut result = flat::export_flat_with(doc, format, opts, ctl)?;
-    result.warnings.extend(xcf_export_loss::warnings_for(doc, xcf_export_loss::Destination::Flat));
+    let (mut result, opaque_tiff) = flat::export_flat_with_layout(doc, format, opts, ctl)?;
+    result.warnings.extend(if format == photocraft_codecs::Format::Tiff {
+        xcf_export_loss::warnings_for_flat_tiff(doc, opaque_tiff)
+    } else {
+        xcf_export_loss::warnings_for(doc, xcf_export_loss::Destination::Flat)
+    });
     result.warnings.extend(precision);
     Ok(result)
 }

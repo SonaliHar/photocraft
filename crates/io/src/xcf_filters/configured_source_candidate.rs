@@ -209,7 +209,7 @@ fn curve_shape(curve: &photocraft_xcf::StoredCurve, m: &mut Meter<'_, '_>) -> Re
         return Err(bad("exact serialized curve shape; no requested-length alias"));
     }
     let mut previous = None;
-    for p in curve.points_bits.chunks_exact(2) {
+    for p in curve.points_bits.as_chunks::<2>().0 {
         m.step(1)?;
         let x = f64::from_bits(*p.first().ok_or_else(|| bad("point x"))?);
         let y = f64::from_bits(*p.get(1).ok_or_else(|| bad("point y"))?);
@@ -371,7 +371,7 @@ pub fn map_retained_curves_source<'a, P>(
     let mut channels = m.vector(5)?;
     for (c, free) in config.channels.iter().zip(forms) {
         let mut points = m.vector(c.curve.point_types.len())?;
-        for p in c.curve.points_bits.chunks_exact(2) {
+        for p in c.curve.points_bits.as_chunks::<2>().0 {
             m.step(1)?;
             points.push([*p.first().ok_or_else(|| bad("point x"))?, *p.get(1).ok_or_else(|| bad("point y"))?]);
         }

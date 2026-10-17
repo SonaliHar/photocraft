@@ -1,16 +1,16 @@
 //! Existing neighborhood source domains; no Point evaluator authority.
 use super::*;
 use crate::xcf_filters::NeighborhoodDomain;
+#[path = "staged_neighborhood/assigned_box.rs"]
+mod assigned_box;
+#[path = "staged_neighborhood/assigned_gaussian.rs"]
+mod assigned_gaussian;
+#[path = "staged_neighborhood/assigned_median.rs"]
+mod assigned_median;
+#[path = "staged_neighborhood/box_geometry.rs"]
+mod box_geometry;
 #[path = "staged_neighborhood/original_gaussian.rs"]
 mod original_gaussian;
-#[path="staged_neighborhood/assigned_box.rs"]
-mod assigned_box;
-#[path="staged_neighborhood/assigned_median.rs"]
-mod assigned_median;
-#[path="staged_neighborhood/assigned_gaussian.rs"]
-mod assigned_gaussian;
-#[path="staged_neighborhood/box_geometry.rs"]
-mod box_geometry;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::xcf_import) enum NeighborhoodSourceFamily {
     BoxGeometryF32,
@@ -48,22 +48,64 @@ impl NeighborhoodSourceFamily {
         }
         let finite = matches!((file.sample, file.precision), (Sample::F32, 650) | (Sample::F64, 750));
         Some(match effect.operation.as_str() {
-            "gegl:box-blur" if box_geometry::hint(file) && file.model==Model::Gray && file.encoding==Encoding::Linear => if file.sample==Sample::F64{Self::BoxGeometryGrayLinearF64}else{Self::BoxGeometryGrayLinearF32},
-            "gegl:box-blur" if box_geometry::hint(file) && file.model==Model::Gray && file.encoding==Encoding::Perceptual => if file.sample==Sample::F64{Self::BoxGeometryGrayPerceptualF64}else{Self::BoxGeometryGrayPerceptualF32},
-            "gegl:box-blur" if box_geometry::hint(file) && file.model==Model::Gray => if file.sample==Sample::F64{Self::BoxGeometryGrayF64}else{Self::BoxGeometryGrayF32},
-            "gegl:box-blur" if box_geometry::hint(file) && file.encoding==Encoding::Perceptual => if file.sample==Sample::F64{Self::BoxGeometryPerceptualF64}else{Self::BoxGeometryPerceptualF32},
-            "gegl:box-blur" if box_geometry::hint(file) && file.encoding==Encoding::Linear => if file.sample==Sample::F64{Self::BoxGeometryLinearF64}else{Self::BoxGeometryLinearF32},
-            "gegl:box-blur" if box_geometry::hint(file) => if !file.icc.is_empty(){if file.sample==Sample::F64{Self::BoxGeometryAssignedF64}else{Self::BoxGeometryAssignedF32}}else if file.sample==Sample::F64{Self::BoxGeometryF64}else{Self::BoxGeometryF32},
-            "gegl:box-blur" if file.sample==Sample::F32 && file.precision==650 && !file.icc.is_empty() => Self::BoxAssignedF32,
+            "gegl:box-blur" if box_geometry::hint(file) && file.model == Model::Gray && file.encoding == Encoding::Linear => {
+                if file.sample == Sample::F64 {
+                    Self::BoxGeometryGrayLinearF64
+                } else {
+                    Self::BoxGeometryGrayLinearF32
+                }
+            }
+            "gegl:box-blur" if box_geometry::hint(file) && file.model == Model::Gray && file.encoding == Encoding::Perceptual => {
+                if file.sample == Sample::F64 {
+                    Self::BoxGeometryGrayPerceptualF64
+                } else {
+                    Self::BoxGeometryGrayPerceptualF32
+                }
+            }
+            "gegl:box-blur" if box_geometry::hint(file) && file.model == Model::Gray => {
+                if file.sample == Sample::F64 {
+                    Self::BoxGeometryGrayF64
+                } else {
+                    Self::BoxGeometryGrayF32
+                }
+            }
+            "gegl:box-blur" if box_geometry::hint(file) && file.encoding == Encoding::Perceptual => {
+                if file.sample == Sample::F64 {
+                    Self::BoxGeometryPerceptualF64
+                } else {
+                    Self::BoxGeometryPerceptualF32
+                }
+            }
+            "gegl:box-blur" if box_geometry::hint(file) && file.encoding == Encoding::Linear => {
+                if file.sample == Sample::F64 {
+                    Self::BoxGeometryLinearF64
+                } else {
+                    Self::BoxGeometryLinearF32
+                }
+            }
+            "gegl:box-blur" if box_geometry::hint(file) => {
+                if !file.icc.is_empty() {
+                    if file.sample == Sample::F64 { Self::BoxGeometryAssignedF64 } else { Self::BoxGeometryAssignedF32 }
+                } else if file.sample == Sample::F64 {
+                    Self::BoxGeometryF64
+                } else {
+                    Self::BoxGeometryF32
+                }
+            }
+            "gegl:box-blur" if file.sample == Sample::F32 && file.precision == 650 && !file.icc.is_empty() => Self::BoxAssignedF32,
             "gegl:box-blur" if finite => Self::BoxFinite,
             "gegl:box-blur" => Self::BoxOriginal,
-            "gegl:median-blur" if file.model==Model::Rgb && file.sample==Sample::F32 && file.precision==650 && !file.icc.is_empty() => Self::MedianAssignedF32,
+            "gegl:median-blur" if file.model == Model::Rgb && file.sample == Sample::F32 && file.precision == 650 && !file.icc.is_empty() => {
+                Self::MedianAssignedF32
+            }
             "gegl:median-blur" if file.model == Model::Gray => Self::MedianGray,
             "gegl:median-blur" if finite => Self::MedianFinite,
             "gegl:median-blur" => Self::MedianOriginal,
             "gegl:motion-blur-linear" => Self::MotionOriginal,
             "gegl:pixelize" => Self::PixelizeOriginal,
-            "gegl:gaussian-blur" if file.model==Model::Rgb && file.sample==Sample::F32 && file.precision==650 && !file.icc.is_empty() => Self::GaussianAssignedF32,
+            "gegl:gaussian-blur" if file.model == Model::Rgb && file.sample == Sample::F32 && file.precision == 650 && !file.icc.is_empty() => {
+                Self::GaussianAssignedF32
+            }
             "gegl:gaussian-blur" if finite => Self::RasterFinite,
             // Routing only. The separate exact legacy predicate must pass;
             // this does not enroll arbitrary Auto, geometry, alpha or profiles.
@@ -75,7 +117,20 @@ impl NeighborhoodSourceFamily {
     }
     pub(super) fn domain(self) -> NeighborhoodDomain {
         match self {
-            Self::BoxGeometryF32 | Self::BoxGeometryF64 | Self::BoxGeometryGrayF32 | Self::BoxGeometryGrayF64 | Self::BoxGeometryGrayLinearF32 | Self::BoxGeometryGrayLinearF64 | Self::BoxGeometryGrayPerceptualF32 | Self::BoxGeometryGrayPerceptualF64 | Self::BoxGeometryLinearF32 | Self::BoxGeometryLinearF64 | Self::BoxGeometryPerceptualF32 | Self::BoxGeometryPerceptualF64 | Self::BoxGeometryAssignedF32 | Self::BoxGeometryAssignedF64 => NeighborhoodDomain::BoxGeometry,
+            Self::BoxGeometryF32
+            | Self::BoxGeometryF64
+            | Self::BoxGeometryGrayF32
+            | Self::BoxGeometryGrayF64
+            | Self::BoxGeometryGrayLinearF32
+            | Self::BoxGeometryGrayLinearF64
+            | Self::BoxGeometryGrayPerceptualF32
+            | Self::BoxGeometryGrayPerceptualF64
+            | Self::BoxGeometryLinearF32
+            | Self::BoxGeometryLinearF64
+            | Self::BoxGeometryPerceptualF32
+            | Self::BoxGeometryPerceptualF64
+            | Self::BoxGeometryAssignedF32
+            | Self::BoxGeometryAssignedF64 => NeighborhoodDomain::BoxGeometry,
             Self::BoxOriginal => NeighborhoodDomain::BoxOriginal,
             Self::BoxFinite | Self::BoxAssignedF32 => NeighborhoodDomain::BoxFinite,
             Self::MedianOriginal => NeighborhoodDomain::MedianOriginal,
@@ -90,18 +145,43 @@ impl NeighborhoodSourceFamily {
     pub(super) fn set_admission(self, domains: &mut admission::AdmissionDomains) {
         domains.owned_neighborhood_domain = Some(self.domain());
         match self {
-            Self::BoxGeometryF32 | Self::BoxGeometryF64 | Self::BoxGeometryGrayF32 | Self::BoxGeometryGrayF64 | Self::BoxGeometryGrayLinearF32 | Self::BoxGeometryGrayLinearF64 | Self::BoxGeometryGrayPerceptualF32 | Self::BoxGeometryGrayPerceptualF64 | Self::BoxGeometryLinearF32 | Self::BoxGeometryLinearF64 | Self::BoxGeometryPerceptualF32 | Self::BoxGeometryPerceptualF64 | Self::BoxGeometryAssignedF32 | Self::BoxGeometryAssignedF64 => {domains.finite_box_domain=true;domains.observed_box_geometry_domain=true;},
+            Self::BoxGeometryF32
+            | Self::BoxGeometryF64
+            | Self::BoxGeometryGrayF32
+            | Self::BoxGeometryGrayF64
+            | Self::BoxGeometryGrayLinearF32
+            | Self::BoxGeometryGrayLinearF64
+            | Self::BoxGeometryGrayPerceptualF32
+            | Self::BoxGeometryGrayPerceptualF64
+            | Self::BoxGeometryLinearF32
+            | Self::BoxGeometryLinearF64
+            | Self::BoxGeometryPerceptualF32
+            | Self::BoxGeometryPerceptualF64
+            | Self::BoxGeometryAssignedF32
+            | Self::BoxGeometryAssignedF64 => {
+                domains.finite_box_domain = true;
+                domains.observed_box_geometry_domain = true;
+            }
             Self::BoxOriginal => domains.opaque_box_domain = true,
             Self::BoxFinite => domains.finite_box_domain = true,
-            Self::BoxAssignedF32 => { domains.finite_box_domain=true; domains.owned_assigned_box_domain=true; },
+            Self::BoxAssignedF32 => {
+                domains.finite_box_domain = true;
+                domains.owned_assigned_box_domain = true;
+            }
             Self::MedianOriginal => domains.opaque_median_domain = true,
             Self::MedianFinite => domains.finite_median_domain = true,
-            Self::MedianAssignedF32 => { domains.finite_median_domain=true; domains.owned_assigned_median_domain=true; },
+            Self::MedianAssignedF32 => {
+                domains.finite_median_domain = true;
+                domains.owned_assigned_median_domain = true;
+            }
             Self::MedianGray => domains.gray_median_domain = true,
             Self::MotionOriginal => domains.opaque_motion_domain = true,
             Self::PixelizeOriginal => domains.opaque_pixelize_domain = true,
             Self::RasterFinite => domains.finite_gaussian_domain = true,
-            Self::GaussianAssignedF32 => {domains.finite_gaussian_domain=true;domains.owned_assigned_gaussian_domain=true;},
+            Self::GaussianAssignedF32 => {
+                domains.finite_gaussian_domain = true;
+                domains.owned_assigned_gaussian_domain = true;
+            }
             Self::OriginalGaussian => {}
         }
     }
@@ -115,10 +195,23 @@ impl NeighborhoodSourceFamily {
             return Ok(false);
         }
         match self {
-            Self::BoxGeometryF32 | Self::BoxGeometryF64 | Self::BoxGeometryGrayF32 | Self::BoxGeometryGrayF64 | Self::BoxGeometryGrayLinearF32 | Self::BoxGeometryGrayLinearF64 | Self::BoxGeometryGrayPerceptualF32 | Self::BoxGeometryGrayPerceptualF64 | Self::BoxGeometryLinearF32 | Self::BoxGeometryLinearF64 | Self::BoxGeometryPerceptualF32 | Self::BoxGeometryPerceptualF64 | Self::BoxGeometryAssignedF32 | Self::BoxGeometryAssignedF64 => box_geometry::qualify(file,ctl,budget),
-            Self::BoxAssignedF32 => assigned_box::qualify(file,ctl,budget),
-            Self::MedianAssignedF32 => assigned_median::qualify(file,ctl,budget),
-            Self::GaussianAssignedF32 => assigned_gaussian::qualify(file,ctl,budget),
+            Self::BoxGeometryF32
+            | Self::BoxGeometryF64
+            | Self::BoxGeometryGrayF32
+            | Self::BoxGeometryGrayF64
+            | Self::BoxGeometryGrayLinearF32
+            | Self::BoxGeometryGrayLinearF64
+            | Self::BoxGeometryGrayPerceptualF32
+            | Self::BoxGeometryGrayPerceptualF64
+            | Self::BoxGeometryLinearF32
+            | Self::BoxGeometryLinearF64
+            | Self::BoxGeometryPerceptualF32
+            | Self::BoxGeometryPerceptualF64
+            | Self::BoxGeometryAssignedF32
+            | Self::BoxGeometryAssignedF64 => box_geometry::qualify(file, ctl, budget),
+            Self::BoxAssignedF32 => assigned_box::qualify(file, ctl, budget),
+            Self::MedianAssignedF32 => assigned_median::qualify(file, ctl, budget),
+            Self::GaussianAssignedF32 => assigned_gaussian::qualify(file, ctl, budget),
             Self::BoxOriginal => residual::opaque_original(file, "gegl:box-blur", ctl, budget),
             Self::MedianOriginal => residual::opaque_original(file, "gegl:median-blur", ctl, budget),
             Self::MotionOriginal => residual::opaque_original(file, "gegl:motion-blur-linear", ctl, budget),
@@ -218,8 +311,12 @@ fn finite<P: ExactParsedPlane>(
 }
 #[cfg(test)]
 #[path = "staged_neighborhood_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unreachable)]
 mod tests;
 
 #[cfg(all(test, feature = "corpus"))]
 #[path = "staged_neighborhood_disabled_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod disabled_tests;

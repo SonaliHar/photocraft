@@ -8,14 +8,20 @@ pub(super) struct DescriptorPlan<'b, 'a> {
     descriptors: Vec<PlaneDescriptor>,
     next: usize,
     mixed_upgrade: bool,
-    hierarchy_upgrade:bool,
-    hierarchy_coverage:bool,
+    hierarchy_upgrade: bool,
+    hierarchy_coverage: bool,
     _fee: Reservation<'b, 'a>,
 }
-impl<'b,'a> DescriptorPlan<'b, 'a> {
-    pub(super) fn hierarchy(descriptors:Vec<PlaneDescriptor>,fee:Reservation<'b,'a>,coverage:bool)->Self{Self{descriptors,next:0,mixed_upgrade:false,hierarchy_upgrade:true,hierarchy_coverage:coverage,_fee:fee}}
-    pub(super) fn hierarchy_coverage(&self)->bool{self.hierarchy_coverage}
-    pub(super) fn hierarchy_upgrade(&self)->bool{self.hierarchy_upgrade}
+impl<'b, 'a> DescriptorPlan<'b, 'a> {
+    pub(super) fn hierarchy(descriptors: Vec<PlaneDescriptor>, fee: Reservation<'b, 'a>, coverage: bool) -> Self {
+        Self { descriptors, next: 0, mixed_upgrade: false, hierarchy_upgrade: true, hierarchy_coverage: coverage, _fee: fee }
+    }
+    pub(super) fn hierarchy_coverage(&self) -> bool {
+        self.hierarchy_coverage
+    }
+    pub(super) fn hierarchy_upgrade(&self) -> bool {
+        self.hierarchy_upgrade
+    }
     pub(super) fn mixed_upgrade(&self) -> bool {
         self.mixed_upgrade
     }
@@ -40,7 +46,9 @@ pub(super) fn preplan<'b, 'a>(
 ) -> Result<Option<DescriptorPlan<'b, 'a>>, IoError> {
     let metadata = photocraft_xcf::read_plain_source_metadata_with_budget(source, o, b, a).map_err(accounting_error)?;
     let f = metadata.file();
-    if let Some(plan)=super::staged_normal_hierarchy::descriptors(f,i,b)?{return Ok(Some(plan))}
+    if let Some(plan) = super::staged_normal_hierarchy::descriptors(f, i, b)? {
+        return Ok(Some(plan));
+    }
     // Only eligible NEW topology is planned. A cap miss is permanent old-only;
     // no old Source cap, identity or validator is changed by this optimization.
     if f.version != 22
@@ -123,7 +131,7 @@ pub(super) fn preplan<'b, 'a>(
     let bytes = cap
         .checked_mul(std::mem::size_of::<PlaneDescriptor>())
         .and_then(|v| v.checked_add(std::mem::size_of::<DescriptorPlan<'_, '_>>()))
-        .and_then(|v|v.checked_add(std::mem::size_of::<Sink<'b,'a,'_,'_,SourceSelectedPolicy>>()))
+        .and_then(|v| v.checked_add(std::mem::size_of::<Sink<'b, 'a, '_, '_, SourceSelectedPolicy>>()))
         .ok_or_else(|| IoError::Unsupported("masked mixed plan capacity".into()))?;
     let fee = b.reserve(photocraft_xcf::BudgetKind::Resident, bytes as u64, "masked mixed descriptor plan").map_err(accounting_error)?;
     let mut descriptors = Vec::new();
@@ -139,7 +147,7 @@ pub(super) fn preplan<'b, 'a>(
         staged_filtered_flat::work(i, b, 32)?;
         descriptors.push(d.plane.as_ref().ok_or_else(|| IoError::Unsupported("masked mixed planned root".into()))?.clone());
     }
-    Ok(Some(DescriptorPlan { descriptors, next: 0, mixed_upgrade: !ordinary,hierarchy_upgrade:false,hierarchy_coverage:false, _fee: fee }))
+    Ok(Some(DescriptorPlan { descriptors, next: 0, mixed_upgrade: !ordinary, hierarchy_upgrade: false, hierarchy_coverage: false, _fee: fee }))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -380,6 +388,8 @@ impl photocraft_doc::xcf_filter_masks::MaskCoverageSetLease for CoverageLease<'_
     }
 }
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="staged_masked_filtered_flat_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "staged_masked_filtered_flat_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod tests;

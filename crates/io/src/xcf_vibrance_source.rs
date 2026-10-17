@@ -139,6 +139,8 @@ pub(crate) fn qualify<P: ExactParsedPlane>(f: &XcfFile<P>, i: &Interrupt<'_>, b:
     let Some(p) = m.plane.as_ref() else { return Ok(false) };
     native(p, f.sample, f.width, f.height, 1, true, i, b)
 }
+// Keep the fixed parameter contract: source identity, limits, control and original budget remain explicit.
+#[allow(clippy::too_many_arguments)]
 fn native<P: ExactParsedPlane>(
     p: &P,
     sample: Sample,

@@ -73,6 +73,8 @@ pub struct Requirements {
     pub prepared_retained_bytes: u64,
     pub vector_bytes: u64,
 }
+// Retain the prospectively paid inline binding layout; boxing adds an unpriced allocation.
+#[allow(clippy::large_enum_variant)]
 enum PreparedEffect<'a> {
     Configured(configured_graph::ProfileOwnedBinding<'a>),
     Brightness(brightness::Prepared<'a, ()>),
@@ -396,10 +398,10 @@ fn shape(w: &ChannelWitness<'_>, c: &Interrupt<'_>) -> Result<(), IoError> {
         if edge.from != previous || edge.to != node.id || edge.input_port != input || edge.output_port != upstream {
             return Err(bad("exact declared linear input edge"));
         }
-        if let Some(prior) = i.checked_sub(1).and_then(|p| w.effects.get(p)) {
-            if ports(prior).2 != upstream {
-                return Err(bad("upstream output port mismatch"));
-            }
+        if let Some(prior) = i.checked_sub(1).and_then(|p| w.effects.get(p))
+            && ports(prior).2 != upstream
+        {
+            return Err(bad("upstream output port mismatch"));
         }
         if w.assignments.get(i).is_none_or(|a| a.node != node.id || a.domain != w.domain) {
             return Err(bad("exact current per-node domain"));

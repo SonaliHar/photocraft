@@ -4,7 +4,6 @@
 //! complete decoded original scene remains retained in the proof owner.
 #[path = "stored_channel_selected.rs"]
 mod selected;
-pub use selected::{CurrentProfilePolicy, SelectedCurrentChannel, SelectedLimits, SelectedProfileRequirements, SelectedRequirements, select_current, select_current_with_profile_policy, selected_profile_requirements};
 use super::*;
 use crate::xcf_channel_candidate::{self as mapper, Ids, Namespace};
 use photocraft_doc::{
@@ -14,6 +13,10 @@ use photocraft_doc::{
     xcf_state::{ItemLocks, ItemState, MaskState},
 };
 use photocraft_xcf::{BudgetKind, DecodeReservations, Reservation, SourceAccounting, SourceContainer};
+pub use selected::{
+    CurrentProfilePolicy, SelectedCurrentChannel, SelectedLimits, SelectedProfileRequirements, SelectedRequirements, select_current,
+    select_current_with_profile_policy, selected_profile_requirements,
+};
 use sha2::{Digest, Sha256};
 use std::cell::{Cell, RefCell};
 /// Complete caller-held namespace backing; a slice length is only a local floor.
@@ -71,7 +74,7 @@ fn hashes(bytes: &[u8], shared: &photocraft_xcf::Budget<'_>, ctl: &Interrupt<'_>
         blake.update(chunk);
     }
     let mut hex = [0u8; 64];
-    for (value, pair) in sha.finalize().iter().zip(hex.chunks_exact_mut(2)) {
+    for (value, pair) in sha.finalize().iter().zip(hex.as_chunks_mut::<2>().0) {
         let alphabet = b"0123456789abcdef";
         *pair.get_mut(0).ok_or_else(|| bad("digest width"))? = *alphabet.get(usize::from(value >> 4)).ok_or_else(|| bad("digest digit"))?;
         *pair.get_mut(1).ok_or_else(|| bad("digest width"))? = *alphabet.get(usize::from(value & 15)).ok_or_else(|| bad("digest digit"))?;
@@ -541,13 +544,15 @@ pub fn assemble_owned_stored_channel<'s, 'b, 'a>(
         opacity: channel.opacity,
         indicates: if channel.show_masked { photocraft_doc::ColorIndicates::MaskedAreas } else { photocraft_doc::ColorIndicates::SelectedAreas },
     });
-    let mut state = photocraft_doc::XcfState::default();
-    state.provenance = photocraft_doc::xcf_provenance::ProjectProvenance {
-        format: text("xcf", &mut b, shared, ctl)?,
-        format_version: 26,
-        container: text("plain", &mut b, shared, ctl)?,
-        source_label: text("Private stored channel", &mut b, shared, ctl)?,
-        source_hash: Some(text(hash.to_hex().as_str(), &mut b, shared, ctl)?),
+    let mut state = photocraft_doc::XcfState {
+        provenance: photocraft_doc::xcf_provenance::ProjectProvenance {
+            format: text("xcf", &mut b, shared, ctl)?,
+            format_version: 26,
+            container: text("plain", &mut b, shared, ctl)?,
+            source_label: text("Private stored channel", &mut b, shared, ctl)?,
+            source_hash: Some(text(hash.to_hex().as_str(), &mut b, shared, ctl)?),
+            ..Default::default()
+        },
         ..Default::default()
     };
     reserve(&mut state.items, 2, &mut b)?;
@@ -580,7 +585,7 @@ pub fn assemble_owned_stored_channel<'s, 'b, 'a>(
     work(shared, ctl, mapping.metadata_bytes)?;
     doc.validate_xcf_state_with(ctl).map_err(|e| if e.code == "cancelled" { IoError::Cancelled } else { bad("invalid private mapped state") })?;
     // Retain all decoder backing; no source/plane refund based on selected slices.
-    drop(b);
+    // The non-owning accounting adapter is no longer borrowed past this point.
     let assembled = AssembledStoredChannel {
         document: doc,
         original,

@@ -9,16 +9,16 @@ use photocraft_text::xcf::runtime_font_input::PreparedRuntimeFont;
 use photocraft_xcf::{ArgumentValue, DecodeOptions, Drawable, Encoding, ErrorKind, Limits, Model, Plane, Sample, XcfError, XcfFile};
 use std::sync::Arc;
 
+#[cfg(test)]
+#[path = "xcf_import/authorized_font_tests.rs"]
+mod authorized_font_tests;
 #[path = "xcf_import/text_preparation.rs"]
 mod text_preparation;
-#[cfg(test)]
-#[path="xcf_import/authorized_font_tests.rs"]
-mod authorized_font_tests;
 
-#[path = "xcf_import/plane.rs"]
-pub(crate) mod plane;
 #[path = "xcf_import/effect_mask_mapping.rs"]
 mod effect_mask_mapping;
+#[path = "xcf_import/plane.rs"]
+pub(crate) mod plane;
 use plane::{ExactParsedPlane, MappingPlane};
 
 #[path = "xcf_import/precision_point_source.rs"]
@@ -58,39 +58,42 @@ pub use owned_xcf_source::{OwnedXcfImport, import_owned_xcf_bytes_in_quota};
 
 #[path = "xcf_import/owned_plain_source.rs"]
 mod owned_plain_source;
-pub use owned_plain_source::{OwnedPlainXcfImport, import_owned_staged_plain_bytes, import_owned_staged_plain_bytes_in_quota, import_owned_staged_plain_from_reader_in_quota, import_owned_xcf_from_reader_in_quota};
+pub use owned_plain_source::{
+    OwnedPlainXcfImport, import_owned_staged_plain_bytes, import_owned_staged_plain_bytes_in_quota, import_owned_staged_plain_from_reader_in_quota,
+    import_owned_xcf_from_reader_in_quota,
+};
 
-#[path = "xcf_import/owned_threshold_source.rs"]
-mod owned_threshold_source;
-#[path = "xcf_import/owned_histogram_threshold_source.rs"]
-mod owned_histogram_threshold_source;
-#[path = "xcf_import/staged_filtered_flat.rs"]
-mod staged_filtered_flat;
 #[path = "xcf_import/owned_filtered_flat_source.rs"]
 mod owned_filtered_flat_source;
+#[path = "xcf_import/owned_histogram_threshold_source.rs"]
+mod owned_histogram_threshold_source;
+#[path = "xcf_import/owned_threshold_source.rs"]
+mod owned_threshold_source;
+#[path = "xcf_import/staged_filtered_flat.rs"]
+mod staged_filtered_flat;
 pub use owned_filtered_flat_source::OwnedFilteredFlatXcfImport;
-#[path="xcf_import/owned_masked_filtered_flat_source.rs"]
+#[path = "xcf_import/owned_masked_filtered_flat_source.rs"]
 mod owned_masked_filtered_flat_source;
 pub use owned_masked_filtered_flat_source::OwnedMaskedFilteredFlatXcfImport;
-#[path="xcf_import/owned_normal_hierarchy_source.rs"]
+#[path = "xcf_import/owned_normal_hierarchy_source.rs"]
 mod owned_normal_hierarchy_source;
 pub use owned_normal_hierarchy_source::OwnedNormalHierarchyXcfImport;
 #[path = "xcf_import/owned_point_source.rs"]
 mod owned_point_source;
 pub use owned_point_source::OwnedPointXcfImport;
-#[path="xcf_import/owned_analytic_geometry_source.rs"]
+#[path = "xcf_import/owned_analytic_geometry_source.rs"]
 mod owned_analytic_geometry_source;
 pub use owned_analytic_geometry_source::OwnedAnalyticGeometryXcfImport;
-#[path="xcf_import/owned_isolated_normal_group_source.rs"]
+#[path = "xcf_import/owned_isolated_normal_group_source.rs"]
 mod owned_isolated_normal_group_source;
 pub use owned_isolated_normal_group_source::OwnedIsolatedNormalGroupXcfImport;
-#[path="xcf_import/owned_gaussian_group_source.rs"]
+#[path = "xcf_import/owned_gaussian_group_source.rs"]
 mod owned_gaussian_group_source;
 pub use owned_gaussian_group_source::OwnedIsolatedGaussianGroupXcfImport;
 #[path = "xcf_import/owned_separable_blend_source.rs"]
 mod owned_separable_blend_source;
-pub use owned_separable_blend_source::OwnedSeparableBlendXcfImport;
 pub use owned_histogram_threshold_source::OwnedHistogramThresholdXcfImport;
+pub use owned_separable_blend_source::OwnedSeparableBlendXcfImport;
 pub use owned_threshold_source::{OwnedThresholdAlphaXcfImport, import_owned_staged_threshold_alpha_bytes_in_quota};
 
 #[path = "xcf_import/source.rs"]
@@ -99,37 +102,39 @@ pub use source::import_plain_source_with_budget;
 
 #[path = "xcf_import/stored_channel_candidate.rs"]
 mod stored_channel_candidate;
-pub use stored_channel_candidate::{assemble_owned_stored_channel, AssembledStoredChannel, NamespaceBacking, StoredChannelCorrespondence, CorrespondenceRequirements};
-pub use stored_channel_candidate::{CurrentProfilePolicy, SelectedCurrentChannel, SelectedLimits, SelectedProfileRequirements, SelectedRequirements, select_current, select_current_with_profile_policy, selected_profile_requirements};
+pub use stored_channel_candidate::{
+    AssembledStoredChannel, CorrespondenceRequirements, NamespaceBacking, StoredChannelCorrespondence, assemble_owned_stored_channel,
+};
+pub use stored_channel_candidate::{
+    CurrentProfilePolicy, SelectedCurrentChannel, SelectedLimits, SelectedProfileRequirements, SelectedRequirements, select_current,
+    select_current_with_profile_policy, selected_profile_requirements,
+};
 
 #[path = "xcf_import/layer_selection_candidate.rs"]
 mod layer_selection_candidate;
 pub use layer_selection_candidate::{
-    LayerOuterPolicy, LayerSelectionIds, LayerSelectionCandidate, LayerSelectionLimits, LayerSelectionNamespace, LayerSelectionRequirements,
-    LAYER_SELECTION_EPOCH, map_layer_selection, map_layer_selection_with_outer_policy,
+    LAYER_SELECTION_EPOCH, LayerOuterPolicy, LayerSelectionCandidate, LayerSelectionIds, LayerSelectionLimits, LayerSelectionNamespace,
+    LayerSelectionRequirements, map_layer_selection, map_layer_selection_with_outer_policy,
 };
 
 #[path = "xcf_import/layer_selection_owner.rs"]
 mod layer_selection_owner;
 pub use layer_selection_owner::{
-    AssembledLayerSelection, LayerCorrespondenceRequirements, LayerCurrentLimits, LayerCurrentRequirements, LayerOriginalPlanesProof,
-    LayerProfilePolicy, LayerProfileRequirements, SelectedCurrentLayer, assemble_owned_layer_selection,
-    assemble_owned_layer_selection_with_outer_policy, layer_profile_requirements, select_layer_current, select_layer_current_with_profile_policy,
+    AssembledLayerSelection, LayerCorrespondenceRequirements, LayerCurrentLimits, LayerCurrentRequirements, LayerOriginalPlanesProof, LayerProfilePolicy,
+    LayerProfileRequirements, SelectedCurrentLayer, assemble_owned_layer_selection, assemble_owned_layer_selection_with_outer_policy,
+    layer_profile_requirements, select_layer_current, select_layer_current_with_profile_policy,
 };
 
 #[path = "xcf_import/layer_selection_current.rs"]
 mod layer_selection_current;
-pub use layer_selection_current::{
-    LayerStorageRequirements, PrivateLayerCurrent, assemble_private_layer_current, layer_storage_requirements,
-};
+pub use layer_selection_current::{LayerStorageRequirements, PrivateLayerCurrent, assemble_private_layer_current, layer_storage_requirements};
 
 #[cfg(all(test, feature = "corpus"))]
 mod linked_custom_name_mapping_tests {
     use super::*;
     #[test]
     fn linked_name_flag_maps_without_changing_pixels_or_monitoring() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../photocraft-corpus/xcf/full/transform-interpolation");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../photocraft-corpus/xcf/full/transform-interpolation");
         let original = std::fs::read(root.join("link-none.xcf")).unwrap();
         let decoded = photocraft_xcf::decode(&original, &Default::default()).unwrap();
         let position = decoded.layers.iter().position(|layer| layer.link.is_some()).unwrap();
@@ -147,17 +152,14 @@ mod linked_custom_name_mapping_tests {
             let imported = map("linked name mapping", file, &Interrupt::NONE, 128 << 20).unwrap().0;
             let doc = imported.document;
             let state = doc.xcf_state.as_ref().unwrap();
-            let source = state.source_items.iter().find(|source| matches!(source.source,
-                photocraft_doc::xcf_items::EditableSource::Linked { .. })).unwrap();
+            let source = state.source_items.iter().find(|source| matches!(source.source, photocraft_doc::xcf_items::EditableSource::Linked { .. })).unwrap();
             let item = state.items.iter().find(|item| item.item == source.owner).unwrap();
             assert_eq!(item.custom_name, flags & 1 != 0);
             assert_eq!(item.name, decoded.layers[position].name);
             assert_eq!(source.cache.as_ref().unwrap().bytes.as_slice(), pixels.as_slice());
-            let photocraft_doc::xcf_items::EditableSource::Linked { configuration, .. } = &source.source else {
-                panic!("linked source")
-            };
-            assert!(configuration.iter().any(|argument| argument.name == "flags" &&
-                matches!(argument.value, photocraft_doc::xcf_filters::FilterValue::Number(
+            let photocraft_doc::xcf_items::EditableSource::Linked { configuration, .. } = &source.source else { panic!("linked source") };
+            assert!(configuration.iter().any(|argument| argument.name == "flags"
+                && matches!(argument.value, photocraft_doc::xcf_filters::FilterValue::Number(
                     photocraft_doc::xcf_filters::ExactNumber::Unsigned { width: 32, value })
                     if value == u64::from(flags))));
             let native = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
@@ -236,6 +238,8 @@ pub fn import_with_limits_and_authorized_font(
     import_candidate_with_budget_and_authorized_font(name, bytes, ctl, &options, &shared, photocraft_xcf::SourceAccounting::Borrowed, font)?
         .ok_or_else(|| IoError::Unsupported("input does not contain GIMP XCF".into()))
 }
+// Keep the fixed parameter contract: source identity, limits, control and original budget remain explicit.
+#[allow(clippy::too_many_arguments)]
 fn import_candidate_accounted(
     name: &str,
     bytes: &[u8],
@@ -294,7 +298,8 @@ fn import_candidate_accounted(
                 usize::try_from(shared.limits().get(photocraft_xcf::BudgetKind::Resident))
                     .map_err(|_| IoError::Unsupported("XCF resident policy exceeds address space".into()))?,
             );
-            let (mut result, _) = map_accounted_with_authorized_font(name, decoded.file, ctl, maximum, Some(&account), Some((shared, &lease)), authorized_font)?;
+            let (mut result, _) =
+                map_accounted_with_authorized_font(name, decoded.file, ctl, maximum, Some(&account), Some((shared, &lease)), authorized_font)?;
             shared.consume_work(bytes.len() as u64, "source provenance hash").map_err(accounting_error)?;
             stamp_source(&mut result, bytes, decoded.container, ctl)?;
             shared.poll("mapped document completed").map_err(
@@ -513,6 +518,8 @@ fn gimp_space(encoding: SampleEncoding) -> photocraft_doc::import_compositing::G
         SampleEncoding::Perceptual => GimpSpace::PerceptualRgb,
     }
 }
+// Keep the fixed parameter contract: source identity, limits, control and original budget remain explicit.
+#[allow(clippy::too_many_arguments)]
 fn admit<P: MappingPlane>(
     d: &Drawable<P>,
     effects_candidate: bool,
@@ -548,10 +555,10 @@ fn admit<P: MappingPlane>(
     if !(blend_domain && matches!(d.mode, 24..=27) && d.blend_space == -3) {
         working(d, d.blend_space)?;
     }
-    if let Some(m) = &d.mask {
-        if !m.unsupported.is_empty() {
-            return Err(unsupported(m, "unsupported layer mask semantics"));
-        }
+    if let Some(m) = &d.mask
+        && !m.unsupported.is_empty()
+    {
+        return Err(unsupported(m, "unsupported layer mask semantics"));
     }
     Ok(mask_placement)
 }
@@ -1683,19 +1690,42 @@ impl<'b, 'a> photocraft_compose::gimp_render::PreparationBudget for SharedPrepar
     }
 }
 
-impl<'b,'a> photocraft_compose::backed_masked_filtered_flat_point_context::MaskedFilterPreparationBudget for SharedPreparation<'b,'a>{
- fn reserve_filter_mask_proof_index(&mut self,bytes:u64)->photocraft_compose::gimp_composite::Result<Self::Lease>{
-  self.shared.reserve(photocraft_xcf::BudgetKind::Index,bytes,"masked mixed source proof index").map_err(|error|{let raster=if error.kind==ErrorKind::Cancelled{photocraft_raster::RasterInputError::Cancelled}else{photocraft_raster::RasterInputError::LimitExceeded};self.failure=Some(error);raster.into()})
- }
+impl<'b, 'a> photocraft_compose::backed_masked_filtered_flat_point_context::MaskedFilterPreparationBudget for SharedPreparation<'b, 'a> {
+    fn reserve_filter_mask_proof_index(&mut self, bytes: u64) -> photocraft_compose::gimp_composite::Result<Self::Lease> {
+        self.shared.reserve(photocraft_xcf::BudgetKind::Index, bytes, "masked mixed source proof index").map_err(|error| {
+            let raster = if error.kind == ErrorKind::Cancelled {
+                photocraft_raster::RasterInputError::Cancelled
+            } else {
+                photocraft_raster::RasterInputError::LimitExceeded
+            };
+            self.failure = Some(error);
+            raster.into()
+        })
+    }
 }
-impl<'b,'a> photocraft_compose::backed_normal_hierarchy_context::HierarchyPreparationBudget for SharedPreparation<'b,'a>{
- fn reserve_hierarchy_index(&mut self,bytes:u64)->photocraft_compose::gimp_composite::Result<Self::Lease>{
-  self.shared.reserve(photocraft_xcf::BudgetKind::Index,bytes,"normal hierarchy source index").map_err(|error|{let raster=if error.kind==ErrorKind::Cancelled{photocraft_raster::RasterInputError::Cancelled}else{photocraft_raster::RasterInputError::LimitExceeded};self.failure=Some(error);raster.into()})
- }
+impl<'b, 'a> photocraft_compose::backed_normal_hierarchy_context::HierarchyPreparationBudget for SharedPreparation<'b, 'a> {
+    fn reserve_hierarchy_index(&mut self, bytes: u64) -> photocraft_compose::gimp_composite::Result<Self::Lease> {
+        self.shared.reserve(photocraft_xcf::BudgetKind::Index, bytes, "normal hierarchy source index").map_err(|error| {
+            let raster = if error.kind == ErrorKind::Cancelled {
+                photocraft_raster::RasterInputError::Cancelled
+            } else {
+                photocraft_raster::RasterInputError::LimitExceeded
+            };
+            self.failure = Some(error);
+            raster.into()
+        })
+    }
 }
 // Preserve the genuine default mapping seam used by staged/held-source imports.
-fn map_accounted<P: MappingPlane,S>(name:&str,file:XcfFile<P>,ctl:&Interrupt<'_>,resident:usize,shared:Option<&dyn Fn(usize)->Result<(),IoError>>,preparation:Option<(&photocraft_xcf::Budget<'_>,S)>)->Result<(ImportResult,usize),IoError>{
-    map_accounted_with_authorized_font(name,file,ctl,resident,shared,preparation,None)
+fn map_accounted<P: MappingPlane, S>(
+    name: &str,
+    file: XcfFile<P>,
+    ctl: &Interrupt<'_>,
+    resident: usize,
+    shared: Option<&dyn Fn(usize) -> Result<(), IoError>>,
+    preparation: Option<(&photocraft_xcf::Budget<'_>, S)>,
+) -> Result<(ImportResult, usize), IoError> {
+    map_accounted_with_authorized_font(name, file, ctl, resident, shared, preparation, None)
 }
 #[allow(clippy::too_many_arguments)]
 fn map_accounted_with_authorized_font<P: MappingPlane, S>(
@@ -1749,22 +1779,29 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         multiply_spaces_domain,
         composition_command_domain,
     } = P::admissions(&file, ctl, preparation.as_ref().map(|(budget, _)| *budget))?;
-    if filtered_flat_domain && filtered_flat_opacity_domain {return Err(IoError::Unsupported("conflicting mixed source purpose".into()));}
-    let filtered_flat_source_domain=filtered_flat_domain || filtered_flat_opacity_domain;
-    let any_filtered_flat_source=filtered_flat_source_domain||masked_filtered_flat_domain||normal_hierarchy_domain;
+    if filtered_flat_domain && filtered_flat_opacity_domain {
+        return Err(IoError::Unsupported("conflicting mixed source purpose".into()));
+    }
+    let filtered_flat_source_domain = filtered_flat_domain || filtered_flat_opacity_domain;
+    let any_filtered_flat_source = filtered_flat_source_domain || masked_filtered_flat_domain || normal_hierarchy_domain;
     if normal_hierarchy_domain {
-        let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||IoError::Unsupported("hierarchy mapper accounting".into()))?;
+        let source_budget = preparation.as_ref().map(|(b, _)| *b).ok_or_else(|| IoError::Unsupported("hierarchy mapper accounting".into()))?;
         // Source paths are <=33 words. Admit the actual identities-prefix
         // searches, bounded insert/reverse traversal and canonical ID joins;
         // the earlier parser/path proof is a distinct paid pass.
-        let n=file.layers.len()as u64;
-        let units=n.checked_mul(n).and_then(|v|v.checked_mul(256)).and_then(|v|v.checked_add(n.checked_mul(1024)?)).ok_or_else(||IoError::Unsupported("hierarchy mapping work".into()))?;
-        staged_filtered_flat::work(ctl,source_budget,units)?;
+        let n = file.layers.len() as u64;
+        let units = n
+            .checked_mul(n)
+            .and_then(|v| v.checked_mul(256))
+            .and_then(|v| v.checked_add(n.checked_mul(1024)?))
+            .ok_or_else(|| IoError::Unsupported("hierarchy mapping work".into()))?;
+        staged_filtered_flat::work(ctl, source_budget, units)?;
     }
 
-    let masked_exposure_source=point_replace_domain==Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(crate::xcf_filters::PointReplaceFamily::MaskedExposure));
-    let masked_scalar_source=matches!(point_replace_domain,Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(family)) if crate::xcf_point_replace_source::masked_stock_source::selected(family));
-    let selected_masked_point_source=masked_exposure_source||masked_scalar_source;
+    let masked_exposure_source =
+        point_replace_domain == Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(crate::xcf_filters::PointReplaceFamily::MaskedExposure));
+    let masked_scalar_source = matches!(point_replace_domain,Some(crate::xcf_filters::NeighborhoodDomain::PointReplace(family)) if crate::xcf_point_replace_source::masked_stock_source::selected(family));
+    let selected_masked_point_source = masked_exposure_source || masked_scalar_source;
     let mut floating_ids = (None, None);
     let mut budget = Budget { used: file.charged_bytes, max: resident, peak: file.charged_bytes, shared };
     budget.charge(
@@ -1776,7 +1813,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         Encoding::NonlinearProfile => photocraft_cms::xcf_color::Encoding::NonlinearProfile,
         Encoding::Perceptual => photocraft_cms::xcf_color::Encoding::Perceptual,
     };
-    let effective = P::effective_profile(&file, space, ce, ctl, preparation.as_ref().map(|(budget,_)|*budget))?;
+    let effective = P::effective_profile(&file, space, ce, ctl, preparation.as_ref().map(|(budget, _)| *budget))?;
     let mode = match file.model {
         Model::Rgb => ColorMode::Rgb,
         Model::Gray => ColorMode::Grayscale,
@@ -1918,10 +1955,31 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         } else {
             modified_context.as_ref().map(|context| crate::xcf_modified_sources::validate_modified_source_with_storage(d, context, ctl)).transpose()?
         };
-        let masked_domains=if masked_filtered_flat_domain||masked_normal_hierarchy_domain && !d.group{Some(staged_source::staged_masked_filtered_flat::domains(d,file.sample,file.width,file.height,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"masked mixed domain accounting"))?)?)}else{None};
-        let masked_root_domain=masked_domains.as_ref().and_then(|v|v.values.first().copied());
-        let filtered_root_domain=if filtered_flat_opacity_domain {Some(staged_filtered_flat::opacity::root_domain(d,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered flat opacity accounting"))?)?)} else if filtered_flat_domain || normal_hierarchy_domain && !masked_normal_hierarchy_domain && !d.group {Some(staged_filtered_flat::root_domain(d,ctl,preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered flat accounting"))?)?)} else {None};
-        let point_replace_domain=masked_root_domain.or(filtered_root_domain.flatten()).or(point_replace_domain);
+        let masked_domains = if masked_filtered_flat_domain || masked_normal_hierarchy_domain && !d.group {
+            Some(staged_source::staged_masked_filtered_flat::domains(
+                d,
+                file.sample,
+                file.width,
+                file.height,
+                ctl,
+                preparation.as_ref().map(|(b, _)| *b).ok_or_else(|| unsupported(d, "masked mixed domain accounting"))?,
+            )?)
+        } else {
+            None
+        };
+        let masked_root_domain = masked_domains.as_ref().and_then(|v| v.values.first().copied());
+        let filtered_root_domain = if filtered_flat_opacity_domain {
+            Some(staged_filtered_flat::opacity::root_domain(
+                d,
+                ctl,
+                preparation.as_ref().map(|(b, _)| *b).ok_or_else(|| unsupported(d, "filtered flat opacity accounting"))?,
+            )?)
+        } else if filtered_flat_domain || normal_hierarchy_domain && !masked_normal_hierarchy_domain && !d.group {
+            Some(staged_filtered_flat::root_domain(d, ctl, preparation.as_ref().map(|(b, _)| *b).ok_or_else(|| unsupported(d, "filtered flat accounting"))?)?)
+        } else {
+            None
+        };
+        let point_replace_domain = masked_root_domain.or(filtered_root_domain.flatten()).or(point_replace_domain);
         let effects_candidate = !d.effects.is_empty()
             && (point_replace_domain.is_some()
                 || owned_point_domain.is_some()
@@ -1964,10 +2022,13 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
             ctl,
         )?;
         let general_rule = if general_separable_domain {
-            Some(photocraft_doc::import_compositing::flat_modern_source_rule(
-                file.version, d.mode, d.blend_space, d.composite_space, d.composite_mode,
-            ).ok_or_else(|| unsupported(d, "general flat source rule changed during mapping"))?)
-        } else { None };
+            Some(
+                photocraft_doc::import_compositing::flat_modern_source_rule(file.version, d.mode, d.blend_space, d.composite_space, d.composite_mode)
+                    .ok_or_else(|| unsupported(d, "general flat source rule changed during mapping"))?,
+            )
+        } else {
+            None
+        };
         budget.charge(1024 + d.name.len() + d.path.len() * 4 + d.diagnostics.iter().map(|v| v.len() + std::mem::size_of::<String>()).sum::<usize>())?;
         let (mut drawable, mut l, side) = P::current_owner(drawable, &file.palette, &mut budget, ctl)?;
         l.id = layer_id;
@@ -2029,10 +2090,8 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         l.visible = d.visible;
         match layer_color_tag(d.color_tag) {
             Ok(label) => l.label = label,
-            Err(reason) => warnings.push(format!(
-                "XCF layer color tag {}: {reason}; original source tag retained, current label unavailable",
-                d.color_tag.unwrap_or_default()
-            )),
+            Err(reason) => warnings
+                .push(format!("XCF layer color tag {}: {reason}; original source tag retained, current label unavailable", d.color_tag.unwrap_or_default())),
         }
         l.locks.transparency = d.lock_alpha;
         l.locks.pixels = d.lock_content;
@@ -2115,9 +2174,17 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                         .checked_add(effect.icon.len())?
                         .checked_add(effect.operation.len())?
                         .checked_add(effect.version.as_ref().map_or(0, String::len))?
-                        .checked_add(if any_filtered_flat_source {crate::xcf_filters::mixed_stock_source::mapping_bytes(effect)?}else{0})?
-                        .checked_add(if masked_scalar_source {crate::xcf_point_replace_source::masked_stock_source::mapping_bytes(effect)?}else{0})?
-                        .checked_add(if (masked_filtered_flat_domain||masked_normal_hierarchy_domain) && crate::xcf_filters::masked_mixed_source::parameters(effect).is_some(){crate::xcf_point_replace_source::masked_stock_source::mapping_bytes(effect)?}else{0})?
+                        .checked_add(if any_filtered_flat_source { crate::xcf_filters::mixed_stock_source::mapping_bytes(effect)? } else { 0 })?
+                        .checked_add(if masked_scalar_source { crate::xcf_point_replace_source::masked_stock_source::mapping_bytes(effect)? } else { 0 })?
+                        .checked_add(
+                            if (masked_filtered_flat_domain || masked_normal_hierarchy_domain)
+                                && crate::xcf_filters::masked_mixed_source::parameters(effect).is_some()
+                            {
+                                crate::xcf_point_replace_source::masked_stock_source::mapping_bytes(effect)?
+                            } else {
+                                0
+                            },
+                        )?
                         .checked_add(effect.arguments.iter().try_fold(0_usize, |n, a| {
                             n.checked_add(128)?.checked_add(a.name.len())?.checked_add(if let photocraft_xcf::ArgumentValue::Config(text) = &a.value {
                                 text.len().checked_mul(8)?
@@ -2130,72 +2197,109 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
             budget.charge(metadata)?;
             let canvas_group_mask = gaussian_group_domain && d.group;
             if any_filtered_flat_source {
-                let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"filtered mask accounting"))?;
-                staged_filtered_flat::work(ctl,source_budget,(d.effects.len() as u64).checked_mul(8).ok_or_else(||unsupported(d,"filtered mask count work"))?)?;
-                effect_mask_mapping::preflight_filtered_root(d,ctl)?;
+                let source_budget = preparation.as_ref().map(|(b, _)| *b).ok_or_else(|| unsupported(d, "filtered mask accounting"))?;
+                staged_filtered_flat::work(
+                    ctl,
+                    source_budget,
+                    (d.effects.len() as u64).checked_mul(8).ok_or_else(|| unsupported(d, "filtered mask count work"))?,
+                )?;
+                effect_mask_mapping::preflight_filtered_root(d, ctl)?;
             }
             let masks = if masked_normal_hierarchy_domain {
-                let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"masked hierarchy mask accounting"))?;
-                effect_mask_mapping::map_masked_normal_hierarchy_source(d,owner,next_filter_id,&mut next_mask_id,&mut state,&mut budget,ctl,doc.bounds(),source_budget)?
-            }else if masked_filtered_flat_domain {
-                let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"masked mixed mask accounting"))?;
-                effect_mask_mapping::map_masked_filtered_flat_source(d,owner,next_filter_id,&mut next_mask_id,&mut state,&mut budget,ctl,doc.bounds(),source_budget)?
-            }else if selected_masked_point_source {
-                let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||unsupported(d,"masked source structural accounting"))?;
-                effect_mask_mapping::map_masked_source(d,owner,next_filter_id,&mut next_mask_id,&mut state,&mut budget,ctl,doc.bounds(),source_budget)?
-            }else{effect_masks(
-                d,
-                owner,
-                next_filter_id,
-                &mut next_mask_id,
-                &mut state,
-                &mut budget,
-                ctl,
-                canvas_group_mask,
-                finite_gaussian_domain
-                    || finite_box_domain
-                    || finite_median_domain
-                    || gray_median_domain
-                    || opaque_box_domain
-                    || opaque_median_domain
-                    || opaque_motion_domain
-                    || opaque_pixelize_domain
-                    || unpremultiply_domain
-                    || hdr_clip_domain
-                    || value_precision_domain
-                    || brightness_precision_domain
-                    || levels_precision_domain
-                    || exposure_black_domain
-                    || color_balance_domain
-                    || temperature_domain
-                    || desaturate_domain
-                    || saturation_domain
-                    || saturation_yuv_domain
-                    || sepia_domain
-                    || alien_map_domain
-                    || saturation_gray_domain
-                    || threshold_domain
-                    || threshold_alpha_domain,
-                value_precision_domain
-                    || brightness_precision_domain
-                    || levels_precision_domain
-                    || exposure_black_domain
-                    || color_balance_domain
-                    || temperature_domain
-                    || desaturate_domain
-                    || saturation_domain
-                    || saturation_yuv_domain
-                    || sepia_domain
-                    || alien_map_domain
-                    || saturation_gray_domain
-                    || threshold_domain
-                    || threshold_alpha_domain,
-                color_balance_depth_domain,
-                exposure_geometry_domain,
-                point_replace_domain.map(|_| doc.bounds()),
-                observed_box_geometry_domain.then(||doc.bounds()),
-            )?};
-            let neighborhood_domain = if let Some(domain) = point_replace_domain.or(owned_point_domain).or(owned_neighborhood_domain) {
+                let source_budget = preparation.as_ref().map(|(b, _)| *b).ok_or_else(|| unsupported(d, "masked hierarchy mask accounting"))?;
+                effect_mask_mapping::map_masked_normal_hierarchy_source(
+                    d,
+                    owner,
+                    next_filter_id,
+                    &mut next_mask_id,
+                    &mut state,
+                    &mut budget,
+                    ctl,
+                    doc.bounds(),
+                    source_budget,
+                )?
+            } else if masked_filtered_flat_domain {
+                let source_budget = preparation.as_ref().map(|(b, _)| *b).ok_or_else(|| unsupported(d, "masked mixed mask accounting"))?;
+                effect_mask_mapping::map_masked_filtered_flat_source(
+                    d,
+                    owner,
+                    next_filter_id,
+                    &mut next_mask_id,
+                    &mut state,
+                    &mut budget,
+                    ctl,
+                    doc.bounds(),
+                    source_budget,
+                )?
+            } else if selected_masked_point_source {
+                let source_budget = preparation.as_ref().map(|(b, _)| *b).ok_or_else(|| unsupported(d, "masked source structural accounting"))?;
+                effect_mask_mapping::map_masked_source(d, owner, next_filter_id, &mut next_mask_id, &mut state, &mut budget, ctl, doc.bounds(), source_budget)?
+            } else {
+                effect_masks(
+                    d,
+                    owner,
+                    next_filter_id,
+                    &mut next_mask_id,
+                    &mut state,
+                    &mut budget,
+                    ctl,
+                    canvas_group_mask,
+                    finite_gaussian_domain
+                        || finite_box_domain
+                        || finite_median_domain
+                        || gray_median_domain
+                        || opaque_box_domain
+                        || opaque_median_domain
+                        || opaque_motion_domain
+                        || opaque_pixelize_domain
+                        || unpremultiply_domain
+                        || hdr_clip_domain
+                        || value_precision_domain
+                        || brightness_precision_domain
+                        || levels_precision_domain
+                        || exposure_black_domain
+                        || color_balance_domain
+                        || temperature_domain
+                        || desaturate_domain
+                        || saturation_domain
+                        || saturation_yuv_domain
+                        || sepia_domain
+                        || alien_map_domain
+                        || saturation_gray_domain
+                        || threshold_domain
+                        || threshold_alpha_domain,
+                    value_precision_domain
+                        || brightness_precision_domain
+                        || levels_precision_domain
+                        || exposure_black_domain
+                        || color_balance_domain
+                        || temperature_domain
+                        || desaturate_domain
+                        || saturation_domain
+                        || saturation_yuv_domain
+                        || sepia_domain
+                        || alien_map_domain
+                        || saturation_gray_domain
+                        || threshold_domain
+                        || threshold_alpha_domain,
+                    color_balance_depth_domain,
+                    exposure_geometry_domain,
+                    point_replace_domain.map(|_| doc.bounds()),
+                    observed_box_geometry_domain.then(|| doc.bounds()),
+                )?
+            };
+            let neighborhood_domain = if exposure_geometry_domain
+                && matches!(
+                    point_replace_domain,
+                    Some(
+                        crate::xcf_filters::NeighborhoodDomain::ExposureBlackPrecision
+                            | crate::xcf_filters::NeighborhoodDomain::PointReplace(crate::xcf_filters::PointReplaceFamily::Exposure)
+                    )
+                ) {
+                // The exact older offset cohort keeps its geometry identity when
+                // the broader Exposure classifier also recognizes its scalars.
+                crate::xcf_filters::NeighborhoodDomain::ExposureGeometry
+            } else if let Some(domain) = point_replace_domain.or(owned_point_domain).or(owned_neighborhood_domain) {
                 domain
             } else if unpremultiply_domain {
                 crate::xcf_filters::NeighborhoodDomain::UnpremultiplyRgbFloatLinear
@@ -2269,13 +2373,27 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 crate::xcf_filters::NeighborhoodDomain::Unqualified
             };
             let stack = if masked_normal_hierarchy_domain {
-                crate::xcf_filters::qualified_ordered_masked_normal_hierarchy_source_stack(&d.effects,&masks,&masked_domains.as_ref().ok_or_else(||unsupported(d,"masked hierarchy domain plan"))?.values,owner,next_filter_id,file.version)?
-            }else if masked_filtered_flat_domain {
-                crate::xcf_filters::qualified_ordered_masked_filtered_flat_source_stack(&d.effects,&masks,&masked_domains.as_ref().ok_or_else(||unsupported(d,"masked mixed domain plan"))?.values,owner,next_filter_id,file.version)?
-            }else if filtered_flat_opacity_domain {
-                crate::xcf_filters::qualified_ordered_filtered_flat_opacity_source_stack(&d.effects,&masks,owner,next_filter_id,file.version)?
+                crate::xcf_filters::qualified_ordered_masked_normal_hierarchy_source_stack(
+                    &d.effects,
+                    &masks,
+                    &masked_domains.as_ref().ok_or_else(|| unsupported(d, "masked hierarchy domain plan"))?.values,
+                    owner,
+                    next_filter_id,
+                    file.version,
+                )?
+            } else if masked_filtered_flat_domain {
+                crate::xcf_filters::qualified_ordered_masked_filtered_flat_source_stack(
+                    &d.effects,
+                    &masks,
+                    &masked_domains.as_ref().ok_or_else(|| unsupported(d, "masked mixed domain plan"))?.values,
+                    owner,
+                    next_filter_id,
+                    file.version,
+                )?
+            } else if filtered_flat_opacity_domain {
+                crate::xcf_filters::qualified_ordered_filtered_flat_opacity_source_stack(&d.effects, &masks, owner, next_filter_id, file.version)?
             } else if filtered_flat_domain || normal_hierarchy_domain {
-                crate::xcf_filters::qualified_ordered_filtered_flat_source_stack(&d.effects,&masks,owner,next_filter_id,file.version)?
+                crate::xcf_filters::qualified_ordered_filtered_flat_source_stack(&d.effects, &masks, owner, next_filter_id, file.version)?
             } else if let Some(domain) = owned_neighborhood_domain {
                 if domain != neighborhood_domain {
                     return Err(unsupported(d, "owned neighborhood source domain mismatch"));
@@ -2359,30 +2477,34 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 stored_blend_space: d.blend_space,
                 stored_composite_space: d.composite_space,
                 stored_operator: d.composite_mode,
-                resolved: if let Some(rule) = general_rule { Some(rule.resolved()) } else { Some(photocraft_doc::import_compositing::ResolvedGimpComposition {
-                    blend_space: if matches!(d.mode, 24..=27) && d.blend_space == -3 {
-                        photocraft_doc::import_compositing::GimpSpace::Lab
-                    } else {
-                        gimp_space(working(d, d.blend_space)?)
-                    },
-                    composite_space: if d.composite_space == 3 {
-                        photocraft_doc::import_compositing::GimpSpace::Lab
-                    } else {
-                        gimp_space(working(d, d.composite_space)?)
-                    },
-                    operator: if normal_mask_domain || matches!(d.mode, 3 | 4 | 6..=21 | 23..=27 | 30..=40 | 41..=60) {
-                        match d.composite_mode {
-                            -1 if d.mode == 28 => photocraft_doc::import_compositing::GimpOperator::Union,
-                            -1 if d.mode == 59 => photocraft_doc::import_compositing::GimpOperator::Union,
-                            1 => photocraft_doc::import_compositing::GimpOperator::Union,
-                            3 => photocraft_doc::import_compositing::GimpOperator::ClipToLayer,
-                            4 => photocraft_doc::import_compositing::GimpOperator::Intersection,
-                            _ => photocraft_doc::import_compositing::GimpOperator::ClipToBackdrop,
-                        }
-                    } else {
-                        photocraft_doc::import_compositing::GimpOperator::Union
-                    },
-                }) },
+                resolved: if let Some(rule) = general_rule {
+                    Some(rule.resolved())
+                } else {
+                    Some(photocraft_doc::import_compositing::ResolvedGimpComposition {
+                        blend_space: if matches!(d.mode, 24..=27) && d.blend_space == -3 {
+                            photocraft_doc::import_compositing::GimpSpace::Lab
+                        } else {
+                            gimp_space(working(d, d.blend_space)?)
+                        },
+                        composite_space: if d.composite_space == 3 {
+                            photocraft_doc::import_compositing::GimpSpace::Lab
+                        } else {
+                            gimp_space(working(d, d.composite_space)?)
+                        },
+                        operator: if normal_mask_domain || matches!(d.mode, 3 | 4 | 6..=21 | 23..=27 | 30..=40 | 41..=60) {
+                            match d.composite_mode {
+                                -1 if d.mode == 28 => photocraft_doc::import_compositing::GimpOperator::Union,
+                                -1 if d.mode == 59 => photocraft_doc::import_compositing::GimpOperator::Union,
+                                1 => photocraft_doc::import_compositing::GimpOperator::Union,
+                                3 => photocraft_doc::import_compositing::GimpOperator::ClipToLayer,
+                                4 => photocraft_doc::import_compositing::GimpOperator::Intersection,
+                                _ => photocraft_doc::import_compositing::GimpOperator::ClipToBackdrop,
+                            }
+                        } else {
+                            photocraft_doc::import_compositing::GimpOperator::Union
+                        },
+                    })
+                },
                 pass_through: pass,
             }),
         });
@@ -2628,23 +2750,62 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
     doc.xcf_state = Some(state);
     // The mandatory hierarchy Source index owns its genuine Index scratch and
     // prepaid whole-Doc validation; do not run an extra unpriced tree pass here.
-    let structural=if normal_hierarchy_domain {Ok(())}else if masked_filtered_flat_domain {
-        let b=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||IoError::Unsupported("masked mixed final accounting".into()))?;
-        let work=|units:u64|b.consume_work(units.max(1),"masked mixed final coverage").map_err(|e|if e.kind==ErrorKind::Cancelled{photocraft_raster::backing::BackingError::Cancelled}else{photocraft_raster::backing::BackingError::Work});
-        let reserve=|n:u64|b.reserve(photocraft_xcf::BudgetKind::Index,n,"masked mixed source proof index").map(staged_source::staged_masked_filtered_flat::CoverageLease).map_err(|e|if e.kind==ErrorKind::Cancelled{photocraft_raster::backing::BackingError::Cancelled}else{photocraft_raster::backing::BackingError::Quota});
-        let set=doc.checked_f32_filter_mask_coverages_with_reservation(photocraft_doc::xcf_filter_masks::MaskCoverageSetLimits::STANDARD,ctl,&work,&reserve).map_err(crate::xcf_point_replace_source::masked_exposure_source::coverage_error)?;
-        doc.validate_xcf_state_with_checked_filter_masks(&set,ctl)
-    }else if selected_masked_point_source {
-        let source_budget=preparation.as_ref().map(|(b,_)|*b).ok_or_else(||IoError::Unsupported("masked source final structural accounting".into()))?;
+    let structural = if normal_hierarchy_domain {
+        Ok(())
+    } else if masked_filtered_flat_domain {
+        let b = preparation.as_ref().map(|(b, _)| *b).ok_or_else(|| IoError::Unsupported("masked mixed final accounting".into()))?;
+        let work = |units: u64| {
+            b.consume_work(units.max(1), "masked mixed final coverage").map_err(|e| {
+                if e.kind == ErrorKind::Cancelled {
+                    photocraft_raster::backing::BackingError::Cancelled
+                } else {
+                    photocraft_raster::backing::BackingError::Work
+                }
+            })
+        };
+        let reserve = |n: u64| {
+            b.reserve(photocraft_xcf::BudgetKind::Index, n, "masked mixed source proof index")
+                .map(staged_source::staged_masked_filtered_flat::CoverageLease)
+                .map_err(|e| {
+                    if e.kind == ErrorKind::Cancelled {
+                        photocraft_raster::backing::BackingError::Cancelled
+                    } else {
+                        photocraft_raster::backing::BackingError::Quota
+                    }
+                })
+        };
+        let set = doc
+            .checked_f32_filter_mask_coverages_with_reservation(photocraft_doc::xcf_filter_masks::MaskCoverageSetLimits::STANDARD, ctl, &work, &reserve)
+            .map_err(crate::xcf_point_replace_source::masked_exposure_source::coverage_error)?;
+        doc.validate_xcf_state_with_checked_filter_masks(&set, ctl)
+    } else if selected_masked_point_source {
+        let source_budget = preparation.as_ref().map(|(b, _)| *b).ok_or_else(|| IoError::Unsupported("masked source final structural accounting".into()))?;
         // Keep every debit and zero-work poll on the same original ledger;
         // the positive poll fee also invokes its original parent observer.
-        let work=|units:u64|source_budget.consume_work(units.max(1),"masked source final coverage").map_err(|e|if e.kind==ErrorKind::Cancelled{photocraft_raster::backing::BackingError::Cancelled}else{photocraft_raster::backing::BackingError::Work});
-        let mask=doc.xcf_state.as_ref().and_then(|state|state.filter_masks.first()).ok_or_else(||IoError::Unsupported("masked source actual final mask missing".into()))?;
-        let proof=mask.validate_checked_f32_coverage_with_local_work(ctl,&work).map_err(crate::xcf_point_replace_source::masked_exposure_source::coverage_error)?;
-        if !proof.raw_nonempty(){return Err(IoError::Unsupported("masked source final field empty".into()));}
-        doc.validate_xcf_state_with_checked_filter_mask(&proof,ctl)
-    }else{doc.validate_xcf_state_with(ctl)};
-    structural.map_err(|e|if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("XCF imported state: {e}"))})?;
+        let work = |units: u64| {
+            source_budget.consume_work(units.max(1), "masked source final coverage").map_err(|e| {
+                if e.kind == ErrorKind::Cancelled {
+                    photocraft_raster::backing::BackingError::Cancelled
+                } else {
+                    photocraft_raster::backing::BackingError::Work
+                }
+            })
+        };
+        let mask = doc
+            .xcf_state
+            .as_ref()
+            .and_then(|state| state.filter_masks.first())
+            .ok_or_else(|| IoError::Unsupported("masked source actual final mask missing".into()))?;
+        let proof =
+            mask.validate_checked_f32_coverage_with_local_work(ctl, &work).map_err(crate::xcf_point_replace_source::masked_exposure_source::coverage_error)?;
+        if !proof.raw_nonempty() {
+            return Err(IoError::Unsupported("masked source final field empty".into()));
+        }
+        doc.validate_xcf_state_with_checked_filter_mask(&proof, ctl)
+    } else {
+        doc.validate_xcf_state_with(ctl)
+    };
+    structural.map_err(|e| if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF imported state: {e}")) })?;
     if let (true, Some(font)) = (stem_text_domain, authorized_font) {
         let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("authorized text scene requires transaction accounting".into()))?;
         let mut adapter = SharedPreparation { shared, failure: None };
@@ -2661,7 +2822,10 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("singleton scene requires transaction accounting".into()))?;
         let mut adapter = SharedPreparation { shared, failure: None };
         let failure = match photocraft_compose::gimp_singleton_preparation::prepare(&doc, ctl, &mut adapter, source_lease) {
-            Ok(prepared) => { drop(prepared); None },
+            Ok(prepared) => {
+                drop(prepared);
+                None
+            }
             Err(error) => Some(error),
         };
         if let Some(error) = failure {
@@ -2680,22 +2844,64 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
                 .unwrap_or_else(|| if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF rendering consumer: {error}")) }));
         }
     } else if P::requires_budgeted_normal_hierarchy_preparation(normal_hierarchy_domain) {
-        let (shared,source_lease)=preparation.ok_or_else(||IoError::Unsupported("hierarchy Source preparation accounting".into()))?;
-        let mut adapter=SharedPreparation{shared,failure:None};
-        let prepared=if matches!(file.sample,Sample::U8|Sample::U16|Sample::U32){photocraft_compose::backed_normal_hierarchy_context::LeasedNormalHierarchyPipeline::new_plain_quantized_source_budgeted(&doc,ctl,&mut adapter,source_lease)}else if masked_normal_hierarchy_domain{photocraft_compose::backed_normal_hierarchy_context::LeasedNormalHierarchyPipeline::new_masked_source_budgeted(&doc,ctl,&mut adapter,source_lease)}else{photocraft_compose::backed_normal_hierarchy_context::LeasedNormalHierarchyPipeline::new_budgeted(&doc,ctl,&mut adapter,source_lease)};
-        if let Err(error)=prepared{return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("normal hierarchy Source preparation: {error}"))}));}
+        let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("hierarchy Source preparation accounting".into()))?;
+        let mut adapter = SharedPreparation { shared, failure: None };
+        let prepared = if matches!(file.sample, Sample::U8 | Sample::U16 | Sample::U32) {
+            photocraft_compose::backed_normal_hierarchy_context::LeasedNormalHierarchyPipeline::new_plain_quantized_source_budgeted(
+                &doc,
+                ctl,
+                &mut adapter,
+                source_lease,
+            )
+        } else if masked_normal_hierarchy_domain {
+            photocraft_compose::backed_normal_hierarchy_context::LeasedNormalHierarchyPipeline::new_masked_source_budgeted(
+                &doc,
+                ctl,
+                &mut adapter,
+                source_lease,
+            )
+        } else {
+            photocraft_compose::backed_normal_hierarchy_context::LeasedNormalHierarchyPipeline::new_budgeted(&doc, ctl, &mut adapter, source_lease)
+        };
+        if let Err(error) = prepared {
+            return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
+                if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("normal hierarchy Source preparation: {error}")) }
+            }));
+        }
     } else if masked_filtered_flat_domain {
-        let(shared,source_lease)=preparation.ok_or_else(||IoError::Unsupported("masked mixed Source preparation accounting".into()))?;
-        let mut adapter=SharedPreparation{shared,failure:None};
-        if let Err(error)=photocraft_compose::backed_masked_filtered_flat_point_context::LeasedMaskedFilteredFlatPointPipeline::new_budgeted(&doc,ctl,&mut adapter,source_lease){return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("masked mixed Source preparation: {error}"))}));}
+        let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("masked mixed Source preparation accounting".into()))?;
+        let mut adapter = SharedPreparation { shared, failure: None };
+        if let Err(error) = photocraft_compose::backed_masked_filtered_flat_point_context::LeasedMaskedFilteredFlatPointPipeline::new_budgeted(
+            &doc,
+            ctl,
+            &mut adapter,
+            source_lease,
+        ) {
+            return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
+                if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("masked mixed Source preparation: {error}")) }
+            }));
+        }
     } else if P::requires_budgeted_filtered_flat_preparation(filtered_flat_source_domain) {
         // One real multi-root document, one shared source ledger and no leaf
         // singleton facade or filtered native intermediary. The mandatory
         // compiler proves every physical input/default/mask before promotion.
-        let (shared, source_lease) = preparation.ok_or_else(||IoError::Unsupported("filtered flat source preparation accounting".into()))?;
-        let mut adapter = SharedPreparation {shared,failure:None};
-        let checked = if filtered_flat_opacity_domain {photocraft_compose::backed_filtered_flat_point_context::LeasedFilteredFlatPointPipeline::new_opacity_source_budgeted(&doc,ctl,&mut adapter,source_lease)}else{photocraft_compose::backed_filtered_flat_point_context::LeasedFilteredFlatPointPipeline::new_budgeted(&doc,ctl,&mut adapter,source_lease)};
-        if let Err(error)=checked {return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("filtered flat source preparation: {error}"))}));}
+        let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("filtered flat source preparation accounting".into()))?;
+        let mut adapter = SharedPreparation { shared, failure: None };
+        let checked = if filtered_flat_opacity_domain {
+            photocraft_compose::backed_filtered_flat_point_context::LeasedFilteredFlatPointPipeline::new_opacity_source_budgeted(
+                &doc,
+                ctl,
+                &mut adapter,
+                source_lease,
+            )
+        } else {
+            photocraft_compose::backed_filtered_flat_point_context::LeasedFilteredFlatPointPipeline::new_budgeted(&doc, ctl, &mut adapter, source_lease)
+        };
+        if let Err(error) = checked {
+            return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
+                if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("filtered flat source preparation: {error}")) }
+            }));
+        }
     } else if P::requires_budgeted_point_preparation(point_replace_domain.is_some() || owned_point_domain.is_some()) {
         // The original exact classifier and qualified_stack already succeeded.
         // This sealed path must also hold the actual controlled source->working
@@ -2729,7 +2935,8 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
     } else if P::requires_budgeted_component_separable_preparation(component_separable_domain) {
         let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("staged component separable scene requires accounting".into()))?;
         let mut adapter = SharedPreparation { shared, failure: None };
-        let checked = photocraft_compose::backed_separable_document::LeasedSeparableBlendPipeline::new_component_budgeted(&doc, ctl, &mut adapter, source_lease);
+        let checked =
+            photocraft_compose::backed_separable_document::LeasedSeparableBlendPipeline::new_component_budgeted(&doc, ctl, &mut adapter, source_lease);
         if let Err(error) = checked {
             return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
                 if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF staged component separable preparation: {error}")) }
@@ -2754,35 +2961,72 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
             }));
         }
     } else if P::requires_budgeted_separable_preparation(multiply_domain || basic_blend_domain || multiply_spaces_domain) {
-        let (shared,source_lease)=preparation.ok_or_else(||IoError::Unsupported("staged separable scene requires accounting".into()))?;
-        let mut adapter=SharedPreparation{shared,failure:None};
-        let checked=photocraft_compose::backed_separable_document::LeasedSeparableBlendPipeline::new_budgeted(&doc,ctl,&mut adapter,source_lease);
-        if let Err(error)=checked {return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("XCF staged separable preparation: {error}"))}))}
+        let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("staged separable scene requires accounting".into()))?;
+        let mut adapter = SharedPreparation { shared, failure: None };
+        let checked = photocraft_compose::backed_separable_document::LeasedSeparableBlendPipeline::new_budgeted(&doc, ctl, &mut adapter, source_lease);
+        if let Err(error) = checked {
+            return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
+                if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF staged separable preparation: {error}")) }
+            }));
+        }
     } else if P::requires_budgeted_gaussian_group_preparation(gaussian_group_domain) {
-        let (shared, source_lease)=preparation.ok_or_else(||IoError::Unsupported("staged Gaussian group requires transaction accounting".into()))?;
-        let mut adapter=SharedPreparation{shared,failure:None};
-        let checked=photocraft_compose::backed_gaussian_group::LeasedGaussianGroupPipeline::new_budgeted(&doc,ctl,&mut adapter,source_lease);
-        if let Err(error)=checked {return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("XCF staged Gaussian group rendering consumer: {error}"))}))}
+        let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("staged Gaussian group requires transaction accounting".into()))?;
+        let mut adapter = SharedPreparation { shared, failure: None };
+        let checked = photocraft_compose::backed_gaussian_group::LeasedGaussianGroupPipeline::new_budgeted(&doc, ctl, &mut adapter, source_lease);
+        if let Err(error) = checked {
+            return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
+                if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF staged Gaussian group rendering consumer: {error}")) }
+            }));
+        }
     } else if P::requires_budgeted_observed_box_geometry_preparation(observed_box_geometry_domain) {
-        let (shared,source_lease)=preparation.ok_or_else(||IoError::Unsupported("observed Box geometry requires accounting".into()))?;
-        let mut adapter=SharedPreparation{shared,failure:None};
-        let checked=photocraft_compose::backed_box_source::LeasedStreamedBoxPipeline::new_geometry_budgeted(&doc,ctl,&mut adapter,source_lease);
-        if let Err(error)=checked{return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("observed Box geometry preparation: {error}"))}))}
+        let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("observed Box geometry requires accounting".into()))?;
+        let mut adapter = SharedPreparation { shared, failure: None };
+        let checked = photocraft_compose::backed_box_source::LeasedStreamedBoxPipeline::new_geometry_budgeted(&doc, ctl, &mut adapter, source_lease);
+        if let Err(error) = checked {
+            return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
+                if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("observed Box geometry preparation: {error}")) }
+            }));
+        }
     } else if P::requires_budgeted_assigned_box_preparation(owned_assigned_box_domain) {
-        let (shared,source_lease)=preparation.ok_or_else(||IoError::Unsupported("assigned Box requires accounting".into()))?;
-        let mut adapter=SharedPreparation{shared,failure:None};
-        let checked=photocraft_compose::backed_neighborhood_context::LeasedStockNeighborhoodPipeline::new_assigned_box_budgeted(&doc,ctl,&mut adapter,source_lease);
-        if let Err(error)=checked{return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("assigned Box preparation: {error}"))}))}
+        let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("assigned Box requires accounting".into()))?;
+        let mut adapter = SharedPreparation { shared, failure: None };
+        let checked =
+            photocraft_compose::backed_neighborhood_context::LeasedStockNeighborhoodPipeline::new_assigned_box_budgeted(&doc, ctl, &mut adapter, source_lease);
+        if let Err(error) = checked {
+            return Err(adapter
+                .failure
+                .map(accounting_error)
+                .unwrap_or_else(|| if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("assigned Box preparation: {error}")) }));
+        }
     } else if P::requires_budgeted_assigned_median_preparation(owned_assigned_median_domain) {
-        let (shared,source_lease)=preparation.ok_or_else(||IoError::Unsupported("assigned Median requires accounting".into()))?;
-        let mut adapter=SharedPreparation{shared,failure:None};
-        let checked=photocraft_compose::backed_neighborhood_context::LeasedStockNeighborhoodPipeline::new_assigned_median_budgeted(&doc,ctl,&mut adapter,source_lease);
-        if let Err(error)=checked{return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("assigned Median preparation: {error}"))}))}
+        let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("assigned Median requires accounting".into()))?;
+        let mut adapter = SharedPreparation { shared, failure: None };
+        let checked = photocraft_compose::backed_neighborhood_context::LeasedStockNeighborhoodPipeline::new_assigned_median_budgeted(
+            &doc,
+            ctl,
+            &mut adapter,
+            source_lease,
+        );
+        if let Err(error) = checked {
+            return Err(adapter
+                .failure
+                .map(accounting_error)
+                .unwrap_or_else(|| if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("assigned Median preparation: {error}")) }));
+        }
     } else if P::requires_budgeted_assigned_gaussian_preparation(owned_assigned_gaussian_domain) {
-        let (shared,source_lease)=preparation.ok_or_else(||IoError::Unsupported("assigned Gaussian requires accounting".into()))?;
-        let mut adapter=SharedPreparation{shared,failure:None};
-        let checked=photocraft_compose::backed_neighborhood_context::LeasedStockNeighborhoodPipeline::new_assigned_gaussian_budgeted(&doc,ctl,&mut adapter,source_lease);
-        if let Err(error)=checked{return Err(adapter.failure.map(accounting_error).unwrap_or_else(||if ctl.cancelled(){IoError::Cancelled}else{IoError::Unsupported(format!("assigned Gaussian preparation: {error}"))}))}
+        let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("assigned Gaussian requires accounting".into()))?;
+        let mut adapter = SharedPreparation { shared, failure: None };
+        let checked = photocraft_compose::backed_neighborhood_context::LeasedStockNeighborhoodPipeline::new_assigned_gaussian_budgeted(
+            &doc,
+            ctl,
+            &mut adapter,
+            source_lease,
+        );
+        if let Err(error) = checked {
+            return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
+                if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("assigned Gaussian preparation: {error}")) }
+            }));
+        }
     } else if P::requires_budgeted_neighborhood_preparation(owned_neighborhood_domain.is_some()) {
         let (shared, source_lease) = preparation.ok_or_else(|| IoError::Unsupported("staged neighborhood scene requires transaction accounting".into()))?;
         let mut adapter = SharedPreparation { shared, failure: None };
@@ -2800,10 +3044,9 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
         let mut adapter = SharedPreparation { shared, failure: None };
         let checked = photocraft_compose::gimp_render::PreparedRenderer::new_accounted(&doc, ctl, &mut adapter, source_lease);
         if let Err(error) = checked {
-            return Err(adapter
-                .failure
-                .map(accounting_error)
-                .unwrap_or_else(|| if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF staged rendering consumer: {error}")) }));
+            return Err(adapter.failure.map(accounting_error).unwrap_or_else(|| {
+                if ctl.cancelled() { IoError::Cancelled } else { IoError::Unsupported(format!("XCF staged rendering consumer: {error}")) }
+            }));
         }
     } else if !doc.channels.is_empty()
         || doc.xcf_state.as_ref().is_some_and(|state| !state.filter_stacks.is_empty() || !state.source_items.is_empty() || state.floating.is_some())
@@ -2815,7 +3058,7 @@ fn map_accounted_with_authorized_font<P: MappingPlane, S>(
     ctl.progress(1.0);
     budget.charge(crate::xcf_assessment::allocation_bound(&doc)?)?;
     let assessment = Some(crate::xcf_assessment::after_qualified_import(&doc, ctl)?);
-    Ok((ImportResult { document: doc, warnings, origin: ImportOrigin::xcf(), assessment, source_read_only: true, preview_only: false}, budget.peak))
+    Ok((ImportResult { document: doc, warnings, origin: ImportOrigin::xcf(), assessment, source_read_only: true, preview_only: false }, budget.peak))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2833,11 +3076,24 @@ fn effect_masks<P: MappingPlane>(
     color_balance_depth_mask: bool,
     exposure_geometry_mask: bool,
     point_replace_canvas: Option<Rect>,
-    observational_box_canvas:Option<Rect>,
+    observational_box_canvas: Option<Rect>,
 ) -> Result<Vec<Option<photocraft_doc::item_identity::ItemRef>>, IoError> {
-    effect_mask_mapping::map(drawable, owner, first_filter, next_mask, state, budget, ctl,
-        canvas_group_mask, finite_raster_mask, value_precision_mask, color_balance_depth_mask,
-        exposure_geometry_mask, point_replace_canvas, observational_box_canvas)
+    effect_mask_mapping::map(
+        drawable,
+        owner,
+        first_filter,
+        next_mask,
+        state,
+        budget,
+        ctl,
+        canvas_group_mask,
+        finite_raster_mask,
+        value_precision_mask,
+        color_balance_depth_mask,
+        exposure_geometry_mask,
+        point_replace_canvas,
+        observational_box_canvas,
+    )
 }
 
 fn record_memberships(
@@ -2881,12 +3137,11 @@ mod unit_tests {
             lock_alpha: flags[2],
             lock_visibility: flags[3],
             tattoo: Some(91),
-            raw_properties: [28, 32, 10, 42].into_iter().zip(flags).map(|(tag, flag)| RawProperty {
-                tag,
-                offset: u64::from(tag),
-                declared_bytes: 4,
-                payload: u32::from(flag).to_be_bytes().to_vec(),
-            }).collect(),
+            raw_properties: [28, 32, 10, 42]
+                .into_iter()
+                .zip(flags)
+                .map(|(tag, flag)| RawProperty { tag, offset: u64::from(tag), declared_bytes: 4, payload: u32::from(flag).to_be_bytes().to_vec() })
+                .collect(),
             plane: Some(Plane { width: 10, height: 9, channels: 1, sample: Sample::U8, bytes: vec![127; 90] }),
             ..Default::default()
         };
@@ -2918,13 +3173,27 @@ mod unit_tests {
             ..Default::default()
         };
         XcfFile {
-            paths: Vec::new(), tattoo: None, item_sets: Vec::new(),
-            version: 11, width: 16, height: 12, model: Model::Rgb,
-            precision: 150, sample: Sample::U8, encoding: Encoding::NonlinearProfile,
-            compression: Compression::None, icc: Vec::new(), dpi: (72.0, 72.0),
-            unit: Unit::Inch, palette: Vec::new(), layers: vec![owner, backdrop],
-            channels: Vec::new(), guides: Vec::new(), diagnostics: Vec::new(),
-            charged_bytes: 0, raw_properties: Vec::new(),
+            paths: Vec::new(),
+            tattoo: None,
+            item_sets: Vec::new(),
+            version: 11,
+            width: 16,
+            height: 12,
+            model: Model::Rgb,
+            precision: 150,
+            sample: Sample::U8,
+            encoding: Encoding::NonlinearProfile,
+            compression: Compression::None,
+            icc: Vec::new(),
+            dpi: (72.0, 72.0),
+            unit: Unit::Inch,
+            palette: Vec::new(),
+            layers: vec![owner, backdrop],
+            channels: Vec::new(),
+            guides: Vec::new(),
+            diagnostics: Vec::new(),
+            charged_bytes: 0,
+            raw_properties: Vec::new(),
         }
     }
 
@@ -2949,23 +3218,20 @@ mod unit_tests {
             let mut file = mask_lock_fixture(0);
             file.layers[0].color_tag = Some(tag);
             let payload = tag.to_be_bytes().to_vec();
-            file.layers[0].raw_properties.push(RawProperty {
-                tag: 34, offset: 123, declared_bytes: 4, payload: payload.clone(),
-            });
+            file.layers[0].raw_properties.push(RawProperty { tag: 34, offset: 123, declared_bytes: 4, payload: payload.clone() });
             let original_pixels = file.layers[0].plane.as_ref().unwrap().bytes.clone();
             assert!(super::qualified_normal_mask(&file));
             let mapped = super::map("color tags", file.clone(), &Interrupt::NONE, 128 << 20).unwrap().0;
-            assert_eq!(mapped.document.layers[0].label, expected);
-            assert_eq!(mapped.document.layers[1].label, LabelColor::None);
+            let tagged = mapped.document.layers.iter().find(|layer| layer.name == file.layers[0].name).unwrap();
+            assert_eq!(tagged.label, expected);
+            assert_eq!(mapped.document.layers.iter().find(|layer| layer.id != tagged.id).unwrap().label, LabelColor::None);
             if let Some(reason) = limitation {
                 assert!(mapped.warnings.iter().any(|warning| warning.contains(reason) && warning.contains("original source tag retained")));
             } else {
                 assert!(!mapped.warnings.iter().any(|warning| warning.contains("current label unavailable")));
             }
             let state = mapped.document.xcf_state.as_ref().unwrap();
-            let record = state.opaque.iter().find(|record| {
-                record.owner == Some(ItemRef::Layer(mapped.document.layers[0].id)) && record.identity == "34@123:4"
-            }).unwrap();
+            let record = state.opaque.iter().find(|record| record.owner == Some(ItemRef::Layer(tagged.id)) && record.identity == "34@123:4").unwrap();
             assert_eq!(record.bytes.as_slice(), payload.as_slice());
             assert_eq!(record.blake3, blake3::hash(&payload).to_hex().as_str());
             assert_eq!(file.layers[0].plane.as_ref().unwrap().bytes, original_pixels);
@@ -2980,7 +3246,10 @@ mod unit_tests {
 
     #[test]
     fn layer_mask_mapping_preserves_each_decoded_lock_without_changing_owner_or_samples() {
-        use photocraft_doc::{item_identity::{ItemRef, MaskId}, xcf_state::ItemLocks};
+        use photocraft_doc::{
+            item_identity::{ItemRef, MaskId},
+            xcf_state::ItemLocks,
+        };
         use photocraft_raster::Interrupt;
         let baseline = super::map("locks", mask_lock_fixture(0), &Interrupt::NONE, 128 << 20).unwrap().0.document;
         for bits in 0..16 {
@@ -2990,20 +3259,15 @@ mod unit_tests {
             let mapped = super::map("locks", file.clone(), &Interrupt::NONE, 128 << 20).unwrap().0.document;
             let state = mapped.xcf_state.as_ref().unwrap();
             let mask = state.items.iter().find(|item| item.item == ItemRef::Mask(MaskId(1))).unwrap();
-            assert_eq!(mask.locks, ItemLocks {
-                content: bits & 1 != 0, position: bits & 2 != 0,
-                alpha: bits & 4 != 0, visibility: bits & 8 != 0,
-            });
-            assert_eq!(mask.mask.as_ref().unwrap().owner, ItemRef::Layer(mapped.layers[0].id));
+            assert_eq!(mask.locks, ItemLocks { content: bits & 1 != 0, position: bits & 2 != 0, alpha: bits & 4 != 0, visibility: bits & 8 != 0 });
+            assert_eq!(mask.mask.as_ref().unwrap().owner, ItemRef::Layer(mapped.layers.iter().find(|layer| layer.mask.is_some()).unwrap().id));
             assert_eq!(mask.source_tattoo, Some(91));
             for (layer, original) in mapped.layers.iter().zip(&baseline.layers) {
                 assert_eq!(layer.surface(), original.surface());
                 assert_eq!(layer.mask, original.mask);
             }
             for (order, property) in original_payloads.iter().enumerate() {
-                let record = state.opaque.iter().find(|record| {
-                    record.owner == Some(mask.item) && record.order == order as u32
-                }).unwrap();
+                let record = state.opaque.iter().find(|record| record.owner == Some(mask.item) && record.order == order as u32).unwrap();
                 assert_eq!(record.identity, format!("{}@{}:{}", property.tag, property.offset, property.declared_bytes));
                 assert_eq!(record.bytes.as_slice(), property.payload.as_slice());
                 assert_eq!(record.blake3, blake3::hash(&property.payload).to_hex().as_str());
@@ -3101,6 +3365,25 @@ mod unit_tests {
         precision_point_context_rejections("color-balance-depth-evidence", "gimp:color-balance");
     }
     #[cfg(feature = "corpus")]
+    fn assert_mapped_raster_custody(source: &photocraft_xcf::XcfFile, current: &photocraft_doc::Document) {
+        assert_eq!(current.source_color_context.as_ref().unwrap().source_precision, source.precision);
+        for drawable in &source.layers {
+            let Some(plane) = &drawable.plane else { continue };
+            let layer = current.layers.iter().find(|layer| layer.name == drawable.name).unwrap();
+            let bounds = photocraft_geom::Rect::from_xywh(drawable.offset.0, drawable.offset.1, drawable.width, drawable.height);
+            assert_eq!(layer.surface().unwrap().try_read_interleaved(bounds).unwrap(), plane.bytes);
+            let item =
+                current.xcf_state.as_ref().unwrap().items.iter().find(|item| item.item == photocraft_doc::item_identity::ItemRef::Layer(layer.id)).unwrap();
+            assert_eq!(item.raster_bounds, Some(bounds));
+            let composition = item.composition.as_ref().unwrap();
+            assert_eq!(composition.source_mode, drawable.mode);
+            assert_eq!(
+                (composition.stored_blend_space, composition.stored_composite_space, composition.stored_operator),
+                (drawable.blend_space, drawable.composite_space, drawable.composite_mode)
+            );
+        }
+    }
+    #[cfg(feature = "corpus")]
     fn precision_point_context_rejections(packet: &str, operation: &str) {
         use sha2::{Digest, Sha256};
         let root = std::path::PathBuf::from(std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS").unwrap()).join(packet);
@@ -3121,12 +3404,23 @@ mod unit_tests {
             let original = photocraft_xcf::decode(&bytes, &Default::default()).unwrap();
             assert_eq!(original.layers[0].effects[0].operation, operation);
             assert!(super::map("precision point", original.clone(), &photocraft_raster::Interrupt::NONE, 128 << 20).is_ok());
+            if matches!(operation, "gegl:brightness-contrast" | "gegl:levels" | "gegl:exposure") {
+                // The later bounded Point domain now admits this offset. Keep
+                // its exact original native/coordinate custody as a positive.
+                let mut shifted = original.clone();
+                shifted.layers[0].offset = (1, 0);
+                let current = super::map("qualified offset", shifted.clone(), &photocraft_raster::Interrupt::NONE, 128 << 20).unwrap().0.document;
+                assert_mapped_raster_custody(&shifted, &current);
+            }
             for change in 0..12 {
                 let mut invalid = original.clone();
                 match change {
                     0 => invalid.version = 23,
                     1 => invalid.icc = photocraft_cms::Builtin::Srgb.profile().to_bytes().as_ref().clone(),
-                    2 => invalid.layers[0].offset = (1, 0),
+                    2 => {
+                        invalid.layers[0].offset =
+                            if matches!(operation, "gegl:brightness-contrast" | "gegl:levels" | "gegl:exposure") { (i32::MAX, 0) } else { (1, 0) }
+                    }
                     3 => invalid.layers[0].opacity = 0.5,
                     4 => invalid.layers[0].effects[0].mask = None,
                     5 => {
@@ -3201,11 +3495,52 @@ mod unit_tests {
             assert_eq!(Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect::<String>(), row["source_sha256"]);
             let original = photocraft_xcf::decode(&bytes, &Default::default()).unwrap();
             assert!(super::map("integer", original.clone(), &photocraft_raster::Interrupt::NONE, 128 << 20).is_ok());
-            for change in 0..7 {
+            // Implicit integer originals retain their existing route. A valid
+            // assigned profile may independently match the already-qualified
+            // nonlinear analytic geometry role; it does not widen the linear role.
+            let mut malformed = original.clone();
+            malformed.icc = b"malformed assigned ICC".to_vec();
+            assert!(super::map("malformed integer profile", malformed, &photocraft_raster::Interrupt::NONE, 128 << 20).is_err());
+            let mut assigned = original.clone();
+            assigned.icc = photocraft_cms::Builtin::Srgb.profile().to_bytes().as_ref().clone();
+            if super::qualified_analytic_normal_geometry(&assigned) {
+                assert_eq!((assigned.version, assigned.encoding), (12, photocraft_xcf::Encoding::NonlinearProfile));
+                assert!(matches!((assigned.precision, assigned.sample), (250, photocraft_xcf::Sample::U16) | (350, photocraft_xcf::Sample::U32)));
+                let current =
+                    super::map("qualified assigned integer geometry", assigned.clone(), &photocraft_raster::Interrupt::NONE, 128 << 20).unwrap().0.document;
+                assert_eq!(current.icc_profile.as_ref().unwrap().as_slice(), assigned.icc);
+                assert_eq!(current.source_color_context.as_ref().unwrap().original_icc.as_ref().unwrap().as_slice(), assigned.icc);
+                assert_mapped_raster_custody(&assigned, &current);
+                let state = current.xcf_state.as_ref().unwrap();
+                current.validate_xcf_state().unwrap();
+                for drawable in &assigned.layers {
+                    let layer = current.layers.iter().find(|layer| layer.name == drawable.name).unwrap();
+                    let item = state.items.iter().find(|item| item.item == photocraft_doc::item_identity::ItemRef::Layer(layer.id)).unwrap();
+                    assert_eq!(
+                        item.composition.as_ref().unwrap().compatibility_epoch,
+                        photocraft_doc::import_compositing::XCF12_ANALYTIC_INTEGER_NORMAL_MASK_GEOMETRY_EPOCH
+                    );
+                    if let Some(mask) = &drawable.mask {
+                        assert_eq!(mask.offset, (0, 0));
+                        let world = photocraft_geom::Rect::from_xywh(drawable.offset.0, drawable.offset.1, mask.width, mask.height);
+                        let mapped = layer.mask.as_ref().unwrap();
+                        assert_eq!(mapped.enabled, drawable.mask_enabled);
+                        assert_eq!(mapped.surface.try_read_interleaved(world).unwrap(), mask.plane.as_ref().unwrap().bytes);
+                        let mask_item = state
+                            .items
+                            .iter()
+                            .find(|item| item.mask.as_ref().is_some_and(|m| m.owner == photocraft_doc::item_identity::ItemRef::Layer(layer.id)))
+                            .unwrap();
+                        assert_eq!(mask_item.raster_bounds, Some(world));
+                    }
+                }
+            } else {
+                assert!(super::map("unqualified assigned integer", assigned, &photocraft_raster::Interrupt::NONE, 128 << 20).is_err());
+            }
+            for change in [0, 2, 3, 4, 5, 6] {
                 let mut invalid = original.clone();
                 match change {
                     0 => invalid.version = if invalid.version == 11 { 12 } else { 11 },
-                    1 => invalid.icc = photocraft_cms::Builtin::Srgb.profile().to_bytes().as_ref().clone(),
                     2 => invalid.precision += 1,
                     3 => invalid.layers[0].mask.as_mut().unwrap().plane.as_mut().unwrap().sample = photocraft_xcf::Sample::F32,
                     4 => invalid.layers[0].mask.as_mut().unwrap().plane.as_mut().unwrap().channels = 2,
@@ -3238,11 +3573,24 @@ mod unit_tests {
             assert_eq!(Sha256::digest(&bytes).iter().map(|v| format!("{v:02x}")).collect::<String>(), row["source_sha256"]);
             let original = photocraft_xcf::decode(&bytes, &Default::default()).unwrap();
             assert!(super::map("qualified", original.clone(), &photocraft_raster::Interrupt::NONE, 128 << 20).is_ok());
+            if original.model == photocraft_xcf::Model::Rgb {
+                let mut assigned = original.clone();
+                assigned.icc = photocraft_cms::Builtin::Srgb.profile().to_bytes().as_ref().clone();
+                let current = super::map("qualified assigned profile", assigned.clone(), &photocraft_raster::Interrupt::NONE, 128 << 20).unwrap().0.document;
+                assert_eq!(current.source_color_context.as_ref().unwrap().original_icc.as_ref().unwrap().as_slice(), assigned.icc);
+                assert_mapped_raster_custody(&assigned, &current);
+            }
             for change in 0..15 {
                 let mut invalid = original.clone();
                 match change {
                     0 => invalid.version = 13,
-                    1 => invalid.icc = photocraft_cms::Builtin::Srgb.profile().to_bytes().as_ref().clone(),
+                    1 => {
+                        invalid.icc = if original.model == photocraft_xcf::Model::Rgb {
+                            b"malformed assigned ICC".to_vec()
+                        } else {
+                            photocraft_cms::Builtin::Srgb.profile().to_bytes().as_ref().clone()
+                        }
+                    }
                     2 => invalid.encoding = photocraft_xcf::Encoding::Linear,
                     3 => invalid.layers[0].offset = (0, 0),
                     4 => invalid.layers[0].opacity = 0.5,

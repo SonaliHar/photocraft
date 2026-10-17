@@ -1074,11 +1074,13 @@ mod tests {
     fn complete_mask_plan_preserves_f64_overshoot_and_signed_words_without_unit_validation() {
         let values = [-0f64, 1.0000000361224046, 0.5f64];
         let bytes: Vec<u8> = values.into_iter().flat_map(f64::to_ne_bytes).collect();
-        let mut mask = Drawable::default();
-        mask.width = 3;
-        mask.height = 1;
-        mask.model = photocraft_xcf::Model::Gray;
-        mask.plane = Some(photocraft_xcf::Plane { width: 3, height: 1, channels: 1, sample: Sample::F64, bytes: bytes.clone() });
+        let mask = Drawable {
+            width: 3,
+            height: 1,
+            model: photocraft_xcf::Model::Gray,
+            plane: Some(photocraft_xcf::Plane { width: 3, height: 1, channels: 1, sample: Sample::F64, bytes: bytes.clone() }),
+            ..Default::default()
+        };
         let shared = budget();
         let ctl = Interrupt::NONE;
         let mut m = meter(&shared, &ctl);
