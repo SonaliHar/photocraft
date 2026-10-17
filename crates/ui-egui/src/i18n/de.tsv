@@ -3210,3 +3210,15 @@ curves	Smooth	Glätten
 	This document's layers: {needed} of {budget} for layers	Ebenen dieses Dokuments: {needed} von {budget} für Ebenen
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Die Ebenen dieses Dokuments brauchen {needed}, dürfen aber {budget} belegen: Das ganze Dokument wird auf der CPU neu gezeichnet
 	GPU Memory (MB, 0 = Automatic)	GPU-Speicher (MB, 0 = Automatisch)
+	A layer per frame, each with its own delay, edited in Window › Timeline	Eine Ebene pro Frame, jeder mit eigener Verzögerung, bearbeitet unter Fenster › Zeitleiste
+	A still image	Ein Standbild
+	Change it later in Preferences › File Handling.	Später änderbar unter Voreinstellungen › Dateiverarbeitung.
+	First frame only	Nur erster Frame
+	Frame animation	Frame-Animation
+	One layer holding every frame, played on the timeline	Eine Ebene mit allen Frames, abgespielt auf der Zeitleiste
+	Open Animated {format}	Animiertes {format} öffnen
+	Remember this choice for {format} files	Diese Auswahl für {format}-Dateien merken
+	Video layer	Videoebene
+	“{name}” is an animated {format} with {frames} frames. Open it as:	„{name}“ ist ein animiertes {format} mit {frames} Frames. Öffnen als:
+	Open animated GIF as	Animiertes GIF öffnen als
+	Open animated WebP as	Animiertes WebP öffnen als
