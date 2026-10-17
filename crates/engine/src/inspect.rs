@@ -41,9 +41,11 @@ pub fn session(s: &Session) -> crate::Result<Value> {
 pub fn document(d: &DocState) -> crate::Result<Value> {
     d.doc.validate_resident()?;
     let doc = &d.doc;
-    let selected = d.selected_layers();
+    let selected = d.selected_layers()?;
     let instances = smart_instances(&doc.layers);
-    json!({
+    let linked_dependencies = linked::dependencies(d)?;
+    Ok(json!({
+        "documentId": doc.id.0.to_string(),
         "name": doc.name,
         "path": &d.path,
         "width": doc.size.width,
@@ -59,7 +61,7 @@ pub fn document(d: &DocState) -> crate::Result<Value> {
         "hasSelection": doc.selection.is_some(),
         "selectionBounds": doc.selection.as_ref().map(|s| { let r = s.content_bounds(); [r.x0, r.y0, r.width() as i32, r.height() as i32] }),
         "layers": doc.layers.iter().rev().map(|l| layer_sel(l, &selected, &instances, Some(&doc.metadata))).collect::<Vec<_>>(),
-        "history": d.history.entries(),
+        "history": d.history.entry_labels().collect::<Vec<_>>(),
         "snapshots": d.snapshots.iter().map(|snap| json!({"id": snap.id, "name": snap.name})).collect::<Vec<_>>(),
         "canUndo": d.history.can_undo(),
         "canRedo": d.history.can_redo(),

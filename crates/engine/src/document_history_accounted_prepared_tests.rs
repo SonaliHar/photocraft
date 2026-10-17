@@ -152,3 +152,107 @@ fn cancellation_after_metadata_admission_and_quota_denial_preserve_all_history_o
     assert!(history.shares_accounted_history(&before));
     assert_eq!(q.usage().unwrap(), usage);
 }
+
+#[test]
+fn accounted_state_limit_uses_prepaid_capacity_and_keeps_resident_byte_policy_out() {
+    let q = quota();
+    let (initial, target) = fixture(&q, None);
+    let mut history = DocumentHistory::new_accounted(initial, 3, "Open", &target, &control()).unwrap();
+    let before = history.clone();
+    let usage = q.usage().unwrap();
+    history.set_accounted_state_limit(1).unwrap();
+    assert_eq!(history.max_states, 1);
+    assert_eq!(history.max_bytes, 0);
+    history.set_accounted_state_limit(3).unwrap();
+    assert_eq!(history.max_states, 3, "restore within actual prepaid capacity, not current soft limit");
+    for invalid in [0, 4, usize::MAX] {
+        assert!(matches!(history.set_accounted_state_limit(invalid), Err(BackingError::Length)));
+        assert_eq!(history.max_states, 3);
+        assert_eq!(history.max_bytes, 0);
+        assert!(history.shares_accounted_history(&before));
+        assert_eq!(q.usage().unwrap(), usage);
+    }
+    history.max_bytes = 1;
+    assert!(matches!(history.set_accounted_state_limit(2), Err(BackingError::Unsupported)));
+    assert_eq!(history.max_bytes, 1, "invalid caller state is refused rather than normalized");
+    assert_eq!(history.max_states, 3);
+    let mut resident = DocumentHistory::new_resident(3);
+    resident.max_bytes = 1024;
+    assert!(matches!(resident.set_accounted_state_limit(2), Err(BackingError::Unsupported)));
+    assert_eq!((resident.max_states, resident.max_bytes), (3, 1024));
+}
+
+#[test]
+fn changed_accounted_append_shrinks_many_old_states_from_undo_and_cancel_is_atomic() {
+    for prepared in [false, true] {
+        let q = quota();
+        let (initial, target) = fixture(&q, None);
+        let mut current = DocumentSnapshot::from_accounted(initial.clone()).unwrap();
+        let mut history = DocumentHistory::new_accounted(initial, 8, "Open", &target, &control()).unwrap();
+        for value in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6] {
+            let owner = current.accounted().unwrap();
+            current = if prepared {
+                history.try_commit_prepared_accounted(owner, opacity(owner, &target, value), "Change", &target, &control()).unwrap()
+            } else {
+                history
+                    .try_commit_accounted(AccountedEdit::LayerOpacity { layer: target.active.unwrap(), opacity: value }, "Change", &target, &control())
+                    .unwrap()
+            };
+        }
+        for _ in 0..2 {
+            current = history.undo(&current, &control()).unwrap().unwrap().snapshot().clone();
+        }
+        assert_eq!(history.past_len(), 4);
+        assert!(history.can_redo());
+        history.set_accounted_state_limit(1).unwrap();
+        let before_history = history.clone();
+        let before = current.clone();
+        let owner = current.accounted().unwrap();
+        let staged = opacity(owner, &target, 0.9);
+        let same = history.try_commit_prepared_accounted(owner, owner.clone(), "No-op", &target, &control()).unwrap();
+        assert!(same.shares_state(&before));
+        assert!(history.shares_accounted_history(&before_history));
+        assert!(history.can_redo(), "soft shrink does not erase redo during a no-op");
+        let Branch::Accounted(entries) = &history.branch else { panic!() };
+        let drain_work = (entries.states.len() * (size_of::<Entry>() + 64)) as u64;
+        let cancelled = AtomicBool::new(false);
+        let cancel = || cancelled.load(Ordering::Relaxed);
+        let interrupt = Interrupt::cancel_only(&cancel);
+        let debit = |units| {
+            if units == drain_work {
+                cancelled.store(true, Ordering::Relaxed);
+            }
+            Ok(())
+        };
+        let controlled = ReadControl { interrupt: &interrupt, work: &debit };
+        let usage = q.usage().unwrap();
+        let result = if prepared {
+            history.try_commit_prepared_accounted(owner, staged.clone(), "Shrink", &target, &controlled)
+        } else {
+            history.try_commit_accounted(AccountedEdit::LayerOpacity { layer: target.active.unwrap(), opacity: 0.9 }, "Shrink", &target, &controlled)
+        };
+        assert!(cancelled.load(Ordering::Relaxed));
+        assert!(matches!(result, Err(BackingError::Cancelled)));
+        assert!(history.shares_accounted_history(&before_history));
+        assert_eq!(history.past_len(), 4);
+        assert!(history.can_redo());
+        assert_eq!(q.usage().unwrap(), usage);
+        current = if prepared {
+            history.try_commit_prepared_accounted(owner, staged, "Shrink", &target, &control()).unwrap()
+        } else {
+            history.try_commit_accounted(AccountedEdit::LayerOpacity { layer: target.active.unwrap(), opacity: 0.9 }, "Shrink", &target, &control()).unwrap()
+        };
+        assert_eq!(history.past_len(), 1);
+        assert!(!history.can_redo());
+        let Branch::Accounted(entries) = &history.branch else { panic!() };
+        assert_eq!(entries.states.len(), 2);
+        assert_eq!(entries.maximum, 9, "the original prepaid slot ceiling does not change");
+        let restored = history.undo(&current, &control()).unwrap().unwrap().snapshot().clone();
+        assert!(restored.shares_state(&before));
+        assert!(!history.can_undo());
+        let redone = history.redo(&restored, &control()).unwrap().unwrap().snapshot().clone();
+        assert!(redone.shares_state(&current));
+        assert_eq!(before_history.past_len(), 4);
+        assert!(before_history.can_redo(), "the independently retained original history was never mutated");
+    }
+}

@@ -3,7 +3,6 @@
 use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
 use photocraft_doc::{Adjustment, Document, Fill, Layer, LayerContent, LayerId, LayerMask, Size};
 use photocraft_geom::Rect;
-use photocraft_raster::Surface;
 use serde_json::{Map, Value, json};
 
 use crate::{EngineError, Result, Session, inspect, pixels};
@@ -119,48 +118,74 @@ fn has_selection(s: &Session) -> std::result::Result<(), String> {
 
 /// Image › Image Rotation by a right angle or a flip (pixels, vectors, guides, … all move).
 fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Value> {
-    let state=s.active().ok_or(EngineError::NoDocument)?;
-    if state.revision==u64::MAX {return Err(EngineError::Other("canvas turn revision limit".into()));}
+    let state = s.active().ok_or(EngineError::NoDocument)?;
+    if state.revision == u64::MAX {
+        return Err(EngineError::Other("canvas turn revision limit".into()));
+    }
     state.doc.validate_resident()?;
-    let baseline=state.doc.clone();let revision=state.revision;let work_base=baseline.clone();
-    let work_label=label.to_owned();let apply_label=label.to_owned();
-    crate::jobs::run(s,label,true,move|ctx| {
-        ctx.stage(0.0,0.95,&work_label,|control| {
-            control.check().map_err(|_|EngineError::Cancelled)?;
-            // Admit before the whole Document clone, including the apply edit's
-            // possible sparse-map clone. Retained raster/source payloads are shared;
-            // only the measured model capacity slice has a clone multiplier.
-            let footprint=work_base.resident_raster_footprint_with(control)?;
-            if footprint.clone_metadata_bytes.checked_mul(3).and_then(|n|n.checked_add(footprint.retained_bytes)).is_none_or(|n|n>photocraft_raster::MAX_CHECKED_RASTER_BYTES) {
-                return Err(EngineError::Other("canvas turn retained/COW staging limit".into()));
+    let baseline = state.doc.clone();
+    let revision = state.revision;
+    let work_base = baseline.clone();
+    let work_label = label.to_owned();
+    let apply_label = label.to_owned();
+    crate::jobs::run(
+        s,
+        label,
+        true,
+        move |ctx| {
+            ctx.stage(0.0, 0.95, &work_label, |control| {
+                control.check().map_err(|_| EngineError::Cancelled)?;
+                // Admit before the whole Document clone, including the apply edit's
+                // possible sparse-map clone. Retained raster/source payloads are shared;
+                // only the measured model capacity slice has a clone multiplier.
+                let footprint = work_base.resident_raster_footprint_with(control)?;
+                if footprint
+                    .clone_metadata_bytes
+                    .checked_mul(3)
+                    .and_then(|n| n.checked_add(footprint.retained_bytes))
+                    .is_none_or(|n| n > photocraft_raster::MAX_CHECKED_RASTER_BYTES)
+                {
+                    return Err(EngineError::Other("canvas turn retained/COW staging limit".into()));
+                }
+                let limits = photocraft_io::NativeSaveLimits::default().preparation;
+                let payload = photocraft_io::retained_native_payload_bytes(&work_base, limits, control)
+                    .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(error.to_string()) })?;
+                let model = photocraft_io::retained_native_model_bytes(&work_base, limits, control)
+                    .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(error.to_string()) })?;
+                if (model as u64)
+                    .checked_mul(3)
+                    .and_then(|n| n.checked_add(payload as u64))
+                    .and_then(|n| n.checked_add(footprint.clone_metadata_bytes.checked_mul(3)?))
+                    .is_none_or(|n| n > photocraft_raster::MAX_CHECKED_RASTER_BYTES)
+                {
+                    return Err(EngineError::Other("canvas turn retained/model staging limit".into()));
+                }
+                control.check().map_err(|_| EngineError::Cancelled)?;
+                let mut doc = (*work_base).clone();
+                crate::canvas_geom::turn_canvas_with_interrupt(&mut doc, t, control)?;
+                control.check().map_err(|_| EngineError::Cancelled)?;
+                Ok((doc, ctx.clone()))
+            })
+        },
+        move |s, (doc, ctx)| {
+            // Generic jobs restores the original target tab and checks its weak
+            // snapshot; retain a revision fence too for focus-only changes.
+            let current = s.active().ok_or(EngineError::NoDocument)?;
+            if current.doc.id != baseline.id || current.revision != revision || !current.doc.shares_state(&baseline) {
+                return Err(EngineError::Other("canvas turn target changed while preparing".into()));
             }
-            let limits=photocraft_io::NativeSaveLimits::default().preparation;
-            let payload=photocraft_io::retained_native_payload_bytes(&work_base,limits,control).map_err(|error|if control.cancelled(){EngineError::Cancelled}else{EngineError::Other(error.to_string())})?;
-            let model=photocraft_io::retained_native_model_bytes(&work_base,limits,control).map_err(|error|if control.cancelled(){EngineError::Cancelled}else{EngineError::Other(error.to_string())})?;
-            if (model as u64).checked_mul(3).and_then(|n|n.checked_add(payload as u64)).and_then(|n|n.checked_add(footprint.clone_metadata_bytes.checked_mul(3)?)).is_none_or(|n|n>photocraft_raster::MAX_CHECKED_RASTER_BYTES) {
-                return Err(EngineError::Other("canvas turn retained/model staging limit".into()));
-            }
-            control.check().map_err(|_|EngineError::Cancelled)?;
-            let mut doc=(*work_base).clone();
-            crate::canvas_geom::turn_canvas_with_interrupt(&mut doc,t,control)?;
-            control.check().map_err(|_|EngineError::Cancelled)?;
-            Ok((doc,ctx.clone()))
-        })
-    },move|s,(doc,ctx)| {
-        // Generic jobs restores the original target tab and checks its weak
-        // snapshot; retain a revision fence too for focus-only changes.
-        let current=s.active().ok_or(EngineError::NoDocument)?;
-        if current.doc.id!=baseline.id || current.revision!=revision || !current.doc.shares_state(&baseline) {
-            return Err(EngineError::Other("canvas turn target changed while preparing".into()));
-        }
-        ctx.stage(0.95,1.0,&apply_label,|control| {
-            control.check().map_err(|_|EngineError::Cancelled)?;
-            let map = t.affine(f64::from(baseline.size.width), f64::from(baseline.size.height));
-            s.set_sampler_map(map);
-            s.edit_with_interrupt(&apply_label,control,move|current,_| {*current=doc;Ok(())})?;
-            Ok(Value::Null)
-        })
-    })
+            ctx.stage(0.95, 1.0, &apply_label, |control| {
+                control.check().map_err(|_| EngineError::Cancelled)?;
+                let map = t.affine(f64::from(baseline.size.width), f64::from(baseline.size.height));
+                s.set_sampler_map(map);
+                s.edit_with_interrupt(&apply_label, control, move |current, _| {
+                    *current = doc;
+                    Ok(())
+                })?;
+                Ok(Value::Null)
+            })
+        },
+    )
 }
 
 macro_rules! cmd {
@@ -393,9 +418,10 @@ pub fn blend_from_str(s: &str) -> Option<BlendMode> {
 /// Photoshop masks a new adjustment or fill layer with the selection, so the adjustment acts on
 /// the selected area only (#1250); the selection itself stays, as Reveal Selection leaves it.
 pub(crate) fn selection_mask(doc: &Document) -> Result<Option<LayerMask>> {
-    doc.selection.as_ref().map(|selection| {
-        mask_at_depth(LayerMask { surface: std::sync::Arc::new(selection.clone()), ..LayerMask::reveal_all() }, doc.depth)
-    }).transpose()
+    doc.selection
+        .as_ref()
+        .map(|selection| mask_at_depth(LayerMask { surface: std::sync::Arc::new(selection.clone()), ..LayerMask::reveal_all() }, doc.depth))
+        .transpose()
 }
 
 fn mask_at_depth(mut mask: LayerMask, depth: SampleType) -> Result<LayerMask> {
@@ -465,7 +491,7 @@ fn destructive_adjust(s: &mut Session, label: &str, adj: Adjustment, p: &Value) 
         return s.edit(label, |doc, _| {
             let sel = doc.selection.clone();
             if let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, None, p)? {
-                pixels::adjust_mask(surf, &adj, sel.as_ref());
+                pixels::adjust_mask(surf, &adj, sel.as_ref())?;
             }
             Ok(Value::Null)
         });
@@ -614,9 +640,33 @@ fn build() -> Vec<CommandSpec> {
             Ok(Value::Null)
         }),
         // Select
-        cmd!("select.all", "All", ["Select"], Some("Cmd+A"), r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_doc, crate::selection_inverse_controlled::run_all),
-        cmd!("select.deselect", "Deselect", ["Select"], Some("Cmd+D"), r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_selection, crate::selection_inverse_controlled::run_deselect),
-        cmd!("select.inverse", "Inverse", ["Select"], Some("Cmd+Shift+I"), r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_selection, crate::selection_inverse_controlled::run),
+        cmd!(
+            "select.all",
+            "All",
+            ["Select"],
+            Some("Cmd+A"),
+            r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            has_doc,
+            crate::selection_inverse_controlled::run_all
+        ),
+        cmd!(
+            "select.deselect",
+            "Deselect",
+            ["Select"],
+            Some("Cmd+D"),
+            r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            has_selection,
+            crate::selection_inverse_controlled::run_deselect
+        ),
+        cmd!(
+            "select.inverse",
+            "Inverse",
+            ["Select"],
+            Some("Cmd+Shift+I"),
+            r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            has_selection,
+            crate::selection_inverse_controlled::run
+        ),
         cmd!(
             "select.rect",
             "Rectangular Selection",
@@ -865,23 +915,19 @@ fn build() -> Vec<CommandSpec> {
             "Reveal Selection",
             ["Layer", "Layer Mask"],
             None,
-            r##"{"layer":id?} (no layer: every selected layer that can take a mask)"##,
+            r##"{"layer":id?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
             has_selection,
-            |s, p| {
-                let sel = s.active().and_then(|d| d.doc.selection.clone()).ok_or(EngineError::Other("no selection".into()))?;
-                let mask = LayerMask { surface: sel, ..LayerMask::reveal_all() };
-                // The selection becomes the mask, so Photoshop drops it (as Hide Selection does): a
-                // following Invert (⌘I) on the targeted mask then inverts all of it, not just the
-                // part inside the old selection. Same undo step as the mask.
-                set_mask_and_deselect(s, p, "Add Layer Mask", mask)
-            }
+            crate::layer_mask_storage_controlled::run
         ),
-        cmd!("layer.layerMask.delete", "Delete", ["Layer", "Layer Mask"], None, r##"{"layer":id?}"##, has_layer, |s, p| set_mask(
-            s,
-            p,
-            "Delete Layer Mask",
-            None
-        )),
+        cmd!(
+            "layer.layerMask.delete",
+            "Delete",
+            ["Layer", "Layer Mask"],
+            None,
+            r##"{"layer":id?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            has_layer,
+            crate::layer_mask_storage_controlled::delete
+        ),
         cmd!("layer.mergeDown", "Merge Down", ["Layer"], None, r##"{"layer":id?}"##, has_layer, |s, p| {
             let id = layer_param(s, p)?;
             s.edit("Merge Down", |doc, active| {
@@ -1311,43 +1357,69 @@ fn build() -> Vec<CommandSpec> {
             enabled: crate::adjust_cmds::has_adjustable,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
-                if kind == "invert" && let Some(value) = crate::native_gray_invert_controlled::try_run(s, p)? {
+                if kind == "invert"
+                    && let Some(value) = crate::native_gray_invert_controlled::try_run(s, p)?
+                {
                     return Ok(value);
                 }
-                if kind == "invert" && let Some(value) = crate::native_raster_invert_controlled::try_run(s, p)? {
+                if kind == "invert"
+                    && let Some(value) = crate::native_raster_invert_controlled::try_run(s, p)?
+                {
                     return Ok(value);
                 }
-                if kind == "threshold" && let Some(value) = crate::native_gray_threshold_controlled::try_run(s, p)? {
+                if kind == "threshold"
+                    && let Some(value) = crate::native_gray_threshold_controlled::try_run(s, p)?
+                {
                     return Ok(value);
                 }
-                if kind == "posterize" && let Some(value) = crate::native_gray_posterize_controlled::try_run(s, p)? {
+                if kind == "posterize"
+                    && let Some(value) = crate::native_gray_posterize_controlled::try_run(s, p)?
+                {
                     return Ok(value);
                 }
-                if kind == "threshold" && let Some(value) = crate::native_raster_threshold_controlled::try_run(s, p)? {
+                if kind == "threshold"
+                    && let Some(value) = crate::native_raster_threshold_controlled::try_run(s, p)?
+                {
                     return Ok(value);
                 }
-                if kind == "posterize" && let Some(value) = crate::native_raster_posterize_controlled::try_run(s, p)? {
+                if kind == "posterize"
+                    && let Some(value) = crate::native_raster_posterize_controlled::try_run(s, p)?
+                {
                     return Ok(value);
                 }
-                if kind == "levels" && let Some(value) = crate::native_gray_levels_controlled::try_run(s, p)? {
+                if kind == "levels"
+                    && let Some(value) = crate::native_gray_levels_controlled::try_run(s, p)?
+                {
                     return Ok(value);
                 }
-                if kind == "curves" && let Some(value) = crate::native_gray_curves_controlled::try_run(s, p)? {
+                if kind == "curves"
+                    && let Some(value) = crate::native_gray_curves_controlled::try_run(s, p)?
+                {
                     return Ok(value);
                 }
-                if kind == "brightnessContrast" && let Some(value) = crate::native_gray_legacy_brightness_contrast_controlled::try_run(s, p)? {
+                if kind == "brightnessContrast"
+                    && let Some(value) = crate::native_gray_legacy_brightness_contrast_controlled::try_run(s, p)?
+                {
                     return Ok(value);
                 }
-                if kind == "brightnessContrast" && let Some(value) = crate::native_raster_legacy_brightness_contrast_controlled::try_run(s, p)? {
+                if kind == "brightnessContrast"
+                    && let Some(value) = crate::native_raster_legacy_brightness_contrast_controlled::try_run(s, p)?
+                {
                     return Ok(value);
                 }
-                if kind == "levels" && let Some(value) = crate::native_raster_levels_controlled::try_run(s, p)? {
+                if kind == "levels"
+                    && let Some(value) = crate::native_raster_levels_controlled::try_run(s, p)?
+                {
                     return Ok(value);
                 }
-                if kind == "curves" && let Some(value) = crate::native_raster_curves_controlled::try_run(s, p)? {
+                if kind == "curves"
+                    && let Some(value) = crate::native_raster_curves_controlled::try_run(s, p)?
+                {
                     return Ok(value);
                 }
-                if kind == "exposure" && let Some(value) = crate::native_raster_exposure_controlled::try_run(s, p)? {
+                if kind == "exposure"
+                    && let Some(value) = crate::native_raster_exposure_controlled::try_run(s, p)?
+                {
                     return Ok(value);
                 }
                 let eyedropped = if matches!(kind.as_str(), "levels" | "curves") { crate::adjust_params::eyedropper_from_params(s, &kind, p)? } else { None };
@@ -1485,8 +1557,9 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::fx_view_cmds::specs());
     v.extend(crate::fx_visibility_cmds::specs());
     v.extend(crate::mask_view_cmds::specs());
-    v.extend(crate::xcf_editing::relationship_specs().into_iter().filter(|spec| !matches!(spec.id,
-        crate::xcf_item_set_manage_cmds::RENAME | crate::xcf_item_set_manage_cmds::DELETE | crate::xcf_item_set_manage_cmds::MEMBERS)));
+    v.extend(crate::xcf_editing::relationship_specs().into_iter().filter(|spec| {
+        !matches!(spec.id, crate::xcf_item_set_manage_cmds::RENAME | crate::xcf_item_set_manage_cmds::DELETE | crate::xcf_item_set_manage_cmds::MEMBERS)
+    }));
     v.extend(crate::xcf_item_set_manage_cmds::specs());
     v.extend(crate::xcf_item_state_cmds::specs());
     v.extend(crate::xcf_item_set_create_cmds::specs());
@@ -1607,35 +1680,6 @@ fn arrange(s: &mut Session, p: &Value, delta: i32) -> Result<Value> {
     Ok(Value::Null)
 }
 
-/// Add (`Some`) or remove (`None`) a layer mask. Adding acts on every selected layer that can take
-/// one ([`crate::layer_multi_cmds::mask_targets`]), in one history step.
-fn set_mask(s: &mut Session, p: &Value, label: &str, mask: Option<LayerMask>) -> Result<Value> {
-    set_mask_with(s, p, label, mask, false)
-}
-
-/// [`set_mask`] that also drops the selection the mask was made from, in the same history step.
-fn set_mask_and_deselect(s: &mut Session, p: &Value, label: &str, mask: LayerMask) -> Result<Value> {
-    set_mask_with(s, p, label, Some(mask), true)
-}
-
-fn set_mask_with(s: &mut Session, p: &Value, label: &str, mask: Option<LayerMask>, deselect: bool) -> Result<Value> {
-    let ids = if mask.is_some() { crate::layer_multi_cmds::mask_targets(s, p)? } else { vec![layer_param(s, p)?] };
-    s.edit(label, |doc, _| {
-        let mask = mask.clone().map(|mask| mask_at_depth(mask, doc.depth)).transpose()?;
-        for id in &ids {
-            if mask.is_some() {
-                crate::extra_cmds::background_to_layer_for_mask(doc, *id);
-            }
-            doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?.mask = mask.clone();
-        }
-        if deselect {
-            doc.selection = None;
-        }
-        Ok(())
-    })?;
-    Ok(Value::Null)
-}
-
 /// Move a layer's pixels, linked mask and type by whole pixels (vectors move via
 /// `vector_cmds::translate_vectors`).
 pub(crate) fn try_translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i32) -> Result<()> {
@@ -1653,7 +1697,17 @@ pub(crate) fn try_translate_layer(doc: &Document, l: &mut Layer, dx: i32, dy: i3
         LayerContent::Raster(s) => *s = translate_surface(s, dx, dy),
         LayerContent::Text(t) => {
             t.transform = photocraft_geom::Affine::translate(dx as f64, dy as f64).mul(&t.transform);
-            crate::type_cmds::try_refresh(doc, t)?;
+            // Preserve the imported rendering and PSD position on an integer move,
+            // exactly as the established nonfallible translation path does.
+            let raw = t.psd_raw.as_deref().map(|r| photocraft_text::psd::translate_tysh(r, f64::from(dx), f64::from(dy)));
+            match (&mut t.cache, raw) {
+                (Some(c), Some(Some(r))) => {
+                    *c = translate_surface(c, dx, dy);
+                    t.psd_raw = Some(std::sync::Arc::new(r));
+                }
+                (Some(c), None) => *c = translate_surface(c, dx, dy),
+                _ => crate::type_cmds::try_refresh(doc, t)?,
+            }
         }
         LayerContent::Group(g) => {
             // Moving an artboard moves the board with its contents.
@@ -1746,7 +1800,7 @@ fn merge_group(s: &mut Session, id: LayerId) -> Result<Value> {
         solo.clipped = false;
         let mut tmp = doc.clone();
         tmp.layers = vec![solo];
-        let mut merged = Layer::new(group.name.clone(), LayerContent::Raster(pixels::composite_layers_uncropped(&tmp, fmt)));
+        let mut merged = Layer::new(group.name.clone(), LayerContent::Raster(pixels::composite_layers_uncropped(&tmp, fmt)?));
         merged.id = group.id;
         merged.opacity = group.opacity;
         merged.blend = if group.blend == photocraft_doc::BlendMode::PassThrough { photocraft_doc::BlendMode::Normal } else { group.blend };

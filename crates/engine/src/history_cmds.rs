@@ -309,6 +309,28 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Resident snapshots share tiles; account known model/payload/map retention before structural copies.
+/// Accounted documents require an owner-aware snapshot lease and are not detached here.
+fn admit_snapshot(snapshot: &crate::DocumentSnapshot) -> Result<()> {
+    snapshot.validate_resident()?;
+    let control = &photocraft_raster::Interrupt::NONE;
+    let limits = photocraft_io::NativeSaveLimits::default().preparation;
+    let model = photocraft_io::retained_native_model_bytes(snapshot, limits, control).map_err(|e| EngineError::Other(e.to_string()))?;
+    let payload = photocraft_io::retained_native_payload_bytes(snapshot, limits, control).map_err(|e| EngineError::Other(e.to_string()))?;
+    let raster = snapshot.resident_raster_footprint_with(control)?;
+    let peak = u64::try_from(model)
+        .map_err(|_| EngineError::Other("snapshot retention overflow".into()))?
+        .checked_mul(4)
+        .and_then(|n| n.checked_add(u64::try_from(payload).ok()?))
+        .and_then(|n| n.checked_add(raster.retained_bytes))
+        .and_then(|n| n.checked_add(raster.clone_metadata_bytes.checked_mul(4)?))
+        .ok_or_else(|| EngineError::Other("snapshot retention overflow".into()))?;
+    if peak > photocraft_raster::MAX_CHECKED_RASTER_BYTES {
+        return Err(EngineError::Other("snapshot retention limit".into()));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,7 +346,7 @@ mod tests {
     }
 
     fn entries(s: &Session) -> Vec<String> {
-        s.active().unwrap().history.entries()
+        s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>()
     }
 
     #[test]
@@ -394,7 +416,7 @@ mod tests {
         assert_eq!(new.doc.size, src.size);
         assert_eq!(new.doc.layers.len(), src.layers.len());
         assert_ne!(new.doc.id, src.id);
-        assert_eq!(new.history.entries().len(), 1, "a fresh history");
+        assert_eq!(new.history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), 1, "a fresh history");
         // An earlier state, with a chosen name; the source document is untouched.
         s.set_active(0);
         let before = entries(&s);
@@ -413,7 +435,7 @@ mod tests {
     }
 
     fn snapshots(s: &Session) -> Value {
-        crate::inspect::document(s.active().unwrap())["snapshots"].clone()
+        crate::inspect::document(s.active().unwrap()).unwrap()["snapshots"].clone()
     }
 
     #[test]
@@ -474,12 +496,12 @@ mod tests {
     #[test]
     fn merged_snapshot_counts_against_the_history_budget() {
         let (mut with, mut without) = (session(), session());
-        let base = with.active().unwrap().memory_bytes();
+        let base = with.active().unwrap().memory_bytes().unwrap();
         with.execute("history.newSnapshot", json!({"from": "mergedLayers"})).unwrap();
         let st = with.active().unwrap();
         let flat = tile_bytes(&st.snapshots[0].doc);
         assert!(flat > 0);
-        assert_eq!(st.memory_bytes(), base + flat);
+        assert_eq!(st.memory_bytes().unwrap(), base + flat);
         // Room for the document's tiles and four fill tiles.
         let cur = tile_bytes(&st.doc);
         let fill = tile_bytes(&Document { layers: st.doc.layers[1..].to_vec(), ..(*st.doc).clone() });
@@ -494,7 +516,7 @@ mod tests {
         let held = |s: &Session| s.active().unwrap().history.past_len();
         assert_eq!(held(&without), 4);
         assert_eq!(held(&with), 3, "the snapshot's tile takes one state's room");
-        assert!(with.active().unwrap().memory_bytes() <= budget);
+        assert!(with.active().unwrap().memory_bytes().unwrap() <= budget);
     }
 
     /// Purge › Histories keeps the snapshots, so it doesn't report the tiles they share with
@@ -507,7 +529,7 @@ mod tests {
         let st = s.active().unwrap();
         // The snapshot's green layer tile, now only in it and the last state.
         let shared = tile_bytes(&Document { layers: st.snapshots[0].doc.layers[1..].to_vec(), ..(*st.doc).clone() });
-        let all = st.history.unique_bytes(&st.doc);
+        let all = st.history.unique_bytes(&st.doc).unwrap();
         let r = s.execute("edit.purge.histories", json!({})).unwrap();
         assert_eq!(r["bytes"], json!(all - shared), "the green tile stays with the snapshot");
         assert_eq!(s.active().unwrap().snapshots.len(), 1);
@@ -573,25 +595,4 @@ mod tests {
         }
         assert_eq!(s.documents().len(), 1);
     }
-}
-
-/// Resident snapshots share tiles; account known model/payload/map retention before structural copies.
-/// Accounted documents require an owner-aware snapshot lease and are not detached here.
-fn admit_snapshot(snapshot: &crate::DocumentSnapshot) -> Result<()> {
-    snapshot.validate_resident()?;
-    let control = &photocraft_raster::Interrupt::NONE;
-    let limits = photocraft_io::NativeSaveLimits::default().preparation;
-    let model = photocraft_io::retained_native_model_bytes(snapshot, limits, control).map_err(|e| EngineError::Other(e.to_string()))?;
-    let payload = photocraft_io::retained_native_payload_bytes(snapshot, limits, control).map_err(|e| EngineError::Other(e.to_string()))?;
-    let raster = snapshot.resident_raster_footprint_with(control)?;
-    let peak = u64::try_from(model).map_err(|_| EngineError::Other("snapshot retention overflow".into()))?
-        .checked_mul(4)
-        .and_then(|n| n.checked_add(u64::try_from(payload).ok()?))
-        .and_then(|n| n.checked_add(raster.retained_bytes))
-        .and_then(|n| n.checked_add(raster.clone_metadata_bytes.checked_mul(4)?))
-        .ok_or_else(|| EngineError::Other("snapshot retention overflow".into()))?;
-    if peak > photocraft_raster::MAX_CHECKED_RASTER_BYTES {
-        return Err(EngineError::Other("snapshot retention limit".into()));
-    }
-    Ok(())
 }

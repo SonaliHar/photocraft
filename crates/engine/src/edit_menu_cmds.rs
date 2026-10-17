@@ -226,14 +226,22 @@ fn fade(s: &mut Session, p: &Value) -> Result<Value> {
 // ------------------------------------------------------------------ Purge
 
 fn history_bytes(s: &Session, all: bool) -> Result<usize> {
-    let docs: Vec<&crate::DocState> = if all { s.documents().iter().collect() } else { s.active().into_iter().collect() };
-    // Purge keeps the snapshots, so the tiles they share with the states aren't freed.
-    docs.iter()
-        .map(|d| {
-            let snaps: Vec<&photocraft_doc::Document> = d.snapshots.iter().map(|s| &*s.doc).collect();
-            d.history.unique_bytes_besides(&d.doc, &snaps)
-        })
-        .sum()
+    // Purge keeps snapshots, so their pinned tiles are excluded from freed bytes.
+    // Traverse actual borrowed owners instead of allocating document-reference vectors.
+    let bytes = |d: &crate::DocState| -> Result<usize> {
+        let (_, _, freed) = d.history.resident_memory_bytes_with_interrupt(
+            &d.doc,
+            d.snapshots.iter().map(|snapshot| &*snapshot.doc),
+            photocraft_ops::ResidentHistoryLimits::default(),
+            &photocraft_raster::Interrupt::NONE,
+        )?;
+        Ok(freed)
+    };
+    if all {
+        s.documents().iter().try_fold(0usize, |total, d| total.checked_add(bytes(d)?).ok_or_else(|| EngineError::Other("history byte count overflow".into())))
+    } else {
+        s.active().map(bytes).transpose().map(|bytes| bytes.unwrap_or(0))
+    }
 }
 
 fn clip_bytes(s: &Session) -> usize {

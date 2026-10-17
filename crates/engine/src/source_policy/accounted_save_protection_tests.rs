@@ -9,6 +9,8 @@ use photocraft_raster::{
 };
 use std::sync::Arc;
 #[path = "../../../xcf/tests/common/mod.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod xcf;
 fn control() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }

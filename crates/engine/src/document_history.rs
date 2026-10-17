@@ -126,40 +126,127 @@ fn slots(q: &BackingQuota, maximum: usize, ctl: &ReadControl<'_>) -> Result<Acco
     lease.reconcile_capacity(checked_actual(actual, size_of::<Accounted>() + 64)?).map_err(|_| BackingError::Allocation)?;
     Ok(Accounted { states, cursor: 0, maximum, _lease: lease })
 }
+fn snapshot_history_limits(
+    limits: photocraft_ops::ResidentHistoryLimits,
+    wrappers: u64,
+) -> Result<photocraft_ops::ResidentHistoryLimits, photocraft_raster::RasterInputError> {
+    use photocraft_raster::RasterInputError as E;
+    let maximum = photocraft_ops::ResidentHistoryLimits::default();
+    if limits.resident_bytes > maximum.resident_bytes || limits.work_units > maximum.work_units {
+        return Err(E::LimitExceeded);
+    }
+    let bytes = (size_of::<DocumentHistory>() as u64).checked_mul(wrappers).ok_or(E::LimitExceeded)?;
+    let work = bytes.checked_mul(8).ok_or(E::LimitExceeded)?;
+    Ok(photocraft_ops::ResidentHistoryLimits {
+        resident_bytes: limits.resident_bytes.checked_sub(bytes).ok_or(E::LimitExceeded)?,
+        work_units: limits.work_units.checked_sub(work).ok_or(E::LimitExceeded)?,
+    })
+}
+
 impl DocumentHistory {
+    /// Resident snapshot-aware counters. Accounted native ownership is measured by its quota.
+    /// Borrowed snapshots stay in the caller; no temporary reference vector is constructed.
+    pub fn resident_memory_bytes_with_interrupt<'a>(
+        &self,
+        current: &Document,
+        extra: impl Clone + Iterator<Item = &'a Document>,
+        limits: photocraft_ops::ResidentHistoryLimits,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<(usize, usize, usize), photocraft_raster::RasterInputError> {
+        control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
+        let Branch::Resident(history) = &self.branch else { return Err(photocraft_raster::RasterInputError::UnsupportedConversion) };
+        let lower = snapshot_history_limits(limits, 1)?;
+        history.resident_memory_bytes_with_interrupt(current, extra, lower, control)
+    }
+
+    /// Clone and trim resident history with all pinned snapshots retained in the byte budget.
+    /// The caller publishes the returned private history only after its final state checks.
+    #[allow(clippy::too_many_arguments)] // Fixed current/pinned ownership, requested limits and original control remain explicit.
+    pub fn resident_try_clone_trim_with_interrupt<'a>(
+        &self,
+        current: &DocumentSnapshot,
+        pinned: impl Clone + Iterator<Item = &'a Document>,
+        max_states: usize,
+        max_bytes: usize,
+        limits: photocraft_ops::ResidentHistoryLimits,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Self, photocraft_raster::RasterInputError> {
+        control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
+        let Branch::Resident(history) = &self.branch else { return Err(photocraft_raster::RasterInputError::UnsupportedConversion) };
+        let current = current.resident_arc().ok_or(photocraft_raster::RasterInputError::UnsupportedConversion)?;
+        let lower = snapshot_history_limits(limits, 3)?;
+        let staged = history.try_clone_trim_with_interrupt(current, pinned, max_states, max_bytes, lower, control)?;
+        control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
+        Ok(Self::resident(staged))
+    }
+
     /// Resident-only controlled record/trim admission. Historical Arc payloads remain caller-held.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn resident_record_requirements_with_extra_tiles(
-        &self, before:&DocumentSnapshot, candidate:&DocumentSnapshot, label:&str,
-        prior:&LayerTarget, layers:&LayerTarget, extra_candidate_tile_occurrences:u64,
-        limits:photocraft_ops::ResidentHistoryLimits, ctl:&photocraft_raster::Interrupt<'_>,
-    )->Result<photocraft_ops::ResidentHistoryRequirements,photocraft_raster::RasterInputError>{
-        let Branch::Resident(history)=&self.branch else{return Err(photocraft_raster::RasterInputError::UnsupportedConversion)};
+        &self,
+        before: &DocumentSnapshot,
+        candidate: &DocumentSnapshot,
+        label: &str,
+        prior: &LayerTarget,
+        layers: &LayerTarget,
+        extra_candidate_tile_occurrences: u64,
+        limits: photocraft_ops::ResidentHistoryLimits,
+        ctl: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<photocraft_ops::ResidentHistoryRequirements, photocraft_raster::RasterInputError> {
+        let Branch::Resident(history) = &self.branch else { return Err(photocraft_raster::RasterInputError::UnsupportedConversion) };
         before.resident_arc().ok_or(photocraft_raster::RasterInputError::UnsupportedConversion)?;
         candidate.resident_arc().ok_or(photocraft_raster::RasterInputError::UnsupportedConversion)?;
-        let maximum=photocraft_ops::ResidentHistoryLimits::default();
-        if limits.resident_bytes>maximum.resident_bytes || limits.work_units>maximum.work_units{return Err(photocraft_raster::RasterInputError::LimitExceeded)}
-        let extra=(size_of::<Self>() as u64).checked_mul(3).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
-        let lower=photocraft_ops::ResidentHistoryLimits{resident_bytes:limits.resident_bytes.checked_sub(extra).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?,work_units:limits.work_units};
-        let mut requirement=history.resident_record_requirements_with_extra_tiles(before,candidate,label,prior,layers,self.max_states,self.max_bytes,extra_candidate_tile_occurrences,lower,ctl)?;
-        requirement.retained_bytes=requirement.retained_bytes.checked_add(size_of::<Self>() as u64).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
-        requirement.clone_bytes=requirement.clone_bytes.checked_add((size_of::<Self>() as u64).checked_mul(2).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
-        requirement.peak_bytes=requirement.peak_bytes.checked_add(extra).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+        let maximum = photocraft_ops::ResidentHistoryLimits::default();
+        if limits.resident_bytes > maximum.resident_bytes || limits.work_units > maximum.work_units {
+            return Err(photocraft_raster::RasterInputError::LimitExceeded);
+        }
+        let extra = (size_of::<Self>() as u64).checked_mul(3).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+        let lower = photocraft_ops::ResidentHistoryLimits {
+            resident_bytes: limits.resident_bytes.checked_sub(extra).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?,
+            work_units: limits.work_units,
+        };
+        let mut requirement = history.resident_record_requirements_with_extra_tiles(
+            before,
+            candidate,
+            label,
+            prior,
+            layers,
+            self.max_states,
+            self.max_bytes,
+            extra_candidate_tile_occurrences,
+            lower,
+            ctl,
+        )?;
+        requirement.retained_bytes =
+            requirement.retained_bytes.checked_add(size_of::<Self>() as u64).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+        requirement.clone_bytes = requirement
+            .clone_bytes
+            .checked_add((size_of::<Self>() as u64).checked_mul(2).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?)
+            .ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+        requirement.peak_bytes = requirement.peak_bytes.checked_add(extra).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
         Ok(requirement)
     }
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_clone_record_trim_with_interrupt(
-        &self,before:DocumentSnapshot,candidate:&DocumentSnapshot,label:&str,
-        prior:&LayerTarget,layers:&LayerTarget,limits:photocraft_ops::ResidentHistoryLimits,
-        ctl:&photocraft_raster::Interrupt<'_>,
-    )->Result<Self,photocraft_raster::RasterInputError>{
-        let Branch::Resident(history)=&self.branch else{return Err(photocraft_raster::RasterInputError::UnsupportedConversion)};
-        self.resident_record_requirements_with_extra_tiles(&before,candidate,label,prior,layers,0,limits,ctl)?;
-        let arc=before.resident_arc().ok_or(photocraft_raster::RasterInputError::UnsupportedConversion)?.clone();
-        let extra=(size_of::<Self>() as u64).checked_mul(3).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
-        let lower=photocraft_ops::ResidentHistoryLimits{resident_bytes:limits.resident_bytes.checked_sub(extra).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?,work_units:limits.work_units};
-        let result=history.try_clone_record_trim_with_interrupt(arc,candidate,label,prior,layers,self.max_states,self.max_bytes,lower,ctl)?;
-        ctl.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
+        &self,
+        before: DocumentSnapshot,
+        candidate: &DocumentSnapshot,
+        label: &str,
+        prior: &LayerTarget,
+        layers: &LayerTarget,
+        limits: photocraft_ops::ResidentHistoryLimits,
+        ctl: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Self, photocraft_raster::RasterInputError> {
+        let Branch::Resident(history) = &self.branch else { return Err(photocraft_raster::RasterInputError::UnsupportedConversion) };
+        self.resident_record_requirements_with_extra_tiles(&before, candidate, label, prior, layers, 0, limits, ctl)?;
+        let arc = before.resident_arc().ok_or(photocraft_raster::RasterInputError::UnsupportedConversion)?.clone();
+        let extra = (size_of::<Self>() as u64).checked_mul(3).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
+        let lower = photocraft_ops::ResidentHistoryLimits {
+            resident_bytes: limits.resident_bytes.checked_sub(extra).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?,
+            work_units: limits.work_units,
+        };
+        let result = history.try_clone_record_trim_with_interrupt(arc, candidate, label, prior, layers, self.max_states, self.max_bytes, lower, ctl)?;
+        ctl.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
         Ok(Self::resident(result))
     }
     /// Prospective metadata census only; byte-budgeted or accounted history has a separate consumer.
@@ -192,7 +279,9 @@ impl DocumentHistory {
             control,
         )?;
         needs.retained_bytes = needs.retained_bytes.checked_add(extra).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
-        needs.clone_bytes = needs.clone_bytes.checked_add(extra.checked_mul(2).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?)
+        needs.clone_bytes = needs
+            .clone_bytes
+            .checked_add(extra.checked_mul(2).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?)
             .ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
         needs.clone_work_units = needs.clone_work_units.checked_add(extra_work).ok_or(photocraft_raster::RasterInputError::LimitExceeded)?;
         Ok(needs)
@@ -243,6 +332,20 @@ impl DocumentHistory {
             _ => false,
         }
     }
+    /// Accounted models retain their actual persistent quota and the state slots
+    /// prepaid at admission. Resident pixel-byte estimates do not apply here.
+    pub(crate) fn set_accounted_state_limit(&mut self, maximum_states: usize) -> Result<(), BackingError> {
+        let Branch::Accounted(history) = &self.branch else { return Err(BackingError::Unsupported) };
+        if self.max_bytes != 0 {
+            return Err(BackingError::Unsupported);
+        }
+        if self.max_states == 0 || self.max_states >= history.maximum || maximum_states == 0 || maximum_states >= history.maximum {
+            return Err(BackingError::Length);
+        }
+        self.max_states = maximum_states;
+        Ok(())
+    }
+
     fn sync_limits(&mut self) -> Result<(), BackingError> {
         match &mut self.branch {
             Branch::Resident(h) => {
@@ -355,15 +458,18 @@ impl DocumentHistory {
         }
         self.update(ctl, |h| {
             let next = h.cursor.checked_add(1).ok_or(BackingError::Length)?;
-            let drop_oldest = h.cursor >= max_states;
-            let retained = next.checked_sub(usize::from(drop_oldest)).ok_or(BackingError::Integrity)?;
-            if retained >= h.states.capacity() {
+            let drop_oldest = next.saturating_sub(max_states);
+            let retained = next.checked_sub(drop_oldest).ok_or(BackingError::Integrity)?;
+            if next > h.states.len() || drop_oldest >= next || retained >= h.maximum || retained >= h.states.capacity() {
                 return Err(BackingError::Integrity);
             }
-            ctl.check(1)?;
+            // Prepay bounded entry destruction and movement before altering this
+            // private copy; the original history (including redo) remains held.
+            let work = h.states.len().checked_mul(size_of::<Entry>() + 64).ok_or(BackingError::Length)?;
+            ctl.check(u64::try_from(work).map_err(|_| BackingError::Length)?)?;
             h.states.truncate(next);
-            if drop_oldest {
-                h.states.remove(0);
+            if drop_oldest != 0 {
+                h.states.drain(..drop_oldest);
             }
             h.states.push(Entry { document: staged, metadata: meta });
             h.cursor = retained;
@@ -390,10 +496,7 @@ impl DocumentHistory {
             return Err(BackingError::Unsupported);
         };
         let current = owner.states.get(owner.cursor).ok_or(BackingError::Integrity)?;
-        if !current.document.shares_model(expected)
-            || staged.document().id != expected.document().id
-            || !staged.quota().shares_ledger(expected.quota())
-        {
+        if !current.document.shares_model(expected) || staged.document().id != expected.document().id || !staged.quota().shares_ledger(expected.quota()) {
             return Err(BackingError::Integrity);
         }
         let snapshot = DocumentSnapshot::from_accounted(staged.clone())?;
@@ -412,15 +515,18 @@ impl DocumentHistory {
                 return Err(BackingError::Integrity);
             }
             let next = history.cursor.checked_add(1).ok_or(BackingError::Length)?;
-            let drop_oldest = history.cursor >= max_states;
-            let retained = next.checked_sub(usize::from(drop_oldest)).ok_or(BackingError::Integrity)?;
-            if retained >= history.states.capacity() {
+            let drop_oldest = next.saturating_sub(max_states);
+            let retained = next.checked_sub(drop_oldest).ok_or(BackingError::Integrity)?;
+            if next > history.states.len() || drop_oldest >= next || retained >= history.maximum || retained >= history.states.capacity() {
                 return Err(BackingError::Integrity);
             }
-            ctl.check(1)?;
+            // Prepay bounded entry destruction and movement before altering this
+            // private copy; the original history (including redo) remains held.
+            let work = history.states.len().checked_mul(size_of::<Entry>() + 64).ok_or(BackingError::Length)?;
+            ctl.check(u64::try_from(work).map_err(|_| BackingError::Length)?)?;
             history.states.truncate(next);
-            if drop_oldest {
-                history.states.remove(0);
+            if drop_oldest != 0 {
+                history.states.drain(..drop_oldest);
             }
             history.states.push(Entry { document: staged, metadata: meta });
             history.cursor = retained;

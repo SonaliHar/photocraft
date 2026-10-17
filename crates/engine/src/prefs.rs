@@ -1646,10 +1646,26 @@ impl Session {
         let n = self.prefs().performance.history_states.max(1) as usize;
         let bytes = self.prefs().performance.history_budget_bytes();
         let budget = self.prefs().performance.effect_cache_mb as usize;
-        for st in &mut self.docs {
-            st.history.max_states = n;
-            st.history.max_bytes = bytes;
-            st.trim_history();
+        let cache_bytes = budget.checked_mul(1 << 20).ok_or_else(|| crate::EngineError::Other("effect cache budget does not fit this platform".into()))?;
+        let mut prepared = Vec::new();
+        prepared.try_reserve_exact(self.docs.len()).map_err(|_| crate::EngineError::Other("history settings allocation failed".into()))?;
+        for st in &self.docs {
+            // Accounted history keeps its prepaid state cap and persistent quota.
+            if st.doc.accounted().is_some() {
+                prepared.push(None);
+                continue;
+            }
+            // Stage every fallible trim before publishing any document's history.
+            // Snapshot-only tiles remain pinned in the same upstream byte budget.
+            let history = st.history.resident_try_clone_trim_with_interrupt(
+                &st.doc,
+                st.snapshots.iter().map(|snapshot| &*snapshot.doc),
+                n,
+                bytes,
+                photocraft_ops::ResidentHistoryLimits::default(),
+                &photocraft_raster::Interrupt::NONE,
+            )?;
+            prepared.push(Some(history));
         }
         for (st, history) in self.docs.iter_mut().zip(prepared) {
             if let Some(history) = history {
@@ -1870,12 +1886,21 @@ fn prefs_set(s: &mut Session, p: &Value) -> Result<Value> {
     }
     // All or nothing: validate against a scratch copy first.
     let (saved_prefs, saved_color) = (s.prefs.clone(), s.color.settings.clone());
+    let mut color_changed = false;
     for (path, v) in &changes {
-        if let Err(e) = s.set_pref(path, v.clone(), true) {
-            s.prefs = saved_prefs;
-            s.color.settings = saved_color;
-            return Err(bad(cmd, e));
+        match s.set_pref(path, v.clone(), false) {
+            Ok(changed) => color_changed |= changed,
+            Err(e) => {
+                s.prefs = saved_prefs;
+                s.color.settings = saved_color;
+                return Err(bad(cmd, e));
+            }
         }
+    }
+    if color_changed && let Err(e) = crate::color_cmds::validate_settings(&s.color.settings) {
+        s.prefs = saved_prefs;
+        s.color.settings = saved_color;
+        return Err(bad(cmd, e));
     }
     if s.prefs().performance.history_states != saved_prefs.get().performance.history_states && s.docs.iter().any(|st| st.doc.accounted().is_some()) {
         s.prefs = saved_prefs;
@@ -1887,8 +1912,13 @@ fn prefs_set(s: &mut Session, p: &Value) -> Result<Value> {
         s.color.settings = saved_color;
         return Err(e);
     }
+    // apply_prefs stages every fallible history update before publishing any side effects.
+    if let Err(e) = s.apply_prefs() {
+        s.prefs = saved_prefs;
+        s.color.settings = saved_color;
+        return Err(e);
+    }
     photocraft_compose::psblend::set_text_gamma(s.color.settings.blend_text_gamma);
-    s.apply_prefs()?;
     let view = s.prefs_view();
     let out: Map<String, Value> = changes.iter().map(|(k, _)| (k.clone(), get_path(&view, k).cloned().unwrap_or(Value::Null))).collect();
     Ok(Value::Object(out))
@@ -2186,7 +2216,7 @@ fn keyboard_shortcuts(s: &mut Session, p: &Value) -> Result<Value> {
         out[*key] = json!(path);
     }
     if changed {
-        s.edit_prefs(|p| *p = next);
+        s.edit_prefs(|p| *p = next)?;
     }
     if let Some(import) = import {
         out["import"] = import;
@@ -2493,7 +2523,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!("prefs.reset", "Reset Preferences", [], None, r##"{"path":"section|section.key"?=everything}"##, prefs_reset, false),
         // Photoshop: âŒ˜K opens Preferences â€º General (âŒ˜, is Layer â€º Hide Layers).
-        section!("edit.preferences.general", "Generalâ€¦", Some("Cmd+K")),
+        section!("edit.preferences.general", "General…", Some("Cmd+K")),
         section!("edit.preferences.interface", "Interfaceâ€¦"),
         section!("edit.preferences.workspace", "Workspaceâ€¦"),
         section!("edit.preferences.tools", "Toolsâ€¦"),
@@ -2513,7 +2543,7 @@ pub fn specs() -> Vec<CommandSpec> {
         section!("edit.preferences.integrations", "Integrationsâ€¦"),
         spec!(
             "edit.keyboardShortcuts",
-            "Keyboard Shortcutsâ€¦",
+            "Keyboard Shortcuts…",
             ["Edit"],
             Some("Cmd+Alt+Shift+K"),
             r##"{"set":{"<command id>|tools.temporary.hand|zoomIn|zoomOut":"Cmd+Shift+X"|""(remove)|null(default)}?,"alternates":{"<command id>":["F3",…]|[](none)|null(default)}?,"reset":true|["<id>",…]?,"removeConflicts":bool=true,"filter":str?,"list":bool=false,"importKys":"<.kys XML>"|{"path":".kys"}?,"useSet":"<name>"|""(defaults)?,"saveSet":"<name>"?,"deleteSet":"<name>"?,"sets":{"<name>":{"shortcuts":{…},"alternateShortcuts":{…}}}?,"activeSet":"<name>"|""?,"exportKys":true|{"path":".kys"}?,"summarize":true|{"mac":bool,"path":".html"}?} (with a path the file is written and the reply has kysPath/htmlPath instead of kys/html)"##,
@@ -2522,14 +2552,14 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "edit.menus",
-            "Menusâ€¦",
+            "Menus…",
             ["Edit"],
             Some("Cmd+Alt+Shift+M"),
             r##"{"hide":["<id>",â€¦]?,"show":["<id>",â€¦]?,"color":{"<id>":"red|orange|yellow|green|blue|violet|gray|none"}?,"reset":bool=false}"##,
             menus,
             true
         ),
-        spec!("edit.toolbar", "Toolbarâ€¦", ["Edit"], None, r##"{"hidden":["<tool>",â€¦]?,"order":["<tool>",â€¦]?,"reset":bool=false}"##, toolbar, true),
+        spec!("edit.toolbar", "Toolbar…", ["Edit"], None, r##"{"hidden":["<tool>",â€¦]?,"order":["<tool>",â€¦]?,"reset":bool=false}"##, toolbar, true),
     ]
 }
 

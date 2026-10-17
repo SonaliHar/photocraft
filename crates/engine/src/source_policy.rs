@@ -18,14 +18,23 @@ impl WriteProtection {
         let poll = || control.check().map_err(|_| crate::EngineError::Cancelled);
         let denied = || crate::EngineError::Other("source-protection.resident-limit: exclusion metadata".into());
         poll()?;
-        if self.sources.len() > 4096 { return Err(denied()); }
+        if self.sources.len() > 4096 {
+            return Err(denied());
+        }
         let hashes = photocraft_io::source_protection::fingerprint_resident_bytes(&self.fingerprints, self.fingerprints.capacity(), control)
             .map_err(|error| if control.cancelled() { crate::EngineError::Cancelled } else { crate::EngineError::Other(error.to_string()) })?;
-        let mut bytes = self.sources.capacity().checked_mul(std::mem::size_of::<String>())
-            .and_then(|n| n.checked_add(hashes)).and_then(|n| n.checked_add(std::mem::size_of::<Self>())).ok_or_else(denied)?;
+        let mut bytes = self
+            .sources
+            .capacity()
+            .checked_mul(std::mem::size_of::<String>())
+            .and_then(|n| n.checked_add(hashes))
+            .and_then(|n| n.checked_add(std::mem::size_of::<Self>()))
+            .ok_or_else(denied)?;
         for path in &self.sources {
             poll()?;
-            if path.len() > 4096 { return Err(denied()); }
+            if path.len() > 4096 {
+                return Err(denied());
+            }
             bytes = bytes.checked_add(path.capacity()).ok_or_else(denied)?;
         }
         poll()?;
@@ -36,14 +45,22 @@ impl WriteProtection {
     }
 
     /// Collect inert exclusions with the caller's token before publishing either list.
-    pub fn add_document_with_interrupt(&mut self, document: &photocraft_doc::Document, source: Option<&SourceIdentity>, control: &photocraft_raster::Interrupt<'_>) -> crate::Result<()> {
+    pub fn add_document_with_interrupt(
+        &mut self,
+        document: &photocraft_doc::Document,
+        source: Option<&SourceIdentity>,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> crate::Result<()> {
         let poll = || control.check().map_err(|_| crate::EngineError::Cancelled);
         let denied = |message: &str| crate::EngineError::Other(message.into());
         poll()?;
-        let fingerprints = photocraft_io::source_protection::document_fingerprints_with_interrupt(document, control)
-            .map_err(|error| if matches!(error, photocraft_io::source_protection::SourceProtectionError::Cancelled) {
+        let fingerprints = photocraft_io::source_protection::document_fingerprints_with_interrupt(document, control).map_err(|error| {
+            if matches!(error, photocraft_io::source_protection::SourceProtectionError::Cancelled) {
                 crate::EngineError::Cancelled
-            } else { crate::EngineError::Other(error.to_string()) })?;
+            } else {
+                crate::EngineError::Other(error.to_string())
+            }
+        })?;
         let path = source.filter(|s| s.origin.is_read_only()).and_then(|s| s.path.as_ref());
         if path.is_some_and(|p| p.len() > 4096)
             || self.sources.len().saturating_add(usize::from(path.is_some())) > 4096
@@ -59,9 +76,13 @@ impl WriteProtection {
             owned.try_reserve_exact(path.len()).map_err(|_| denied("xcf.source-protection.limit: path allocation failed"))?;
             owned.push_str(path);
             Some(owned)
-        } else { None };
+        } else {
+            None
+        };
         poll()?;
-        if let Some(owned) = owned { self.sources.push(owned); }
+        if let Some(owned) = owned {
+            self.sources.push(owned);
+        }
         self.fingerprints.extend(fingerprints);
         Ok(())
     }
@@ -103,7 +124,7 @@ mod tests {
         let mut path = String::with_capacity(8192);
         path.push_str("granted/source.xcf");
         let mut hash = String::with_capacity(256);
-        hash.push_str(&blake3::hash(b"own source").to_hex().to_string());
+        hash.push_str(blake3::hash(b"own source").to_hex().as_ref());
         let protection = WriteProtection { sources: vec![path], fingerprints: vec![hash] };
         let before = protection.sources.clone();
         let resident = protection.resident_bytes_with_interrupt(&photocraft_raster::Interrupt::NONE).unwrap();
