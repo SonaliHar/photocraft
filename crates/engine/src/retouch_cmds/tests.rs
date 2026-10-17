@@ -122,7 +122,7 @@ fn periodic_clone_live_matches_commit_through_a_corner() {
             }
             params["points"] = json!(points);
             let mut committed = Session::new();
-            committed.add_document((*before).clone(), None);
+            committed.add_document((*before).clone(), None).unwrap();
             committed.execute("paint.cloneStamp", params.clone()).unwrap();
             let id = s.active().unwrap().active_layer.unwrap();
             let actual = live.doc.layer(id).unwrap().surface().unwrap().read_region(before.bounds());
@@ -1535,7 +1535,7 @@ macro_rules! live_coordinate_regression {
                         let err = live.push(&batch).unwrap_err();
                         assert!(matches!(err, EngineError::BadParams { cmd: ref actual, ref msg }
                             if actual == cmd && msg.contains("point coordinates must be finite")));
-                        assert!(std::sync::Arc::ptr_eq(&shown, &live.doc), "{cmd}: invalid batch changed the preview");
+                        assert!(shown.shares_state(&live.doc), "{cmd}: invalid batch changed the preview");
                         assert_eq!(live.bounds(), bounds, "{cmd}");
                     }
                     let next = [StrokePoint::new(-4.0, 16.0, 1.0), StrokePoint::new(24.0, 16.0, 1.0)];
@@ -1547,7 +1547,7 @@ macro_rules! live_coordinate_regression {
                     assert_eq!(got.content_bounds(), want.content_bounds(), "{cmd}");
                 }
                 let st = s.active().unwrap();
-                assert!(std::sync::Arc::ptr_eq(&doc, &st.doc));
+                assert!(doc.shares_state(&st.doc));
                 assert_eq!((st.revision, st.history.past_len()), (revision, history));
             }
         }
@@ -2002,7 +2002,7 @@ fn periodic_clone_live_offer_commits_and_undoes_the_same_pixels_as_replay() {
         let read = |s: &Session| s.active().unwrap().doc.layer(id).unwrap().surface().unwrap().read_region(before.bounds());
         assert_eq!(read(&s), shown, "offered preview at depth {depth}");
         let mut replay = Session::new();
-        replay.add_document((*before).clone(), None);
+        replay.add_document((*before).clone(), None).unwrap();
         replay.execute("paint.cloneStamp", params).unwrap();
         assert_eq!(read(&s), read(&replay), "command replay at depth {depth}");
         assert!(s.undo());

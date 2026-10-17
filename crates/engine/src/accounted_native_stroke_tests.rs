@@ -1,29 +1,143 @@
 //! Deferred plain-source native stroke publication/fence contracts.
 use super::*;
-#[path="accounted_native_stroke_test_support.rs"] mod fixture;
-fn session(gray:bool,sample:photocraft_color::SampleType,lock:bool)->Session{
- let imported=fixture::import(gray,sample,lock);let mut s=Session::new();s.add_owned_plain_xcf_import(&imported,"native-stroke.xcf",Some("authorized/native-stroke.xcf"),&fixture::ctl()).unwrap();s.tools.brush.size=7.0;s.tools.brush.pressure_size=false;s
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
+#[path = "accounted_native_stroke_test_support.rs"]
+mod fixture;
+fn session(gray: bool, sample: photocraft_color::SampleType, lock: bool) -> Session {
+    let imported = fixture::import(gray, sample, lock);
+    let mut s = Session::new();
+    s.add_owned_plain_xcf_import(&imported, "native-stroke.xcf", Some("authorized/native-stroke.xcf"), &fixture::ctl()).unwrap();
+    s.tools.brush.size = 7.0;
+    s.tools.brush.pressure_size = false;
+    s
 }
 #[test]
-#[ignore="UNRUN/uncompiled generated plain XCF real paid native adoption, Round/erase/Clear/pencil COW across tile boundaries, alpha lock, source/history/redo preservation. No producer numerical oracle."]
-fn native_stroke_changes_one_history_and_keeps_source_custody(){
- for gray in [false,true]{for sample in [photocraft_color::SampleType::U8,photocraft_color::SampleType::U16,photocraft_color::SampleType::F32]{for variant in 0..4{
-  let mut s=session(gray,sample,false);let before=s.active().unwrap().doc.clone();let raw=fixture::payload(&before);let source=s.active().unwrap().source.clone();let rev=s.active().unwrap().revision;let past=s.active().unwrap().history.past_len();let mut p=fixture::patch();if variant==1{p["erase"]=Value::Bool(true)}if variant==2{p["mode"]=Value::String("clear".into())}let command=if variant==3{"paint.pencil"}else{"paint.stroke"};
-  let reply=s.execute(command,p).unwrap();assert!(reply.get("damage").and_then(Value::as_array).is_some());let changed=s.active().unwrap().doc.clone();assert!(changed.accounted().unwrap().is_legacy_storage());assert_eq!(s.active().unwrap().revision,rev+1);assert_eq!(s.active().unwrap().history.past_len(),past+1);assert_ne!(fixture::payload(&changed),raw);assert_eq!(s.active().unwrap().source,source);assert!(s.active().unwrap().source_read_only);assert_eq!(before.xcf_state,changed.xcf_state);assert_eq!(before.source_color_context,changed.source_color_context);assert_eq!(fixture::payload(&before),raw);
-  assert!(s.undo_with_control(&fixture::ctl()).unwrap());assert_eq!(fixture::payload(&s.active().unwrap().doc),raw);let revision=s.active().unwrap().revision;let current=s.active().unwrap().doc.clone();let mut noop=fixture::patch();noop["points"]=serde_json::json!([[-1000.0,-1000.0,1.0]]);s.execute("paint.stroke",noop).unwrap();assert_eq!(s.active().unwrap().revision,revision);assert!(current.shares_state(&s.active().unwrap().doc));assert!(s.active().unwrap().history.can_redo());assert!(s.redo_with_control(&fixture::ctl()).unwrap());assert_eq!(fixture::payload(&s.active().unwrap().doc),fixture::payload(&changed));
- }}}
- let mut s=session(false,photocraft_color::SampleType::U8,true);let before=fixture::payload(&s.active().unwrap().doc);s.execute("paint.stroke",fixture::patch()).unwrap();let after=fixture::payload(&s.active().unwrap().doc);for(a,b)in before.chunks_exact(4).zip(after.chunks_exact(4)){assert_eq!(a[3],b[3]);}
+#[ignore = "UNRUN/uncompiled generated plain XCF real paid native adoption, Round/erase/Clear/pencil COW across tile boundaries, alpha lock, source/history/redo preservation. No producer numerical oracle."]
+fn native_stroke_changes_one_history_and_keeps_source_custody() {
+    for gray in [false, true] {
+        for sample in [photocraft_color::SampleType::U8, photocraft_color::SampleType::U16, photocraft_color::SampleType::F32] {
+            for variant in 0..4 {
+                let mut s = session(gray, sample, false);
+                let before = s.active().unwrap().doc.clone();
+                let raw = fixture::payload(&before);
+                let source = s.active().unwrap().source.clone();
+                let rev = s.active().unwrap().revision;
+                let past = s.active().unwrap().history.past_len();
+                let mut p = fixture::patch();
+                if variant == 1 {
+                    p["erase"] = Value::Bool(true)
+                }
+                if variant == 2 {
+                    p["mode"] = Value::String("clear".into())
+                }
+                let command = if variant == 3 { "paint.pencil" } else { "paint.stroke" };
+                let reply = s.execute(command, p).unwrap();
+                assert!(reply.get("damage").and_then(Value::as_array).is_some());
+                let changed = s.active().unwrap().doc.clone();
+                assert!(changed.accounted().unwrap().is_legacy_storage());
+                assert_eq!(s.active().unwrap().revision, rev + 1);
+                assert_eq!(s.active().unwrap().history.past_len(), past + 1);
+                assert_ne!(fixture::payload(&changed), raw);
+                assert_eq!(s.active().unwrap().source, source);
+                assert!(s.active().unwrap().source_read_only);
+                assert_eq!(before.xcf_state, changed.xcf_state);
+                assert_eq!(before.source_color_context, changed.source_color_context);
+                assert_eq!(fixture::payload(&before), raw);
+                assert!(s.undo_with_control(&fixture::ctl()).unwrap());
+                assert_eq!(fixture::payload(&s.active().unwrap().doc), raw);
+                let revision = s.active().unwrap().revision;
+                let current = s.active().unwrap().doc.clone();
+                let mut noop = fixture::patch();
+                noop["points"] = serde_json::json!([[-1000.0, -1000.0, 1.0]]);
+                s.execute("paint.stroke", noop).unwrap();
+                assert_eq!(s.active().unwrap().revision, revision);
+                assert!(current.shares_state(&s.active().unwrap().doc));
+                assert!(s.active().unwrap().history.can_redo());
+                assert!(s.redo_with_control(&fixture::ctl()).unwrap());
+                assert_eq!(fixture::payload(&s.active().unwrap().doc), fixture::payload(&changed));
+            }
+        }
+    }
+    let mut s = session(false, photocraft_color::SampleType::U8, true);
+    let before = fixture::payload(&s.active().unwrap().doc);
+    s.execute("paint.stroke", fixture::patch()).unwrap();
+    let after = fixture::payload(&s.active().unwrap().doc);
+    for (a, b) in before.as_chunks::<4>().0.iter().zip(after.as_chunks::<4>().0.iter()) {
+        assert_eq!(a[3], b[3]);
+    }
 }
 #[test]
-#[ignore="UNRUN/uncompiled Down original-meter continuity, single-use early failure/interception cleanup, captured source/view/tool and prepared final fences, early control refusal and unsupported brush contracts."]
-fn native_stroke_capture_and_staging_refuse_atomically(){
- for variant in 0..5{
-  let mut s=session(false,photocraft_color::SampleType::F32,false);let before=s.active().unwrap().doc.clone();let captured=capture_accounted_native_stroke_target(&s).unwrap().unwrap();captured.admit_samples(3).unwrap();let used=captured.work.diagnostics().used;assert!(used>0);let mut p=fixture::patch();captured.inject_captured_params(&s,&mut p).unwrap();assert!(captured.work.diagnostics().used>used);
-  match variant{0=>s.active_mut().unwrap().source_read_only=false,1=>s.active_mut().unwrap().view_revision+=1,2=>s.tools.foreground[0]=0.03125,3=>s.prefs.edit(|p|p.performance.history_states=1),_=>s.active_mut().unwrap().channel_view.quick_mask_hidden=true};assert!(captured.inject_captured_params(&s,&mut p).is_err());assert!(before.shares_state(&s.active().unwrap().doc));
- }
- let mut s=session(false,photocraft_color::SampleType::U16,false);let target=capture_accounted_native_stroke_target(&s).unwrap().unwrap();let mut p=fixture::patch();target.inject_captured_params(&s,&mut p).unwrap();let used=target.work.diagnostics().used;target.arm_captured_work(&mut s).unwrap();s.execute("paint.stroke",p.clone()).unwrap();assert!(target.work.diagnostics().used>used);assert!(s.native_stroke_work.is_none());let target=capture_accounted_native_stroke_target(&s).unwrap().unwrap();let mut p=fixture::patch();target.inject_captured_params(&s,&mut p).unwrap();target.arm_captured_work(&mut s).unwrap();assert!(s.execute("missing.command",Value::Null).is_err());assert!(s.native_stroke_work.is_none());let before=s.active().unwrap().doc.clone();assert!(target.admit_samples(100001).is_err());assert!(target.inject_captured_params(&s,&mut p).is_err());assert!(before.shares_state(&s.active().unwrap().doc));
- let request=Request::parse(&s,"paint.stroke",&p,&fixture::ctl()).unwrap();let staged=request.prepare(&s,&fixture::ctl()).unwrap();s.active_mut().unwrap().view_revision+=1;assert!(staged.execute(&mut s,&fixture::ctl()).is_err());assert!(before.shares_state(&s.active().unwrap().doc));
- let mut selected=super::selection_tests::session(photocraft_color::SampleType::U8);let pressed=capture_accounted_native_stroke_target(&selected).unwrap().unwrap();selected.execute("select.all",serde_json::json!({})).unwrap();let selection=selected.active().unwrap().doc.clone();let mut stale=fixture::patch();assert!(pressed.inject_captured_params(&selected,&mut stale).is_err());assert!(selection.shares_state(&selected.active().unwrap().doc));
- let mut locked=session(false,photocraft_color::SampleType::U8,false);let old=locked.active().unwrap().doc.accounted().unwrap().clone();let q=old.quota().clone();let fee=q.reserve(QuotaKind::Resident,8<<20).unwrap();let mut model=old.document().clone();model.layers[0].locks.pixels=true;let owner=AccountedDocument::from_owned(model,std::sync::Arc::new((old,fee)),q,&fixture::ctl()).unwrap();locked=Session::new();locked.add_accounted_document(owner,None,&fixture::ctl()).unwrap();let lock_before=locked.active().unwrap().doc.clone();assert!(locked.execute("paint.stroke",fixture::patch()).is_err());assert!(lock_before.shares_state(&locked.active().unwrap().doc));
- let work=|_|Err(BackingError::Work);let deny=ReadControl{interrupt:&photocraft_raster::Interrupt::NONE,work:&work};assert!(Request::parse(&s,"paint.stroke",&p,&deny).is_err());let mut advanced=fixture::patch();advanced["autoErase"]=Value::Bool(true);assert!(s.execute("paint.pencil",advanced).is_err());assert!(before.shares_state(&s.active().unwrap().doc));
+#[ignore = "UNRUN/uncompiled Down original-meter continuity, single-use early failure/interception cleanup, captured source/view/tool and prepared final fences, early control refusal and unsupported brush contracts."]
+fn native_stroke_capture_and_staging_refuse_atomically() {
+    for variant in 0..5 {
+        let mut s = session(false, photocraft_color::SampleType::F32, false);
+        let before = s.active().unwrap().doc.clone();
+        let captured = capture_accounted_native_stroke_target(&s).unwrap().unwrap();
+        captured.admit_samples(3).unwrap();
+        let used = captured.work.diagnostics().used;
+        assert!(used > 0);
+        let mut p = fixture::patch();
+        captured.inject_captured_params(&s, &mut p).unwrap();
+        assert!(captured.work.diagnostics().used > used);
+        match variant {
+            0 => s.active_mut().unwrap().source_read_only = false,
+            1 => s.active_mut().unwrap().view_revision += 1,
+            2 => s.tools.foreground[0] = 0.03125,
+            3 => s.prefs.edit(|p| p.performance.history_states = 1),
+            _ => s.active_mut().unwrap().channel_view.quick_mask_hidden = true,
+        };
+        assert!(captured.inject_captured_params(&s, &mut p).is_err());
+        assert!(before.shares_state(&s.active().unwrap().doc));
+    }
+    let mut s = session(false, photocraft_color::SampleType::U16, false);
+    let target = capture_accounted_native_stroke_target(&s).unwrap().unwrap();
+    let mut p = fixture::patch();
+    target.inject_captured_params(&s, &mut p).unwrap();
+    let used = target.work.diagnostics().used;
+    target.arm_captured_work(&mut s).unwrap();
+    s.execute("paint.stroke", p.clone()).unwrap();
+    assert!(target.work.diagnostics().used > used);
+    assert!(s.native_stroke_work.is_none());
+    let target = capture_accounted_native_stroke_target(&s).unwrap().unwrap();
+    let mut p = fixture::patch();
+    target.inject_captured_params(&s, &mut p).unwrap();
+    target.arm_captured_work(&mut s).unwrap();
+    assert!(s.execute("missing.command", Value::Null).is_err());
+    assert!(s.native_stroke_work.is_none());
+    let before = s.active().unwrap().doc.clone();
+    assert!(target.admit_samples(100001).is_err());
+    assert!(target.inject_captured_params(&s, &mut p).is_err());
+    assert!(before.shares_state(&s.active().unwrap().doc));
+    let request = Request::parse(&s, "paint.stroke", &p, &fixture::ctl()).unwrap();
+    let staged = request.prepare(&s, &fixture::ctl()).unwrap();
+    s.active_mut().unwrap().view_revision += 1;
+    assert!(staged.execute(&mut s, &fixture::ctl()).is_err());
+    assert!(before.shares_state(&s.active().unwrap().doc));
+    let mut selected = super::selection_tests::session(photocraft_color::SampleType::U8);
+    let pressed = capture_accounted_native_stroke_target(&selected).unwrap().unwrap();
+    selected.execute("select.all", serde_json::json!({})).unwrap();
+    let selection = selected.active().unwrap().doc.clone();
+    let mut stale = fixture::patch();
+    assert!(pressed.inject_captured_params(&selected, &mut stale).is_err());
+    assert!(selection.shares_state(&selected.active().unwrap().doc));
+    let mut locked = session(false, photocraft_color::SampleType::U8, false);
+    let old = locked.active().unwrap().doc.accounted().unwrap().clone();
+    let q = old.quota().clone();
+    let fee = q.reserve(QuotaKind::Resident, 8 << 20).unwrap();
+    let mut model = old.document().clone();
+    model.layers[0].locks.pixels = true;
+    let owner = AccountedDocument::from_owned(model, std::sync::Arc::new((old, fee)), q, &fixture::ctl()).unwrap();
+    locked = Session::new();
+    locked.add_accounted_document(owner, None, &fixture::ctl()).unwrap();
+    let lock_before = locked.active().unwrap().doc.clone();
+    assert!(locked.execute("paint.stroke", fixture::patch()).is_err());
+    assert!(lock_before.shares_state(&locked.active().unwrap().doc));
+    let work = |_| Err(BackingError::Work);
+    let deny = ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &work };
+    assert!(Request::parse(&s, "paint.stroke", &p, &deny).is_err());
+    let mut advanced = fixture::patch();
+    advanced["autoErase"] = Value::Bool(true);
+    assert!(s.execute("paint.pencil", advanced).is_err());
+    assert!(before.shares_state(&s.active().unwrap().doc));
 }

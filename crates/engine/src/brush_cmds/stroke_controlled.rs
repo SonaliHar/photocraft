@@ -9,12 +9,12 @@ use photocraft_paint::{BrushSettings, StrokePoint};
 use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES};
 use serde_json::Value;
 
-#[path = "path_symmetry_controlled.rs"]
-mod path_symmetry_controlled;
 #[path = "live_batch_controlled.rs"]
 pub(super) mod live_batch_controlled;
 #[path = "live_transaction_controlled.rs"]
 pub(super) mod live_transaction_controlled;
+#[path = "path_symmetry_controlled.rs"]
+mod path_symmetry_controlled;
 
 fn bad(cmd: &str, message: impl Into<String>) -> EngineError {
     super::bad(cmd, message)
@@ -58,16 +58,15 @@ pub(super) fn prepare_reflected_passes(
         crate::symmetry_cmds::PaintingSymmetry::Preset(preset) => {
             // Reserve the scalar validation and caller's primary/mirror dedup
             // comparisons as well as the lower helper's exact reflection work.
-            let outer_work = (points.len() as u64).checked_mul((preset.mirror_count() as u64) + 1)
+            let outer_work = (points.len() as u64)
+                .checked_mul((preset.mirror_count() as u64) + 1)
                 .and_then(|work| work.checked_mul(16))
                 .ok_or_else(|| EngineError::Other("painting symmetry work overflow".into()))?;
-            let remaining = limits.work_units.checked_sub(outer_work)
-                .ok_or_else(|| EngineError::Other("painting symmetry work limit".into()))?;
-            reflected_passes_with_interrupt(*preset, points, StrokeLimits { work_units: remaining, ..limits }, control)
-                .map_err(|error| match error {
-                    StrokeError::Cancelled => EngineError::Cancelled,
-                    error => EngineError::Other(format!("painting symmetry: {error}")),
-                })?
+            let remaining = limits.work_units.checked_sub(outer_work).ok_or_else(|| EngineError::Other("painting symmetry work limit".into()))?;
+            reflected_passes_with_interrupt(*preset, points, StrokeLimits { work_units: remaining, ..limits }, control).map_err(|error| match error {
+                StrokeError::Cancelled => EngineError::Cancelled,
+                error => EngineError::Other(format!("painting symmetry: {error}")),
+            })?
         }
     };
     poll(control)?;
@@ -121,10 +120,10 @@ pub(super) fn dispatch_preflight(session: &Session, cmd: &str, params: &Value, _
         return Err(bad(cmd, "stroke point count limit"));
     }
     for key in ["size", "hardness", "opacity", "flow", "spacing", "smoothing", "zoom"] {
-        if let Some(value) = params.get(key) {
-            if value.as_f64().is_none_or(|value| !value.is_finite() || !(value as f32).is_finite()) {
-                return Err(bad(cmd, format!("{key} must be a finite representable number")));
-            }
+        if let Some(value) = params.get(key)
+            && value.as_f64().is_none_or(|value| !value.is_finite() || !(value as f32).is_finite())
+        {
+            return Err(bad(cmd, format!("{key} must be a finite representable number")));
         }
     }
     if params.get("layer").is_some_and(|value| value.as_u64().filter(|id| *id != 0).is_none()) {
@@ -169,7 +168,9 @@ fn brush_assets(brush: &BrushSettings, cmd: &str) -> Result<u64> {
             .filter(|count| *count > 0 && *count == tile.data.len() as u64)
             .ok_or_else(|| bad(cmd, "invalid retained brush asset"))?;
         bytes = bytes
-            .checked_add((tile.data.len() as u64).checked_mul(16).and_then(|bytes|bytes.checked_add(32)).ok_or_else(|| bad(cmd, "brush asset accounting overflow"))?)
+            .checked_add(
+                (tile.data.len() as u64).checked_mul(16).and_then(|bytes| bytes.checked_add(32)).ok_or_else(|| bad(cmd, "brush asset accounting overflow"))?,
+            )
             .and_then(|bytes| bytes.checked_add(count.checked_mul(16)?))
             .filter(|bytes| *bytes <= MAX_CHECKED_RASTER_BYTES)
             .ok_or_else(|| bad(cmd, "brush asset limit"))?;
@@ -248,9 +249,8 @@ pub(super) fn try_run_with_interrupt(
         .ok_or_else(|| bad(cmd, "stroke ownership accounting overflow"))?;
     let mut available = MAX_CHECKED_RASTER_BYTES.checked_sub(retained).filter(|bytes| *bytes > 0).ok_or_else(|| bad(cmd, "stroke ownership limit"))?;
     let (captured_path, mirrors, reflection_work) = if let Some(axis) = path_axis {
-        let (captured, mirrors, work) = path_symmetry_controlled::PreparedAxis::prepare(
-            axis, points, StrokeLimits { resident_bytes: available, ..StrokeLimits::default() }, control,
-        )?;
+        let (captured, mirrors, work) =
+            path_symmetry_controlled::PreparedAxis::prepare(axis, points, StrokeLimits { resident_bytes: available, ..StrokeLimits::default() }, control)?;
         available = available.checked_sub(captured.retained_bytes).filter(|bytes| *bytes > 0).ok_or_else(|| bad(cmd, "path symmetry ownership limit"))?;
         (Some(captured), mirrors, work)
     } else {
@@ -459,14 +459,20 @@ mod tests {
         let pre = layer.surface().unwrap().clone();
         let mut expected = pre.clone();
         doc.layers.push(layer);
-        let mut session = Session::new(); session.add_document(doc, None).unwrap();
-        let axis = crate::symmetry_cmds::SymmetryAxis { source: "Own curved samples".into(), segments: vec![[[8.0, 0.0], [8.0, 8.0]], [[8.0, 8.0], [12.0, 16.0]]] };
+        let mut session = Session::new();
+        session.add_document(doc, None).unwrap();
+        let axis =
+            crate::symmetry_cmds::SymmetryAxis { source: "Own curved samples".into(), segments: vec![[[8.0, 0.0], [8.0, 8.0]], [[8.0, 8.0], [12.0, 16.0]]] };
         session.active_mut().unwrap().symmetry = Some(crate::symmetry_cmds::PaintingSymmetry::Path(axis.clone()));
         let brush = BrushSettings { size: 4.0, pressure_size: false, opacity: 0.6, flow: 0.3, wet_edges: true, seed: 3, ..Default::default() };
         let points = [StrokePoint::new(3.0, 3.0, 1.0), StrokePoint::new(9.0, 8.0, 0.7)];
-        let mut original = StrokeRenderer::new(&brush, Some(pre.format()), 1.0); original.push(&points); original.finish();
+        let mut original = StrokeRenderer::new(&brush, Some(pre.format()), 1.0);
+        original.push(&points);
+        original.finish();
         let reflected = axis.reflect_points(&points);
-        let mut mirror = StrokeRenderer::new(&brush, Some(pre.format()), 1.0); mirror.push(&reflected); mirror.finish();
+        let mut mirror = StrokeRenderer::new(&brush, Some(pre.format()), 1.0);
+        mirror.push(&reflected);
+        mirror.finish();
         original.composite_union_many(&[mirror], &pre, &mut expected, None, false);
         let before = session.active().unwrap().doc.clone();
         let revision = session.active().unwrap().revision;
@@ -482,17 +488,28 @@ mod tests {
     fn shared_reflection_preparer_matches_upstream_order_and_raw_stylus_bits() {
         use crate::symmetry_cmds::{PaintingSymmetry, SymmetryAxis};
         use photocraft_paint::symmetry::{PresetSymmetry, SymmetryMode};
-        let points = [StrokePoint { x: 2.0, y: 3.0, pressure: f32::from_bits(0x7fc01234), tilt_x: -0.0, time: f64::from_bits(0x8000000000000000), ..Default::default() }];
-        let axes = [PaintingSymmetry::Path(SymmetryAxis { source: "Own axis".into(), segments: vec![[[8.0,0.0],[8.0,16.0]]] }),
-            PaintingSymmetry::Preset(PresetSymmetry::new(SymmetryMode::Dual, [8.0,8.0], 17.0).unwrap())];
+        let points = [StrokePoint {
+            x: 2.0,
+            y: 3.0,
+            pressure: f32::from_bits(0x7fc01234),
+            tilt_x: -0.0,
+            time: f64::from_bits(0x8000000000000000),
+            ..Default::default()
+        }];
+        let axes = [
+            PaintingSymmetry::Path(SymmetryAxis { source: "Own axis".into(), segments: vec![[[8.0, 0.0], [8.0, 16.0]]] }),
+            PaintingSymmetry::Preset(PresetSymmetry::new(SymmetryMode::Dual, [8.0, 8.0], 17.0).unwrap()),
+        ];
         for axis in axes {
             let expected = axis.reflected_passes(&points);
             let actual = prepare_reflected_passes(&axis, &points, StrokeLimits::default(), &Interrupt::NONE).unwrap();
             assert_eq!(actual.len(), expected.len());
-            for (left,right) in actual.iter().zip(&expected) {
-                for (left,right) in left.iter().zip(right) {
-                    assert_eq!(left.x.to_bits(), right.x.to_bits()); assert_eq!(left.y.to_bits(), right.y.to_bits());
-                    assert_eq!(left.pressure.to_bits(), right.pressure.to_bits()); assert_eq!(left.tilt_x.to_bits(), right.tilt_x.to_bits());
+            for (left, right) in actual.iter().zip(&expected) {
+                for (left, right) in left.iter().zip(right) {
+                    assert_eq!(left.x.to_bits(), right.x.to_bits());
+                    assert_eq!(left.y.to_bits(), right.y.to_bits());
+                    assert_eq!(left.pressure.to_bits(), right.pressure.to_bits());
+                    assert_eq!(left.tilt_x.to_bits(), right.tilt_x.to_bits());
                     assert_eq!(left.time.to_bits(), right.time.to_bits());
                 }
             }
@@ -513,16 +530,20 @@ mod tests {
         session.active_mut().unwrap().active_layer = Some(id);
         let state = session.active().unwrap();
         session.live_commit = Some(super::super::LiveCommit {
-            cmd: "paint.pencil".into(), base: (state.doc.id, state.revision), params: json!({}), seed: None,
-            points: vec![], surface: source.clone(), bounds: Rect::EMPTY,
+            cmd: "paint.pencil".into(),
+            base: (state.doc.id, state.revision),
+            params: json!({}),
+            seed: None,
+            points: vec![],
+            surface: source.clone(),
+            bounds: Rect::EMPTY,
         });
-        let brush = BrushSettings { size: 3.0, pressure_size: false, color: [0.8,0.1,0.3,1.0], ..Default::default() };
-        let points = [StrokePoint::new(3.0,3.0,1.0)];
+        let brush = BrushSettings { size: 3.0, pressure_size: false, color: [0.8, 0.1, 0.3, 1.0], ..Default::default() };
+        let points = [StrokePoint::new(3.0, 3.0, 1.0)];
         let history = session.active().unwrap().history.past_len();
         let result = try_run(&mut session, "paint.stroke", &json!({"points":[[3,3,1]]}), "Brush", &brush, &points, false).unwrap();
         assert!(result.is_some());
         assert_eq!(session.active().unwrap().history.past_len(), history + 1);
         assert_ne!(session.active().unwrap().doc.layer(id).unwrap().surface().unwrap(), &source);
     }
-
 }

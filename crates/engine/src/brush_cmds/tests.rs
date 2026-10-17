@@ -202,15 +202,15 @@ fn live_color_replacement_matches_the_commit() {
 fn color_replacement_refuses_non_pixel_targets() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 20, "height": 20, "background": "#ff0000"})).unwrap();
-    let steps = s.active().unwrap().history.entries().len();
+    let steps = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
     for t in [json!("mask"), json!("quickMask"), json!({"channel": 0}), json!(3)] {
         let p = json!({"points": [[10, 10]], "size": 6, "target": t});
         assert!(s.execute("paint.colorReplacement", p.clone()).is_err(), "{t}");
         assert!(live_color_replacement(&s, &p).is_err(), "{t}");
     }
-    assert_eq!(s.active().unwrap().history.entries().len(), steps);
+    assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), steps);
     s.execute("paint.colorReplacement", json!({"points": [[10, 10]], "size": 6, "target": "pixels"})).unwrap();
-    assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
+    assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), steps + 1);
 }
 
 #[test]
@@ -570,7 +570,7 @@ fn live_brush_and_pencil_reject_invalid_batches_without_changing_the_preview() {
                 let err = live.push(&batch).unwrap_err();
                 assert!(matches!(err, EngineError::BadParams { cmd: ref actual, ref msg }
                     if actual == cmd && msg.contains("point coordinates must be finite")));
-                assert!(std::sync::Arc::ptr_eq(&shown, &live.doc), "reject the whole batch before touching the preview");
+                assert!(shown.shares_state(&live.doc), "reject the whole batch before touching the preview");
                 assert_eq!(live.bounds(), bounds);
             }
             // A rejected batch must not advance the renderer; resuming is identical to never
@@ -583,7 +583,7 @@ fn live_brush_and_pencil_reject_invalid_batches_without_changing_the_preview() {
             assert_eq!(got.content_bounds(), want.content_bounds());
         }
         let st = s.active().unwrap();
-        assert!(std::sync::Arc::ptr_eq(&doc, &st.doc));
+        assert!(doc.shares_state(&st.doc));
         assert_eq!((st.revision, st.history.past_len()), (revision, history));
     }
 }
@@ -827,13 +827,39 @@ fn out_of_range_scatter_is_rejected_and_the_maximum_still_paints() {
     let mut s = new();
     assert!(s.execute("tools.setBrush", json!({ "brush": scatter(1e38) })).is_err());
     assert!(s.execute("paint.stroke", stroke.clone()).is_ok());
-    // The maximum (1000 %) is accepted and paints a finite, well-formed dab.
-    for patch in [scatter(10.0), dual(10.0)] {
+    // At maximum scatter, a single default-seed dab may land off canvas;
+    // a dual dab may also miss the primary tip completely. Use declared seeds
+    // whose public RNG offsets prove an in-bounds, overlapping positive input.
+    // Keep the same32x32 canvas, point10, default20px primary and6px dual sizes.
+    for (patch, seed, dual_tip) in [(scatter(10.0), 456u64, false), (dual(10.0), 52u64, true)] {
         let mut s = new();
         s.execute("tools.setBrush", json!({ "brush": patch })).unwrap();
-        let r = s.execute("paint.stroke", stroke.clone()).unwrap();
+        assert_eq!(s.tools.brush.size, 20.0);
+        let rng_seed = if dual_tip { seed ^ 0xD0A1 } else { seed };
+        let streams = if dual_tip {
+            [photocraft_paint::rng::stream::DUAL_X, photocraft_paint::rng::stream::DUAL_Y]
+        } else {
+            [photocraft_paint::rng::stream::SCATTER_X, photocraft_paint::rng::stream::SCATTER_Y]
+        };
+        let radius = if dual_tip {
+            assert_eq!(s.tools.brush.dual_brush.size, 6.0);
+            3.0
+        } else {
+            10.0
+        };
+        for stream in streams {
+            let offset = f64::from(photocraft_paint::rng::rand_signed(rng_seed, 0, stream)) * 10.0 * radius;
+            assert!(offset.abs() < if dual_tip { 3.0 } else { 5.0 }, "actual deterministic fixture displacement: {offset}");
+        }
+        let before = surface(&s);
+        let steps = s.active().unwrap().history.past_len();
+        let r = s.execute("paint.stroke", json!({"points":[[10,10]],"seed":seed})).unwrap();
         let d: Vec<i64> = r["damage"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).collect();
         assert!(d[0].abs() < 1000 && d[1].abs() < 1000 && d[2] > 0 && d[3] > 0, "{r}");
+        assert_ne!(surface(&s), before, "the maximum genuinely paints native pixels");
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+        assert!(s.undo());
+        assert_eq!(surface(&s), before);
     }
     // Control: 200 % scatter paints where it did before the cap (the soft default tip reaches a
     // little past its radius).
@@ -904,13 +930,25 @@ fn live_and_commit(s: &Session, cmd: &str, base: Value, pts: &[[f64; 3]]) -> (Li
 #[test]
 fn a_commit_takes_the_live_strokes_pixels_and_they_equal_a_fresh_render() {
     let pts = [[10.0, 50.0, 1.0], [60.0, 30.0, 0.7], [120.0, 60.0, 0.9], [180.0, 40.0, 0.4], [150.0, 80.0, 1.0]];
+    let input = |erase: bool| {
+        let mut session = session(200, 100);
+        if erase {
+            // The erase branch is a positive changed-pixels/one-undo contract;
+            // erase over transparent pixels is separately an exact raw no-op.
+            session.execute("edit.fill", json!({"contents":"white"})).unwrap();
+            assert_eq!(rgba(&session, 60, 30), [1.0; 4]);
+        }
+        session
+    };
     for (cmd, base) in [
         ("paint.stroke", json!({"brush": {"size": 18, "hardness": 0.0, "flow": 0.5}, "smoothing": 0.5, "target": "pixels"})),
         ("paint.stroke", json!({"preset": "Spatter", "smoothing": 0.0, "target": "pixels"})),
         ("paint.stroke", json!({"brush": {"size": 12}, "erase": true, "target": "pixels"})),
         ("paint.pencil", json!({"smoothing": 0.0})),
     ] {
-        let mut s = session(200, 100);
+        let erase = base.get("erase").and_then(Value::as_bool).unwrap_or(false);
+        let mut s = input(erase);
+        let before = surface(&s);
         let (live, p) = live_and_commit(&s, cmd, base.clone(), &pts);
         let steps = s.active().unwrap().history.past_len();
         s.offer_live_stroke(live).unwrap();
@@ -919,13 +957,14 @@ fn a_commit_takes_the_live_strokes_pixels_and_they_equal_a_fresh_render() {
         assert_eq!(r["fromLive"], true, "{cmd} {base}: the commit took the live pixels");
         assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one undo step");
         // The journal's replay renders from scratch and must give the same pixels.
-        let mut fresh = session(200, 100);
+        let mut fresh = input(erase);
         let r = fresh.execute(cmd, p).unwrap();
         assert!(r.get("fromLive").is_none());
         assert!(same_pixels(&surface(&s), &surface(&fresh), Rect::new(0, 0, 200, 100)), "{cmd} {base}");
-        // Undo restores the pre-stroke pixels.
-        s.undo();
-        assert!(same_pixels(&surface(&s), &surface(&session(200, 100)), Rect::new(0, 0, 200, 100)));
+        assert_ne!(surface(&s), before, "every positive case actually changed native pixels");
+        // Undo restores the exact seeded pre-stroke pixels, including erase input.
+        assert!(s.undo());
+        assert!(same_pixels(&surface(&s), &before, Rect::new(0, 0, 200, 100)));
     }
 }
 
@@ -1085,4 +1124,27 @@ fn brush_and_pencil_paint_a_cmyk_pick_with_the_picked_inks() {
         let got: Vec<f32> = surf.read_region(Rect::new(8, 8, 9, 9)).into_iter().take(4).collect();
         assert!(got.iter().zip(cyan).all(|(a, b)| (a - b).abs() < 0.02), "{cmd}: {got:?}");
     }
+}
+
+#[test]
+fn offered_erase_over_blank_pixels_is_exact_raw_noop_and_keeps_real_redo() {
+    let mut s = session(64, 32);
+    s.execute("paint.pencil", json!({"points":[[8,16],[40,16]],"size":4,"color":"#336699"})).unwrap();
+    let painted = s.active().unwrap().doc.clone();
+    assert!(s.undo());
+    let before = s.active().unwrap().doc.clone();
+    let revision = s.active().unwrap().revision;
+    let past = s.active().unwrap().history.past_len();
+    let pts = [[8.0, 16.0, 1.0], [40.0, 16.0, 1.0]];
+    let (live, params) = live_and_commit(&s, "paint.stroke", json!({"size":4,"erase":true,"target":"pixels"}), &pts);
+    s.offer_live_stroke(live).unwrap();
+    let result = s.execute("paint.stroke", params).unwrap();
+    s.clear_live_stroke();
+    assert_eq!(result["fromLive"], true);
+    assert_eq!(result["damage"], json!([0, 0, 0, 0]));
+    assert!(s.active().unwrap().doc.shares_state(&before));
+    assert_eq!(s.active().unwrap().revision, revision);
+    assert_eq!(s.active().unwrap().history.past_len(), past);
+    assert!(s.redo(), "the untouched real redo entry remains available");
+    assert_eq!(s.active().unwrap().doc, painted);
 }

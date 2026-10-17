@@ -11,6 +11,8 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 #[path = "../../xcf/tests/common/mod.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod xcf;
 fn ctl() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
@@ -29,7 +31,6 @@ fn fixture(sample: SampleType, lock: Lock) -> Session {
         SampleType::U32 => (350, 0x80000001u32.to_be_bytes().to_vec(), 0xc0000001u32.to_be_bytes().to_vec()),
         SampleType::F32 => (650, 0.5f32.to_be_bytes().to_vec(), (-0.0f32).to_be_bytes().to_vec()),
         SampleType::F64 => (750, (0.5 + 2f64.powi(-44)).to_be_bytes().to_vec(), (-0.0f64).to_be_bytes().to_vec()),
-        _ => panic!(),
     };
     let pixel = [color.as_slice(), color.as_slice(), color.as_slice(), alpha.as_slice()].concat();
     let raw = pixel.repeat(257 * 2);
@@ -249,5 +250,5 @@ fn real_control_and_quota_failures_keep_owner_history_and_private_fees_atomic() 
     assert_eq!(q.usage().unwrap(), baseline);
 }
 
-#[path="accounted_native_alpha_wide_tests.rs"]
+#[path = "accounted_native_alpha_wide_tests.rs"]
 mod wide_contracts;

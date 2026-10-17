@@ -36,7 +36,7 @@ fn wide_proof_identity_is_not_a_reusable_decoded_alpha_flag() {
         drop(proof);
         assert_eq!(q.usage().unwrap(), baseline);
         let left = AtomicU64::new(total.load(Ordering::Relaxed) - 1);
-        let work = |n| left.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+        let work = |n| left.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
         assert!(VerifiedNativeAlpha::verify(owner, edit, &ReadControl { interrupt: &Interrupt::NONE, work: &work }).is_err());
         assert_eq!(q.usage().unwrap(), baseline);
         let work = |_| if q.usage().unwrap().resident > baseline.resident { Err(BackingError::Cancelled) } else { Ok(()) };

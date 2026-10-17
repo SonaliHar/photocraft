@@ -280,4 +280,6 @@ impl<'a> VerifiedNativeAlpha<'a> {
 
 #[cfg(test)]
 #[path = "accounted_native_alpha_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
