@@ -12,8 +12,8 @@ fn original_png(snapshot: &photocraft_engine::DocumentSnapshot, root: &std::path
         for x in 0..16 {
             let p: [u8; 4] = std::array::from_fn(|c| (png.get(x, y, c).clamp(0., 1.) * 255.).round() as u8);
             let expected = egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]).to_array();
-            for c in 0..4 {
-                assert!((i16::from(actual.pixels[(y * 16 + x) as usize].to_array()[c]) - i16::from(expected[c])).abs() <= 2);
+            for (c, expected_component) in expected.iter().enumerate() {
+                assert!((i16::from(actual.pixels[(y * 16 + x) as usize].to_array()[c]) - i16::from(*expected_component)).abs() <= 2);
             }
         }
     }

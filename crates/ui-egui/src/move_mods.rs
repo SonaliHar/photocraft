@@ -576,7 +576,7 @@ mod tests {
     #[test]
     fn arrow_keys_nudge_the_selection_with_a_selection_tool() {
         let mut app = app_with_layer();
-        app.session.edit_prefs(|p| p.tools.bundle_nudges = false);
+        app.session.edit_prefs(|p| p.tools.bundle_nudges = false).unwrap();
         let id = app.session.active().unwrap().active_layer.unwrap();
         app.ui.tool = Tool::Lasso;
         assert!(!press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE), "no selection: not used");
@@ -633,7 +633,7 @@ mod tests {
         assert_eq!(history(&app), h0 + 1, "0.9 s: the same run");
         press_at(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE, 3.0);
         assert_eq!(history(&app), h0 + 2, "1.1 s of quiet: a new run");
-        app.session.edit_prefs(|p| p.tools.nudge_bundle_pause_ms = 5000);
+        app.session.edit_prefs(|p| p.tools.nudge_bundle_pause_ms = 5000).unwrap();
         press_at(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE, 7.0);
         assert_eq!(history(&app), h0 + 2, "4 s with a 5 s pause: the same run");
         assert_eq!(left_edge(&app, id), 12);
@@ -646,7 +646,7 @@ mod tests {
     fn every_press_is_a_step_with_bundling_off() {
         let mut app = app_with_layer();
         let id = app.session.active().unwrap().active_layer.unwrap();
-        app.session.edit_prefs(|p| p.tools.bundle_nudges = false);
+        app.session.edit_prefs(|p| p.tools.bundle_nudges = false).unwrap();
         let h0 = history(&app);
         for _ in 0..5 {
             assert!(press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
@@ -655,7 +655,7 @@ mod tests {
         assert!(app.session.undo());
         assert_eq!(left_edge(&app, id), 12, "one pixel back");
         // Turning it back on bundles the next run, which doesn't swallow the earlier steps.
-        app.session.edit_prefs(|p| p.tools.bundle_nudges = true);
+        app.session.edit_prefs(|p| p.tools.bundle_nudges = true).unwrap();
         for _ in 0..3 {
             press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE);
         }
@@ -778,7 +778,7 @@ mod tests {
         app.run("edit.undo", json!({})).unwrap();
         assert_eq!(quad(&app), q0, "nothing is left of the session to undo");
         // With bundling off every nudge is a step.
-        app.session.edit_prefs(|p| p.tools.bundle_nudges = false);
+        app.session.edit_prefs(|p| p.tools.bundle_nudges = false).unwrap();
         for i in 0..3 {
             press_at(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE, 20.0 + 0.1 * f64::from(i));
             settle(&mut app);

@@ -190,6 +190,13 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
                 let polygonal = mods.alt && nothing_selected;
                 let intent = if polygonal { Modifiers { alt: false, ..mods } } else { mods };
                 let mut d = Drag::new(tool, p, vec![[p[0], p[1], 1.0]], intent, false);
+                if tool == Tool::Lasso
+                    && let Err(error) = d.capture_selection_origin(app)
+                {
+                    app.ui.status = error;
+                    app.ui.status_error = true;
+                    return true;
+                }
                 let document = app.session.active().map(|st| st.doc.id);
                 d.lasso = Some(Lasso { cursor: p, down: true, polygonal, document, straight: Vec::new() });
                 app.drag = Some(d);

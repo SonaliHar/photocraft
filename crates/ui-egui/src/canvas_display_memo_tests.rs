@@ -17,11 +17,11 @@ fn duotone_display_document_is_built_once_per_snapshot() {
     let (a, key) = display_doc(&mut app, 0);
     assert_eq!(key, 1 << 41);
     let (b, _) = display_doc(&mut app, 0);
-    assert!(std::sync::Arc::ptr_eq(&a, &b), "the second call reuses the first's document");
+    assert!(a.shares_state(&b), "the second call reuses the first's document");
     assert_eq!(a.layers.len(), app.session.documents()[0].doc.layers.len() + 1, "with the ink display layer");
     app.run("edit.fill", json!({"color": "#808080"})).unwrap();
     let (c, _) = display_doc(&mut app, 0);
-    assert!(!std::sync::Arc::ptr_eq(&a, &c), "an edit builds it again");
+    assert!(!a.shares_state(&c), "an edit builds it again");
     assert_eq!(c.layers.last().map(|l| l.name.as_str()), a.layers.last().map(|l| l.name.as_str()));
 }
 
@@ -34,13 +34,13 @@ fn live_adjust_document_is_built_once_per_setting() {
     let (a, k1) = display_doc(&mut app, 0);
     let (b, k2) = display_doc(&mut app, 0);
     assert_eq!(k1, k2);
-    assert!(std::sync::Arc::ptr_eq(&a, &b));
+    assert!(a.shares_state(&b));
     app.live_adjust = Some((id, json!({"inBlack": 40})));
     let (c, k3) = display_doc(&mut app, 0);
     assert_ne!(k1, k3);
-    assert!(!std::sync::Arc::ptr_eq(&a, &c), "a new setting builds it again");
+    assert!(!a.shares_state(&c), "a new setting builds it again");
     app.live_adjust = None;
     let (d, k4) = display_doc(&mut app, 0);
     assert_eq!(k4, 0);
-    assert!(std::sync::Arc::ptr_eq(&d, &app.session.documents()[0].doc), "no preview: the document itself");
+    assert!(d.shares_state(&app.session.documents()[0].doc), "no preview: the document itself");
 }

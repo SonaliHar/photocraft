@@ -96,9 +96,18 @@ pub(crate) fn active_outline(app: &mut PhotocraftApp, at: Option<[f64; 2]>, comm
         return None;
     }
     // A live rectangle's corner widget under the pointer (or being dragged) isn't a layer to pick.
-    if at.is_some_and(|p| crate::corner_radius::hovers(app, p)) {
-        app.canvas_hover_layer = None;
-        return None;
+    match at.map(|p| crate::corner_radius::hovers(app, p)).transpose() {
+        Ok(Some(true)) => {
+            app.canvas_hover_layer = None;
+            return None;
+        }
+        Ok(_) => {}
+        Err(error) => {
+            app.ui.status = error;
+            app.ui.status_error = true;
+            app.canvas_hover_layer = None;
+            return None;
+        }
     }
     // A layer hovered in the Layers panel takes precedence over canvas rollover.
     if let Some(id) = app.hover_layer
@@ -160,7 +169,7 @@ mod tests {
         assert_eq!(target(&mut app, Some([10.5, 12.0]), false, false), None);
         assert_eq!(target(&mut app, Some([10.5, 12.0]), true, false), Some(a));
         // Preferences › Tools › Show Highlight on Rollover off.
-        app.session.edit_prefs(|p| p.tools.show_highlight_on_rollover = false);
+        assert!(app.session.edit_prefs(|p| p.tools.show_highlight_on_rollover = false).is_ok());
         assert_eq!(target(&mut app, Some([10.5, 12.0]), true, false), None);
     }
 
@@ -190,7 +199,7 @@ mod tests {
         app.guide_drag = None;
 
         // When rollover preference is disabled, no outline:
-        app.session.edit_prefs(|p| p.tools.show_highlight_on_rollover = false);
+        assert!(app.session.edit_prefs(|p| p.tools.show_highlight_on_rollover = false).is_ok());
         assert_eq!(active_outline(&mut app, None, false, false), None);
     }
 

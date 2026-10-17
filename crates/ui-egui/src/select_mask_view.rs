@@ -596,7 +596,7 @@ mod tests {
     }
 
     fn pixel(doc: &Document, x: i32, y: i32) -> Vec<f32> {
-        let s = photocraft_compose::flatten_to_surface(doc, PixelFormat::RGBA8, None);
+        let s = photocraft_compose::flatten_to_surface(doc, PixelFormat::RGBA8, None).unwrap();
         s.pixel(x, y)
     }
 

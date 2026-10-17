@@ -1,6 +1,8 @@
 //! UNRUN general CURRENT native workflow, no authored-source geometry claim.
 use super::*;
 #[path = "canvas_flat_current_fixture.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 use fixture::{archive, ctl, fixture, page, payload, reference};
 use serde_json::{Value, json};
@@ -11,8 +13,8 @@ fn preview(doc: &photocraft_engine::DocumentSnapshot, literals: &[fixture::Liter
     for (actual, p) in image.pixels.iter().zip(expected) {
         let b = p.map(|v| (v.clamp(0., 1.) * 255.).round() as u8);
         let b = egui::Color32::from_rgba_unmultiplied(b[0], b[1], b[2], b[3]).to_array();
-        for c in 0..4 {
-            assert!((i16::from(actual.to_array()[c]) - i16::from(b[c])).abs() <= 1);
+        for (c, expected_component) in b.iter().enumerate() {
+            assert!((i16::from(actual.to_array()[c]) - i16::from(*expected_component)).abs() <= 1);
         }
     }
     drop((image, fee));

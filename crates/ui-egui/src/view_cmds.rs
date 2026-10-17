@@ -771,16 +771,19 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
                 return Err("unsupported unequal-axis Print Size view".into());
             }
             // Use the screen-resolution preference without narrowing authoritative document DPI.
-            let screen = f64::from(app.session.prefs().units_and_rulers.screen_resolution.max(1.0));
+            let screen = app.session.prefs().units_and_rulers.screen_resolution.max(1.0);
             // Compare thresholds first: valid tiny/huge f64 DPI never overflows the ratio or cast.
-            let zoom = if resolution.x_dpi <= screen / 64.0 {
-                64.0
-            } else if resolution.x_dpi >= screen / 0.01 {
-                0.01
+            let size = [doc.size.width, doc.size.height];
+            let minimum = crate::zoom_levels::min(size);
+            let maximum = crate::zoom_levels::MAX;
+            let zoom = if resolution.x_dpi <= screen / f64::from(maximum) {
+                maximum
+            } else if resolution.x_dpi >= screen / f64::from(minimum) {
+                minimum
             } else {
                 (screen / resolution.x_dpi) as f32
             };
-            view.zoom = crate::zoom_levels::clamp(zoom, [doc.size.width, doc.size.height]);
+            view.zoom = crate::zoom_levels::clamp(zoom, size);
             Ok(json!({"zoom": view.zoom}))
         }
         "view.fitLayersOnScreen" => fit_layers(app),
@@ -1335,10 +1338,11 @@ fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value)
                         Ok(chosen) => chosen,
                         Err(error) => return Some(Err(error.to_string())),
                     };
-                    !chosen.is_empty() && chosen.iter().all(|id| {
-                        st.doc.layers.iter().any(|root| root.id == *id)
-                            && st.doc.layer(*id).is_some_and(|layer| layer.visible && matches!(layer.content, photocraft_doc::LayerContent::Adjustment(_)))
-                    })
+                    !chosen.is_empty()
+                        && chosen.iter().all(|id| {
+                            st.doc.layers.iter().any(|root| root.id == *id)
+                                && st.doc.layer(*id).is_some_and(|layer| layer.visible && matches!(layer.content, photocraft_doc::LayerContent::Adjustment(_)))
+                        })
                 }
                 None => false,
             };
@@ -1421,15 +1425,17 @@ fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value)
                 "image.applyImage" => {
                     let mut masks = vec!["none".to_string()];
                     masks.extend(load.iter().cloned());
-                    // Source layer: Merged, then the pixel layers top to bottom (the engine takes
-                    // the topmost layer of a name), shown by their own names.
+                    // Merged, then actual pixel-layer identities top to bottom. Labels retain
+                    // the document names, including duplicate names, without using them as selectors.
                     let mut layers = vec!["merged".to_string()];
+                    let mut names = Map::new();
                     for (_, _, l) in d.walk().into_iter().rev() {
-                        if l.surface().is_some() && !layers.contains(&l.name) {
-                            layers.push(l.name.clone());
+                        if l.surface().is_some() {
+                            let id = l.id.0.to_string();
+                            names.insert(id.clone(), json!(l.name));
+                            layers.push(id);
                         }
                     }
-                    let names: Map<String, Value> = layers.iter().skip(1).map(|n| (n.clone(), json!(n))).collect();
                     // Scale and Offset only affect Add and Subtract.
                     dialog(
                         app,

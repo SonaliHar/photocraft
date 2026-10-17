@@ -475,7 +475,6 @@ fn commit_path(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) {
             app.ui.selected_path = Some(name);
             app.ui.selected_saved_path = None;
         })
-
     };
     if let Err(e) = r {
         app.ui.status = e;
@@ -984,7 +983,7 @@ pub(crate) fn draw_handle(painter: &egui::Painter, anchor: Pos2, handle: Pos2, a
 }
 
 /// Work path / active shape path outlines, anchors, and the pen path in progress.
-pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
+pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) -> Result<(), String> {
     let tool = app.ui.tool;
     let accent = Tokens::get(painter.ctx()).accent;
     let to_scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
@@ -1021,7 +1020,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         if let Some((_, p)) = targeted_vector_mask(app) {
             draw_path(&p, tool == Tool::PathSelection);
         }
-        crate::corner_radius::draw(app, painter, &to_scr, accent);
+        crate::corner_radius::draw(app, painter, &to_scr, accent)?;
     }
     // Pen path in progress, with handles of the last knot and a rubber band to the pointer. While
     // ⌘/Ctrl drags it, Direct Selection draws its preview instead.
@@ -1090,6 +1089,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     if paths || app.ui.pen.is_some() {
         crate::anchor_tools::draw_pen_hover(app, painter, &to_scr, accent, painter.ctx().input(|i| i.modifiers));
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1748,15 +1748,22 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     // Typed selection cannot be inferred from restored legacy names. A changed
     // legacy work/layer/name selection only invalidates this optional ID witness.
-    let consistent = app.ui.selected_saved_path.as_ref().is_none_or(|selected| app.session.active().is_some_and(|active| {
-        if active.doc.id.0 != selected.document || active.doc.paths.len() > 10_000 { return false; }
-        let mut paths = active.doc.paths.iter().filter(|path| path.id.0 == selected.path);
-        let Some(path) = paths.next() else { return false };
-        paths.next().is_none() && path.id.0 != 0 && app.ui.selected_path.as_deref() == Some(path.name.as_str())
-    }));
-    if !consistent { app.ui.selected_saved_path = None; }
-    let selected = app.ui.selected_saved_path.as_ref().and_then(|selected|
-        app.session.active().filter(|active| active.doc.id.0 == selected.document).map(|_| photocraft_doc::item_identity::PathId(selected.path)));
+    let consistent = app.ui.selected_saved_path.as_ref().is_none_or(|selected| {
+        app.session.active().is_some_and(|active| {
+            if active.doc.id.0 != selected.document || active.doc.paths.len() > 10_000 {
+                return false;
+            }
+            let mut paths = active.doc.paths.iter().filter(|path| path.id.0 == selected.path);
+            let Some(path) = paths.next() else { return false };
+            paths.next().is_none() && path.id.0 != 0 && app.ui.selected_path.as_deref() == Some(path.name.as_str())
+        })
+    });
+    if !consistent {
+        app.ui.selected_saved_path = None;
+    }
+    let selected = app.ui.selected_saved_path.as_ref().and_then(|selected| {
+        app.session.active().filter(|active| active.doc.id.0 == selected.document).map(|_| photocraft_doc::item_identity::PathId(selected.path))
+    });
     if let Some(path) = selected {
         crate::xcf_panels::path_name::properties(app, ui, path);
         crate::xcf_panels::source_inspect::owner_properties(app, ui, photocraft_doc::item_identity::ItemRef::Path(path));
@@ -1768,7 +1775,12 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let doc = st.doc.clone();
     let rows = match crate::vector_path_rows_cache::rows(ui.ctx(), &doc, st.revision, st.active_layer) {
         Ok(rows) => rows,
-        Err(error) => { app.ui.status = error.to_string(); app.ui.status_error = true; ui.label(error.to_string()); return; }
+        Err(error) => {
+            app.ui.status = error.to_string();
+            app.ui.status_error = true;
+            ui.label(error.to_string());
+            return;
+        }
     };
     let has_layer_path = rows.iter().any(|r| r.kind == PathRow::Layer);
     let mut action: Option<(&str, Value)> = None;
@@ -1795,7 +1807,9 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, true, name));
                 let sel = if let Some(selected) = app.ui.selected_saved_path.as_ref().filter(|selected| selected.document == doc.id.0) {
                     *kind == PathRow::Saved && id.is_some_and(|id| id.0 == selected.path)
-                } else { app.ui.selected_path.as_deref() == Some(key.as_str()) };
+                } else {
+                    app.ui.selected_path.as_deref() == Some(key.as_str())
+                };
                 if sel {
                     ui.painter().rect_filled(r, 0.0, t.row_selected);
                 } else if resp.hovered() {
@@ -1826,7 +1840,9 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     app.ui.selected_path = Some(key.clone());
                     app.ui.selected_saved_path = if *kind == PathRow::Saved {
                         id.filter(|id| id.0 != 0).map(|id| crate::state::XcfSavedPathSelection { document: doc.id.0, path: id.0 })
-                    } else { None };
+                    } else {
+                        None
+                    };
                 }
                 // Double-clicking the Work Path saves it (Photoshop's "Save Path").
                 if !load && resp.double_clicked() && *kind == PathRow::Work {
@@ -2061,7 +2077,7 @@ mod tests {
             let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0));
             let painter = ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(rect);
             let xf = ViewXform { rect, zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
-            draw_overlay(app, &painter, &xf, &doc);
+            draw_overlay(app, &painter, &xf, &doc).unwrap();
         });
         out.textures_delta.clear();
         out.shapes.len()

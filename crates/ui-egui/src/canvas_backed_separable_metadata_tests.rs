@@ -16,8 +16,8 @@ fn preview(doc: &photocraft_engine::DocumentSnapshot, root: &std::path::Path, ca
     for (actual, p) in image.pixels.iter().zip(expected) {
         let q = p.map(|v| (v.clamp(0., 1.) * 255.).round() as u8);
         let q = egui::Color32::from_rgba_unmultiplied(q[0], q[1], q[2], q[3]).to_array();
-        for c in 0..4 {
-            assert!((i16::from(actual.to_array()[c]) - i16::from(q[c])).abs() <= 1);
+        for (c, expected_component) in q.iter().enumerate() {
+            assert!((i16::from(actual.to_array()[c]) - i16::from(*expected_component)).abs() <= 1);
         }
     }
     drop((image, fee));

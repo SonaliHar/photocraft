@@ -42,7 +42,7 @@ fn source() -> (PathBuf, Value, Vec<Vec<u8>>) {
         assert_eq!(hash(&b), blob["sha256"].as_str().unwrap());
         assert_eq!(b.len() as u64, blob["bytes"].as_u64().unwrap());
         if cfg!(target_endian = "big") {
-            for sample in b.chunks_exact_mut(4) {
+            for sample in b.as_chunks_mut::<4>().0 {
                 sample.reverse();
             }
         }

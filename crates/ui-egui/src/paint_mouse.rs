@@ -217,7 +217,12 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::canvas::{ToolEvent, tool_event};
+    use crate::canvas::{ToolEvent, tool_event as raw_tool_event};
+
+    fn tool_event(app: &mut PhotocraftApp, event: ToolEvent, modifiers: egui::Modifiers) {
+        raw_tool_event(app, event, modifiers);
+        crate::canvas::wait_for_test_live_stroke(app);
+    }
 
     fn harness(prefs: Option<&str>) -> Harness<'static, PhotocraftApp> {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -237,6 +242,7 @@ mod tests {
                     return;
                 }
                 egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+                crate::canvas::wait_for_test_live_stroke(app);
             },
             app,
         );

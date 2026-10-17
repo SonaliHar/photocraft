@@ -124,7 +124,7 @@ fn original_gaussian_ui_source_edit_roundtrip_keeps_native_and_profile_roles() {
         let disabled = app.session.active().unwrap().doc.clone();
         assert_eq!(native(&disabled), words);
         let (display, fee) = backed_snapshot_display_image(&disabled, 96, 80, None, &Interrupt::NONE).unwrap();
-        for (pixel, raw) in display.pixels.iter().zip(words.1.chunks_exact(4)) {
+        for (pixel, raw) in display.pixels.iter().zip(words.1.as_chunks::<4>().0) {
             for (actual, expected) in pixel.to_array().iter().zip(raw) {
                 assert!((i16::from(*actual) - i16::from(*expected)).abs() <= 1);
             }

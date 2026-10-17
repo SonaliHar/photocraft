@@ -27,7 +27,8 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use eframe::egui_wgpu::{self, CallbackResources, CallbackTrait, RenderState, ScreenDescriptor};
 use eframe::wgpu;
@@ -1595,6 +1596,64 @@ fn drm_video_memory(drm: &std::path::Path, vendor: u32, device: u32) -> Option<u
 #[cfg(not(any(target_os = "linux", windows)))]
 fn detect_video_memory(_vendor: u32, _device: u32) -> Option<u64> {
     None
+}
+
+/// A scoped pending GPU payload reservation. Declared before the staged texture so failure
+/// destroys that texture owner before returning its reservation.
+struct PendingUpload {
+    counter: Arc<AtomicU64>,
+    bytes: u64,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    health: DeviceHealth,
+}
+impl Drop for PendingUpload {
+    fn drop(&mut self) {
+        // Submitted commands may retain mip scratch after its Rust handle is dropped.
+        // Native waits before refund; web refunds from the completion callback.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.health.wait(&self.device, None);
+            self.counter.fetch_sub(self.bytes, Ordering::AcqRel);
+            let _ = &self.queue;
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let counter = self.counter.clone();
+            let bytes = self.bytes;
+            self.queue.on_submitted_work_done(move || {
+                counter.fetch_sub(bytes, Ordering::AcqRel);
+            });
+            self.health.poll(&self.device);
+        }
+    }
+}
+
+fn upload_footprint(size: [u32; 2], tile: u32, format: wgpu::TextureFormat, separate: bool) -> Option<(u64, u64)> {
+    if tile == 0 || size.contains(&0) || size.iter().any(|n| *n > i32::MAX as u32) {
+        return None;
+    }
+    let count = u64::from(size[0].div_ceil(tile)).checked_mul(u64::from(size[1].div_ceil(tile)))?;
+    // Bound the preflight itself before iteration; normal GPU budgets deny much earlier.
+    if count > 65536 {
+        return None;
+    }
+    let mut retained = 0u64;
+    let mut scratch = 0u64;
+    for y in (0..size[1]).step_by(tile as usize) {
+        for x in (0..size[0]).step_by(tile as usize) {
+            let (w, h) = (tile.min(size[0] - x), tile.min(size[1] - y));
+            retained = retained.checked_add(TILE_UNIFORM_SIZE)?;
+            for level in 0..mip_count(w, h) {
+                let bytes = u64::from((w >> level).max(1)).checked_mul(u64::from((h >> level).max(1)))?.checked_mul(texel_bytes(format))?;
+                retained = retained.checked_add(bytes)?;
+                if separate && level != 0 {
+                    scratch = scratch.checked_add(bytes)?;
+                }
+            }
+        }
+    }
+    Some((retained, scratch))
 }
 
 struct Resources {

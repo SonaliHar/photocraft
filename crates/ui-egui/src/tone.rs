@@ -75,7 +75,10 @@ fn isolate(layers: &mut [Layer], id: LayerId) -> bool {
 }
 
 /// Histograms of `doc` as seen by `source`, in the channels of `space`.
-pub fn compute_histograms(doc: &Document, source: HistSource, space: ToneSpace) -> Histograms {
+pub fn compute_histograms(doc: &Document, source: HistSource, space: ToneSpace) -> Result<Histograms, String> {
+    if doc.has_backed_rasters().map_err(|error| error.to_string())? {
+        return Err("Histogram preview requires a resident document".into());
+    }
     let mut h = vec![
         [0u32; 256];
         match space {
@@ -89,7 +92,7 @@ pub fn compute_histograms(doc: &Document, source: HistSource, space: ToneSpace) 
         // colour mode (#5335).
         HistSource::Channel { layer, surface } => {
             let surf = match surface {
-                photocraft_engine::channel_cmds::GraySurface::LayerMask => doc.layer(layer).and_then(|l| l.mask.as_ref()).map(|m| &m.surface),
+                photocraft_engine::channel_cmds::GraySurface::LayerMask => doc.layer(layer).and_then(|l| l.mask.as_ref()).map(|m| m.surface.as_ref()),
                 photocraft_engine::channel_cmds::GraySurface::Alpha(i) => doc.channels.get(i).map(|c| &c.surface),
                 photocraft_engine::channel_cmds::GraySurface::QuickMask => doc.quick_mask.as_ref().map(|c| &c.surface),
             };
@@ -100,14 +103,14 @@ pub fn compute_histograms(doc: &Document, source: HistSource, space: ToneSpace) 
             }
         }
         HistSource::BelowLayer(_) | HistSource::Layer(_) => {
-            composite_bins(doc, source, space, &mut h);
+            composite_bins(doc, source, space, &mut h)?;
         }
     }
-    Histograms { tag: tag(source, space), ch: h }
+    Ok(Histograms { tag: tag(source, space), ch: h })
 }
 
 /// Bins of the composited image below (`BelowLayer`) or of one layer alone (`Layer`), in `space`.
-fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, h: &mut [[u32; 256]]) {
+fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, h: &mut [[u32; 256]]) -> Result<(), String> {
     let mut d = doc.clone();
     match source {
         HistSource::BelowLayer(hide) => {
@@ -120,7 +123,7 @@ fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, h: &mut 
         }
         HistSource::Channel { .. } => {}
     }
-    let img = photocraft_compose::thumbnail(&d, 384);
+    let img = photocraft_compose::thumbnail(&d, 384).map_err(|error| error.to_string())?;
     let bin = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as usize;
     for p in img.pixels.as_chunks::<4>().0 {
         if p[3] == 0 {
@@ -150,6 +153,7 @@ fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, h: &mut 
             }
         }
     }
+    Ok(())
 }
 
 /// 256-bin histogram of a gray plane: its levels in 0–255, sampled like the engine's auto-tone
@@ -449,16 +453,16 @@ mod tests {
         let b = photocraft_geom::Rect::from_xywh(0, 0, 32, 32);
         s.edit("fill-planes", |doc, active| {
             doc.channels[0].surface.fill_rect(b, &[0.25]);
-            doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap().surface.fill_rect(b, &[0.0]);
+            Arc::make_mut(&mut doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap().surface).fill_rect(b, &[0.0]);
             Ok(())
         })
         .unwrap();
         let st = s.active().unwrap();
         let layer = st.active_layer.unwrap();
-        let h = compute_histograms(&st.doc, HistSource::Channel { layer, surface: GraySurface::Alpha(0) }, ToneSpace::Rgb);
+        let h = compute_histograms(&st.doc, HistSource::Channel { layer, surface: GraySurface::Alpha(0) }, ToneSpace::Rgb).unwrap();
         assert!(h[0][64] > 0, "a spike at 25% grey, got {:?}", &h[0][0..80]);
         assert_eq!(h[0][0], 0, "not the black layer beneath");
-        let m = compute_histograms(&st.doc, HistSource::Channel { layer, surface: GraySurface::LayerMask }, ToneSpace::Rgb);
+        let m = compute_histograms(&st.doc, HistSource::Channel { layer, surface: GraySurface::LayerMask }, ToneSpace::Rgb).unwrap();
         assert!(m[0][0] > 0, "the hidden mask is black");
         // Each plane keeps its own cache entry: switching targets recomputes.
         assert_ne!(

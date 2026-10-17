@@ -193,7 +193,6 @@ fn screen(doc: Document, setup: &[(&str, serde_json::Value)], name: &str) -> Opt
                     ok2.store(gpu_canvas::supports_f16_canvas(&rs.adapter) && std::env::var("PHOTOCRAFT_CANVAS_F16").as_deref() != Ok("0"), Ordering::SeqCst);
                     app.set_wgpu(rs.clone());
                 }
-                app.session.open_document(doc, None);
                 app
             })
     }));
@@ -201,6 +200,8 @@ fn screen(doc: Document, setup: &[(&str, serde_json::Value)], name: &str) -> Opt
         eprintln!("skipping: no GPU adapter");
         return None;
     };
+    // Fixture admission must fail the test, not be mistaken for an unavailable GPU.
+    harness.state_mut().session.open_document(doc, None).expect("valid canvas fixture opens");
     if !ok.load(Ordering::SeqCst) {
         eprintln!("skipping: adapter can't render/filter Rgba16Float");
         return None;

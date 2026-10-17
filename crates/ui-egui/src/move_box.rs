@@ -105,12 +105,12 @@ mod tests {
         app.ui.tool_options.move_auto_select = true;
         drag(&mut app, [-10.0, -10.0], [10.0, 10.0], egui::Modifiers::NONE);
         let st = app.session.active().unwrap();
-        assert_eq!(st.selected_layers(), vec![ids[0]], "the box touched the first square only");
+        assert_eq!(st.selected_layers().unwrap(), vec![ids[0]], "the box touched the first square only");
         assert_eq!(st.doc.layer(ids[1]).unwrap().surface().unwrap().content_bounds().x0, 40, "nothing moved");
         assert!(app.layer_box.is_none());
         // ⇧ adds the second square, dragged up and left from beyond the right edge.
         drag(&mut app, [70.0, 30.0], [50.0, 20.0], egui::Modifiers::SHIFT);
-        let mut sel = app.session.active().unwrap().selected_layers();
+        let mut sel = app.session.active().unwrap().selected_layers().unwrap();
         sel.sort_unstable_by_key(|l| l.0);
         assert_eq!(sel, ids);
     }
@@ -132,6 +132,6 @@ mod tests {
         drag(&mut app, [8.0, 8.0], [50.0, 20.0], egui::Modifiers::NONE);
         assert!(app.ui.dialogs.iter().all(|d| d.kind != crate::state::DialogKind::Error), "no lock dialog");
         assert!(app.layer_box.is_none());
-        assert_eq!(app.session.active().unwrap().selected_layers(), vec![paint]);
+        assert_eq!(app.session.active().unwrap().selected_layers().unwrap(), vec![paint]);
     }
 }

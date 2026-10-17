@@ -290,7 +290,7 @@ mod tests {
     fn pending() -> Worker {
         let doc = photocraft_doc::Document::new("stroke", photocraft_geom::Size::new(4, 4), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
         let p = Pending {
-            baseline: photocraft_engine::DocumentSnapshot::from_resident(doc).unwrap(),
+            baseline: photocraft_engine::DocumentSnapshot::from_resident(Arc::new(doc)).unwrap(),
             revision: 0,
             fence: None,
             generation: 1,

@@ -2,6 +2,8 @@
 use super::*;
 #[path = "canvas_observed_box_fixture.rs"]
 #[allow(dead_code)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod observed;
 #[test]
 #[ignore = "UNRUN: observed Box preserves opaque raw tuple through paid CURRENT native/title/query/canvas; unrelated mutations and malformed filter edits refuse, no normalization or source proof"]
@@ -9,7 +11,8 @@ fn observed_box_current_raw_tuple_is_not_mutation_authority() {
     // These six local originals are independently saved GIMP files. Their
     // source/native bindings are distinct from the synthetic raw control below;
     // the display reference is an existing PhotoCraft adapter, not GIMP proof.
-    for (_, bytes) in observed::source_cases() {
+    for (path, bytes) in observed::source_cases() {
+        eprintln!("observed Box source {:?}: import", path.file_name());
         let q = photocraft_raster::backing::quota::BackingQuota::new(photocraft_raster::backing::quota::QuotaLimits {
             resident: 256 << 20,
             index: 32 << 20,
@@ -32,13 +35,16 @@ fn observed_box_current_raw_tuple_is_not_mutation_authority() {
         assert_eq!(observed::raw(&before), [1654948433; 3]);
         assert!(app.session.active().unwrap().source_read_only);
         super::preview(&before, &literal);
+        eprintln!("observed Box source {:?}: initial preview complete; native reopen", path.file_name());
         let mut reopened = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         crate::owned_native_open::adopt_bytes(&mut reopened, "observed.pcraft", fixture::archive(before.accounted().unwrap()), &ctl()).unwrap();
         let current = &reopened.session.active().unwrap().doc;
         fixture::exact(&before, current);
         super::preview(current, &literal);
+        eprintln!("observed Box source {:?}: native preview complete", path.file_name());
     }
     let (base, literal) = fixture::fixture(SampleType::F32, false, 0);
+    eprintln!("observed Box synthetic Current: raw tuple and native adoption");
     let raw = [i32::MIN, 0, i32::MAX];
     let owner = observed::with_raw(&base, raw, &ctl());
     let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -49,6 +55,7 @@ fn observed_box_current_raw_tuple_is_not_mutation_authority() {
     assert_eq!(fixture::native(&before), literal.raw);
     assert_eq!(before.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].operation.schema_epoch, observed::EPOCH);
     super::preview(&before, &literal); // old full Surface algorithm, then crop
+    eprintln!("observed Box synthetic Current: preview complete; mutation refusal checks");
     let id = before.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id.0.to_string();
     let history = app.session.active().unwrap().history.clone();
     let revision = app.session.active().unwrap().revision;
