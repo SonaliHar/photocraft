@@ -15,163 +15,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 fn add(a: u64, b: u64) -> Result<u64, GraphExecuteError> {
     a.checked_add(b).ok_or(GraphExecuteError::ResidentLimit)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::super::{
-        generator_counter_noise as noise, generator_linear_gradient as linear, generator_radial_gradient as radial, graph_execute::ExecutionDomain,
-        graph_pipeline::execute_pipeline, wide_point::WorkingContext,
-    };
-    use super::*;
-    use photocraft_color::{ColorMode, PixelFormat, SampleType};
-    use photocraft_doc::{
-        SampleEncoding,
-        item_identity::GraphNodeId,
-        xcf_filters::{GraphVersionOrigin, OperationIdentity},
-    };
-    fn graph() -> FilterGraph {
-        FilterGraph {
-            input: None,
-            nodes: vec![GraphNode {
-                id: GraphNodeId(1),
-                operation: OperationIdentity {
-                    name: "own:explicit-generator".into(),
-                    stored_version: "own".into(),
-                    schema_epoch: "own-no-source-admission".into(),
-                },
-                version_origin: GraphVersionOrigin::Stored,
-                arguments: Vec::new(),
-            }],
-            edges: Vec::new(),
-            output: GraphNodeId(1),
-            original_pipeline: None,
-        }
-    }
-    #[test]
-    fn all_three_generators_partition_exactly_in_absolute_negative_coordinates() {
-        let graph = graph();
-        let extent = Rect::new(-2, -1, 2, 1);
-        let format = PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false);
-        let domain = ExecutionDomain { format, encoding: SampleEncoding::Linear, profile_fingerprint: Some([9; 32]) };
-        let context = linear::WorkingContext { encoding: domain.encoding, profile_identity: [9; 32] };
-        let start = (-0f64).to_ne_bytes();
-        let end = 2f64.to_ne_bytes();
-        let default = (-3f64).to_ne_bytes();
-        let ranges = [noise::Range { low: -2., high: 3. }];
-        let kernels = [
-            Kernel::Linear(linear::Request {
-                format,
-                roi: extent,
-                geometry: linear::Geometry { start: [-1.5, -0.5], end: [1.5, 0.5], repeat: linear::Repeat::Clamp },
-                start: linear::Endpoint { native: &start, context },
-                end: linear::Endpoint { native: &end, context },
-                output_context: context,
-                output_default: &default,
-            }),
-            Kernel::Radial(radial::Request {
-                format,
-                roi: extent,
-                geometry: radial::Geometry { center: [-0.5, -0.5], radii: [2., 3.], repeat: radial::Repeat::Clamp },
-                start: linear::Endpoint { native: &start, context },
-                end: linear::Endpoint { native: &end, context },
-                output_context: context,
-                output_default: &default,
-            }),
-            Kernel::CounterNoise {
-                configuration: noise::Noise {
-                    seed: 0xfedcba9876543210,
-                    format,
-                    context: WorkingContext { encoding: domain.encoding, profile_identity: [9; 32] },
-                    domain: noise::Domain::FiniteHdr,
-                    ranges: &ranges,
-                    alpha: None,
-                    output_default: &default,
-                },
-                roi: extent,
-            },
-        ];
-        for kernel in kernels {
-            let prepared = PreparedGenerator::prepare(kernel, domain, &Interrupt::NONE).unwrap();
-            let validator = |node: &GraphNode, candidate: &PreparedGenerator<'_>| {
-                if node.arguments.is_empty() && candidate.roi() == extent { Ok(()) } else { Err(GraphExecuteError::InvalidPlan) }
-            };
-            let binding = Binding {
-                node: GraphNodeId(1),
-                identity: &graph.nodes.first().unwrap().operation,
-                version_origin: GraphVersionOrigin::Stored,
-                output_port: "output",
-                generator: &prepared,
-                validate_arguments: &validator,
-            };
-            let full = execute_pipeline(
-                &graph,
-                1,
-                None,
-                extent,
-                domain,
-                ExecutionLimits::default(),
-                &Interrupt::NONE,
-                |_, direction, port| generator_graph::accepts_port(&binding, direction, port),
-                |request, budget| generator_graph::evaluate(&binding, request, budget),
-            )
-            .unwrap();
-            let adaptive = PreparedRoiGraph::prepare(&graph, &binding, ExecutionLimits::default(), &Interrupt::NONE).unwrap();
-            let initial = adaptive.remaining_work();
-            for roi in [Rect::new(-2, -1, 0, 1), Rect::new(0, -1, 2, 1)] {
-                let part = adaptive.execute(roi, ExecutionLimits::default(), &Interrupt::NONE).unwrap();
-                assert_eq!(part.surface().try_read_interleaved(roi).unwrap(), full.surface().try_read_interleaved(roi).unwrap());
-                assert_eq!(part.surface().default_bytes(), default);
-            }
-            assert!(adaptive.remaining_work() < initial);
-            assert!(adaptive.execute(Rect::new(-3, -1, 0, 1), ExecutionLimits::default(), &Interrupt::NONE).is_err());
-        }
-    }
-    #[test]
-    fn fresh_limits_cannot_reset_atomic_quota_or_publish_cancelled_output() {
-        let graph = graph();
-        let extent = Rect::new(0, 0, 1, 1);
-        let default = 0f64.to_ne_bytes();
-        let ranges = [noise::Range { low: 0., high: 1. }];
-        let domain = ExecutionDomain {
-            format: PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false),
-            encoding: SampleEncoding::Linear,
-            profile_fingerprint: Some([9; 32]),
-        };
-        let prepared = PreparedGenerator::prepare(
-            Kernel::CounterNoise {
-                configuration: noise::Noise {
-                    seed: 17,
-                    format: domain.format,
-                    context: WorkingContext { encoding: domain.encoding, profile_identity: [9; 32] },
-                    domain: noise::Domain::Unit,
-                    ranges: &ranges,
-                    alpha: None,
-                    output_default: &default,
-                },
-                roi: extent,
-            },
-            domain,
-            &Interrupt::NONE,
-        )
-        .unwrap();
-        let validator = |_: &GraphNode, _: &PreparedGenerator<'_>| Ok(());
-        let binding = Binding {
-            node: GraphNodeId(1),
-            identity: &graph.nodes.first().unwrap().operation,
-            version_origin: GraphVersionOrigin::Stored,
-            output_port: "output",
-            generator: &prepared,
-            validate_arguments: &validator,
-        };
-        let limits = ExecutionLimits { work_units: 500_000, ..ExecutionLimits::default() };
-        let adaptive = PreparedRoiGraph::prepare(&graph, &binding, limits, &Interrupt::NONE).unwrap();
-        assert!(adaptive.execute(extent, limits, &Interrupt::NONE).is_ok());
-        assert!(adaptive.execute(extent, limits, &Interrupt::NONE).is_ok());
-        assert!(adaptive.execute(extent, limits, &Interrupt::NONE).is_err());
-        let cancelled = || true;
-        assert!(adaptive.execute(extent, limits, &Interrupt::cancel_only(&cancelled)).is_err());
-    }
-}
 fn mul(a: u64, b: u64) -> Result<u64, GraphExecuteError> {
     a.checked_mul(b).ok_or(GraphExecuteError::WorkLimit)
 }
@@ -408,5 +251,162 @@ impl<'a, 'data> PreparedRoiGraph<'a, 'data> {
             |_| Err(GraphRoiError::UnsupportedFootprint),
             |request, budget| self.evaluate(request, budget),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{
+        generator_counter_noise as noise, generator_linear_gradient as linear, generator_radial_gradient as radial, graph_execute::ExecutionDomain,
+        graph_pipeline::execute_pipeline, wide_point::WorkingContext,
+    };
+    use super::*;
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::{
+        SampleEncoding,
+        item_identity::GraphNodeId,
+        xcf_filters::{GraphVersionOrigin, OperationIdentity},
+    };
+    fn graph() -> FilterGraph {
+        FilterGraph {
+            input: None,
+            nodes: vec![GraphNode {
+                id: GraphNodeId(1),
+                operation: OperationIdentity {
+                    name: "own:explicit-generator".into(),
+                    stored_version: "own".into(),
+                    schema_epoch: "own-no-source-admission".into(),
+                },
+                version_origin: GraphVersionOrigin::Stored,
+                arguments: Vec::new(),
+            }],
+            edges: Vec::new(),
+            output: GraphNodeId(1),
+            original_pipeline: None,
+        }
+    }
+    #[test]
+    fn all_three_generators_partition_exactly_in_absolute_negative_coordinates() {
+        let graph = graph();
+        let extent = Rect::new(-2, -1, 2, 1);
+        let format = PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false);
+        let domain = ExecutionDomain { format, encoding: SampleEncoding::Linear, profile_fingerprint: Some([9; 32]) };
+        let context = linear::WorkingContext { encoding: domain.encoding, profile_identity: [9; 32] };
+        let start = (-0f64).to_ne_bytes();
+        let end = 2f64.to_ne_bytes();
+        let default = (-3f64).to_ne_bytes();
+        let ranges = [noise::Range { low: -2., high: 3. }];
+        let kernels = [
+            Kernel::Linear(linear::Request {
+                format,
+                roi: extent,
+                geometry: linear::Geometry { start: [-1.5, -0.5], end: [1.5, 0.5], repeat: linear::Repeat::Clamp },
+                start: linear::Endpoint { native: &start, context },
+                end: linear::Endpoint { native: &end, context },
+                output_context: context,
+                output_default: &default,
+            }),
+            Kernel::Radial(radial::Request {
+                format,
+                roi: extent,
+                geometry: radial::Geometry { center: [-0.5, -0.5], radii: [2., 3.], repeat: radial::Repeat::Clamp },
+                start: linear::Endpoint { native: &start, context },
+                end: linear::Endpoint { native: &end, context },
+                output_context: context,
+                output_default: &default,
+            }),
+            Kernel::CounterNoise {
+                configuration: noise::Noise {
+                    seed: 0xfedcba9876543210,
+                    format,
+                    context: WorkingContext { encoding: domain.encoding, profile_identity: [9; 32] },
+                    domain: noise::Domain::FiniteHdr,
+                    ranges: &ranges,
+                    alpha: None,
+                    output_default: &default,
+                },
+                roi: extent,
+            },
+        ];
+        for kernel in kernels {
+            let prepared = PreparedGenerator::prepare(kernel, domain, &Interrupt::NONE).unwrap();
+            let validator = |node: &GraphNode, candidate: &PreparedGenerator<'_>| {
+                if node.arguments.is_empty() && candidate.roi() == extent { Ok(()) } else { Err(GraphExecuteError::InvalidPlan) }
+            };
+            let binding = Binding {
+                node: GraphNodeId(1),
+                identity: &graph.nodes.first().unwrap().operation,
+                version_origin: GraphVersionOrigin::Stored,
+                output_port: "output",
+                generator: &prepared,
+                validate_arguments: &validator,
+            };
+            let full = execute_pipeline(
+                &graph,
+                1,
+                None,
+                extent,
+                domain,
+                ExecutionLimits::default(),
+                &Interrupt::NONE,
+                |_, direction, port| generator_graph::accepts_port(&binding, direction, port),
+                |request, budget| generator_graph::evaluate(&binding, request, budget),
+            )
+            .unwrap();
+            let adaptive = PreparedRoiGraph::prepare(&graph, &binding, ExecutionLimits::default(), &Interrupt::NONE).unwrap();
+            let initial = adaptive.remaining_work();
+            for roi in [Rect::new(-2, -1, 0, 1), Rect::new(0, -1, 2, 1)] {
+                let part = adaptive.execute(roi, ExecutionLimits::default(), &Interrupt::NONE).unwrap();
+                assert_eq!(part.surface().try_read_interleaved(roi).unwrap(), full.surface().try_read_interleaved(roi).unwrap());
+                assert_eq!(part.surface().default_bytes(), default);
+            }
+            assert!(adaptive.remaining_work() < initial);
+            assert!(adaptive.execute(Rect::new(-3, -1, 0, 1), ExecutionLimits::default(), &Interrupt::NONE).is_err());
+        }
+    }
+    #[test]
+    fn fresh_limits_cannot_reset_atomic_quota_or_publish_cancelled_output() {
+        let graph = graph();
+        let extent = Rect::new(0, 0, 1, 1);
+        let default = 0f64.to_ne_bytes();
+        let ranges = [noise::Range { low: 0., high: 1. }];
+        let domain = ExecutionDomain {
+            format: PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false),
+            encoding: SampleEncoding::Linear,
+            profile_fingerprint: Some([9; 32]),
+        };
+        let prepared = PreparedGenerator::prepare(
+            Kernel::CounterNoise {
+                configuration: noise::Noise {
+                    seed: 17,
+                    format: domain.format,
+                    context: WorkingContext { encoding: domain.encoding, profile_identity: [9; 32] },
+                    domain: noise::Domain::Unit,
+                    ranges: &ranges,
+                    alpha: None,
+                    output_default: &default,
+                },
+                roi: extent,
+            },
+            domain,
+            &Interrupt::NONE,
+        )
+        .unwrap();
+        let validator = |_: &GraphNode, _: &PreparedGenerator<'_>| Ok(());
+        let binding = Binding {
+            node: GraphNodeId(1),
+            identity: &graph.nodes.first().unwrap().operation,
+            version_origin: GraphVersionOrigin::Stored,
+            output_port: "output",
+            generator: &prepared,
+            validate_arguments: &validator,
+        };
+        let limits = ExecutionLimits { work_units: 500_000, ..ExecutionLimits::default() };
+        let adaptive = PreparedRoiGraph::prepare(&graph, &binding, limits, &Interrupt::NONE).unwrap();
+        assert!(adaptive.execute(extent, limits, &Interrupt::NONE).is_ok());
+        assert!(adaptive.execute(extent, limits, &Interrupt::NONE).is_ok());
+        assert!(adaptive.execute(extent, limits, &Interrupt::NONE).is_err());
+        let cancelled = || true;
+        assert!(adaptive.execute(extent, limits, &Interrupt::cancel_only(&cancelled)).is_err());
     }
 }

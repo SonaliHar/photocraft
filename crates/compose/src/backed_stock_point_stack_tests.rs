@@ -151,3 +151,38 @@ fn stack_preparation_shares_work_and_releases_real_private_fees_on_refusal() {
     assert_eq!(q.usage().unwrap(), before);
     assert_eq!(initial_reads, reads.load(std::sync::atomic::Ordering::SeqCst));
 }
+
+#[test]
+fn two_node_preparation_reserves_complete_capacity_before_construction() {
+    let (mut doc, q, _guard, reads, profile, _) = fixture(0, ColorMode::Rgb, SampleType::U8, SampleEncoding::NonlinearProfile);
+    configure(&mut doc, 2, 0, false, false, false);
+    let before = q.usage().unwrap();
+    let initial_reads = reads.load(std::sync::atomic::Ordering::SeqCst);
+    let prepared = PreparedStockPointPipeline::prepare(&doc, profile, &q, &ctl()).unwrap();
+    // Measure the actual retained lease instead of reproducing the stage/space
+    // sizing expression that this regression protects.
+    let held = q.usage().unwrap().resident.checked_sub(before.resident).unwrap();
+    assert!(held > 1);
+    drop(prepared);
+    assert_eq!(q.usage().unwrap(), before);
+
+    // The inherited fixture's unchanged resident ceiling is 64 MiB. Occupy its
+    // spare capacity: exact remaining admission succeeds, one byte less refuses
+    // before native reads and leaves the original ledger unchanged.
+    for available in [held, held - 1] {
+        let blocker = q.reserve(QuotaKind::Resident, (64u64 << 20) - before.resident - available).unwrap();
+        let blocked = q.usage().unwrap();
+        let result = PreparedStockPointPipeline::prepare(&doc, profile, &q, &ctl());
+        if available == held {
+            let prepared = result.unwrap();
+            assert_eq!(q.usage().unwrap().resident, 64u64 << 20);
+            drop(prepared);
+        } else {
+            assert!(matches!(result, Err(BackedNormalError::Quota(photocraft_raster::backing::quota::QuotaError::LimitExceeded(QuotaKind::Resident)))));
+        }
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), initial_reads);
+        assert_eq!(q.usage().unwrap(), blocked);
+        drop(blocker);
+        assert_eq!(q.usage().unwrap(), before);
+    }
+}

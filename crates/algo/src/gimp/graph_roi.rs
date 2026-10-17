@@ -219,13 +219,17 @@ fn propagate_roi_impl(
             let input = RoiPlan::new(supplied.mapped_output, supplied.source_extent, supplied.halo, supplied.abyss, upstream_format, control)?;
             budget.charge(&input, supplied.work_per_sample, 0, control)?;
             if Some(edge.from) == plan.external_input() {
-                union(&mut external_input, input.source_read(), external_format)?;
+                if !input.source_read().is_empty() {
+                    union(&mut external_input, input.source_read(), external_format)?;
+                }
             } else {
                 let &(index, upstream_order) = identities.get(&edge.from).ok_or(GraphRoiError::InvalidPlan)?;
                 if upstream_order >= order {
                     return Err(GraphRoiError::InvalidPlan);
                 }
-                union(node_outputs.get_mut(index).ok_or(GraphRoiError::InvalidPlan)?, input.source_read(), upstream_format)?;
+                if !input.source_read().is_empty() {
+                    union(node_outputs.get_mut(index).ok_or(GraphRoiError::InvalidPlan)?, input.source_read(), upstream_format)?;
+                }
             }
             let slot = edge_inputs.get_mut(edge_index).ok_or(GraphRoiError::InvalidPlan)?;
             if slot.is_some() {

@@ -186,11 +186,21 @@ fn seven_current_origin_geometries_keep_existing_pixel_schedule() {
             context.validate_operative(&ctl()).unwrap();
             let d = owner.document();
             let state = d.xcf_state.as_ref().unwrap();
-            let old =
-                OrderedStack::new_with_interrupt(&state.filter_stacks[0], basis, d.sample_encoding.unwrap(), 22, d.bounds(), [false; 3], &Interrupt::NONE)
-                    .unwrap()
-                    .with_current_point_storage(Some(d.depth))
-                    .with_filter_output_precision(state.current_filter_output_precision);
+            let old_stack =
+                OrderedStack::new_with_interrupt(&state.filter_stacks[0], basis, d.sample_encoding.unwrap(), 22, d.bounds(), [false; 3], &Interrupt::NONE);
+            // The original Source stack keeps its 8x6 Color Balance envelope.
+            // The explicit larger CURRENT role reuses the old scalar kernel.
+            let balance = if family >= 5 {
+                assert!(old_stack.is_err());
+                Some(crate::gimp_color_balance::ColorBalanceNode::new(&state.filter_stacks[0].nodes[0], basis, d.sample_encoding.unwrap(), 22).unwrap())
+            } else {
+                None
+            };
+            let old = if family < 5 {
+                Some(old_stack.unwrap().with_current_point_storage(Some(d.depth)).with_filter_output_precision(state.current_filter_output_precision))
+            } else {
+                None
+            };
             let LayerContent::BackedRaster(layer) = &d.layers[0].content else { panic!() };
             for (x, y) in [(0, 0), (size.width as i32 - 1, size.height as i32 - 1)] {
                 let actual = context.render_wide_band(Rect::new(x, y, x + 1, y + 1), &ctl()).unwrap();
@@ -198,7 +208,12 @@ fn seven_current_origin_geometries_keep_existing_pixel_schedule() {
                 layer.checked_view().read_logical_pixel_native_into(x, y, &mut raw[..layer.format().bytes_per_pixel()], &ctl()).unwrap();
                 let read = |c| try_read_sample_f64(&raw, d.depth, c).unwrap();
                 let rgb = if d.mode == ColorMode::Grayscale { [read(0); 3] } else { [read(0), read(1), read(2)] };
-                let expected = old.point_at([rgb[0], rgb[1], rgb[2], read(d.mode.color_channels())], (x, y), &mut |_| Ok(())).unwrap();
+                let pixel = [rgb[0], rgb[1], rgb[2], read(d.mode.color_channels())];
+                let expected = if let Some(balance) = &balance {
+                    balance.apply(pixel, &mut |_| Ok(())).unwrap()
+                } else {
+                    old.as_ref().unwrap().point_at(pixel, (x, y), &mut |_| Ok(())).unwrap()
+                };
                 assert_eq!(actual.pixels()[0].map(f64::to_bits), expected.map(f64::to_bits), "family{family}");
             }
         }

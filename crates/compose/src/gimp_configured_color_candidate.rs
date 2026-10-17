@@ -14,7 +14,7 @@ use photocraft_color::{
     try_read_sample_f64, try_write_sample_f64,
 };
 use photocraft_doc::xcf_filters::FilterNode;
-use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
+use photocraft_geom::{Rect, TileCoord};
 use photocraft_raster::{
     Interrupt, MAX_CHECKED_RASTER_BYTES, RasterInputError, Surface,
     staged::{StagedSurfaceBuilder, StagingBudget},
@@ -132,20 +132,17 @@ fn count(roi: Rect) -> Result<u64, RasterInputError> {
     )
 }
 fn cells(roi: Rect, mut f: impl FnMut(Rect) -> Result<(), RasterInputError>) -> Result<(), RasterInputError> {
-    for tile in roi.tiles() {
-        let x0 = tile.tx.checked_mul(TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?;
-        let y0 = tile.ty.checked_mul(TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?;
-        for cy in (0..TILE_SIZE).step_by(64) {
-            for cx in (0..TILE_SIZE).step_by(64) {
-                let x = x0.checked_add(cx).ok_or(RasterInputError::InvalidBounds)?;
-                let y = y0.checked_add(cy).ok_or(RasterInputError::InvalidBounds)?;
-                let part =
-                    Rect::new(x, y, x.checked_add(64).ok_or(RasterInputError::InvalidBounds)?, y.checked_add(64).ok_or(RasterInputError::InvalidBounds)?)
-                        .intersect(&roi);
-                if !part.is_empty() {
-                    f(part)?;
-                }
-            }
+    // Staging coverage cells are relative to the requested ROI, including when
+    // that ROI crosses a tile boundary or starts at a negative coordinate.
+    for y in (roi.y0..roi.y1).step_by(64) {
+        for x in (roi.x0..roi.x1).step_by(64) {
+            let part = Rect::new(
+                x,
+                y,
+                x.checked_add(64).ok_or(RasterInputError::InvalidBounds)?.min(roi.x1),
+                y.checked_add(64).ok_or(RasterInputError::InvalidBounds)?.min(roi.y1),
+            );
+            f(part)?;
         }
     }
     Ok(())
@@ -251,6 +248,8 @@ pub fn requirements_color_candidate(
 /// All intermediate working samples use F64 storage solely as lossless binary64
 /// staging. Original native precision is quantized once, after inverse CMS.
 /// ROI-only output; no ICC/profile-cache/default or source qualification claim.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn render_color_candidate(
     node: &FilterNode,
     binding: SourceBinding<'_>,
@@ -268,6 +267,8 @@ pub fn render_color_candidate(
     render_color_candidate_with_requirements(node, binding, sampling, source, extent, roi, actual_source, pair, working_default, policy, limits, control, None)
 }
 
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_color_candidate_with_requirements(
     node: &FilterNode,
     binding: SourceBinding<'_>,
@@ -308,6 +309,8 @@ pub(crate) fn render_color_candidate_with_requirements(
 /// Reuse one caller-prepared exact typed configuration across CMS graph cells.
 /// Preparation authority and original configuration remain borrowed; no source
 /// identity is inferred and the same paired transform/default policies apply.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn render_prepared_color_candidate(
     prepared: &photocraft_algo::gimp::configured::PreparedConfiguration<'_>,
     source: &Surface,
@@ -323,6 +326,8 @@ pub fn render_prepared_color_candidate(
     render_prepared_color_candidate_with_requirements(prepared, source, extent, roi, actual_source, pair, working_default, policy, limits, control, None)
 }
 
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_prepared_color_candidate_with_requirements(
     prepared: &photocraft_algo::gimp::configured::PreparedConfiguration<'_>,
     source: &Surface,
@@ -372,6 +377,8 @@ pub(crate) fn render_prepared_color_candidate_with_requirements(
 
 // The retained-source and prepared entry points share all CMS and final-native
 // numerical/staging code; only explicit configuration preparation differs.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 fn render_color_execution(
     source: &Surface,
     extent: Rect,
@@ -520,4 +527,23 @@ fn render_color_execution(
 
 #[path = "gimp_configured_color_candidate/owned.rs"]
 mod owned;
-pub use owned::{OwnedConfiguredColorCandidate, ProfileOwnedColorRequirements, profile_owned_color_requirements, prepare_owned_color_candidate, prepare_retained_color_candidate, prepare_profile_owned_color_candidate};
+pub use owned::{
+    OwnedConfiguredColorCandidate, ProfileOwnedColorRequirements, prepare_owned_color_candidate, prepare_profile_owned_color_candidate,
+    prepare_retained_color_candidate, profile_owned_color_requirements,
+};
+
+#[cfg(test)]
+mod roi_cell_tests {
+    use super::*;
+    #[test]
+    fn relative_cells_cross_tiles_and_refuse_coordinate_overflow() {
+        let mut actual = Vec::new();
+        cells(Rect::new(-1, 3, 65, 5), |r| {
+            actual.push(r);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(actual, [Rect::new(-1, 3, 63, 5), Rect::new(63, 3, 65, 5)]);
+        assert!(matches!(cells(Rect::new(i32::MAX - 1, 0, i32::MAX, 1), |_| Ok(())), Err(RasterInputError::InvalidBounds)));
+    }
+}

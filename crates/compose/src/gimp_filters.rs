@@ -27,8 +27,6 @@ mod saturation_yuv_tests;
 #[path = "gimp_sepia_tests.rs"]
 mod sepia_tests;
 use crate::gimp_composite::{CompositionError, Result, WorkingSpace};
-#[path = "gimp_filters_controlled.rs"]
-mod controlled;
 #[path = "gimp_alpha_clip.rs"]
 mod alpha_clip;
 #[path = "gimp_alpha_clip_finite.rs"]
@@ -42,6 +40,8 @@ mod component_extract;
 #[cfg(test)]
 #[path = "gimp_component_geometry_tests.rs"]
 mod component_geometry_tests;
+#[path = "gimp_filters_controlled.rs"]
+mod controlled;
 use photocraft_algo::gimp::{
     point::{PointOperation, PreparedPointOperation},
     registry::{WorkingEncoding, point_member},
@@ -112,7 +112,9 @@ pub(crate) fn validated_current_threshold_alpha(
     stored: SampleEncoding,
     version: u32,
 ) -> Result<(photocraft_algo::gimp::threshold_alpha::ThresholdAlpha, bool)> {
-    let [node] = source else { return Err(CompositionError::Unsupported("singleton Threshold Alpha required")); };
+    let [node] = source else {
+        return Err(CompositionError::Unsupported("singleton Threshold Alpha required"));
+    };
     let policy = node.composition.as_ref().ok_or(CompositionError::Unsupported("missing Threshold Alpha effect policy"))?;
     if version != 22
         || !matches!(channels, 1 | 3)
@@ -133,13 +135,19 @@ pub(crate) fn validated_current_threshold_alpha(
     {
         return Err(CompositionError::Unsupported("unqualified enabled Threshold Alpha current policy"));
     }
-    let [argument] = node.arguments.as_slice() else { return Err(CompositionError::Unsupported("Threshold Alpha single stored argument")); };
-    let FilterValue::Number(ExactNumber::Float32Bits(bits)) = argument.value else { return Err(CompositionError::Unsupported("Threshold Alpha stored Float32 argument")); };
+    let [argument] = node.arguments.as_slice() else {
+        return Err(CompositionError::Unsupported("Threshold Alpha single stored argument"));
+    };
+    let FilterValue::Number(ExactNumber::Float32Bits(bits)) = argument.value else {
+        return Err(CompositionError::Unsupported("Threshold Alpha stored Float32 argument"));
+    };
     if argument.name != "value" {
         return Err(CompositionError::Unsupported("Threshold Alpha stored argument name"));
     }
     let (_, operation) = point_member("gimp:threshold-alpha", Some(&node.operation.stored_version), &[("value", f64::from(f32::from_bits(bits)))])?;
-    let PointOperation::ThresholdAlpha { value } = operation else { return Err(CompositionError::Invalid("Threshold Alpha registry member")); };
+    let PointOperation::ThresholdAlpha { value } = operation else {
+        return Err(CompositionError::Invalid("Threshold Alpha registry member"));
+    };
     let operation = photocraft_algo::gimp::threshold_alpha::ThresholdAlpha { value };
     operation.validate()?;
     Ok((operation, node.enabled))
@@ -212,52 +220,112 @@ pub(crate) fn scalar_preparation_bytes(nodes: usize, max_args: usize) -> Result<
 }
 /// Existing current integer point buffer boundary, shared by resident and
 /// owned-backed callers. Other current precisions deliberately stay wide.
-pub(crate) fn current_point_storage_result(mut pixel:[f64;4], integer_storage:Option<u64>, changes_alpha:bool)->[f64;4] {
-        if let Some(denominator) = integer_storage {
-            let denominator = denominator as f64;
-            // Public Color to Alpha U8 projection independently proves the
-            // same current storage boundary applies to generated coverage.
-            let count = if changes_alpha { 4 } else { 3 };
-            for component in pixel.iter_mut().take(count) {
-                *component = (component.clamp(0.0, 1.0) * denominator).round() / denominator;
-            }
+pub(crate) fn current_point_storage_result(mut pixel: [f64; 4], integer_storage: Option<u64>, changes_alpha: bool) -> [f64; 4] {
+    if let Some(denominator) = integer_storage {
+        let denominator = denominator as f64;
+        // Public Color to Alpha U8 projection independently proves the
+        // same current storage boundary applies to generated coverage.
+        let count = if changes_alpha { 4 } else { 3 };
+        for component in pixel.iter_mut().take(count) {
+            *component = (component.clamp(0.0, 1.0) * denominator).round() / denominator;
         }
-        pixel
+    }
+    pixel
 }
 impl PointStack {
     /// Only the real-budget stock compiler may supply this independently owned
     /// Parts holder. A name/schema match cannot manufacture an unpaid owner.
-    pub(crate) fn from_prepared_vibrance(candidate: crate::gimp_vibrance::OwnedVibrance, enabled: bool, sample: photocraft_color::SampleType, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+    pub(crate) fn from_prepared_vibrance(
+        candidate: crate::gimp_vibrance::OwnedVibrance,
+        enabled: bool,
+        sample: photocraft_color::SampleType,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Self> {
         controlled::checkpoint(control)?;
-        if !matches!(sample, photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64) { return Err(CompositionError::Unsupported("owned Vibrance current sample")); }
+        if !matches!(sample, photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64) {
+            return Err(CompositionError::Unsupported("owned Vibrance current sample"));
+        }
         let mut vibrance = Vec::new();
         vibrance.try_reserve_exact(1).map_err(|_| photocraft_raster::RasterInputError::AllocationFailed)?;
-        if vibrance.capacity() > 2 { return Err(photocraft_raster::RasterInputError::AllocationFailed.into()); }
+        if vibrance.capacity() > 2 {
+            return Err(photocraft_raster::RasterInputError::AllocationFailed.into());
+        }
         vibrance.push((candidate, enabled));
         controlled::checkpoint(control)?;
-        Ok(Self { hue_chroma:Vec::new(), vibrance, semi_flatten: None, unpremultiply: None, video: None, nodes: Vec::new(), channels: 3, integer_gray_temperature_clamp: false, current_sample: Some(sample) })
+        Ok(Self {
+            hue_chroma: Vec::new(),
+            vibrance,
+            semi_flatten: None,
+            unpremultiply: None,
+            video: None,
+            nodes: Vec::new(),
+            channels: 3,
+            integer_gray_temperature_clamp: false,
+            current_sample: Some(sample),
+        })
     }
-    pub(crate) fn from_prepared_hue_chroma(candidate: crate::gimp_hue_chroma::OwnedHueChroma, enabled: bool, sample: photocraft_color::SampleType, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+    pub(crate) fn from_prepared_hue_chroma(
+        candidate: crate::gimp_hue_chroma::OwnedHueChroma,
+        enabled: bool,
+        sample: photocraft_color::SampleType,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Self> {
         controlled::checkpoint(control)?;
-        if !matches!(sample, photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64) { return Err(CompositionError::Unsupported("owned Hue current sample")); }
+        if !matches!(sample, photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64) {
+            return Err(CompositionError::Unsupported("owned Hue current sample"));
+        }
         let mut hue_chroma = Vec::new();
         hue_chroma.try_reserve_exact(1).map_err(|_| photocraft_raster::RasterInputError::AllocationFailed)?;
-        if hue_chroma.capacity() > 2 { return Err(photocraft_raster::RasterInputError::AllocationFailed.into()); }
+        if hue_chroma.capacity() > 2 {
+            return Err(photocraft_raster::RasterInputError::AllocationFailed.into());
+        }
         hue_chroma.push((candidate, enabled));
         controlled::checkpoint(control)?;
-        Ok(Self { vibrance:Vec::new(), hue_chroma, semi_flatten: None, unpremultiply: None, video: None, nodes: Vec::new(), channels: 3, integer_gray_temperature_clamp: false, current_sample: Some(sample) })
+        Ok(Self {
+            vibrance: Vec::new(),
+            hue_chroma,
+            semi_flatten: None,
+            unpremultiply: None,
+            video: None,
+            nodes: Vec::new(),
+            channels: 3,
+            integer_gray_temperature_clamp: false,
+            current_sample: Some(sample),
+        })
     }
     #[cfg(test)]
     pub(crate) fn from_nodes_at(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, owner: photocraft_geom::Rect) -> Result<Self> {
         Self::from_nodes_at_with_interrupt(source, profile, stored, version, owner, &photocraft_raster::Interrupt::NONE)
     }
-    pub(crate) fn from_nodes_at_with_interrupt(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, owner: photocraft_geom::Rect, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+    pub(crate) fn from_nodes_at_with_interrupt(
+        source: &[FilterNode],
+        profile: &Profile,
+        stored: SampleEncoding,
+        version: u32,
+        owner: photocraft_geom::Rect,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Self> {
         controlled::preparation(control, |control| Self::prepare_nodes_at(source, profile, stored, version, owner, control, false))
     }
-    pub(crate) fn from_nodes_at_for_stock(source:&[FilterNode],profile:&Profile,stored:SampleEncoding,version:u32,owner:photocraft_geom::Rect,control:&photocraft_raster::Interrupt<'_>)->Result<Self> {
-        controlled::preparation(control,|control|Self::prepare_nodes_at(source,profile,stored,version,owner,control,true))
+    pub(crate) fn from_nodes_at_for_stock(
+        source: &[FilterNode],
+        profile: &Profile,
+        stored: SampleEncoding,
+        version: u32,
+        owner: photocraft_geom::Rect,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Self> {
+        controlled::preparation(control, |control| Self::prepare_nodes_at(source, profile, stored, version, owner, control, true))
     }
-    fn prepare_nodes_at(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, owner: photocraft_geom::Rect, control: &photocraft_raster::Interrupt<'_>, stock:bool) -> Result<Self> {
+    fn prepare_nodes_at(
+        source: &[FilterNode],
+        profile: &Profile,
+        stored: SampleEncoding,
+        version: u32,
+        owner: photocraft_geom::Rect,
+        control: &photocraft_raster::Interrupt<'_>,
+        stock: bool,
+    ) -> Result<Self> {
         if controlled::iter(source, control).any(crate::gimp_vibrance::claims) {
             return Err(CompositionError::Unsupported("Vibrance requires the paid prepared Parts entry"));
         }
@@ -265,21 +333,47 @@ impl PointStack {
             return Err(CompositionError::Unsupported("Hue-Chroma requires the paid prepared Parts entry"));
         }
         if controlled::iter(source, control).any(crate::gimp_semi_flatten::claims) {
-            let [node] = source else { return Err(CompositionError::Unsupported("Semi-Flatten singleton")); };
+            let [node] = source else {
+                return Err(CompositionError::Unsupported("Semi-Flatten singleton"));
+            };
             let candidate = crate::gimp_semi_flatten::PreparedSemiFlatten::new(node, profile, stored, version, owner, control)?;
-            return Ok(Self { vibrance: Vec::new(), hue_chroma: Vec::new(), semi_flatten: Some((candidate, node.enabled)), unpremultiply: None, video: None, current_sample: None, nodes: Vec::new(), channels: 3, integer_gray_temperature_clamp: false });
+            return Ok(Self {
+                vibrance: Vec::new(),
+                hue_chroma: Vec::new(),
+                semi_flatten: Some((candidate, node.enabled)),
+                unpremultiply: None,
+                video: None,
+                current_sample: None,
+                nodes: Vec::new(),
+                channels: 3,
+                integer_gray_temperature_clamp: false,
+            });
         }
         if controlled::iter(source, control).any(crate::gimp_red_eye::claims_geometry) {
-            let [node] = source else { return Err(CompositionError::Unsupported("Red Eye owner geometry singleton")); };
+            let [node] = source else {
+                return Err(CompositionError::Unsupported("Red Eye owner geometry singleton"));
+            };
             crate::gimp_red_eye::canonical_geometry(node, profile, stored, version)?;
             if !matches!(owner, photocraft_geom::Rect { x0: -7, y0: 5, x1: 12, y1: 18 } | photocraft_geom::Rect { x0: -3, y0: -4, x1: 259, y1: 5 }) {
                 return Err(CompositionError::Unsupported("Red Eye owner geometry point extent"));
             }
         }
         if controlled::iter(source, control).any(|node| node.operation.name == "gegl:unpremultiply") {
-            let [node] = source else { return Err(CompositionError::Unsupported("Unpremultiply singleton")); };
+            let [node] = source else {
+                return Err(CompositionError::Unsupported("Unpremultiply singleton"));
+            };
             let candidate = crate::gimp_unpremultiply::canonical_candidate(node, profile, stored, owner, version)?;
-            return Ok(Self { vibrance: Vec::new(), hue_chroma: Vec::new(), semi_flatten: None, unpremultiply: Some((candidate, node.enabled)), video: None, current_sample: None, nodes: Vec::new(), channels: 3, integer_gray_temperature_clamp: false });
+            return Ok(Self {
+                vibrance: Vec::new(),
+                hue_chroma: Vec::new(),
+                semi_flatten: None,
+                unpremultiply: Some((candidate, node.enabled)),
+                video: None,
+                current_sample: None,
+                nodes: Vec::new(),
+                channels: 3,
+                integer_gray_temperature_clamp: false,
+            });
         }
         if controlled::iter(source, control).any(crate::gimp_video_degradation::claims_video) {
             let [node] = source else {
@@ -287,7 +381,8 @@ impl PointStack {
             };
             let video = crate::gimp_video_degradation::canonical_candidate(node, profile, stored, owner, version)?;
             return Ok(Self {
-                vibrance: Vec::new(), hue_chroma: Vec::new(),
+                vibrance: Vec::new(),
+                hue_chroma: Vec::new(),
                 semi_flatten: None,
                 unpremultiply: None,
                 video: Some((video, node.enabled)),
@@ -297,17 +392,28 @@ impl PointStack {
                 integer_gray_temperature_clamp: false,
             });
         }
-        if stock { controlled::preparation(control,|control|Self::prepare_nodes(source,profile,stored,version,control,true)) }
-        else { Self::from_nodes_with_interrupt(source, profile, stored, version, control) }
+        if stock {
+            controlled::preparation(control, |control| Self::prepare_nodes(source, profile, stored, version, control, true))
+        } else {
+            Self::from_nodes_with_interrupt(source, profile, stored, version, control)
+        }
     }
     /// Actual retained node capacity plus fixed analytic profile envelopes,
     /// including Color Overlay's bounded nested profile/transform preparation.
     pub(crate) fn scalar_retained_bytes(&self) -> Result<u64> {
-        let mut vibrance_bytes=(self.vibrance.capacity() as u64).checked_mul(std::mem::size_of::<(crate::gimp_vibrance::OwnedVibrance,bool)>() as u64).ok_or(CompositionError::Invalid("owned Vibrance holder capacity"))?;
-        for (vibrance,_) in &self.vibrance { vibrance_bytes=vibrance_bytes.checked_add(vibrance.nested_bytes()).ok_or(CompositionError::Invalid("owned Vibrance nested capacity"))?; }
-        let mut hue_bytes = (self.hue_chroma.capacity() as u64).checked_mul(std::mem::size_of::<(crate::gimp_hue_chroma::OwnedHueChroma, bool)>() as u64).ok_or(CompositionError::Invalid("owned Hue holder capacity"))?;
-        for (hue, _) in &self.hue_chroma { hue_bytes = hue_bytes.checked_add(hue.nested_bytes()).ok_or(CompositionError::Invalid("owned Hue nested capacity"))?; }
-        hue_bytes=hue_bytes.checked_add(vibrance_bytes).ok_or(CompositionError::Invalid("owned point holder capacity"))?;
+        let mut vibrance_bytes = (self.vibrance.capacity() as u64)
+            .checked_mul(std::mem::size_of::<(crate::gimp_vibrance::OwnedVibrance, bool)>() as u64)
+            .ok_or(CompositionError::Invalid("owned Vibrance holder capacity"))?;
+        for (vibrance, _) in &self.vibrance {
+            vibrance_bytes = vibrance_bytes.checked_add(vibrance.nested_bytes()).ok_or(CompositionError::Invalid("owned Vibrance nested capacity"))?;
+        }
+        let mut hue_bytes = (self.hue_chroma.capacity() as u64)
+            .checked_mul(std::mem::size_of::<(crate::gimp_hue_chroma::OwnedHueChroma, bool)>() as u64)
+            .ok_or(CompositionError::Invalid("owned Hue holder capacity"))?;
+        for (hue, _) in &self.hue_chroma {
+            hue_bytes = hue_bytes.checked_add(hue.nested_bytes()).ok_or(CompositionError::Invalid("owned Hue nested capacity"))?;
+        }
+        hue_bytes = hue_bytes.checked_add(vibrance_bytes).ok_or(CompositionError::Invalid("owned point holder capacity"))?;
         let slots = u64::try_from(self.nodes.capacity()).map_err(|_| CompositionError::Invalid("point capacity overflow"))?;
         let overlays = u64::try_from(self.nodes.iter().filter(|node| node.color_overlay.is_some() || node.color_rotate.is_some()).count())
             .map_err(|_| CompositionError::Invalid("point capacity overflow"))?;
@@ -318,9 +424,21 @@ impl PointStack {
             .and_then(|n| n.checked_add(hue_bytes))
             .ok_or(CompositionError::Invalid("point capacity overflow"))
     }
-    pub(crate) fn stock_retained_bytes(&self)->Result<u64> {
-        let extras=self.nodes.iter().filter(|node|node.channel_mixer.is_some() || node.mono_mixer_signed.is_some() || node.absolute.is_some() || node.red_eye.is_some() || node.gray_color_exchange.is_some()).count() as u64;
-        self.scalar_retained_bytes()?.checked_add(extras.checked_mul(4*65536).ok_or(CompositionError::Invalid("stock point candidate capacity"))?).ok_or(CompositionError::Invalid("stock point candidate capacity"))
+    pub(crate) fn stock_retained_bytes(&self) -> Result<u64> {
+        let extras = self
+            .nodes
+            .iter()
+            .filter(|node| {
+                node.channel_mixer.is_some()
+                    || node.mono_mixer_signed.is_some()
+                    || node.absolute.is_some()
+                    || node.red_eye.is_some()
+                    || node.gray_color_exchange.is_some()
+            })
+            .count() as u64;
+        self.scalar_retained_bytes()?
+            .checked_add(extras.checked_mul(4 * 65536).ok_or(CompositionError::Invalid("stock point candidate capacity"))?)
+            .ok_or(CompositionError::Invalid("stock point candidate capacity"))
     }
     #[cfg(test)]
     pub(crate) fn new(stack: &photocraft_doc::xcf_filters::FilterStack, profile: &Profile, stored: SampleEncoding, version: u32) -> Result<Self> {
@@ -330,10 +448,23 @@ impl PointStack {
     pub(crate) fn from_nodes(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32) -> Result<Self> {
         Self::from_nodes_with_interrupt(source, profile, stored, version, &photocraft_raster::Interrupt::NONE)
     }
-    pub(crate) fn from_nodes_with_interrupt(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
+    pub(crate) fn from_nodes_with_interrupt(
+        source: &[FilterNode],
+        profile: &Profile,
+        stored: SampleEncoding,
+        version: u32,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Self> {
         controlled::preparation(control, |control| Self::prepare_nodes(source, profile, stored, version, control, false))
     }
-    fn prepare_nodes(source: &[FilterNode], profile: &Profile, stored: SampleEncoding, version: u32, control: &photocraft_raster::Interrupt<'_>, stock:bool) -> Result<Self> {
+    fn prepare_nodes(
+        source: &[FilterNode],
+        profile: &Profile,
+        stored: SampleEncoding,
+        version: u32,
+        control: &photocraft_raster::Interrupt<'_>,
+        stock: bool,
+    ) -> Result<Self> {
         if controlled::iter(source, control).any(crate::gimp_vibrance::claims) {
             return Err(CompositionError::Unsupported("Vibrance requires the paid prepared Parts entry"));
         }
@@ -344,7 +475,9 @@ impl PointStack {
             return Err(CompositionError::Unsupported("Semi-Flatten requires exact owner extent"));
         }
         if controlled::iter(source, control).any(crate::gimp_red_eye::claims_geometry) {
-            let [node] = source else { return Err(CompositionError::Unsupported("Red Eye owner geometry singleton")); };
+            let [node] = source else {
+                return Err(CompositionError::Unsupported("Red Eye owner geometry singleton"));
+            };
             crate::gimp_red_eye::canonical_geometry(node, profile, stored, version)?;
         }
         if controlled::iter(source, control).any(|node| node.operation.name == "gegl:unpremultiply") {
@@ -353,10 +486,12 @@ impl PointStack {
         if source.len() > 256 {
             return Err(CompositionError::Invalid("point filter stack limit"));
         }
-        let replace_fields =
-            controlled::iter(source, control).any(|node| node.composition.as_ref().is_some_and(|policy| {
-                policy.compatibility_epoch == POINT_REPLACE_COMPATIBILITY_EPOCH || policy.compatibility_epoch == crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH
-            }));
+        let replace_fields = controlled::iter(source, control).any(|node| {
+            node.composition.as_ref().is_some_and(|policy| {
+                policy.compatibility_epoch == POINT_REPLACE_COMPATIBILITY_EPOCH
+                    || policy.compatibility_epoch == crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH
+            })
+        });
         if replace_fields
             && (source.len() != 1
                 || controlled::iter(source, control).any(|node| {
@@ -368,7 +503,9 @@ impl PointStack {
                         "gegl:color-overlay" => node.operation.schema_epoch == COLOR_OVERLAY_PRECISION_EPOCH,
                         "gegl:channel-mixer" => node.operation.schema_epoch == CHANNEL_MIXER_PRECISION_EPOCH,
                         "gegl:mono-mixer" => node.operation.schema_epoch == MONO_MIXER_SIGNED_PRECISION_EPOCH,
-                        "gegl:red-eye-removal" => matches!(node.operation.schema_epoch.as_str(), RED_EYE_PRECISION_EPOCH | crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH),
+                        "gegl:red-eye-removal" => {
+                            matches!(node.operation.schema_epoch.as_str(), RED_EYE_PRECISION_EPOCH | crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH)
+                        }
                         "gegl:color-rotate" => node.operation.schema_epoch == crate::gimp_color_rotate::COLOR_ROTATE_PERCEPTUAL_EPOCH,
                         "gegl:color-to-alpha" => node.operation.schema_epoch == COLOR_TO_ALPHA_PRECISION_EPOCH,
                         "gegl:component-extract" => component_extract::qualified_epoch(&node.operation.schema_epoch),
@@ -376,7 +513,11 @@ impl PointStack {
                         "gegl:brightness-contrast" => node.operation.schema_epoch == BRIGHTNESS_CONTRAST_PRECISION_EPOCH,
                         "gegl:levels" => node.operation.schema_epoch == GEGL_LEVELS_PRECISION_EPOCH,
                         "gegl:exposure" => node.operation.schema_epoch == EXPOSURE_BLACK_PRECISION_EPOCH,
-                        "gegl:color-temperature" => node.operation.schema_epoch == COLOR_TEMPERATURE_PRECISION_EPOCH,
+                        "gegl:color-temperature" => {
+                            node.operation.schema_epoch == COLOR_TEMPERATURE_PRECISION_EPOCH
+                                || (node.operation.schema_epoch == COLOR_TEMPERATURE_OFFGRID_EPOCH
+                                    && matches!(stored, SampleEncoding::Linear | SampleEncoding::NonlinearProfile))
+                        }
                         "gegl:sepia" => node.operation.schema_epoch == SEPIA_PRECISION_EPOCH,
                         "gegl:alien-map" => matches!(node.operation.schema_epoch.as_str(), ALIEN_MAP_PRECISION_EPOCH | ALIEN_MAP_HSL_PRECISION_EPOCH),
                         _ => false,
@@ -387,9 +528,12 @@ impl PointStack {
                         || node.source_region != Some(0)
                         || !node.auxiliary.is_empty()
                         || node.composition.as_ref().is_none_or(|policy| {
-                            policy.compatibility_epoch != if node.operation.schema_epoch == crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH {
-                                crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH
-                            } else { POINT_REPLACE_COMPATIBILITY_EPOCH }
+                            policy.compatibility_epoch
+                                != if node.operation.schema_epoch == crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH {
+                                    crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH
+                                } else {
+                                    POINT_REPLACE_COMPATIBILITY_EPOCH
+                                }
                                 || policy.source_mode != 62
                                 || policy.legacy
                                 || policy.pass_through
@@ -436,7 +580,8 @@ impl PointStack {
                 || source.len() != 1
                 || !qualified_point_encoding
                 || !matches!(profile.channels(), 1 | 3)
-                || controlled::iter(source, control).any(|node| node.operation.name != "gegl:mono-mixer" || node.operation.schema_epoch != MONO_MIXER_SIGNED_PRECISION_EPOCH))
+                || controlled::iter(source, control)
+                    .any(|node| node.operation.name != "gegl:mono-mixer" || node.operation.schema_epoch != MONO_MIXER_SIGNED_PRECISION_EPOCH))
         {
             return Err(CompositionError::Unsupported("unqualified expanded Mono Mixer domain"));
         }
@@ -458,11 +603,14 @@ impl PointStack {
                 || source.len() != 1
                 || !qualified_point_encoding
                 || !matches!(profile.channels(), 1 | 3)
-                || controlled::iter(source, control).any(|n| !matches!(n.operation.schema_epoch.as_str(), ALPHA_CLIP_PRECISION_EPOCH | ALPHA_CLIP_FINITE_PRECISION_EPOCH)))
+                || controlled::iter(source, control)
+                    .any(|n| !matches!(n.operation.schema_epoch.as_str(), ALPHA_CLIP_PRECISION_EPOCH | ALPHA_CLIP_FINITE_PRECISION_EPOCH)))
         {
             return Err(CompositionError::Unsupported("unqualified typed Alpha Clip domain"));
         }
-        if controlled::iter(source, control).any(|node| node.operation.schema_epoch == COMPONENT_EXTRACT_GEOMETRY_EPOCH) && stored != SampleEncoding::NonlinearProfile {
+        if controlled::iter(source, control).any(|node| node.operation.schema_epoch == COMPONENT_EXTRACT_GEOMETRY_EPOCH)
+            && stored != SampleEncoding::NonlinearProfile
+        {
             return Err(CompositionError::Unsupported("Component Extract geometry requires current nonlinear storage"));
         }
         if component_extract
@@ -529,7 +677,8 @@ impl PointStack {
                 || source.len() != 1
                 || !matches!(profile.channels(), 1 | 3)
                 || !qualified_point_encoding
-                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != THRESHOLD_ALPHA_PRECISION_EPOCH || node.operation.name != "gimp:threshold-alpha"))
+                || controlled::iter(source, control)
+                    .any(|node| node.operation.schema_epoch != THRESHOLD_ALPHA_PRECISION_EPOCH || node.operation.name != "gimp:threshold-alpha"))
         {
             return Err(CompositionError::Unsupported("unqualified witnessed Alpha Threshold precision domain"));
         }
@@ -542,13 +691,15 @@ impl PointStack {
                 || source.len() != 1
                 || profile.channels() != 3
                 || !qualified_point_encoding
-                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != THRESHOLD_PRECISION_EPOCH || node.operation.name != "gimp:threshold"))
+                || controlled::iter(source, control)
+                    .any(|node| node.operation.schema_epoch != THRESHOLD_PRECISION_EPOCH || node.operation.name != "gimp:threshold"))
         {
             return Err(CompositionError::Unsupported("unqualified witnessed RGB Threshold precision domain"));
         }
         let saturation_gray = controlled::iter(source, control).any(|node| node.operation.schema_epoch == SATURATION_GRAY_PRECISION_EPOCH);
         let saturation_yuv = controlled::iter(source, control).any(|node| node.operation.schema_epoch == SATURATION_RGB_YUV_PRECISION_EPOCH);
-        let saturation = saturation_gray || saturation_yuv || controlled::iter(source, control).any(|node| node.operation.schema_epoch == SATURATION_PRECISION_EPOCH);
+        let saturation =
+            saturation_gray || saturation_yuv || controlled::iter(source, control).any(|node| node.operation.schema_epoch == SATURATION_PRECISION_EPOCH);
         if controlled::iter(source, control).any(|node| node.operation.name == "gegl:saturation")
             && (!saturation
                 || source.len() != 1
@@ -574,7 +725,8 @@ impl PointStack {
                 || source.len() != 1
                 || profile.channels() != 3
                 || !qualified_point_encoding
-                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != DESATURATE_PRECISION_EPOCH || node.operation.name != "gimp:desaturate"))
+                || controlled::iter(source, control)
+                    .any(|node| node.operation.schema_epoch != DESATURATE_PRECISION_EPOCH || node.operation.name != "gimp:desaturate"))
         {
             return Err(CompositionError::Unsupported("unqualified witnessed Desaturate precision domain"));
         }
@@ -617,7 +769,8 @@ impl PointStack {
             && (source.len() != 1
                 || !matches!(profile.channels(), 1 | 3)
                 || !qualified_point_encoding
-                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != GEGL_LEVELS_PRECISION_EPOCH || node.operation.name != "gegl:levels"))
+                || controlled::iter(source, control)
+                    .any(|node| node.operation.schema_epoch != GEGL_LEVELS_PRECISION_EPOCH || node.operation.name != "gegl:levels"))
         {
             return Err(CompositionError::Unsupported("unqualified witnessed GEGL Levels precision domain"));
         }
@@ -635,11 +788,13 @@ impl PointStack {
             && (source.len() != 1
                 || profile.channels() != 3
                 || !qualified_point_encoding
-                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != VALUE_INVERT_PRECISION_EPOCH || node.operation.name != "gegl:value-invert"))
+                || controlled::iter(source, control)
+                    .any(|node| node.operation.schema_epoch != VALUE_INVERT_PRECISION_EPOCH || node.operation.name != "gegl:value-invert"))
         {
             return Err(CompositionError::Unsupported("unqualified witnessed Value Invert precision domain"));
         }
-        let rgb_clip = controlled::iter(source, control).any(|node| node.operation.schema_epoch == RGB_CLIP_HDR_EPOCH || node.operation.name == "gegl:rgb-clip");
+        let rgb_clip =
+            controlled::iter(source, control).any(|node| node.operation.schema_epoch == RGB_CLIP_HDR_EPOCH || node.operation.name == "gegl:rgb-clip");
         if rgb_clip
             && (source.len() != 1
                 || profile.channels() != 3
@@ -652,7 +807,8 @@ impl PointStack {
             && (source.len() != 1
                 || profile.channels() != 3
                 || stored != SampleEncoding::NonlinearProfile
-                || controlled::iter(source, control).any(|node| node.operation.schema_epoch != MONO_MIXER_EDITS_EPOCH || node.operation.name != "gegl:mono-mixer"))
+                || controlled::iter(source, control)
+                    .any(|node| node.operation.schema_epoch != MONO_MIXER_EDITS_EPOCH || node.operation.name != "gegl:mono-mixer"))
         {
             return Err(CompositionError::Unsupported("unqualified witnessed Mono Mixer domain"));
         }
@@ -907,7 +1063,9 @@ impl PointStack {
             } else if red_eye {
                 let raw_space = if node.operation.schema_epoch == crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH {
                     crate::gimp_red_eye::OWNER_GEOMETRY_RAW_SPACE
-                } else { 127500881 };
+                } else {
+                    127500881
+                };
                 if !matches!(node.operation.schema_epoch.as_str(), RED_EYE_PRECISION_EPOCH | crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH)
                     || node
                         .composition
@@ -967,7 +1125,7 @@ impl PointStack {
                 WorkingEncoding::Nonlinear => GimpSpace::ProfileRgb,
             };
             nodes.push(PointNode {
-                enabled:node.enabled,
+                enabled: node.enabled,
                 absolute: if absolute { Some(crate::gimp_absolute::AbsoluteCandidate::new(profile, stored)?) } else { None },
                 color_rotate: if color_rotate {
                     Some(crate::gimp_color_rotate::ColorRotateCandidate::new(profile, stored, crate::gimp_color_rotate::typed_arguments(&node.arguments)?)?)
@@ -1023,7 +1181,8 @@ impl PointStack {
             nodes.reverse();
         }
         Ok(Self {
-            vibrance: Vec::new(), hue_chroma: Vec::new(),
+            vibrance: Vec::new(),
+            hue_chroma: Vec::new(),
             semi_flatten: None,
             unpremultiply: None,
             video: None,
@@ -1041,13 +1200,24 @@ impl PointStack {
         self.current_sample = sample;
     }
     pub(crate) fn has_signed_generated_storage(&self) -> bool {
-        self.unpremultiply.is_some() || self.nodes.iter().filter(|node|node.enabled).any(|node| node.mono_mixer_signed.is_some() || node.channel_mixer.is_some() || node.absolute.is_some())
+        self.unpremultiply.is_some()
+            || self
+                .nodes
+                .iter()
+                .filter(|node| node.enabled)
+                .any(|node| node.mono_mixer_signed.is_some() || node.channel_mixer.is_some() || node.absolute.is_some())
     }
     pub(crate) fn changes_alpha(&self) -> bool {
-        if let Some((_, enabled)) = self.vibrance.first() { return *enabled; }
-        if let Some((_, enabled)) = self.hue_chroma.first() { return *enabled; }
-        if let Some((_, enabled)) = &self.semi_flatten { return *enabled; }
-        self.nodes.iter().filter(|node|node.enabled).any(|node| {
+        if let Some((_, enabled)) = self.vibrance.first() {
+            return *enabled;
+        }
+        if let Some((_, enabled)) = self.hue_chroma.first() {
+            return *enabled;
+        }
+        if let Some((_, enabled)) = &self.semi_flatten {
+            return *enabled;
+        }
+        self.nodes.iter().filter(|node| node.enabled).any(|node| {
             matches!(
                 node.operation,
                 PointOperation::AlphaClipFinitePrecision { clip_low: true, .. }
@@ -1065,9 +1235,17 @@ impl PointStack {
             )
         })
     }
-    pub(crate) fn validate_stock_input(&self,position:(i32,i32),pixel:[f64;4],control:&photocraft_raster::Interrupt<'_>,poll:&mut impl FnMut(WideWork)->Result<()>)->Result<()> {
+    pub(crate) fn validate_stock_input(
+        &self,
+        position: (i32, i32),
+        pixel: [f64; 4],
+        control: &photocraft_raster::Interrupt<'_>,
+        poll: &mut impl FnMut(WideWork) -> Result<()>,
+    ) -> Result<()> {
         poll(WideWork::SampleUnits(128))?;
-        if pixel.iter().any(|v|!v.is_finite()) || !(0.0..=1.0).contains(&pixel[3]) { return Err(CompositionError::Unsupported("stock Point finite native colors/unit alpha")); }
+        if pixel.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&pixel[3]) {
+            return Err(CompositionError::Unsupported("stock Point finite native colors/unit alpha"));
+        }
         if let Some((vibrance, _)) = self.vibrance.first() {
             return vibrance_pixel(poll, vibrance.validation_work(), |control, work| vibrance.validate_input(pixel, control, work));
         }
@@ -1078,25 +1256,46 @@ impl PointStack {
             poll(WideWork::SampleUnits(3 * 128 + 4))?;
             return candidate.validate_input(pixel);
         }
-        if let Some((video,_))=&self.video {
-            return video.try_eval_at(position,&pixel,&mut[0.;4],false,control);
+        if let Some((video, _)) = &self.video {
+            return video.try_eval_at(position, &pixel, &mut [0.; 4], false, control);
         }
         for node in &self.nodes {
             poll(WideWork::SampleUnits(128))?;
-            let input=if self.channels==1 { [pixel[0],pixel[3],0.,0.] }else{pixel};
-            let input=input.get(..self.channels+1).ok_or(CompositionError::Invalid("stock Point input channels"))?;
-            if let Some(candidate)=&node.channel_mixer {
-                if candidate.working_input(input)?.iter().take(3).any(|v|!v.is_finite() || !(0.0..=1.0).contains(v)) { return Err(CompositionError::Unsupported("Channel Mixer current linear Float unit input")); }
-            }else if let Some(candidate)=&node.mono_mixer_signed {
-                if candidate.working_input(input)?.iter().take(3).any(|v|!v.is_finite() || !(0.0..=1.0).contains(v)) { return Err(CompositionError::Unsupported("Mono Mixer current linear Float unit input")); }
-            }else if let Some(candidate)=&node.color_overlay { candidate.working_input(input)?; }
-            else if let Some(candidate)=&node.color_rotate { candidate.working_input(input)?; }
-            else if let Some(candidate)=&node.absolute { candidate.working_input(input)?; }
-            else if let Some(candidate)=&node.red_eye { candidate.working_input(input)?; }
-            else if node.gray_color_exchange.is_some() || matches!(node.operation,PointOperation::AlphaClipPrecision{..}|PointOperation::AlphaClipFinitePrecision{..}|PointOperation::ColorExchange{..}|PointOperation::ColorToAlpha{..}|PointOperation::ComponentExtract{..}) {
-                if node.working.convert([pixel[0],pixel[1],pixel[2]],true)?.iter().any(|v|!(*v as f32).is_finite() || !(0.0..=1.0).contains(&(*v as f32))) { return Err(CompositionError::Unsupported("literal-color working samples outside unit domain")); }
-            }else if matches!(node.operation,PointOperation::RgbClip{..}) { /* Existing Linear Float HDR colors are finite above. */
-            }else if pixel.iter().any(|v|!(0.0..=1.0).contains(v)) { return Err(CompositionError::Unsupported("generic point source unit samples")); }
+            let input = if self.channels == 1 { [pixel[0], pixel[3], 0., 0.] } else { pixel };
+            let input = input.get(..self.channels + 1).ok_or(CompositionError::Invalid("stock Point input channels"))?;
+            if let Some(candidate) = &node.channel_mixer {
+                if candidate.working_input(input)?.iter().take(3).any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
+                    return Err(CompositionError::Unsupported("Channel Mixer current linear Float unit input"));
+                }
+            } else if let Some(candidate) = &node.mono_mixer_signed {
+                if candidate.working_input(input)?.iter().take(3).any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
+                    return Err(CompositionError::Unsupported("Mono Mixer current linear Float unit input"));
+                }
+            } else if let Some(candidate) = &node.color_overlay {
+                candidate.working_input(input)?;
+            } else if let Some(candidate) = &node.color_rotate {
+                candidate.working_input(input)?;
+            } else if let Some(candidate) = &node.absolute {
+                candidate.working_input(input)?;
+            } else if let Some(candidate) = &node.red_eye {
+                candidate.working_input(input)?;
+            } else if node.gray_color_exchange.is_some()
+                || matches!(
+                    node.operation,
+                    PointOperation::AlphaClipPrecision { .. }
+                        | PointOperation::AlphaClipFinitePrecision { .. }
+                        | PointOperation::ColorExchange { .. }
+                        | PointOperation::ColorToAlpha { .. }
+                        | PointOperation::ComponentExtract { .. }
+                )
+            {
+                if node.working.convert([pixel[0], pixel[1], pixel[2]], true)?.iter().any(|v| !(*v as f32).is_finite() || !(0.0..=1.0).contains(&(*v as f32))) {
+                    return Err(CompositionError::Unsupported("literal-color working samples outside unit domain"));
+                }
+            } else if matches!(node.operation, PointOperation::RgbClip { .. }) { /* Existing Linear Float HDR colors are finite above. */
+            } else if pixel.iter().any(|v| !(0.0..=1.0).contains(v)) {
+                return Err(CompositionError::Unsupported("generic point source unit samples"));
+            }
         }
         Ok(())
     }
@@ -1136,7 +1335,9 @@ impl PointStack {
             return controlled::finish_pixel(candidate.apply(pixel, *enabled)?, poll);
         }
         if let Some((candidate, enabled)) = &self.unpremultiply {
-            if self.current_sample != Some(photocraft_color::SampleType::F32) { return Err(CompositionError::Unsupported("Unpremultiply current native Float storage")); }
+            if self.current_sample != Some(photocraft_color::SampleType::F32) {
+                return Err(CompositionError::Unsupported("Unpremultiply current native Float storage"));
+            }
             poll(WideWork::SampleUnits(128))?;
             let output = controlled::run(poll, |control, work| candidate.apply_with(&pixel, *enabled, control, work))?;
             poll(WideWork::SampleUnits(0))?;
@@ -1146,7 +1347,9 @@ impl PointStack {
             return Err(CompositionError::Unsupported("Video Degradation requires coordinates"));
         }
         for node in &self.nodes {
-            if !node.enabled { continue; }
+            if !node.enabled {
+                continue;
+            }
             poll(WideWork::SampleUnits(128))?;
             if let Some(absolute) = &node.absolute {
                 pixel = if self.channels == 1 {
@@ -1307,18 +1510,44 @@ impl PointStack {
 mod unpremultiply_stack_tests {
     use super::*;
     fn node() -> FilterNode {
-        use photocraft_doc::{import_compositing::GimpComposition, item_identity::{FilterId, ItemRef, MaskId}, xcf_filters::OperationIdentity};
+        use photocraft_doc::{
+            import_compositing::GimpComposition,
+            item_identity::{FilterId, ItemRef, MaskId},
+            xcf_filters::OperationIdentity,
+        };
         FilterNode {
-            id: FilterId(1), operation: OperationIdentity { name: "gegl:unpremultiply".into(), stored_version: "0:0".into(), schema_epoch: "xcf-22-stock-unpremultiply-rgb-f32-linear-v1".into() },
-            arguments: vec![], source_display_name: None, source_icon: None, enabled: true, opacity_f64_bits: 1f64.to_bits(),
-            source_clipping: Some(0), source_region: Some(0), mask: Some(ItemRef::Mask(MaskId(2))), auxiliary: vec![],
-            composition: Some(GimpComposition { compatibility_epoch: "xcf-22-stock-unpremultiply-rgb-f32-linear-v1".into(), source_mode: 62, legacy: false,
-                stored_blend_space: -1877441967, stored_composite_space: -1877441967, stored_operator: -1877441967, resolved: None, pass_through: false }),
+            id: FilterId(1),
+            operation: OperationIdentity {
+                name: "gegl:unpremultiply".into(),
+                stored_version: "0:0".into(),
+                schema_epoch: "xcf-22-stock-unpremultiply-rgb-f32-linear-v1".into(),
+            },
+            arguments: vec![],
+            source_display_name: None,
+            source_icon: None,
+            enabled: true,
+            opacity_f64_bits: 1f64.to_bits(),
+            source_clipping: Some(0),
+            source_region: Some(0),
+            mask: Some(ItemRef::Mask(MaskId(2))),
+            auxiliary: vec![],
+            composition: Some(GimpComposition {
+                compatibility_epoch: "xcf-22-stock-unpremultiply-rgb-f32-linear-v1".into(),
+                source_mode: 62,
+                legacy: false,
+                stored_blend_space: -1877441967,
+                stored_composite_space: -1877441967,
+                stored_operator: -1877441967,
+                resolved: None,
+                pass_through: false,
+            }),
         }
     }
     #[test]
     fn unpremultiply_public_stack_expected_positive() {
-        let mut stack = PointStack::from_nodes_at(&[node()], photocraft_cms::Builtin::Srgb.profile(), SampleEncoding::Linear, 22, photocraft_geom::Rect::new(0, 0, 8, 6)).unwrap();
+        let mut stack =
+            PointStack::from_nodes_at(&[node()], photocraft_cms::Builtin::Srgb.profile(), SampleEncoding::Linear, 22, photocraft_geom::Rect::new(0, 0, 8, 6))
+                .unwrap();
         stack.set_current_sample(Some(photocraft_color::SampleType::F32));
         let actual = stack.apply_current([0.25, -0.5, 0.75, 0.5], false, &mut |_| Ok(())).unwrap();
         assert_eq!(actual, [0.5, -1., 1.5, 0.5]);
@@ -1348,7 +1577,8 @@ mod unpremultiply_stack_tests {
             stack.set_current_sample(sample);
             assert!(stack.apply_current([0.25, 0.5, 0.75, 0.5], false, &mut |_| Ok(())).is_err());
         }
-        let mut original = node(); original.enabled = false;
+        let mut original = node();
+        original.enabled = false;
         let mut stack = prepare(&[original], profile, SampleEncoding::Linear, 22, owner).unwrap();
         stack.set_current_sample(Some(photocraft_color::SampleType::F32));
         assert_eq!(stack.apply_current([-1., 6., -0., -0.], false, &mut |_| Ok(())).unwrap().map(f64::to_bits), [-1., 6., -0., -0.].map(f64::to_bits));
@@ -2497,6 +2727,17 @@ mod color_temperature_precision_oracle {
                 }),
             };
             let stack = PointStack::from_nodes(std::slice::from_ref(&node), profile, stored, 22).unwrap();
+            // A measured CURRENT edit retains the operation epoch and raw words;
+            // only the outer field-compatibility role changes after editing.
+            let mut current = node.clone();
+            current.composition.as_mut().unwrap().compatibility_epoch = POINT_REPLACE_COMPATIBILITY_EPOCH.into();
+            let edited = PointStack::from_nodes(std::slice::from_ref(&current), profile, stored, 22).unwrap();
+            if current.operation.schema_epoch == COLOR_TEMPERATURE_OFFGRID_EPOCH {
+                assert!(PointStack::from_nodes(std::slice::from_ref(&current), profile, SampleEncoding::Perceptual, 22).is_err());
+            }
+            let mut wrong_epoch = current.clone();
+            wrong_epoch.operation.schema_epoch = "unqualified".into();
+            assert!(PointStack::from_nodes(&[wrong_epoch], profile, stored, 22).is_err());
             let source = std::fs::read(root.join(layer["native"]["file"].as_str().unwrap())).unwrap();
             let reference = std::fs::read(root.join(row["baked"]["layers"][0]["native"]["file"].as_str().unwrap())).unwrap();
             let decode = |bytes: &[u8]| match width {
@@ -2513,6 +2754,7 @@ mod color_temperature_precision_oracle {
                 let input =
                     if gray { [color, color, color, alpha] } else { [color, decode(&pixel[width..2 * width]), decode(&pixel[2 * width..3 * width]), alpha] };
                 let actual = stack.apply(input, &mut |_| Ok(())).unwrap();
+                assert_eq!(edited.apply(input, &mut |_| Ok(())).unwrap().map(f64::to_bits), actual.map(f64::to_bits));
                 assert_eq!(actual[3].to_bits(), alpha.to_bits());
                 assert_eq!(&pixel[channels * width..], &expected[channels * width..]);
                 for (channel, expected) in expected.chunks_exact(width).enumerate() {

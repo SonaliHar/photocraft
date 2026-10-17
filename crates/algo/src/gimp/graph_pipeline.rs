@@ -36,6 +36,8 @@ impl std::error::Error for GraphPipelineError {}
 /// Nested operation/configuration schemas and exact port names still require caller
 /// qualification. Callback allocation/work accounting is cooperative as documented
 /// by graph_execute; absent profile metadata is never an implied color space.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn execute_pipeline<'a>(
     graph: &FilterGraph,
     max_depth: usize,
@@ -75,6 +77,8 @@ pub fn execute_pipeline<'a>(
 /// returns cache capacity at last use. Their work charges share the same ceiling.
 /// The 200k structural reservation covers both bounded planners' 100k visits.
 /// Callback allocations/work remain cooperative, with no operation/profile oracle.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn execute_pipeline_with_roi<'a>(
     graph: &FilterGraph,
     max_depth: usize,
@@ -247,7 +251,8 @@ pub fn execute_pipeline_with_roi_domains_available<'a>(
     )
     .map_err(GraphPipelineError::Roi)?;
     reservation.charge_roi_work(regions.usage().work).map_err(GraphPipelineError::Execute)?;
-    super::graph_execute::execute_reserved_rois_domains_available(&plan, reservation, Some(&regions), assignments, control, evaluate).map_err(GraphPipelineError::Execute)
+    super::graph_execute::execute_reserved_rois_domains_available(&plan, reservation, Some(&regions), assignments, control, evaluate)
+        .map_err(GraphPipelineError::Execute)
 }
 
 #[cfg(test)]
@@ -259,39 +264,71 @@ mod tests {
     // its upstream producer or receive fabricated source/default pixels.
     #[test]
     fn adaptive_no_pixels_skips_producer_and_preserves_explicit_availability() {
-        use super::super::{graph_execute::{DomainAssignment, InputPixels}, roi::{Abyss, Halo}};
+        use super::super::{
+            graph_execute::{DomainAssignment, InputPixels},
+            roi::{Abyss, Halo},
+        };
         use photocraft_doc::xcf_filters::{GraphEdge, GraphNode, OperationIdentity};
-        let node = |id| GraphNode { id: GraphNodeId(id), operation: OperationIdentity {
-            name: "Own no-read constant".into(), stored_version: "1".into(), schema_epoch: "own".into() },
-            version_origin: Default::default(), arguments: Vec::new() };
-        let graph = FilterGraph { input: None, nodes: vec![node(1), node(2)],
+        let node = |id| GraphNode {
+            id: GraphNodeId(id),
+            operation: OperationIdentity { name: "Own no-read constant".into(), stored_version: "1".into(), schema_epoch: "own".into() },
+            version_origin: Default::default(),
+            arguments: Vec::new(),
+        };
+        let graph = FilterGraph {
+            input: None,
+            nodes: vec![node(1), node(2)],
             edges: vec![GraphEdge { from: GraphNodeId(1), to: GraphNodeId(2), input_port: "source".into(), output_port: "output".into() }],
-            output: GraphNodeId(2), original_pipeline: None };
+            output: GraphNodeId(2),
+            original_pipeline: None,
+        };
         let domain = ExecutionDomain { format: PixelFormat::RGBA8, encoding: SampleEncoding::NonlinearProfile, profile_fingerprint: None };
         let assignments = [DomainAssignment { node: GraphNodeId(1), domain }, DomainAssignment { node: GraphNodeId(2), domain }];
         let roi = Rect::new(10, 10, 11, 11);
-        let run = |legacy: bool| execute_pipeline_with_roi_domains_available(&graph, 2, None, roi, domain, &assignments,
-            ExecutionLimits::default(), &Interrupt::NONE, |_, _, _| true,
-            |_| Ok(InputFootprint { mapped_output: Rect::EMPTY, source_extent: Rect::new(0, 0, 1, 1),
-                halo: Halo::default(), abyss: Abyss::None, work_per_sample: 1 }),
-            |request, budget| {
-                assert_eq!(request.node.id, GraphNodeId(2), "skipped producer must never execute");
-                if legacy {
-                    return super::super::graph_execute::evaluate_materialized(request, budget,
-                        |_, _| panic!("legacy callback must not receive invented pixels"));
-                }
-                assert_eq!(request.inputs.len(), 1);
-                let input = request.inputs.first().unwrap();
-                assert!(matches!(input.pixels, InputPixels::NoPixelsRequired));
-                assert_eq!(input.domain, domain);
-                assert!(input.roi.is_empty());
-                assert!(input.footprint.unwrap().source_read().is_empty());
-                budget.reserve_output(4096)?;
-                budget.finish_output(Surface::try_with_default_bytes(domain.format, &[7, 11, 13, 255]).unwrap(), request.roi, request.domain)
-            });
-        let output = run(false).unwrap();
+        let run = |legacy: bool, output_roi| {
+            execute_pipeline_with_roi_domains_available(
+                &graph,
+                2,
+                None,
+                output_roi,
+                domain,
+                &assignments,
+                ExecutionLimits::default(),
+                &Interrupt::NONE,
+                |_, _, _| true,
+                |_| {
+                    Ok(InputFootprint {
+                        mapped_output: Rect::EMPTY,
+                        source_extent: Rect::new(0, 0, 1, 1),
+                        halo: Halo::default(),
+                        abyss: Abyss::None,
+                        work_per_sample: 1,
+                    })
+                },
+                |request, budget| {
+                    assert_eq!(request.node.id, GraphNodeId(2), "skipped producer must never execute");
+                    if legacy {
+                        return super::super::graph_execute::evaluate_materialized(request, budget, |_, _| {
+                            panic!("legacy callback must not receive invented pixels")
+                        });
+                    }
+                    assert_eq!(request.inputs.len(), 1);
+                    let input = request.inputs.first().unwrap();
+                    assert!(matches!(input.pixels, InputPixels::NoPixelsRequired));
+                    assert_eq!(input.domain, domain);
+                    assert!(input.roi.is_empty());
+                    assert!(input.footprint.unwrap().source_read().is_empty());
+                    budget.reserve_output(4096)?;
+                    budget.finish_output(Surface::try_with_default_bytes(domain.format, &[7, 11, 13, 255]).unwrap(), request.roi, request.domain)
+                },
+            )
+        };
+        let output = run(false, roi).unwrap();
         assert_eq!(output.surface().try_read_interleaved(roi).unwrap(), [7, 11, 13, 255]);
-        assert!(matches!(run(true), Err(GraphPipelineError::Execute(GraphExecuteError::Operation("callback requires materialized input pixels")))));
+        assert!(matches!(run(true, roi), Err(GraphPipelineError::Execute(GraphExecuteError::Operation("callback requires materialized input pixels")))));
+        // Empty dependency demands are pruned without widening the executor's
+        // existing refusal of an explicitly requested empty final output.
+        assert!(matches!(run(false, Rect::EMPTY), Err(GraphPipelineError::Execute(GraphExecuteError::Roi))));
     }
     #[test]
     fn zero_index_refuses_before_port_or_operation_callback_and_passthrough_borrows() {

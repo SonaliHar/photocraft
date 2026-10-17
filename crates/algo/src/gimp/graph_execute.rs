@@ -157,14 +157,24 @@ pub fn evaluate_materialized(
     let mut inputs = Vec::new();
     inputs.try_reserve_exact(request.inputs.len()).map_err(|_| GraphExecuteError::Allocation)?;
     let actual = inputs.capacity().checked_mul(std::mem::size_of::<InputBinding<'_>>()).ok_or(GraphExecuteError::IndexLimit)?;
-    if actual > bytes { budget.reserve_scratch(count(actual - bytes)?)?; budget.reserve_index(count(actual - bytes)?)?; }
+    if actual > bytes {
+        budget.reserve_scratch(count(actual - bytes)?)?;
+        budget.reserve_index(count(actual - bytes)?)?;
+    }
     for input in request.inputs {
         budget.poll()?;
         let InputPixels::Materialized(surface) = input.pixels else {
             return Err(GraphExecuteError::Operation("callback requires materialized input pixels"));
         };
-        inputs.push(InputBinding { input_port: input.input_port, output_port: input.output_port, endpoint: input.endpoint,
-            surface, domain: input.domain, roi: input.roi, footprint: input.footprint });
+        inputs.push(InputBinding {
+            input_port: input.input_port,
+            output_port: input.output_port,
+            endpoint: input.endpoint,
+            surface,
+            domain: input.domain,
+            roi: input.roi,
+            footprint: input.footprint,
+        });
     }
     evaluate(NodeRequest { node: request.node, inputs: &inputs, roi: request.roi, domain: request.domain }, budget)
 }
@@ -441,10 +451,7 @@ pub fn planning_requirements(nodes: usize, edges: usize) -> Result<PlanningRequi
         add(count(nodes)?.checked_mul(512).ok_or(GraphExecuteError::IndexLimit)?, count(edges)?.checked_mul(256).ok_or(GraphExecuteError::IndexLimit)?)?,
         4096,
     )?;
-    Ok(PlanningRequirements {
-        index_bytes,
-        work_units: u64::try_from(super::graph_plan::MAX_WORK).map_err(|_| GraphExecuteError::WorkLimit)?,
-    })
+    Ok(PlanningRequirements { index_bytes, work_units: u64::try_from(super::graph_plan::MAX_WORK).map_err(|_| GraphExecuteError::WorkLimit)? })
 }
 #[allow(clippy::too_many_arguments)]
 pub(super) fn reserve_execution_domains<'a>(
@@ -527,12 +534,17 @@ pub(super) fn execute_reserved_rois_domains<'a>(
     execute_reserved_rois_impl(plan, reservation, rois, Some(assignments), control, |request, budget| evaluate_materialized(request, budget, &mut evaluate))
 }
 pub(super) fn execute_reserved_rois_domains_available<'a>(
-    plan: &GraphPlan<'_>, reservation: ExecutionReservation<'a>, rois: Option<&GraphRoiPlan>,
-    assignments: &[DomainAssignment], control: &Interrupt<'_>,
+    plan: &GraphPlan<'_>,
+    reservation: ExecutionReservation<'a>,
+    rois: Option<&GraphRoiPlan>,
+    assignments: &[DomainAssignment],
+    control: &Interrupt<'_>,
     evaluate: impl FnMut(AvailableNodeRequest<'_>, &mut NodeBudget<'_, '_>) -> Result<NodeOutput>,
 ) -> Result<GraphOutput<'a>> {
     let final_domain = validate_domains(plan.graph(), reservation.external_domain, assignments, control)?;
-    if final_domain != reservation.domain { return Err(GraphExecuteError::Domain); }
+    if final_domain != reservation.domain {
+        return Err(GraphExecuteError::Domain);
+    }
     execute_reserved_rois_impl(plan, reservation, rois, Some(assignments), control, evaluate)
 }
 fn execute_reserved_rois_impl<'a>(
@@ -620,7 +632,9 @@ fn execute_reserved_rois_impl<'a>(
             inputs.try_reserve_exact(edge_indices.len()).map_err(|_| GraphExecuteError::Allocation)?;
             let input_capacity_bytes = inputs.capacity().checked_mul(std::mem::size_of::<AvailableInputBinding<'_>>()).ok_or(GraphExecuteError::IndexLimit)?;
             let input_envelope = edge_indices.len().checked_mul(256).ok_or(GraphExecuteError::IndexLimit)?;
-            if input_capacity_bytes > input_envelope { return Err(GraphExecuteError::IndexLimit); }
+            if input_capacity_bytes > input_envelope {
+                return Err(GraphExecuteError::IndexLimit);
+            }
             for &edge_index in edge_indices {
                 poll(control)?;
                 let edge = graph.edges.get(edge_index).ok_or(GraphExecuteError::InvalidPlan)?;
@@ -636,12 +650,20 @@ fn execute_reserved_rois_impl<'a>(
                     let upstream = outputs.get(index).and_then(Option::as_ref);
                     if upstream.is_none() {
                         let skipped = rois.is_some_and(|regions| regions.node_outputs().get(index).is_some_and(Option::is_none));
-                        if !skipped || footprint.is_none() || !input_roi.is_empty() { return Err(GraphExecuteError::InvalidPlan); }
+                        if !skipped || footprint.is_none() || !input_roi.is_empty() {
+                            return Err(GraphExecuteError::InvalidPlan);
+                        }
                         let producer = graph.nodes.get(index).ok_or(GraphExecuteError::InvalidPlan)?;
                         let producer_domain = selected_domain(assignments, index, producer.id, domain)?;
-                        inputs.push(AvailableInputBinding { input_port: &edge.input_port, output_port: &edge.output_port,
-                            endpoint: Endpoint::Node { id: edge.from, index }, pixels: InputPixels::NoPixelsRequired,
-                            domain: producer_domain, roi: input_roi, footprint });
+                        inputs.push(AvailableInputBinding {
+                            input_port: &edge.input_port,
+                            output_port: &edge.output_port,
+                            endpoint: Endpoint::Node { id: edge.from, index },
+                            pixels: InputPixels::NoPixelsRequired,
+                            domain: producer_domain,
+                            roi: input_roi,
+                            footprint,
+                        });
                         continue;
                     }
                     let upstream = upstream.ok_or(GraphExecuteError::InvalidPlan)?;
@@ -746,7 +768,8 @@ mod tests {
         let before = source.clone();
         let domain = ExecutionDomain { format: source.format(), encoding: SampleEncoding::Linear, profile_fingerprint: None };
         let charge = 256 + encoded.len() as u64;
-        let limits = ExecutionLimits { cache_bytes: 2 * charge, work_units: 12, ..Default::default() };
+        // Three RGBA samples plus one materialized input binding per node.
+        let limits = ExecutionLimits { cache_bytes: 2 * charge, work_units: 3 * (4 + 1), ..Default::default() };
         let mut calls = 0usize;
         let output = execute_graph(&plan, Some(&source), Rect::new(0, 0, 1, 1), domain, limits, &Interrupt::NONE, |request, budget| {
             calls += 1;

@@ -15,6 +15,20 @@ fn resident(size: Size, mode: ColorMode, sample: SampleType, stored: SampleEncod
     // Bound these synthetic fixtures before allocating raw input/native tiles.
     assert!(size.width <= 257 && size.height <= 257);
     let fee = q.reserve(QuotaKind::Resident, 8 << 20).unwrap();
+    // This resident generic-renderer fixture uses the current effective encoding,
+    // unlike the separate exact-Builtin backed Threshold Alpha class fixture.
+    let effective = photocraft_cms::xcf_color::effective_profile(
+        None,
+        if mode == ColorMode::Rgb { photocraft_cms::ColorSpace::Rgb } else { photocraft_cms::ColorSpace::Gray },
+        crate::gimp_composite::encoding(stored),
+    )
+    .unwrap();
+    doc.icc_profile = Some(effective.to_bytes());
+    doc.working_profile_interpretation = if mode == ColorMode::Rgb {
+        photocraft_doc::WorkingProfileInterpretation::implicit_srgb(doc.icc_profile.as_ref().unwrap())
+    } else {
+        photocraft_doc::WorkingProfileInterpretation::implicit_sgray(doc.icc_profile.as_ref().unwrap())
+    };
     doc.size = size;
     let extent = Rect::from_xywh(origin[0], origin[1], size.width, size.height);
     let format = doc.pixel_format();
@@ -101,7 +115,8 @@ fn shifted_nonunit_and_profile_mismatch_remain_refused_after_geometry_extension(
             let mut current = resident(size, ColorMode::Rgb, SampleType::F64, SampleEncoding::NonlinearProfile, [0, 0]);
             for alpha in [false, true] {
                 let LayerContent::Raster(surface) = &mut current.doc.layers[0].content else { panic!() };
-                surface.try_write_pixel_f64(0, 0, if alpha { &[0.5, 0.5, 0.5, bad] } else { &[bad, 0.5, 0.5, 0.75] }).unwrap();
+                let bad_pixel = if alpha { [0.5, 0.5, 0.5, bad] } else { [bad, 0.5, 0.5, 0.75] };
+                surface.try_write_pixel_f64(0, 0, &bad_pixel).unwrap();
                 assert!(crate::gimp_render::PreparedRenderer::new(&current.doc).is_err());
             }
         }

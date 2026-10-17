@@ -65,6 +65,8 @@ fn tile_count(roi: Rect) -> Result<u64, RasterInputError> {
 }
 /// Actual typed source -> prepared evaluator -> exact native final quantization.
 /// No stored locator access, implicit CMS, compositing envelope or admission.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn render_source_candidate(
     node: &FilterNode,
     binding: SourceBinding<'_>,
@@ -79,6 +81,8 @@ pub fn render_source_candidate(
     render_source_candidate_with_sample_policy(node, binding, CurveSamplePolicy::RequireExact256, source, extent, roi, actual, policy, limits, control)
 }
 /// Explicit retained-table opt-in; requested metadata remains caller-bound.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn render_source_candidate_with_sample_policy(
     node: &FilterNode,
     binding: SourceBinding<'_>,
@@ -139,12 +143,24 @@ pub fn render_source_candidate_with_sample_policy(
     let bound = bind_source_node_with_sample_policy(node, binding, sampling, control)?;
     let preparation_limits = Limits { resident_bytes: preparation, work_units: 16384 };
     bound.with_prepared(actual, preparation_limits, control, |prepared| {
-        render_prepared_window(prepared, source, roi, actual, policy, output, scratch, limits.work_units.checked_sub(16384).ok_or(RasterInputError::LimitExceeded)?, control)
+        render_prepared_window(
+            prepared,
+            source,
+            roi,
+            actual,
+            policy,
+            output,
+            scratch,
+            limits.work_units.checked_sub(16384).ok_or(RasterInputError::LimitExceeded)?,
+            control,
+        )
     })
 }
 
 // Shared numerical/staging consumer. Callers must preadmit output, scratch and
 // work and validate exact source/context/ROI before entering this private seam.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_prepared_window(
     prepared: &photocraft_algo::gimp::configured::PreparedConfiguration<'_>,
     source: &Surface,
@@ -162,69 +178,59 @@ pub(crate) fn render_prepared_window(
     let mut native_cells = native_cells::NativeCells::new(scratch, control)?;
     let mut prepaid = Prepaid { bytes: output_bytes, work: work_units };
     let mut builder = StagedSurfaceBuilder::new(format, source.default_bytes(), roi, &mut prepaid, control)?;
-    // Fixed64px cells are the builder's coverage unit; intersect edge cells.
-    for coordinate in roi.tiles() {
-        let x0 = coordinate.tx.checked_mul(TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?;
-        let y0 = coordinate.ty.checked_mul(TILE_SIZE).ok_or(RasterInputError::InvalidBounds)?;
-        for cy in (0..TILE_SIZE).step_by(64) {
-            for cx in (0..TILE_SIZE).step_by(64) {
+    // Match the builder's ROI-relative 64px coverage cells, not tile origins.
+    for y in (roi.y0..roi.y1).step_by(64) {
+        for x in (roi.x0..roi.x1).step_by(64) {
+            poll(control)?;
+            let part = Rect::new(
+                x,
+                y,
+                x.checked_add(64).ok_or(RasterInputError::InvalidBounds)?.min(roi.x1),
+                y.checked_add(64).ok_or(RasterInputError::InvalidBounds)?.min(roi.y1),
+            );
+            let raw = native_cells.read(source, part, control)?;
+            for native in raw.chunks_exact_mut(bpp) {
                 poll(control)?;
-                let x = x0.checked_add(cx).ok_or(RasterInputError::InvalidBounds)?;
-                let y = y0.checked_add(cy).ok_or(RasterInputError::InvalidBounds)?;
-                let part =
-                    Rect::new(x, y, x.checked_add(64).ok_or(RasterInputError::InvalidBounds)?, y.checked_add(64).ok_or(RasterInputError::InvalidBounds)?)
-                        .intersect(&roi);
-                if part.is_empty() {
-                    continue;
+                prepaid.work(4096)?;
+                let mut input = [0.0; 4];
+                let mut output = [0.0; 4];
+                for (index, sample) in input.iter_mut().take(format.channels()).enumerate() {
+                    *sample = checked_arithmetic::decode_finite(
+                        Operand { bytes: native, storage: Storage::Native(format.sample), index },
+                        if index == colors { Domain::Unit } else { Domain::FloatHdr },
+                    )
+                    .map_err(|_| RasterInputError::InvalidSample)?;
                 }
-                let raw = native_cells.read(source, part, control)?;
-                for native in raw.chunks_exact_mut(bpp) {
-                    poll(control)?;
-                    prepaid.work(4096)?;
-                    let mut input = [0.0; 4];
-                    let mut output = [0.0; 4];
-                    for (index, sample) in input.iter_mut().take(format.channels()).enumerate() {
-                        *sample = checked_arithmetic::decode_finite(
-                            Operand { bytes: native, storage: Storage::Native(format.sample), index },
-                            if index == colors { Domain::Unit } else { Domain::FloatHdr },
-                        )
+                prepared.try_eval_pixel(
+                    input.get(..format.channels()).ok_or(RasterInputError::LengthMismatch)?,
+                    output.get_mut(..format.channels()).ok_or(RasterInputError::LengthMismatch)?,
+                    actual,
+                    control,
+                )?;
+                let mut encoded = [0u8; 32];
+                let encoded = encoded.get_mut(..bpp).ok_or(RasterInputError::LengthMismatch)?;
+                encoded.copy_from_slice(native);
+                for (index, sample) in output.iter().take(colors).enumerate() {
+                    checked_arithmetic::encode_finite(*sample, Destination { bytes: encoded, storage: Storage::Native(format.sample), index }, policy.colors)
                         .map_err(|_| RasterInputError::InvalidSample)?;
-                    }
-                    prepared.try_eval_pixel(
-                        input.get(..format.channels()).ok_or(RasterInputError::LengthMismatch)?,
-                        output.get_mut(..format.channels()).ok_or(RasterInputError::LengthMismatch)?,
-                        actual,
-                        control,
-                    )?;
-                    let mut encoded = [0u8; 32];
-                    let encoded = encoded.get_mut(..bpp).ok_or(RasterInputError::LengthMismatch)?;
-                    encoded.copy_from_slice(native);
-                    for (index, sample) in output.iter().take(colors).enumerate() {
-                        checked_arithmetic::encode_finite(
-                            *sample,
-                            Destination { bytes: encoded, storage: Storage::Native(format.sample), index },
-                            policy.colors,
-                        )
-                        .map_err(|_| RasterInputError::InvalidSample)?;
-                    }
-                    if format.alpha && !matches!(policy.coverage, CoveragePolicy::PreserveSource) {
-                        let mut alpha = *output.get(colors).ok_or(RasterInputError::LengthMismatch)?;
-                        match policy.coverage {
-                            CoveragePolicy::EvaluatedRejectUnit if !(0.0..=1.0).contains(&alpha) => return Err(RasterInputError::InvalidSample),
-                            CoveragePolicy::EvaluatedClampUnit => alpha = alpha.clamp(0.0, 1.0),
-                            _ => {}
-                        }
-                        checked_arithmetic::encode_finite(
-                            alpha,
-                            Destination { bytes: encoded, storage: Storage::Native(format.sample), index: colors },
-                            policy.alpha,
-                        )
-                        .map_err(|_| RasterInputError::InvalidSample)?;
-                    }
-                    native.copy_from_slice(encoded);
                 }
-                builder.push_region(part, raw, &mut prepaid, control)?;
+                if format.alpha && !matches!(policy.coverage, CoveragePolicy::PreserveSource) {
+                    let mut alpha = *output.get(colors).ok_or(RasterInputError::LengthMismatch)?;
+                    match policy.coverage {
+                        CoveragePolicy::EvaluatedRejectUnit if !(0.0..=1.0).contains(&alpha) => return Err(RasterInputError::InvalidSample),
+                        CoveragePolicy::EvaluatedClampUnit => alpha = alpha.clamp(0.0, 1.0),
+                        _ => {}
+                    }
+                    checked_arithmetic::encode_finite(
+                        alpha,
+                        Destination { bytes: encoded, storage: Storage::Native(format.sample), index: colors },
+                        policy.alpha,
+                    )
+                    .map_err(|_| RasterInputError::InvalidSample)?;
+                }
+                native.copy_from_slice(encoded);
             }
+            builder.push_region(part, raw, &mut prepaid, control)?;
         }
     }
     let staged = builder.finalize(&mut prepaid, control)?;

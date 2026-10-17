@@ -27,18 +27,18 @@ use photocraft_raster::backing::{
 
 #[path = "backed_stock_point_empty.rs"]
 mod empty;
-#[path = "backed_stock_point_root.rs"]
-pub(crate) mod root;
-#[path = "backed_stock_point_hue_chroma.rs"]
-mod owned_hue;
-#[path = "backed_stock_point_vibrance.rs"]
-mod owned_vibrance;
 #[path = "backed_stock_point_loaded_exposure.rs"]
 mod loaded_exposure;
 #[path = "backed_stock_point_masked_exposure.rs"]
 mod masked_exposure;
 #[path = "backed_stock_point_masked_scalar.rs"]
 mod masked_scalar;
+#[path = "backed_stock_point_hue_chroma.rs"]
+mod owned_hue;
+#[path = "backed_stock_point_vibrance.rs"]
+mod owned_vibrance;
+#[path = "backed_stock_point_root.rs"]
+pub(crate) mod root;
 
 #[derive(Clone, Copy)]
 enum Recipe {
@@ -192,7 +192,10 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
             "gegl:brightness-contrast" => node.operation.schema_epoch == gimp_filters::BRIGHTNESS_CONTRAST_PRECISION_EPOCH,
             "gegl:levels" => node.operation.schema_epoch == gimp_filters::GEGL_LEVELS_PRECISION_EPOCH,
             "gegl:exposure" => {
-                matches!(node.operation.schema_epoch.as_str(), gimp_filters::EXPOSURE_BLACK_PRECISION_EPOCH | gimp_filters::EXPOSURE_GEOMETRY_EPOCH | crate::gimp_exposure::LOADED_POINT_EPOCH)
+                matches!(
+                    node.operation.schema_epoch.as_str(),
+                    gimp_filters::EXPOSURE_BLACK_PRECISION_EPOCH | gimp_filters::EXPOSURE_GEOMETRY_EPOCH | crate::gimp_exposure::LOADED_POINT_EPOCH
+                )
             }
             "gegl:color-temperature" => node.operation.schema_epoch == gimp_filters::COLOR_TEMPERATURE_PRECISION_EPOCH,
             "gegl:sepia" => node.operation.schema_epoch == gimp_filters::SEPIA_PRECISION_EPOCH,
@@ -294,6 +297,8 @@ fn initial_member(node: &FilterNode, budget: &mut impl PlanBudget, interrupt: &I
     Ok(())
 }
 
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 fn qualify_witnessed_metadata(
     doc: &Document,
     layer: &photocraft_doc::Layer,
@@ -538,7 +543,10 @@ enum StockPointProgram {
     MaskedScalar { candidate: crate::gimp_masked_scalar::PreparedMaskedScalar, mask: photocraft_raster::Surface, extent: Rect, enabled: bool },
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum PreparationPurpose { Source, Current }
+enum PreparationPurpose {
+    Source,
+    Current,
+}
 struct StockPointPlan {
     recipe: Recipe,
     stack: StockPointProgram,
@@ -561,11 +569,18 @@ pub struct LeasedStockPointPipeline<S, L> {
     _source: S,
     _lease: L,
 }
-fn prepare_plan<B: PlanBudget>(doc:&Document,supplied:Option<&Profile>,purpose:PreparationPurpose,header:u64,interrupt:&Interrupt<'_>,budget:&mut B)->Result<(StockPointPlan,B::Lease),BackedNormalError>{
-    prepare_plan_current(doc,supplied,purpose,None,header,interrupt,budget)
+fn prepare_plan<B: PlanBudget>(
+    doc: &Document,
+    supplied: Option<&Profile>,
+    purpose: PreparationPurpose,
+    header: u64,
+    interrupt: &Interrupt<'_>,
+    budget: &mut B,
+) -> Result<(StockPointPlan, B::Lease), BackedNormalError> {
+    prepare_plan_current(doc, supplied, purpose, None, header, interrupt, budget)
 }
-fn selection_allowed(doc:&Document,purpose:PreparationPurpose,proof:Option<&CheckedProgrammeSelection<'_>>)->bool{
-    purpose==PreparationPurpose::Current && proof.is_some_and(|p|p.storage_kind()==ProgrammeNativeStorageKind::Point&&p.matches_document(doc))
+fn selection_allowed(doc: &Document, purpose: PreparationPurpose, proof: Option<&CheckedProgrammeSelection<'_>>) -> bool {
+    purpose == PreparationPurpose::Current && proof.is_some_and(|p| p.storage_kind() == ProgrammeNativeStorageKind::Point && p.matches_document(doc))
 }
 fn prepare_plan_current<B: PlanBudget>(
     doc: &Document,
@@ -577,7 +592,12 @@ fn prepare_plan_current<B: PlanBudget>(
     budget: &mut B,
 ) -> Result<(StockPointPlan, B::Lease), BackedNormalError> {
     work(budget, interrupt, 1)?;
-    if selection.is_some(){work(budget,interrupt,128)?;if !selection_allowed(doc,purpose,selection){return Err(scope());}}
+    if selection.is_some() {
+        work(budget, interrupt, 128)?;
+        if !selection_allowed(doc, purpose, selection) {
+            return Err(scope());
+        }
+    }
     let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
     let [layer] = doc.layers.as_slice() else { return Err(scope()) };
     let [filters] = state.filter_stacks.as_slice() else { return Err(scope()) };
@@ -589,7 +609,9 @@ fn prepare_plan_current<B: PlanBudget>(
         return Err(scope());
     }
     let node = filters.nodes.first().ok_or_else(scope)?;
-    if node.operation.schema_epoch == crate::gimp_exposure::LOADED_POINT_EPOCH && (state.items.len()!=2 || state.filter_masks.len()!=1) { return Err(scope()); }
+    if node.operation.schema_epoch == crate::gimp_exposure::LOADED_POINT_EPOCH && (state.items.len() != 2 || state.filter_masks.len() != 1) {
+        return Err(scope());
+    }
     if state.provenance.format_version != 22
         || state.filter_masks.len().checked_add(1) != Some(state.items.len())
         || (if witnessed || remaining_optional_mask(node) { state.filter_masks.len() > filters.nodes.len() } else { state.filter_masks.len() != 1 })
@@ -606,27 +628,29 @@ fn prepare_plan_current<B: PlanBudget>(
         return Err(scope());
     }
     if crate::gimp_masked_scalar::claims_epoch(node.operation.schema_epoch.as_str()) {
-        if state.items.len()!=2 || state.filter_masks.len()!=1 { return Err(scope()); }
-        let (extent,format,default) = match &layer.content {
-            LayerContent::BackedRaster(backed)=>(backed.operative_bounds(),backed.format(),backed.default_bytes()),
-            LayerContent::Raster(surface)=>{
-                let item=state.items.iter().find(|i|i.item==ItemRef::Layer(layer.id)).ok_or_else(scope)?;
-                (item.raster_bounds.ok_or_else(scope)?,surface.format(),surface.default_bytes())
+        if state.items.len() != 2 || state.filter_masks.len() != 1 {
+            return Err(scope());
+        }
+        let (extent, format, default) = match &layer.content {
+            LayerContent::BackedRaster(backed) => (backed.operative_bounds(), backed.format(), backed.default_bytes()),
+            LayerContent::Raster(surface) => {
+                let item = state.items.iter().find(|i| i.item == ItemRef::Layer(layer.id)).ok_or_else(scope)?;
+                (item.raster_bounds.ok_or_else(scope)?, surface.format(), surface.default_bytes())
             }
-            _=>return Err(scope()),
+            _ => return Err(scope()),
         };
-        return masked_scalar::prepare(doc,supplied,purpose,selection,header,extent,format,default,interrupt,budget);
+        return masked_scalar::prepare(doc, supplied, purpose, selection, header, extent, format, default, interrupt, budget);
     }
     if node.operation.schema_epoch == crate::gimp_masked_exposure::EPOCH {
-        let (extent,format,default) = match &layer.content {
-            LayerContent::BackedRaster(backed)=>(backed.operative_bounds(),backed.format(),backed.default_bytes()),
-            LayerContent::Raster(surface)=>{
-                let item=state.items.iter().find(|i|i.item==ItemRef::Layer(layer.id)).ok_or_else(scope)?;
-                (item.raster_bounds.ok_or_else(scope)?,surface.format(),surface.default_bytes())
+        let (extent, format, default) = match &layer.content {
+            LayerContent::BackedRaster(backed) => (backed.operative_bounds(), backed.format(), backed.default_bytes()),
+            LayerContent::Raster(surface) => {
+                let item = state.items.iter().find(|i| i.item == ItemRef::Layer(layer.id)).ok_or_else(scope)?;
+                (item.raster_bounds.ok_or_else(scope)?, surface.format(), surface.default_bytes())
             }
-            _=>return Err(scope()),
+            _ => return Err(scope()),
         };
-        return masked_exposure::prepare(doc,supplied,purpose,selection,header,extent,format,default,interrupt,budget);
+        return masked_exposure::prepare(doc, supplied, purpose, selection, header, extent, format, default, interrupt, budget);
     }
     for node in &filters.nodes {
         initial_member(node, budget, interrupt)?;
@@ -655,7 +679,9 @@ fn prepare_plan_current<B: PlanBudget>(
     // PointNode/argument storage and two 64KiB implicit analytic profile
     // envelopes (one WorkingSpace and the retained effective-profile preparation).
     // Header slack is explicit; it is not a replacement source/model fee.
-    let mut scalar = crate::gimp_neighborhood::scalar_preparation_bytes(1).map_err(BackedNormalError::Color)?;
+    // OrderedStack reserves both stage and working-space slots for every node,
+    // including inactive nodes, before its constructor prepares the stages.
+    let mut scalar = crate::gimp_neighborhood::scalar_preparation_bytes(filters.nodes.len()).map_err(BackedNormalError::Color)?;
     for node in &filters.nodes {
         let own = if configured_kind(node).is_some() {
             crate::gimp_neighborhood::stock_configured_preparation_bytes(&node.operation.name)
@@ -789,25 +815,40 @@ impl PreparedStockPointPipeline {
     /// retained in this paid plan; a Linear effective profile is not the basis.
     pub fn prepare(doc: &Document, supplied: &Profile, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<Self, BackedNormalError> {
         let header = (std::mem::size_of::<Self>() as u64).checked_add(128).ok_or_else(length)?;
-        if let Some(layer) = doc.layers.first() {
-            if let LayerContent::BackedRaster(backed) = &layer.content {
-                if !quota.shares_ledger(backed.quota()) {
-                    return Err(BackedNormalError::Backing(BackingError::Quota));
-                }
-            }
+        if let Some(layer) = doc.layers.first()
+            && let LayerContent::BackedRaster(backed) = &layer.content
+            && !quota.shares_ledger(backed.quota())
+        {
+            return Err(BackedNormalError::Backing(BackingError::Quota));
         }
         let (plan, lease) = prepare_plan(doc, Some(supplied), PreparationPurpose::Current, header, control.interrupt, &mut NativeBudget { quota, control })?;
         Ok(Self { plan, quota: quota.clone(), _lease: lease })
     }
-    fn prepare_selected(proof:&CheckedProgrammeSelection<'_>,supplied:&Profile,control:&ReadControl<'_>)->Result<Self,BackedNormalError>{
+    fn prepare_selected(proof: &CheckedProgrammeSelection<'_>, supplied: &Profile, control: &ReadControl<'_>) -> Result<Self, BackedNormalError> {
         control.check(128).map_err(BackedNormalError::Backing)?;
-        let owner=proof.owner();let doc=owner.document();
-        if !proof.matches_owner(owner)||!selection_allowed(doc,PreparationPurpose::Current,Some(proof)){return Err(scope());}
-        let quota=owner.quota();
-        if let Some(layer)=doc.layers.first(){if let LayerContent::BackedRaster(backed)=&layer.content{if !quota.shares_ledger(backed.quota()){return Err(BackedNormalError::Backing(BackingError::Quota));}}}
-        let header=(std::mem::size_of::<Self>()as u64).checked_add(128).ok_or_else(length)?;
-        let(plan,lease)=prepare_plan_current(doc,Some(supplied),PreparationPurpose::Current,Some(proof),header,control.interrupt,&mut NativeBudget{quota,control})?;
-        Ok(Self{plan,quota:quota.clone(),_lease:lease})
+        let owner = proof.owner();
+        let doc = owner.document();
+        if !proof.matches_owner(owner) || !selection_allowed(doc, PreparationPurpose::Current, Some(proof)) {
+            return Err(scope());
+        }
+        let quota = owner.quota();
+        if let Some(layer) = doc.layers.first()
+            && let LayerContent::BackedRaster(backed) = &layer.content
+            && !quota.shares_ledger(backed.quota())
+        {
+            return Err(BackedNormalError::Backing(BackingError::Quota));
+        }
+        let header = (std::mem::size_of::<Self>() as u64).checked_add(128).ok_or_else(length)?;
+        let (plan, lease) = prepare_plan_current(
+            doc,
+            Some(supplied),
+            PreparationPurpose::Current,
+            Some(proof),
+            header,
+            control.interrupt,
+            &mut NativeBudget { quota, control },
+        )?;
+        Ok(Self { plan, quota: quota.clone(), _lease: lease })
     }
     /// No external ICC parse is required: this existing generic Point policy
     /// uses the exact implicit basis and controlled effective-profile binding.
@@ -845,103 +886,141 @@ impl PreparedStockPointPipeline {
         control: &ReadControl<'_>,
     ) -> Result<[f64; 4], BackedNormalError> {
         match &self.plan.stack {
-            StockPointProgram::Ordered(stack) => evaluate_bound_point(stack, self.plan.format, self.plan.unit_input, self.plan.half_input, self.plan.opaque_input, &self.quota, raw, format, position, control),
-            StockPointProgram::MaskedExposure {candidate,mask,extent,enabled}=>{
+            StockPointProgram::Ordered(stack) => evaluate_bound_point(
+                stack,
+                self.plan.format,
+                self.plan.unit_input,
+                self.plan.half_input,
+                self.plan.opaque_input,
+                &self.quota,
+                raw,
+                format,
+                position,
+                control,
+            ),
+            StockPointProgram::MaskedExposure { candidate, mask, extent, enabled } => {
                 control.check(256).map_err(BackedNormalError::Backing)?;
-                let _mix_scratch=candidate.reserve_runtime(&self.quota,control)?;
-                if position.0<extent.x0 || position.0>=extent.x1 || position.1<extent.y0 || position.1>=extent.y1 { return Err(scope()); }
-                if format!=self.plan.format || raw.len()!=format.bytes_per_pixel() { return Err(scope()); }
-                let read=|channel|try_read_sample_f64(raw,format.sample,channel).map_err(|_|length());
-                let before=[read(0)?,read(1)?,read(2)?,read(3)?];
-                let mut scalar=[0.;1];
-                mask.try_read_pixel_f64(position.0,position.1,&mut scalar).map_err(|_|length())?;
-                let [coverage]=scalar;
-                candidate.evaluate(before,*enabled,coverage,&self.quota,control)
+                let _mix_scratch = candidate.reserve_runtime(&self.quota, control)?;
+                if position.0 < extent.x0 || position.0 >= extent.x1 || position.1 < extent.y0 || position.1 >= extent.y1 {
+                    return Err(scope());
+                }
+                if format != self.plan.format || raw.len() != format.bytes_per_pixel() {
+                    return Err(scope());
+                }
+                let read = |channel| try_read_sample_f64(raw, format.sample, channel).map_err(|_| length());
+                let before = [read(0)?, read(1)?, read(2)?, read(3)?];
+                let mut scalar = [0.; 1];
+                mask.try_read_pixel_f64(position.0, position.1, &mut scalar).map_err(|_| length())?;
+                let [coverage] = scalar;
+                candidate.evaluate(before, *enabled, coverage, &self.quota, control)
             }
-            StockPointProgram::MaskedScalar {candidate,mask,extent,enabled}=>{
+            StockPointProgram::MaskedScalar { candidate, mask, extent, enabled } => {
                 control.check(256).map_err(BackedNormalError::Backing)?;
-                let _mix_scratch=candidate.reserve_runtime(&self.quota,control)?;
-                if position.0<extent.x0 || position.0>=extent.x1 || position.1<extent.y0 || position.1>=extent.y1 { return Err(scope()); }
-                if format!=self.plan.format || raw.len()!=format.bytes_per_pixel() { return Err(scope()); }
-                let read=|channel|try_read_sample_f64(raw,format.sample,channel).map_err(|_|length());
-                let before=[read(0)?,read(1)?,read(2)?,read(3)?];
-                let mut scalar=[0.;1];
-                mask.try_read_pixel_f64(position.0,position.1,&mut scalar).map_err(|_|length())?;
-                let [coverage]=scalar;
-                candidate.evaluate(before,*enabled,coverage,&self.quota,control)
+                let _mix_scratch = candidate.reserve_runtime(&self.quota, control)?;
+                if position.0 < extent.x0 || position.0 >= extent.x1 || position.1 < extent.y0 || position.1 >= extent.y1 {
+                    return Err(scope());
+                }
+                if format != self.plan.format || raw.len() != format.bytes_per_pixel() {
+                    return Err(scope());
+                }
+                let read = |channel| try_read_sample_f64(raw, format.sample, channel).map_err(|_| length());
+                let before = [read(0)?, read(1)?, read(2)?, read(3)?];
+                let mut scalar = [0.; 1];
+                mask.try_read_pixel_f64(position.0, position.1, &mut scalar).map_err(|_| length())?;
+                let [coverage] = scalar;
+                candidate.evaluate(before, *enabled, coverage, &self.quota, control)
             }
             StockPointProgram::LoadedExposure { candidate, enabled } => {
                 control.check(format.bytes_per_pixel() as u64 + 1).map_err(BackedNormalError::Backing)?;
-                if format != self.plan.format || raw.len() != format.bytes_per_pixel() { return Err(scope()); }
+                if format != self.plan.format || raw.len() != format.bytes_per_pixel() {
+                    return Err(scope());
+                }
                 let read = |channel| try_read_sample_f64(raw, format.sample, channel).map_err(|_| length());
-                candidate.evaluate([read(0)?,read(1)?,read(2)?,read(3)?],*enabled,false,&self.quota,control)
+                candidate.evaluate([read(0)?, read(1)?, read(2)?, read(3)?], *enabled, false, &self.quota, control)
             }
         }
     }
 }
 
-
 /// Same numeric/control body as the singleton native evaluator. Only sealed
 /// paid compilers select these flags; no public arbitrary callback is retained.
-pub(crate) fn evaluate_bound_point(stack: &OrderedStack, expected: PixelFormat, unit_input: bool, half_input: bool, opaque_input: bool, quota: &BackingQuota, raw: &[u8], format: PixelFormat, position: (i32,i32), control: &ReadControl<'_>) -> Result<[f64;4],BackedNormalError> {
-        control.check(format.bytes_per_pixel() as u64 + 1).map_err(BackedNormalError::Backing)?;
-        if format != expected || raw.len() != format.bytes_per_pixel() {
-            return Err(scope());
-        }
-        let read = |channel| try_read_sample_f64(raw, format.sample, channel).map_err(|_| length());
-        let rgb = if format.mode == ColorMode::Grayscale { [read(0)?; 3] } else { [read(0)?, read(1)?, read(2)?] };
-        let input = [rgb[0], rgb[1], rgb[2], read(format.mode.color_channels())?];
-        if unit_input && input.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
-            return Err(BackedNormalError::Unsupported("unit CURRENT stock Point native samples"));
-        }
-        if half_input
-            && input.iter().any(|value| {
-                !photocraft_color::try_round_f32_to_f16_bits(*value as f32)
-                    .is_ok_and(|bits| photocraft_color::widen_f16_to_f32_bits(bits) == (*value as f32).to_bits())
-            })
-        {
-            return Err(BackedNormalError::Unsupported("Color Balance exact widened Half current input"));
-        }
-        if opaque_input && input[3] != 1.0 {
-            return Err(BackedNormalError::Unsupported("Posterize opaque current input"));
-        }
-        let mut failed = None;
-        let mut temporary: Option<QuotaLease> = None;
-        let mut poll = |event| {
-            let result = match event {
-                WideWork::SampleUnits(units) => control.check(units).map_err(BackedNormalError::Backing),
-                WideWork::ReserveBytes(bytes) if temporary.is_none() => {
-                    quota.reserve(QuotaKind::Resident, bytes).map(|lease| temporary = Some(lease)).map_err(BackedNormalError::Quota)
-                }
-                WideWork::ReleaseBytes(bytes) if temporary.as_ref().is_some_and(|lease| lease.bytes() == bytes) => {
-                    temporary = None;
-                    Ok(())
-                }
-                _ => Err(BackedNormalError::Invalid("stock Point temporary ownership protocol")),
-            };
-            if let Err(error) = result {
-                failed = Some(error);
-                return Err(CompositionError::Invalid("stock Point caller control refused"));
+// Keep the sealed evaluator inputs explicit across the established profile and control boundary.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_bound_point(
+    stack: &OrderedStack,
+    expected: PixelFormat,
+    unit_input: bool,
+    half_input: bool,
+    opaque_input: bool,
+    quota: &BackingQuota,
+    raw: &[u8],
+    format: PixelFormat,
+    position: (i32, i32),
+    control: &ReadControl<'_>,
+) -> Result<[f64; 4], BackedNormalError> {
+    control.check(format.bytes_per_pixel() as u64 + 1).map_err(BackedNormalError::Backing)?;
+    if format != expected || raw.len() != format.bytes_per_pixel() {
+        return Err(scope());
+    }
+    let read = |channel| try_read_sample_f64(raw, format.sample, channel).map_err(|_| length());
+    let rgb = if format.mode == ColorMode::Grayscale { [read(0)?; 3] } else { [read(0)?, read(1)?, read(2)?] };
+    let input = [rgb[0], rgb[1], rgb[2], read(format.mode.color_channels())?];
+    if unit_input && input.iter().any(|value| !value.is_finite() || !(0.0..=1.0).contains(value)) {
+        return Err(BackedNormalError::Unsupported("unit CURRENT stock Point native samples"));
+    }
+    if half_input
+        && input.iter().any(|value| {
+            !photocraft_color::try_round_f32_to_f16_bits(*value as f32)
+                .is_ok_and(|bits| photocraft_color::widen_f16_to_f32_bits(bits) == (*value as f32).to_bits())
+        })
+    {
+        return Err(BackedNormalError::Unsupported("Color Balance exact widened Half current input"));
+    }
+    if opaque_input && input[3] != 1.0 {
+        return Err(BackedNormalError::Unsupported("Posterize opaque current input"));
+    }
+    let mut failed = None;
+    let mut temporary: Option<QuotaLease> = None;
+    let mut poll = |event| {
+        let result = match event {
+            WideWork::SampleUnits(units) => control.check(units).map_err(BackedNormalError::Backing),
+            WideWork::ReserveBytes(bytes) if temporary.is_none() => {
+                quota.reserve(QuotaKind::Resident, bytes).map(|lease| temporary = Some(lease)).map_err(BackedNormalError::Quota)
             }
-            Ok(())
+            WideWork::ReleaseBytes(bytes) if temporary.as_ref().is_some_and(|lease| lease.bytes() == bytes) => {
+                temporary = None;
+                Ok(())
+            }
+            _ => Err(BackedNormalError::Invalid("stock Point temporary ownership protocol")),
         };
-        let validated = stack.validate_stock_input(position, input, control.interrupt, &mut poll);
-        let evaluated = match validated {
-            Ok(()) => stack.point_at(input, position, &mut poll),
-            Err(error) => Err(error),
-        };
-        if let Some(error) = failed {
-            return Err(error);
+        if let Err(error) = result {
+            failed = Some(error);
+            return Err(CompositionError::Invalid("stock Point caller control refused"));
         }
-        let output = evaluated.map_err(BackedNormalError::Color)?;
-        if temporary.is_some() {
-            return Err(BackedNormalError::Invalid("stock Point temporary owner retained"));
+        Ok(())
+    };
+    let validated = stack.validate_stock_input(position, input, control.interrupt, &mut poll);
+    let evaluated = match validated {
+        Ok(()) => stack.point_at(input, position, &mut poll),
+        Err(error) => Err(error),
+    };
+    if let Some(error) = failed {
+        return Err(error);
+    }
+    let output = evaluated.map_err(|error| match error {
+        CompositionError::Raster(photocraft_raster::RasterInputError::Cancelled) => {
+            BackedNormalError::Backing(photocraft_raster::backing::BackingError::Cancelled)
         }
-        if output.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&output[3]) {
-            return Err(BackedNormalError::Invalid("stock Point generated finite color/unit alpha"));
-        }
-        control.check(0).map_err(BackedNormalError::Backing)?;
-        Ok(output)
+        other => BackedNormalError::Color(other),
+    })?;
+    if temporary.is_some() {
+        return Err(BackedNormalError::Invalid("stock Point temporary owner retained"));
+    }
+    if output.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&output[3]) {
+        return Err(BackedNormalError::Invalid("stock Point generated finite color/unit alpha"));
+    }
+    control.check(0).map_err(BackedNormalError::Backing)?;
+    Ok(output)
 }
 
 /// Tightly packed straight RGBA64 operative result in the current stored
@@ -1003,12 +1082,19 @@ impl<'a> PreparedBackedStockPointContext<'a> {
         let filters = state.filter_stacks.first().ok_or_else(scope)?;
         let header = (std::mem::size_of::<Self>() as u64).checked_add(128).ok_or_else(length)?;
         let lease = owner.quota().reserve(QuotaKind::Index, header).map_err(BackedNormalError::Quota)?;
-        let pipeline=if doc.selection.is_some(){
-            let _selection_fee=owner.quota().reserve(QuotaKind::Index,(std::mem::size_of::<CheckedProgrammeSelection<'_>>()+128)as u64).map_err(BackedNormalError::Quota)?;
-            let proof=owner.checked_programme_selection(control).map_err(BackedNormalError::Backing)?;
-            if !proof.matches_owner(owner){return Err(scope());}
-            PreparedStockPointPipeline::prepare_selected(&proof,profile,control)?
-        }else{PreparedStockPointPipeline::prepare(doc, profile, owner.quota(), control)?};
+        let pipeline = if doc.selection.is_some() {
+            let _selection_fee = owner
+                .quota()
+                .reserve(QuotaKind::Index, (std::mem::size_of::<CheckedProgrammeSelection<'_>>() + 128) as u64)
+                .map_err(BackedNormalError::Quota)?;
+            let proof = owner.checked_programme_selection(control).map_err(BackedNormalError::Backing)?;
+            if !proof.matches_owner(owner) {
+                return Err(scope());
+            }
+            PreparedStockPointPipeline::prepare_selected(&proof, profile, control)?
+        } else {
+            PreparedStockPointPipeline::prepare(doc, profile, owner.quota(), control)?
+        };
         let node = match pipeline.plan.recipe {
             Recipe::Empty => None,
             Recipe::Filtered => Some(filters.nodes.first().ok_or_else(scope)?.id),
@@ -1090,6 +1176,8 @@ pub(crate) mod tests;
 
 #[cfg(test)]
 #[path = "backed_semi_flatten_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unreachable)]
 mod semi_flatten_tests;
 
 #[cfg(test)]
@@ -1118,14 +1206,20 @@ mod empty_tests;
 
 #[cfg(test)]
 #[path = "backed_hue_chroma_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unreachable)]
 mod hue_chroma_tests;
 
 #[cfg(test)]
 #[path = "backed_vibrance_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unreachable)]
 mod vibrance_tests;
 
 #[cfg(test)]
 #[path = "backed_point_origin_geometry_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unreachable)]
 mod origin_geometry_tests;
 
 #[cfg(test)]
@@ -1136,15 +1230,14 @@ mod point_replace_origin_geometry_tests;
 #[path = "residual_origin_geometry_tests.rs"]
 mod residual_origin_geometry_tests;
 
-
 #[cfg(test)]
-#[path="backed_stock_point_masked_exposure_tests.rs"]
+#[path = "backed_stock_point_masked_exposure_tests.rs"]
 mod masked_exposure_tests;
 
 #[cfg(test)]
-#[path="backed_stock_point_masked_scalar_tests.rs"]
+#[path = "backed_stock_point_masked_scalar_tests.rs"]
 mod masked_scalar_tests;
 
 #[cfg(test)]
-#[path="backed_programme_selection_point_tests.rs"]
+#[path = "backed_programme_selection_point_tests.rs"]
 pub(crate) mod programme_selection_tests;

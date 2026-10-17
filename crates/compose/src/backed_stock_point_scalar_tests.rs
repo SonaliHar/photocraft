@@ -16,12 +16,12 @@ fn b(name: &str, v: bool) -> FilterArgument {
 }
 fn configure(doc: &mut Document, kind: u8) {
     let (name, epoch, raw, args) = match kind {
-        0 => ("gegl:exposure", gimp_filters::EXPOSURE_GEOMETRY_EPOCH, -901479855, vec![f("exposure", 0.5), f("black-level", 0.125)]),
+        0 => ("gegl:exposure", gimp_filters::EXPOSURE_GEOMETRY_EPOCH, -901479855, vec![f("exposure", 0.5), f("black-level", 0.0625)]),
         1 => (
             "gegl:rgb-clip",
             gimp_filters::RGB_CLIP_HDR_EPOCH,
             1825931857,
-            vec![b("clip-low", true), b("clip-high", false), f("low-limit", 0.), f("high-limit", 1.)],
+            vec![b("clip-low", true), f("low-limit", 0.), b("clip-high", true), f("high-limit", 1.)],
         ),
         2 => ("gegl:unpremultiply", crate::gimp_unpremultiply::UNPREMULTIPLY_EPOCH, -1877441967, vec![]),
         3 | 4 => (
@@ -77,8 +77,8 @@ impl NativePlaneStore for ComputedStore {
 fn native(doc: &mut Document, q: &BackingQuota, canvas: Size, bounds: Rect, rgba: [f64; 4]) {
     let format = doc.pixel_format();
     let mut pixel = [0; 40];
-    for c in 0..format.mode.color_channels() {
-        photocraft_color::try_write_sample_f64(&mut pixel, format.sample, c, rgba[c]).unwrap();
+    for (c, value) in rgba.iter().copied().enumerate().take(format.mode.color_channels()) {
+        photocraft_color::try_write_sample_f64(&mut pixel, format.sample, c, value).unwrap();
     }
     photocraft_color::try_write_sample_f64(&mut pixel, format.sample, format.mode.color_channels(), rgba[3]).unwrap();
     let descriptor = NativePlaneDescriptor::new(format, bounds, &[0; 40][..format.bytes_per_pixel()]).unwrap();
@@ -105,7 +105,12 @@ fn compare(owner: &AccountedDocument, profile: &Profile) {
     let LayerContent::BackedRaster(layer) = &doc.layers[0].content else { panic!() };
     let state = doc.xcf_state.as_ref().unwrap();
     let current = PreparedBackedStockPointContext::new(owner, profile, NormalBandLimits::default(), &ctl()).unwrap();
-    current.validate_operative(&ctl()).unwrap();
+    current.validate_operative(&ctl()).unwrap_or_else(|error| {
+        panic!(
+            "operative: operation={} enabled={} sample={:?} error={error:?}",
+            state.filter_stacks[0].nodes[0].operation.name, state.filter_stacks[0].nodes[0].enabled, doc.depth
+        )
+    });
     let bounds = layer.operative_bounds();
     let roi = Rect::new(bounds.x0, bounds.y0, bounds.x0 + 3, bounds.y0 + 2);
     let output = current.render_wide_band(roi, &ctl()).unwrap();
@@ -129,6 +134,19 @@ fn compare(owner: &AccountedDocument, profile: &Profile) {
 }
 #[test]
 fn six_remaining_current_families_match_old_native_input_and_wide_schedule() {
+    // The former positive black-level 0.125 is outside the unchanged [-0.1,0.1]
+    // Exposure domain. Keep it as a real inactive/active schema refusal.
+    for enabled in [false, true] {
+        let (mut doc, q, guard, _, profile, _) = fixture(0, ColorMode::Rgb, SampleType::U16, SampleEncoding::Linear);
+        configure(&mut doc, 0);
+        native(&mut doc, &q, Size::new(295, 160), Rect::new(-13, 13, 244, 142), [0.25, 0.5, 0.75, 0.5]);
+        let node = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
+        node.arguments.iter_mut().find(|argument| argument.name == "black-level").unwrap().value =
+            FilterValue::Number(ExactNumber::Float32Bits(0.125f32.to_bits()));
+        node.enabled = enabled;
+        let owner = adopt(doc, q, guard);
+        assert!(PreparedBackedStockPointContext::new(&owner, profile, NormalBandLimits::default(), &ctl()).is_err());
+    }
     for kind in 0..6 {
         for enabled in [false, true] {
             let sample = if kind >= 3 {
@@ -176,9 +194,12 @@ fn rgb_clip_retains_hdr_but_exact_opaque_and_precision_limits_are_not_widened() 
     configure(&mut doc, 1);
     let pipeline = PreparedStockPointPipeline::prepare(&doc, profile, &q, &ctl()).unwrap();
     let raw = [-3f32, 2., 0.75, 1.].map(f32::to_ne_bytes).concat();
-    assert_eq!(pipeline.evaluate_native(&raw, doc.pixel_format(), &ctl()).unwrap(), [0., 2., 0.75, 1.]);
+    assert_eq!(pipeline.evaluate_native(&raw, doc.pixel_format(), &ctl()).unwrap(), [0., 1., 0.75, 1.]);
     let fractional = [-3f32, 2., 0.75, 0.5].map(f32::to_ne_bytes).concat();
     assert!(pipeline.evaluate_native(&fractional, doc.pixel_format(), &ctl()).is_err());
+    doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].arguments[2].value = FilterValue::Bool(false);
+    assert!(PreparedStockPointPipeline::prepare(&doc, profile, &q, &ctl()).is_err());
+    doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].arguments[2].value = FilterValue::Bool(true);
     doc.source_color_context.as_mut().unwrap().source_precision = 500;
     assert!(PreparedStockPointPipeline::prepare(&doc, profile, &q, &ctl()).is_err());
 }

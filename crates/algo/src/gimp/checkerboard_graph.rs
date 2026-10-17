@@ -150,6 +150,8 @@ pub fn preparation_requirements(
     Ok(PreparationRequirements { retained_bytes: retained, work_units: work })
 }
 impl<'a> PreparedCheckerboard<'a> {
+    // Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         node: &'a GraphNode,
         configuration: &'a kernel::Checkerboard,
@@ -215,9 +217,12 @@ pub fn evaluate(prepared: &PreparedCheckerboard<'_>, request: NodeRequest<'_>, b
         return Err(E::Roi);
     }
     let q = kernel::requirements(prepared.configuration, request.roi).map_err(raster)?;
+    // The graph's retained Surface envelope has a conservative 256-byte header;
+    // the standalone kernel prices the concrete Surface header instead.
+    let output_retained = add(q.output_retained_bytes, 256u64.saturating_sub(std::mem::size_of::<photocraft_raster::Surface>() as u64))?;
     let work = add(q.work_units, add(PREPARE_WORK, prepared.retained_bytes)?)?;
     let scratch = add(q.scratch_bytes, prepared.retained_bytes)?;
-    let peak = add(add(q.output_retained_bytes, q.output_index_bytes)?, scratch)?;
+    let peak = add(add(output_retained, q.output_index_bytes)?, scratch)?;
     if peak > prepared.limits.resident_bytes {
         return Err(E::ResidentLimit);
     }
@@ -225,7 +230,7 @@ pub fn evaluate(prepared: &PreparedCheckerboard<'_>, request: NodeRequest<'_>, b
     if work > left.work_units {
         return Err(E::WorkLimit);
     }
-    if q.output_retained_bytes > left.cache_bytes {
+    if output_retained > left.cache_bytes {
         return Err(E::CacheLimit);
     }
     if q.output_index_bytes > left.index_bytes {
@@ -239,7 +244,7 @@ pub fn evaluate(prepared: &PreparedCheckerboard<'_>, request: NodeRequest<'_>, b
     budget.charge_work(work)?;
     prepared.validate.validate(request.node, prepared.configuration)?;
     budget.poll()?;
-    budget.reserve_output(q.output_retained_bytes)?;
+    budget.reserve_output(output_retained)?;
     budget.reserve_index(q.output_index_bytes)?;
     budget.reserve_scratch(scratch)?;
     let surface = kernel::try_generate(
