@@ -3952,3 +3952,5 @@ cameraRaw	Type	Typ
 	This document's layers: {needed} of {budget} for layers	Warstwy tego dokumentu: {needed} z {budget} na warstwy
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Warstwy tego dokumentu potrzebują {needed}, ale mogą zająć {budget}: odświeżanie całego dokumentu używa CPU
 	GPU Memory (MB, 0 = Automatic)	Pamięć GPU (MB, 0 = Automatycznie)
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Narysuj na obrazie co najmniej dwie prowadnice wzdłuż linii, które powinny być pionowe lub poziome (Shift+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Przeciągnij koniec prowadnicy, aby go przesunąć; zaznacz prowadnicę i naciśnij Delete, aby ją usunąć. Maksymalnie cztery prowadnice.

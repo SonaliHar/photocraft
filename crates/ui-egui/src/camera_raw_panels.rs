@@ -85,6 +85,7 @@ pub(crate) fn without(p: &CameraRaw, id: &str) -> CameraRaw {
         }
         "geometry" => {
             q.upright = d.upright;
+            q.upright_guides = d.upright_guides;
             (q.transform_vertical, q.transform_horizontal, q.transform_rotate, q.transform_aspect) =
                 (d.transform_vertical, d.transform_horizontal, d.transform_rotate, d.transform_aspect);
             (q.transform_scale, q.transform_offset_x, q.transform_offset_y) = (d.transform_scale, d.transform_offset_x, d.transform_offset_y);
@@ -121,6 +122,8 @@ struct Edit<'a> {
     dirty: bool,
     /// White balance › Auto was chosen: the dialog measures the preview.
     auto_wb: bool,
+    /// Upright › Guided was clicked: its tool is taken up.
+    guided_tool: bool,
 }
 
 impl Edit<'_> {
@@ -153,6 +156,9 @@ pub(crate) fn edit(ui: &mut Ui, d: &mut CameraRawDialog, layout: &mut CameraRawL
     profile_row(ui, d, &mut dirty);
     st::rule(ui);
     for (id, title) in PANELS {
+        if id == "geometry" && std::mem::take(&mut d.guides.reveal) {
+            ui.scroll_to_cursor(Some(egui::Align::TOP));
+        }
         let open = layout.open.iter().any(|o| o == id);
         let eye = if d.hidden.iter().any(|h| h == id) { Eye::Hidden } else { Eye::Shown { edited: edited(&d.params, id) } };
         let h = st::panel_header(ui, id, tr(title), open, None, eye);
@@ -176,7 +182,7 @@ pub(crate) fn edit(ui: &mut Ui, d: &mut CameraRawDialog, layout: &mut CameraRawL
             }
         }
         if layout.open.iter().any(|o| o == id) {
-            let mut e = Edit { p: &mut d.params, layout, dirty: false, auto_wb: false };
+            let mut e = Edit { p: &mut d.params, layout, dirty: false, auto_wb: false, guided_tool: false };
             match id {
                 "light" => light(ui, &mut e, &mut d.scope.alt_tone),
                 "color" => color(ui, &mut e, &mut d.wb_picker),
@@ -191,7 +197,11 @@ pub(crate) fn edit(ui: &mut Ui, d: &mut CameraRawDialog, layout: &mut CameraRawL
                 _ => {}
             }
             dirty |= e.dirty;
-            if e.auto_wb {
+            let (auto_wb, guided_tool) = (e.auto_wb, e.guided_tool);
+            if guided_tool {
+                d.guides.active = true;
+            }
+            if auto_wb {
                 d.auto_white_balance();
             }
             if id == "detail"
@@ -1144,10 +1154,34 @@ fn geometry(ui: &mut Ui, e: &mut Edit) {
         }
     });
     if let Some(i) = clicked {
-        let mode = if sel == Some(i) && i != 0 { "off" } else { MODES[i] };
+        // Clicking Guided again only takes its tool up again.
+        let mode = if sel == Some(i) && i != 0 && MODES[i] != "guided" { "off" } else { MODES[i] };
         if e.p.upright != mode {
             e.p.upright = mode.into();
+            // Guides belong to Guided; another mode starts without them.
+            e.p.upright_guides.clear();
             e.dirty = true;
+        }
+        e.guided_tool = mode == "guided";
+    }
+    if e.p.upright == "guided" {
+        let n = e.p.upright_guides.len();
+        let text = if n < 2 {
+            tl!("Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).")
+        } else {
+            tl!("Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.")
+        };
+        st::note(ui, text, true);
+        if n > 0 {
+            let mut cleared = false;
+            ui.horizontal(|ui| {
+                ui.add_space(st::INSET_L);
+                cleared = st::small_button(ui, tl!("Clear Guides"), true, false, 84.0).clicked();
+            });
+            if cleared {
+                e.p.upright_guides.clear();
+                e.dirty = true;
+            }
         }
     }
     st::note(ui, tl!("For best results, apply lens corrections first."), true);

@@ -40,6 +40,7 @@ pub mod brushes_tab;
 pub(crate) mod cam_preview;
 mod cam_transform;
 mod camera_raw_detail_ui;
+mod camera_raw_guides_ui;
 mod camera_raw_panels;
 mod camera_raw_preview_ui;
 mod camera_raw_scope_ui;

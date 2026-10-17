@@ -4111,3 +4111,5 @@ cameraRaw	Type	Type
 	This document's layers: {needed} of {budget} for layers	Lagen van dit document: {needed} van {budget} voor lagen
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	De lagen van dit document hebben {needed} nodig maar mogen {budget} gebruiken: het hele document wordt op de CPU opnieuw getekend
 	GPU Memory (MB, 0 = Automatic)	GPU-geheugen (MB, 0 = Automatisch)
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Teken twee of meer hulplijnen op de afbeelding langs lijnen die verticaal of horizontaal moeten zijn (Shift+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Sleep het uiteinde van een hulplijn om het te verplaatsen; selecteer een hulplijn en druk op Delete om deze te verwijderen. Maximaal vier hulplijnen.

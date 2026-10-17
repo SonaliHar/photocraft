@@ -4051,3 +4051,5 @@ cameraRaw	Type	Τύπος
 	This document's layers: {needed} of {budget} for layers	Επίπεδα αυτού του εγγράφου: {needed} από {budget} για επίπεδα
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Τα επίπεδα αυτού του εγγράφου χρειάζονται {needed} αλλά μπορούν να καταλάβουν {budget}: η επανασχεδίαση όλου του εγγράφου γίνεται στη CPU
 	GPU Memory (MB, 0 = Automatic)	Μνήμη GPU (MB, 0 = Αυτόματο)
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Σχεδιάστε δύο ή περισσότερους οδηγούς στην εικόνα κατά μήκος γραμμών που πρέπει να είναι κατακόρυφες ή οριζόντιες (Shift+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Σύρετε το άκρο ενός οδηγού για να το μετακινήσετε· επιλέξτε έναν οδηγό και πατήστε Delete για να τον αφαιρέσετε. Έως τέσσερις οδηγοί.

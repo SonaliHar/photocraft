@@ -4355,3 +4355,5 @@ navigator	Zoom	Zoom
 	This document's layers: {needed} of {budget} for layers	Capas de este documento: {needed} de {budget} para capas
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Las capas de este documento necesitan {needed} pero pueden ocupar {budget}: los redibujados de todo el documento usan la CPU
 	GPU Memory (MB, 0 = Automatic)	Memoria de GPU (MB, 0 = Automático)
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Dibuje dos o más guías en la imagen a lo largo de líneas que deban ser verticales u horizontales (Mayús+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Arrastre el extremo de una guía para moverlo; seleccione una guía y pulse Supr para eliminarla. Hasta cuatro guías.

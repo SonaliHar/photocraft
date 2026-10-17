@@ -3368,3 +3368,5 @@ cameraRaw	Type	Typ
 	This document's layers: {needed} of {budget} for layers	Ebenen dieses Dokuments: {needed} von {budget} für Ebenen
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Die Ebenen dieses Dokuments brauchen {needed}, dürfen aber {budget} belegen: Das ganze Dokument wird auf der CPU neu gezeichnet
 	GPU Memory (MB, 0 = Automatic)	GPU-Speicher (MB, 0 = Automatisch)
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Zeichnen Sie zwei oder mehr Hilfslinien auf das Bild entlang von Linien, die senkrecht oder waagerecht sein sollen (Umschalt+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Ziehen Sie ein Ende einer Hilfslinie, um es zu verschieben; wählen Sie eine Hilfslinie aus und drücken Sie Entf, um sie zu entfernen. Bis zu vier Hilfslinien.

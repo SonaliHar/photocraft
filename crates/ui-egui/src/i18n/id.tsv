@@ -3355,3 +3355,5 @@ cameraRaw	Type	Jenis
 	This document's layers: {needed} of {budget} for layers	Layer dokumen ini: {needed} dari {budget} untuk layer
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Layer dokumen ini membutuhkan {needed} tetapi boleh memakai {budget}: penggambaran ulang seluruh dokumen memakai CPU
 	GPU Memory (MB, 0 = Automatic)	Memori GPU (MB, 0 = Otomatis)
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Gambar dua panduan atau lebih pada gambar di sepanjang garis yang seharusnya vertikal atau horizontal (Shift+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Seret ujung panduan untuk memindahkannya; pilih panduan dan tekan Delete untuk menghapusnya. Maksimal empat panduan.

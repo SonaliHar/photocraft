@@ -79,6 +79,8 @@ pub struct CameraRawDialog {
     pub(crate) profile_browser: bool,
     /// The White Balance tool: the next click on the preview neutralises that colour.
     pub(crate) wb_picker: bool,
+    /// Geometry › Upright › Guided's tool (Shift+T).
+    pub(crate) guides: crate::camera_raw_guides_ui::GuideTool,
     pub(crate) mono_tex: Option<TextureHandle>,
     pub(crate) before_after: BeforeAfter,
     /// The Before view's settings (none at first); the Before/After bar copies and swaps them.
@@ -167,6 +169,7 @@ impl CameraRawDialog {
         result["beforeAfter"] = json!(self.before_after);
         result["profileBrowser"] = json!(self.profile_browser);
         result["whiteBalancePicker"] = json!(self.wb_picker);
+        result["guidedUprightTool"] = json!({"active": self.guides.active, "selected": self.guides.selected});
         result["curveState"] = json!(self.curve_state);
         result["curveRect"] = json!(self.curve_rect.map(|r| [r.left(), r.top(), r.right(), r.bottom()]));
         result["hoverSample"] = json!(self.hover_sample(view.vectorscope));
@@ -746,6 +749,7 @@ fn open_pixels(
         undo: Vec::new(),
         redo: Vec::new(),
         edit_origin: None,
+        guides: Default::default(),
     };
     d.render(ctx);
     app.camera_raw = Some(d);
@@ -1265,7 +1269,17 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             }
             _ => (None, view),
         };
-        let (r, response, panning, zoom_box) = super::camera_raw_preview_ui::interact(&mut preview, navigation, after_view, size, &mut scope.sampler_tool);
+        // The Guided Upright tool takes the preview's clicks as the sampler does (H and Z put it down).
+        if d.params.upright != "guided" || layout.tool != "edit" || scope.sampler_tool || d.wb_picker {
+            d.guides.active = false;
+        }
+        let guided = d.guides.active;
+        let mut clicks_taken = scope.sampler_tool || guided;
+        let (r, response, panning, zoom_box) = super::camera_raw_preview_ui::interact(&mut preview, navigation, after_view, size, &mut clicks_taken);
+        if !clicks_taken {
+            scope.sampler_tool = false;
+            d.guides.active = false;
+        }
         let shown = crate::camera_raw_panels::visible(&d.params, &d.hidden);
         let tex = if d.show_before && mode == BeforeAfter::Off { d.before_tex.as_ref() } else { d.tex.as_ref() };
         let uv = ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
@@ -1319,6 +1333,23 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 let s = Stroke::new(1.0, Color32::from_white_alpha(if i % 4 == 0 { 70 } else { 35 }));
                 preview.painter().vline(r.left() + f * r.width(), g.y_range(), s);
                 preview.painter().hline(g.x_range(), r.top() + f * r.height(), s);
+            }
+        }
+        if guided && d.guides.active && !d.show_before {
+            let shown = crate::camera_raw_panels::visible(&d.params, &d.hidden);
+            if crate::camera_raw_guides_ui::preview(
+                &mut preview,
+                &mut d.guides,
+                &mut d.params,
+                &shown,
+                r,
+                d.full_w,
+                d.full_h,
+                &response,
+                panning,
+                d.tex.as_ref(),
+            ) {
+                d.dirty = true;
             }
         }
         // White Balance tool: a click neutralises the colour under the pointer.
@@ -1395,19 +1426,21 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             scope.sampler_tool = !scope.sampler_tool;
         }
         low.add_space(6.0);
-        let hand = crate::icons::button(&mut low, "hand", 32.0, navigation.hand && !scope.sampler_tool, tl!("Hand Tool (H)"));
+        let hand = crate::icons::button(&mut low, "hand", 32.0, navigation.hand && !scope.sampler_tool && !d.guides.active, tl!("Hand Tool (H)"));
         if hand.double_clicked() {
             navigation.fit();
         } else if hand.clicked() {
             navigation.hand = true;
             scope.sampler_tool = false;
+            d.guides.active = false;
         }
-        let zoom = crate::icons::button(&mut low, "zoom-in", 32.0, !navigation.hand && !scope.sampler_tool, tl!("Zoom Tool (Z)"));
+        let zoom = crate::icons::button(&mut low, "zoom-in", 32.0, !navigation.hand && !scope.sampler_tool && !d.guides.active, tl!("Zoom Tool (Z)"));
         if zoom.double_clicked() {
             navigation.zoom_at(1.0, after_view.center(), after_view, size);
         } else if zoom.clicked() {
             navigation.hand = false;
             scope.sampler_tool = false;
+            d.guides.active = false;
         }
         super::camera_raw_scope_ui::floating(ctx, d, scope, panels);
         super::camera_raw_scope_ui::shortcuts(ctx, scope);
@@ -1656,6 +1689,36 @@ fn shortcuts(app: &mut PhotocraftApp, ctx: &egui::Context, action: &mut Option<&
         if i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::G) {
             layout.grid = !layout.grid;
         }
+        // Shift+T: Geometry › Upright › Guided and its tool (checked with Shift exactly, since
+        // consume_key with no Shift would also take Shift+T).
+        if i.modifiers.shift && !i.modifiers.command && !i.modifiers.alt && i.consume_key(Modifiers::SHIFT, Key::T) {
+            let was = d.params.clone();
+            if crate::camera_raw_guides_ui::toggle(&mut d.guides, &mut d.params) {
+                let guided = std::mem::replace(&mut d.params, was);
+                remember_edit(d);
+                d.params = guided;
+                d.dirty = true;
+            }
+            if d.guides.active {
+                d.guides.reveal = true;
+                layout.tool = "edit".into();
+                if !layout.open.iter().any(|o| o == "geometry") {
+                    if layout.single_panel {
+                        layout.open.clear();
+                    }
+                    layout.open.push("geometry".into());
+                }
+            }
+        }
+        if d.guides.active && (i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace)) {
+            let was = d.params.clone();
+            if crate::camera_raw_guides_ui::delete_selected(&mut d.guides, &mut d.params) {
+                let edited = std::mem::replace(&mut d.params, was);
+                remember_edit(d);
+                d.params = edited;
+                d.dirty = true;
+            }
+        }
         for (key, mods, tool) in [
             (Key::E, Modifiers::NONE, "edit"),
             (Key::B, Modifiers::NONE, "remove"),
@@ -1673,6 +1736,9 @@ fn shortcuts(app: &mut PhotocraftApp, ctx: &egui::Context, action: &mut Option<&
         if i.consume_key(Modifiers::NONE, Key::Escape) {
             if d.wb_picker {
                 d.wb_picker = false;
+            } else if d.guides.cancel_drag() {
+            } else if d.guides.active {
+                d.guides.active = false;
             } else if d.profile_browser {
                 d.profile_browser = false;
             } else {

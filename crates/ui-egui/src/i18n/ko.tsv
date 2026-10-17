@@ -3564,3 +3564,5 @@ cameraRaw	Type	유형
 	This document's layers: {needed} of {budget} for layers	이 문서의 레이어: 레이어용 {budget} 중 {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	이 문서의 레이어에 {needed}가 필요하지만 {budget}만 사용할 수 있습니다: 문서 전체 다시 그리기는 CPU를 사용합니다
 	GPU Memory (MB, 0 = Automatic)	GPU 메모리(MB, 0 = 자동)
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	세로 또는 가로여야 하는 선을 따라 이미지에 안내선을 두 개 이상 그립니다(Shift+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	안내선 끝을 드래그하여 이동하고, 안내선을 선택한 후 Delete 키를 눌러 제거합니다. 안내선은 최대 4개입니다.

@@ -2982,3 +2982,5 @@ cameraRaw	Type	类型
 	This document's layers: {needed} of {budget} for layers	此文档的图层：图层可用 {budget} 中的 {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	此文档的图层需要 {needed}，但只能占用 {budget}：整个文档的重绘使用 CPU
 	GPU Memory (MB, 0 = Automatic)	GPU 内存（MB，0 = 自动）
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	沿应为垂直或水平的线条在图像上绘制两条或更多参考线 (Shift+T)。
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	拖动参考线的端点可移动它；选择参考线并按 Delete 键可将其删除。最多四条参考线。

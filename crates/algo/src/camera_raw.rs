@@ -16,8 +16,8 @@
 //!    undone first, then [`crate::lens::LensMap`] (scale, rotation, Vertical / Horizontal
 //!    keystone homography, Brown–Conrady radial distortion; see [`crate::lens`]); the source is
 //!    sampled with a Catmull-Rom bicubic clamped to its 2×2 neighbourhood (no ringing), edges
-//!    extended. The caller restores alpha. Upright's automatic modes are placeholders: they need
-//!    line detection, so only `off` (and the manual sliders) render.
+//!    extended. The caller restores alpha. Upright's rotation ([`upright`]) sits between the
+//!    keystone and the distortion.
 //! 1. **Calibration**, then **white balance and exposure**, in linear light (white balance decodes
 //!    the document's values with the sRGB curve as a perceptual working encoding; encoding is
 //!    undone exactly at the end). Calibration rotates each primary's hue about the grey axis and
@@ -56,7 +56,7 @@
 //! 9. **Effects**: post-crop vignette (amount, midpoint, roundness, feather, highlights,
 //!    style) and grain (amount, size, roughness; position-hashed, deterministic).
 //!
-//! Stored and round-tripped but not rendered yet: the automatic Upright modes, the White Balance menu (Temperature and Tint hold the balance) and the
+//! Stored and round-tripped but not rendered yet: the White Balance menu (Temperature and Tint hold the balance) and the
 //! process version. [`CameraRaw::is_identity`] ignores them, since they change no pixels.
 
 #![allow(clippy::needless_range_loop)] // index loops mirror the maths (pixels × channels)
@@ -91,6 +91,7 @@ use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
 use photocraft_geom::Rect;
 
 mod local_tone;
+pub mod upright;
 mod whites_blacks;
 
 /// How the pixels encode light: the sRGB curve (gamma 0) or a pure power law (ProPhoto's 1.8,
@@ -242,9 +243,13 @@ pub struct CameraRaw {
     /// (yellow) to 180° (cyan).
     pub defringe_green_hue: [f32; 2],
     // Geometry
-    /// Upright: `off | auto | level | vertical | full | guided`. Only the manual sliders below
-    /// render; the automatic modes are placeholders (they need line detection).
+    /// Upright: `off | auto | level | vertical | full | guided` (see [`upright`]). The
+    /// automatic modes find the picture's lines themselves; Guided fits `upright_guides`.
     pub upright: String,
+    /// Guided Upright's guides (at most four), each two endpoints as fractions (`0..=1`) of the
+    /// frame before any Geometry, so they stay on the picture's lines. Guides closer to vertical
+    /// are made plumb, the others level; two or more are needed.
+    pub upright_guides: Vec<[[f32; 2]; 2]>,
     /// Manual Transformations › Vertical, −100..=100: keystone about the centre (negative widens
     /// the top, as [`crate::lens::LensCorrection::vertical`]).
     pub transform_vertical: f32,
@@ -348,6 +353,7 @@ impl Default for CameraRaw {
             defringe_green_amount: 0.0,
             defringe_green_hue: [40.0, 60.0],
             upright: "off".into(),
+            upright_guides: Vec::new(),
             transform_vertical: 0.0,
             transform_horizontal: 0.0,
             transform_rotate: 0.0,
@@ -709,6 +715,11 @@ impl CameraRaw {
         ] {
             *v = f(*v, -100.0, 100.0, 0.0);
         }
+        self.upright_guides.retain(|g| g.iter().flatten().all(|v| v.is_finite()));
+        self.upright_guides.truncate(4);
+        for v in self.upright_guides.iter_mut().flatten().flatten() {
+            *v = v.clamp(0.0, 1.0);
+        }
         self.transform_rotate = f(self.transform_rotate, -10.0, 10.0, d.transform_rotate);
         self.transform_scale = f(self.transform_scale, 50.0, 150.0, d.transform_scale);
         for v in [
@@ -757,20 +768,28 @@ impl CameraRaw {
     fn grade_neutral(&self) -> bool {
         self.grade_shadows.neutral() && self.grade_midtones.neutral() && self.grade_highlights.neutral() && self.grade_global.neutral()
     }
-    /// Optics › Distortion and the Manual Transformations (the warp). Upright's automatic modes
-    /// are placeholders and don't count.
+    /// Upright does something: a mode other than `off`, and for Guided at least two guides.
+    pub fn upright_active(&self) -> bool {
+        match self.upright.as_str() {
+            "off" => false,
+            "guided" => self.upright_guides.len() >= 2,
+            _ => true,
+        }
+    }
+    /// Optics › Distortion, Upright and the Manual Transformations (the warp).
     fn geometry_neutral(&self) -> bool {
-        [
-            self.lens_distortion,
-            self.transform_vertical,
-            self.transform_horizontal,
-            self.transform_rotate,
-            self.transform_aspect,
-            self.transform_offset_x,
-            self.transform_offset_y,
-        ]
-        .iter()
-        .all(|v| *v == 0.0)
+        !self.upright_active()
+            && [
+                self.lens_distortion,
+                self.transform_vertical,
+                self.transform_horizontal,
+                self.transform_rotate,
+                self.transform_aspect,
+                self.transform_offset_x,
+                self.transform_offset_y,
+            ]
+            .iter()
+            .all(|v| *v == 0.0)
             && self.transform_scale == 100.0
     }
     /// Optics › Vignette and Defringe.
@@ -1230,36 +1249,91 @@ fn bicubic_rgb(src: &[[f32; 4]], w: usize, h: usize, x: f64, y: f64) -> [f32; 3]
     acc
 }
 
-/// Optics › Distortion and Geometry › Manual Transformations as one inverse warp. Each output
-/// pixel undoes Offset (a shift by up to half the frame) and Aspect (a stretch about the
-/// centre), then [`lens::LensMap`] undoes Scale, Rotate, the Vertical / Horizontal keystone and
-/// the radial distortion (all relative to the frame, so a preview proxy warps like the full
-/// image). Samples past the frame extend its edges; where the keystone has no preimage (past the
-/// horizon) the edge pixel in that direction is used. Alpha is left alone (the caller keeps it).
+/// Optics › Distortion, Geometry › Upright and the Manual Transformations as one map from output
+/// pixels to source pixels for a `w × h` frame. Each output pixel undoes Offset (a shift by up to
+/// half the frame) and Aspect (a stretch about the centre), then [`lens::LensMap`] undoes Scale,
+/// Rotate and the Vertical / Horizontal keystone, then the Upright rotation ([`upright`]), then
+/// the radial distortion; all relative to the frame, so a preview proxy warps like the full image.
+pub struct GeometryMap {
+    map: lens::LensMap,
+    c: [f64; 2],
+    stretch: [f64; 2],
+    offset: [f64; 2],
+}
+
+impl GeometryMap {
+    /// `upright` is the forward Upright homography ([`upright::homography`]) if any.
+    pub fn new(p: &CameraRaw, w: usize, h: usize, upright: Option<&crate::transform::Homography>) -> Option<GeometryMap> {
+        let (Ok(wi), Ok(hi)) = (i32::try_from(w), i32::try_from(h)) else { return None };
+        let lc = lens::LensCorrection {
+            correct_distortion: false,
+            correct_vignette: false,
+            correct_ca: false,
+            distortion: f64::from(p.lens_distortion),
+            vertical: f64::from(p.transform_vertical),
+            horizontal: f64::from(p.transform_horizontal),
+            angle: f64::from(p.transform_rotate),
+            scale: f64::from(p.transform_scale),
+            ..Default::default()
+        };
+        let mut map = lens::LensMap::new(&lc, Rect::new(0, 0, wi, hi));
+        if let Some(u) = upright {
+            map = map.then_homography(u.inverse()?.0);
+        }
+        let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
+        let aspect = f64::from(p.transform_aspect) / 100.0;
+        let stretch = if aspect >= 0.0 { [1.0 + 0.5 * aspect, 1.0] } else { [1.0, 1.0 - 0.5 * aspect] };
+        let offset = [f64::from(p.transform_offset_x) / 100.0 * cx, f64::from(p.transform_offset_y) / 100.0 * cy];
+        Some(GeometryMap { map, c: [cx, cy], stretch, offset })
+    }
+    /// Where output point `(x, y)` (pixels) samples the source; `None` past the horizon.
+    pub fn source_of(&self, x: f64, y: f64) -> Option<[f64; 2]> {
+        let [cx, cy] = self.c;
+        let ux = (x - self.offset[0] - cx) / self.stretch[0] + cx;
+        let uy = (y - self.offset[1] - cy) / self.stretch[1] + cy;
+        self.map.sample(ux, uy).map(|s| s.p)
+    }
+    /// Where source point `(x, y)` lands in the output (Newton's method on [`Self::source_of`]);
+    /// `None` when it doesn't converge (a point the warp sends past the horizon).
+    pub fn output_of(&self, x: f64, y: f64) -> Option<[f64; 2]> {
+        let mut q = [x, y];
+        let scale = self.c[0].hypot(self.c[1]).max(1.0);
+        for _ in 0..40 {
+            let s = self.source_of(q[0], q[1])?;
+            let (ex, ey) = (s[0] - x, s[1] - y);
+            if ex.hypot(ey) < 1e-4 * scale {
+                return Some(q);
+            }
+            let e = 1e-3 * scale;
+            let sx = self.source_of(q[0] + e, q[1])?;
+            let sy = self.source_of(q[0], q[1] + e)?;
+            let (a, b, c, d) = ((sx[0] - s[0]) / e, (sy[0] - s[0]) / e, (sx[1] - s[1]) / e, (sy[1] - s[1]) / e);
+            let det = a * d - b * c;
+            if !det.is_finite() || det.abs() < 1e-12 {
+                return None;
+            }
+            q = [q[0] - (d * ex - b * ey) / det, q[1] - (-c * ex + a * ey) / det];
+            if !q.iter().all(|v| v.is_finite()) {
+                return None;
+            }
+        }
+        None
+    }
+}
+
+/// [`GeometryMap`] over the pixels. The source is sampled with a Catmull-Rom bicubic clamped to
+/// its 2×2 neighbourhood; samples past the frame extend its edges; where the warp has no
+/// preimage (past the horizon) the edge pixel in that direction is used. Alpha is left alone (the
+/// caller keeps it).
 fn geometry(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw) {
-    let (Ok(wi), Ok(hi)) = (i32::try_from(w), i32::try_from(h)) else { return };
-    let lc = lens::LensCorrection {
-        correct_distortion: false,
-        correct_vignette: false,
-        correct_ca: false,
-        distortion: f64::from(p.lens_distortion),
-        vertical: f64::from(p.transform_vertical),
-        horizontal: f64::from(p.transform_horizontal),
-        angle: f64::from(p.transform_rotate),
-        scale: f64::from(p.transform_scale),
-        ..Default::default()
-    };
-    let map = lens::LensMap::new(&lc, Rect::new(0, 0, wi, hi));
+    let up = if p.upright_active() { upright::homography(&p.upright, &p.upright_guides, px, w, h) } else { None };
+    let Some(map) = GeometryMap::new(p, w, h, up.as_ref()) else { return };
     let (cx, cy) = (w as f64 / 2.0, h as f64 / 2.0);
-    let aspect = f64::from(p.transform_aspect) / 100.0;
-    let (sx, sy) = if aspect >= 0.0 { (1.0 + 0.5 * aspect, 1.0) } else { (1.0, 1.0 - 0.5 * aspect) };
-    let (ox, oy) = (f64::from(p.transform_offset_x) / 100.0 * cx, f64::from(p.transform_offset_y) / 100.0 * cy);
     let src = px.to_vec();
     par_rows(px, w, 1, |y, row| {
         for (x, q) in row.iter_mut().enumerate() {
-            let ux = (x as f64 + 0.5 - ox - cx) / sx + cx;
-            let uy = (y as f64 + 0.5 - oy - cy) / sy + cy;
-            let at = map.sample(ux, uy).map_or([cx + (ux - cx) * 1e4, cy + (uy - cy) * 1e4], |s| s.p);
+            let (ox, oy) = (x as f64 + 0.5, y as f64 + 0.5);
+            let at = map.source_of(ox, oy).unwrap_or([cx + (ox - cx) * 1e4, cy + (oy - cy) * 1e4]);
             let c = bicubic_rgb(&src, w, h, at[0] - 0.5, at[1] - 0.5);
             q[..3].copy_from_slice(&c);
         }
@@ -1777,12 +1851,33 @@ mod tests {
     }
 
     #[test]
+    fn guided_upright_makes_the_guides_plumb_in_the_output() {
+        let (w, h) = (600usize, 400usize);
+        // Two posts leaning in toward the top, as a camera pitched up sees them.
+        let guides = vec![[[0.22f32, 0.1], [0.18, 0.9]], [[0.78, 0.1], [0.82, 0.9]]];
+        let p = CameraRaw { upright: "guided".into(), upright_guides: guides.clone(), ..Default::default() };
+        assert!(p.upright_active() && !p.is_identity());
+        let up = upright::homography(&p.upright, &p.upright_guides, &[], w, h).expect("a correction");
+        let map = GeometryMap::new(&p, w, h, Some(&up)).unwrap();
+        for g in &guides {
+            let [a, b] = g.map(|q| map.output_of(f64::from(q[0]) * w as f64, f64::from(q[1]) * h as f64).unwrap());
+            assert!((a[0] - b[0]).abs() < 0.5, "{a:?} {b:?}");
+            // And the round trip lands back on the guide.
+            let s = map.source_of(a[0], a[1]).unwrap();
+            assert!((s[0] - f64::from(g[0][0]) * w as f64).abs() < 0.01 && (s[1] - f64::from(g[0][1]) * h as f64).abs() < 0.01);
+        }
+        let base = img(60, 40);
+        assert_ne!(run(&base, 60, 40, &p), base);
+    }
+
+    #[test]
     fn new_controls_default_to_identity_and_placeholders_change_nothing() {
         assert!(CameraRaw::default().is_identity());
         let (w, h) = (40, 30);
         let base = img(w, h);
         for p in [
-            CameraRaw { upright: "auto".into(), ..Default::default() },
+            // Guided Upright needs two guides.
+            CameraRaw { upright: "guided".into(), upright_guides: vec![[[0.2, 0.1], [0.25, 0.9]]], ..Default::default() },
             CameraRaw { white_balance: "custom".into(), process_version: 5, ..Default::default() },
             CameraRaw { curve_refine_saturation: 0.0, noise_luminance_contrast: 80.0, noise_color_smoothness: 100.0, ..Default::default() },
             CameraRaw {
@@ -1806,7 +1901,7 @@ mod tests {
             ..Default::default()
         };
         let placeholders = CameraRaw {
-            upright: "full".into(),
+            upright: "guided".into(),
             transform_scale: 100.0,
             gray_mixer: [-30.0; 8],
             curve_refine_saturation: 100.0,
