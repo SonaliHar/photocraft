@@ -15,11 +15,7 @@ pub fn compress_block<M: Matcher>(state: &mut CompressState<M>, output: &mut Vec
     state.matcher.start_matching(|seq| {
         match seq {
             Sequence::Literals { literals } => literals_vec.extend_from_slice(literals),
-            Sequence::Triple {
-                literals,
-                offset,
-                match_len,
-            } => {
+            Sequence::Triple { literals, offset, match_len } => {
                 literals_vec.extend_from_slice(literals);
                 sequences.push(crate::blocks::sequence_section::Sequence {
                     ll: literals.len() as u32,
@@ -34,9 +30,7 @@ pub fn compress_block<M: Matcher>(state: &mut CompressState<M>, output: &mut Vec
 
     let mut writer = BitWriter::from(output);
     if literals_vec.len() > 1024 {
-        if let Some(table) =
-            compress_literals(&literals_vec, state.last_huff_table.as_ref(), &mut writer)
-        {
+        if let Some(table) = compress_literals(&literals_vec, state.last_huff_table.as_ref(), &mut writer) {
             state.last_huff_table.replace(table);
         }
     } else {
@@ -52,24 +46,11 @@ pub fn compress_block<M: Matcher>(state: &mut CompressState<M>, output: &mut Vec
 
         // Choose the tables
         // TODO store previously used tables
-        let ll_mode = choose_table(
-            state.fse_tables.ll_previous.as_ref(),
-            &state.fse_tables.ll_default,
-            sequences.iter().map(|seq| encode_literal_length(seq.ll).0),
-            9,
-        );
-        let ml_mode = choose_table(
-            state.fse_tables.ml_previous.as_ref(),
-            &state.fse_tables.ml_default,
-            sequences.iter().map(|seq| encode_match_len(seq.ml).0),
-            9,
-        );
-        let of_mode = choose_table(
-            state.fse_tables.of_previous.as_ref(),
-            &state.fse_tables.of_default,
-            sequences.iter().map(|seq| encode_offset(seq.of).0),
-            8,
-        );
+        let ll_mode =
+            choose_table(state.fse_tables.ll_previous.as_ref(), &state.fse_tables.ll_default, sequences.iter().map(|seq| encode_literal_length(seq.ll).0), 9);
+        let ml_mode =
+            choose_table(state.fse_tables.ml_previous.as_ref(), &state.fse_tables.ml_default, sequences.iter().map(|seq| encode_match_len(seq.ml).0), 9);
+        let of_mode = choose_table(state.fse_tables.of_previous.as_ref(), &state.fse_tables.of_default, sequences.iter().map(|seq| encode_offset(seq.of).0), 8);
 
         writer.write_bits(encode_fse_table_modes(&ll_mode, &ml_mode, &of_mode), 8);
 
@@ -77,13 +58,7 @@ pub fn compress_block<M: Matcher>(state: &mut CompressState<M>, output: &mut Vec
         encode_table(&of_mode, &mut writer);
         encode_table(&ml_mode, &mut writer);
 
-        encode_sequences(
-            &sequences,
-            &mut writer,
-            ll_mode.as_ref(),
-            ml_mode.as_ref(),
-            of_mode.as_ref(),
-        );
+        encode_sequences(&sequences, &mut writer, ll_mode.as_ref(), ml_mode.as_ref(), of_mode.as_ref());
 
         if let FseTableMode::Encoded(table) = ll_mode {
             state.fse_tables.ll_previous = Some(table)
@@ -116,12 +91,7 @@ impl FseTableMode<'_> {
     }
 }
 
-fn choose_table<'a>(
-    previous: Option<&'a FSETable>,
-    default_table: &'a FSETable,
-    data: impl Iterator<Item = u8>,
-    max_log: u8,
-) -> FseTableMode<'a> {
+fn choose_table<'a>(previous: Option<&'a FSETable>, default_table: &'a FSETable, data: impl Iterator<Item = u8>, max_log: u8) -> FseTableMode<'a> {
     // TODO check if the new table is better than the predefined and previous table
     let use_new_table = true;
     let use_previous_table = false;
@@ -142,11 +112,7 @@ fn encode_table(mode: &FseTableMode<'_>, writer: &mut BitWriter<&mut Vec<u8>>) {
     }
 }
 
-fn encode_fse_table_modes(
-    ll_mode: &FseTableMode<'_>,
-    ml_mode: &FseTableMode<'_>,
-    of_mode: &FseTableMode<'_>,
-) -> u8 {
+fn encode_fse_table_modes(ll_mode: &FseTableMode<'_>, ml_mode: &FseTableMode<'_>, of_mode: &FseTableMode<'_>) -> u8 {
     fn mode_to_bits(mode: &FseTableMode<'_>) -> u8 {
         match mode {
             FseTableMode::Predefined(_) => 0,
@@ -293,7 +259,7 @@ fn encode_match_len(len: u32) -> (u8, u32, usize) {
         8195..=16386 => (49, len - 8195, 13),
         16387..=32770 => (50, len - 16387, 14),
         32771..=65538 => (51, len - 32771, 15),
-        65539..=131074 => (52, len - 32771, 16),
+        65539..=131074 => (52, len - 65539, 16),
         131075.. => unreachable!(),
     }
 }
@@ -373,5 +339,15 @@ fn compress_literals(
         Some(new_encoder_table)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod upstream_091_tests {
+    #[test]
+    fn maximum_match_extra_bits_start_at_correct_base() {
+        assert_eq!(super::encode_match_len(65539), (52, 0, 16));
+        assert_eq!(super::encode_match_len(65540), (52, 1, 16));
+        assert_eq!(super::encode_match_len(131074), (52, 65535, 16));
     }
 }

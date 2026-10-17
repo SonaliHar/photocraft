@@ -52,9 +52,7 @@ fn test_decode_corpus_files() {
 
         let start_time = std::time::Instant::now();
         /////DECODING
-        frame_dec
-            .decode_blocks(&mut content, BlockDecodingStrategy::All)
-            .unwrap();
+        frame_dec.decode_blocks(&mut content, BlockDecodingStrategy::All).unwrap();
         let result = frame_dec.collect().unwrap();
         let end_time = start_time.elapsed();
 
@@ -62,21 +60,14 @@ fn test_decode_corpus_files() {
             Some(chksum) => {
                 #[cfg(feature = "hash")]
                 if frame_dec.get_calculated_checksum().unwrap() != chksum {
-                    println!(
-                        "Checksum did not match! From data: {}, calculated while decoding: {}\n",
-                        chksum,
-                        frame_dec.get_calculated_checksum().unwrap()
-                    );
+                    println!("Checksum did not match! From data: {}, calculated while decoding: {}\n", chksum, frame_dec.get_calculated_checksum().unwrap());
                     fail_counter_chksum += 1;
                     failed.push(p.clone().to_string());
                 } else {
                     println!("Checksums are ok!\n");
                 }
                 #[cfg(not(feature = "hash"))]
-                println!(
-                    "Checksum feature not enabled, skipping. From data: {}\n",
-                    chksum
-                );
+                println!("Checksum feature not enabled, skipping. From data: {}\n", chksum);
             }
             None => println!("No checksums to test\n"),
         }
@@ -90,31 +81,19 @@ fn test_decode_corpus_files() {
         let mut success = true;
 
         if original.len() != result.len() {
-            println!(
-                "Result has wrong length: {}, should be: {}",
-                result.len(),
-                original.len()
-            );
+            println!("Result has wrong length: {}, should be: {}", result.len(), original.len());
             success = false;
             fail_counter_size += 1;
         }
 
         if frame_dec.bytes_read_from_source() != file_size {
-            println!(
-                "Framedecoder counted wrong amount of bytes: {}, should be: {}",
-                frame_dec.bytes_read_from_source(),
-                file_size
-            );
+            println!("Framedecoder counted wrong amount of bytes: {}, should be: {}", frame_dec.bytes_read_from_source(), file_size);
             success = false;
             fail_counter_bytes_read += 1;
         }
 
         let mut counter = 0;
-        let min = if original.len() < result.len() {
-            original.len()
-        } else {
-            result.len()
-        };
+        let min = if original.len() < result.len() { original.len() } else { result.len() };
         for idx in 0..min {
             if original[idx] != result[idx] {
                 counter += 1;
@@ -179,10 +158,7 @@ fn test_decode_corpus_files() {
     } else if avg_speed_bps < 1_000_000 {
         println!("Average speed reading: {} KB/s", avg_speed_read_bps / 1000);
     } else {
-        println!(
-            "Average speed reading: {} MB/s",
-            avg_speed_read_bps / 1_000_000
-        );
+        println!("Average speed reading: {} MB/s", avg_speed_read_bps / 1_000_000);
     }
 
     assert!(failed.is_empty());

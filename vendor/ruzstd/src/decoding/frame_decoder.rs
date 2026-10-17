@@ -16,10 +16,10 @@ use core::convert::TryInto;
 
 /// The default maximum window size, in bytes, that a [FrameDecoder] accepts.
 ///
-/// Defaults to 100mb to bound allocation for malformed or hostile frames. The
+/// Defaults to 128mb to bound allocation for malformed or hostile frames. The
 /// spec permits far larger windows, so raise the limit with
 /// [FrameDecoder::set_max_window_size] for input you trust.
-pub const DEFAULT_MAX_WINDOW_SIZE: u64 = 1024 * 1024 * 100;
+pub const DEFAULT_MAX_WINDOW_SIZE: u64 = 1024 * 1024 * 128;
 
 /// Low level Zstandard decoder that can be used to decompress frames with fine control over when and how many bytes are decoded.
 ///
@@ -587,5 +587,20 @@ impl Read for FrameDecoder {
         } else {
             state.decoder_scratch.buffer.read(target)
         }
+    }
+}
+
+#[cfg(test)]
+mod upstream_091_window_tests {
+    #[test]
+    fn upstream_default_does_not_override_explicit_native_window_limit() {
+        assert_eq!(super::FrameDecoder::new().max_window_size(), 128 * 1024 * 1024);
+        // Independent raw frame descriptor declares128MiB; explicit16MiB
+        // owned-native admission must refuse before allocating that history.
+        let frame = [0x28, 0xb5, 0x2f, 0xfd, 0, 0x88, 9, 0, 0, 7];
+        assert!(matches!(
+            crate::decoding::StreamingDecoder::new_with_max_window_size(frame.as_slice(), 16 << 20),
+            Err(crate::decoding::errors::FrameDecoderError::WindowSizeTooBig { requested: 134217728, max: 16777216 })
+        ));
     }
 }

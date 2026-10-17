@@ -19,11 +19,9 @@ fn test_dict_parsing() {
 
     // tables copied from ./dict_tests/dictionary
     let raw_tables = &[
-        54, 16, 192, 155, 4, 0, 207, 59, 239, 121, 158, 116, 220, 93, 114, 229, 110, 41, 249, 95,
-        165, 255, 83, 202, 254, 68, 74, 159, 63, 161, 100, 151, 137, 21, 184, 183, 189, 100, 235,
-        209, 251, 174, 91, 75, 91, 185, 19, 39, 75, 146, 98, 177, 249, 14, 4, 35, 0, 0, 0, 40, 40,
-        20, 10, 12, 204, 37, 196, 1, 173, 122, 0, 4, 0, 128, 1, 2, 2, 25, 32, 27, 27, 22, 24, 26,
-        18, 12, 12, 15, 16, 11, 69, 37, 225, 48, 20, 12, 6, 2, 161, 80, 40, 20, 44, 137, 145, 204,
+        54, 16, 192, 155, 4, 0, 207, 59, 239, 121, 158, 116, 220, 93, 114, 229, 110, 41, 249, 95, 165, 255, 83, 202, 254, 68, 74, 159, 63, 161, 100, 151, 137,
+        21, 184, 183, 189, 100, 235, 209, 251, 174, 91, 75, 91, 185, 19, 39, 75, 146, 98, 177, 249, 14, 4, 35, 0, 0, 0, 40, 40, 20, 10, 12, 204, 37, 196, 1,
+        173, 122, 0, 4, 0, 128, 1, 2, 2, 25, 32, 27, 27, 22, 24, 26, 18, 12, 12, 15, 16, 11, 69, 37, 225, 48, 20, 12, 6, 2, 161, 80, 40, 20, 44, 137, 145, 204,
         46, 0, 0, 0, 0, 0, 116, 253, 16, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
     raw.extend(&raw_tables[..]);
@@ -34,33 +32,21 @@ fn test_dict_parsing() {
     raw.extend(vec![0xEF, 0xCD, 0xAB, 0]);
 
     //just some random bytes
-    let raw_content = vec![
-        1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 1, 1, 123, 3, 234, 23, 234, 34, 23, 234, 34, 34, 234, 234,
-    ];
+    let raw_content = vec![1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 1, 1, 123, 3, 234, 23, 234, 34, 23, 234, 34, 34, 234, 234];
     raw.extend(&raw_content);
 
     let dict = Dictionary::decode_dict(&raw).unwrap();
 
     if dict.id != dict_id {
-        panic!(
-            "Dict-id did not get parsed correctly. Is: {}, Should be: {}",
-            dict.id, dict_id
-        );
+        panic!("Dict-id did not get parsed correctly. Is: {}, Should be: {}", dict.id, dict_id);
     }
 
     if !dict.dict_content.eq(&raw_content) {
-        panic!(
-            "dict content did not get parsed correctly. Is: {:?}, Should be: {:?}",
-            dict.dict_content, raw_content
-        );
+        panic!("dict content did not get parsed correctly. Is: {:?}, Should be: {:?}", dict.dict_content, raw_content);
     }
 
     if !dict.offset_hist.eq(&[3, 10, 0x00ABCDEF]) {
-        panic!(
-            "offset history did not get parsed correctly. Is: {:?}, Should be: {:?}",
-            dict.offset_hist,
-            [3, 10, 0x00ABCDEF]
-        );
+        panic!("offset history did not get parsed correctly. Is: {:?}, Should be: {:?}", dict.offset_hist, [3, 10, 0x00ABCDEF]);
     }
 
     // test magic num checking
@@ -127,9 +113,7 @@ fn test_dict_decoding() {
 
         let start_time = std::time::Instant::now();
         /////DECODING
-        frame_dec
-            .decode_blocks(&mut content, BlockDecodingStrategy::All)
-            .unwrap();
+        frame_dec.decode_blocks(&mut content, BlockDecodingStrategy::All).unwrap();
         let result = frame_dec.collect().unwrap();
         let end_time = start_time.elapsed();
 
@@ -137,19 +121,12 @@ fn test_dict_decoding() {
             Some(chksum) => {
                 #[cfg(feature = "hash")]
                 if frame_dec.get_calculated_checksum().unwrap() != chksum {
-                    println!(
-                        "Checksum did not match! From data: {}, calculated while decoding: {}\n",
-                        chksum,
-                        frame_dec.get_calculated_checksum().unwrap()
-                    );
+                    println!("Checksum did not match! From data: {}, calculated while decoding: {}\n", chksum, frame_dec.get_calculated_checksum().unwrap());
                 } else {
                     println!("Checksums are ok!\n");
                 }
                 #[cfg(not(feature = "hash"))]
-                println!(
-                    "Checksum feature not enabled, skipping. From data: {}\n",
-                    chksum
-                );
+                println!("Checksum feature not enabled, skipping. From data: {}\n", chksum);
             }
             None => println!("No checksums to test\n"),
         }
@@ -163,31 +140,19 @@ fn test_dict_decoding() {
         let mut success = true;
 
         if original.len() != result.len() {
-            println!(
-                "Result has wrong length: {}, should be: {}",
-                result.len(),
-                original.len()
-            );
+            println!("Result has wrong length: {}, should be: {}", result.len(), original.len());
             success = false;
             fail_counter_size += 1;
         }
 
         if frame_dec.bytes_read_from_source() != file_size {
-            println!(
-                "Framedecoder counted wrong amount of bytes: {}, should be: {}",
-                frame_dec.bytes_read_from_source(),
-                file_size
-            );
+            println!("Framedecoder counted wrong amount of bytes: {}, should be: {}", frame_dec.bytes_read_from_source(), file_size);
             success = false;
             fail_counter_bytes_read += 1;
         }
 
         let mut counter = 0;
-        let min = if original.len() < result.len() {
-            original.len()
-        } else {
-            result.len()
-        };
+        let min = if original.len() < result.len() { original.len() } else { result.len() };
         for idx in 0..min {
             if original[idx] != result[idx] {
                 counter += 1;
@@ -252,10 +217,7 @@ fn test_dict_decoding() {
     } else if avg_speed_bps < 1_000_000 {
         println!("Average speed reading: {} KB/s", avg_speed_read_bps / 1000);
     } else {
-        println!(
-            "Average speed reading: {} MB/s",
-            avg_speed_read_bps / 1_000_000
-        );
+        println!("Average speed reading: {} MB/s", avg_speed_read_bps / 1_000_000);
     }
 
     assert!(failed.is_empty());

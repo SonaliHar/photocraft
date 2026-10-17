@@ -139,4 +139,4 @@ Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
 
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
-| `vendor/ruzstd/` | ruzstd 0.9.0 Zstandard codec with checked regenerated-block limits and safe ring storage | Moritz Borcherding; PhotoCraft contributors (local safety changes) | crates.io ruzstd 0.9.0, <https://github.com/KillingSpark/zstd-rs> | MIT, [`vendor/ruzstd/LICENSE`](vendor/ruzstd/LICENSE) |
+| `vendor/ruzstd/` | ruzstd 0.9.1 Zstandard codec with checked regenerated-block limits and safe ring storage | Moritz Borcherding; PhotoCraft contributors (local safety changes) | crates.io ruzstd 0.9.1, <https://github.com/KillingSpark/zstd-rs> | MIT, [`vendor/ruzstd/LICENSE`](vendor/ruzstd/LICENSE) |

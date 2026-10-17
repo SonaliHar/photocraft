@@ -36,8 +36,7 @@ fn test_encode_corpus_files_uncompressed_our_decompressor() {
 
         compressor.compress();
         let mut decompressed_output = Vec::new();
-        let mut decoder =
-            crate::decoding::StreamingDecoder::new(compressed_file.as_slice()).unwrap();
+        let mut decoder = crate::decoding::StreamingDecoder::new(compressed_file.as_slice()).unwrap();
         decoder.read_to_end(&mut decompressed_output).unwrap();
 
         if input != decompressed_output {
@@ -46,10 +45,7 @@ fn test_encode_corpus_files_uncompressed_our_decompressor() {
     }
 
     if !failures.is_empty() {
-        panic!(
-            "Decompression of compressed file failed on the following files: {:?}",
-            failures
-        );
+        panic!("Decompression of compressed file failed on the following files: {:?}", failures);
     }
 }
 
@@ -99,18 +95,12 @@ fn test_encode_corpus_files_uncompressed_original_decompressor() {
                 }
             }
             Err(e) => {
-                failures.push((
-                    path.to_owned(),
-                    format!("Decompressor threw an error: {e:?}"),
-                ));
+                failures.push((path.to_owned(), format!("Decompressor threw an error: {e:?}")));
             }
         };
 
         if !failures.is_empty() {
-            panic!(
-                "Decompression of the compressed file fails on the following files: {:?}",
-                failures
-            );
+            panic!("Decompression of the compressed file fails on the following files: {:?}", failures);
         }
     }
 }
@@ -153,8 +143,7 @@ fn test_encode_corpus_files_compressed_our_decompressor() {
 
         compressor.compress();
         let mut decompressed_output = Vec::new();
-        let mut decoder =
-            crate::decoding::StreamingDecoder::new(compressed_file.as_slice()).unwrap();
+        let mut decoder = crate::decoding::StreamingDecoder::new(compressed_file.as_slice()).unwrap();
         decoder.read_to_end(&mut decompressed_output).unwrap();
 
         if input != decompressed_output {
@@ -163,10 +152,7 @@ fn test_encode_corpus_files_compressed_our_decompressor() {
     }
 
     if !failures.is_empty() {
-        panic!(
-            "Decompression of compressed file failed on the following files: {:?}",
-            failures
-        );
+        panic!("Decompression of compressed file failed on the following files: {:?}", failures);
     }
 }
 
@@ -216,18 +202,12 @@ fn test_encode_corpus_files_compressed_original_decompressor() {
                 }
             }
             Err(e) => {
-                failures.push((
-                    path.to_owned(),
-                    format!("Decompressor threw an error: {e:?}"),
-                ));
+                failures.push((path.to_owned(), format!("Decompressor threw an error: {e:?}")));
             }
         };
 
         if !failures.is_empty() {
-            panic!(
-                "Decompression of the compressed file fails on the following files: {:?}",
-                failures
-            );
+            panic!("Decompression of the compressed file fails on the following files: {:?}", failures);
         }
     }
 }

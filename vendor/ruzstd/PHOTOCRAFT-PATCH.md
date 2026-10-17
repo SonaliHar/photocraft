@@ -1,6 +1,6 @@
 # Local decoder changes (PhotoCraft)
 
-Base: crates.io ruzstd0.9.0, MIT, original source retained except replaced optimized raw-pointer ring implementation. No GIMP/GEGL or proprietary implementation is involved. Unsafe is forbidden; ring uses safe initialized VecDeque storage.
+Base: crates.io ruzstd0.9.1 (upstream revision aa145e8757c6982aab6a8336d3bba43d1a4c6fae), MIT; the optimized raw-pointer ring implementation is replaced. No GIMP/GEGL or proprietary implementation is involved. Unsafe is forbidden; ring uses safe initialized VecDeque storage.
 
 Changes: complete compressed sequence/literal-tail regenerated length is checked before history pushes/repeats. Encoded and decoded raw/RLE blocks and regenerated literals must fit min(frame window,128KiB). Oversized plans return typed RegeneratedBlockTooLarge without ring mutation. This closes the malformed compressed-sequence allocation gap in upstream sequence_execution.
 
@@ -10,4 +10,9 @@ Regression sources: original overblock sequence test failed against unbounded ex
 
 
 
-Borrowed block control: additive decode_blocks_with_poll/read_with_poll polls before and after each validated block, including history fill; legacy methods wrap a no-op callback. Callback is never retained. Exact maximum valid43690-sequence/128KiB block measured1.678ms in the final release probe (earlier1.899ms); this does not qualify allocation/syscall or total-import latency. Final52 tests include failed-grow/history preservation,16MiB declared window boundary and history-fill control failure before output publication. PhotoCraft's actual optional decoder separately preserves Work/Cancelled and refunds all temporary/output reservations.
+Borrowed block control: additive decode_blocks_with_poll/read_with_poll polls before and after each validated block, including history fill; legacy methods wrap a no-op callback. Callback is never retained. Exact maximum valid43690-sequence/128KiB block measured1.678ms in the final release probe (earlier1.899ms); this does not qualify allocation/syscall or total-import latency. Historical pre-rebase52-test validation included failed-grow/history preservation,16MiB declared window boundary and history-fill control failure before output publication. This is not a fresh0.9.1 validation claim. PhotoCraft's actual optional decoder separately preserves Work/Cancelled and refunds all temporary/output reservations.
+
+
+2026-10-17 upstream0.9.1 rebase: integrated the actual upstream match-length encoder correction, suffix-store sizing correction,128MiB default-window compatibility, one-block streaming return policy, new public block-size error variants and updated upstream window tests. The native owned decoder still passes its explicit <=16MiB limit; the upstream default is not its admission limit.
+
+Overlapping upstream block-size/repeat-offset fixes are retained through the stricter existing checked complete sequence/literal-tail preflight BEFORE history mutation and checked subtraction returning ZeroOffset. Upstream post-generation size checks cannot replace that preallocation guard. The safe initialized fallible ring/capacity census and borrowed per-block controls remain unchanged. Upstream unsafe ring-growth optimization is superseded by the local safe ring, not reintroduced. Corpus-dependent upstream tests remain under their existing opt-in feature; the new256MiB fixture is not synthesized or silently substituted. Existing synthetic block/default-limit/control regressions require fresh execution after this rebase.

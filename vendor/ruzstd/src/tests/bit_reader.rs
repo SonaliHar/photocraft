@@ -2,10 +2,7 @@
 fn test_bitreader_reversed() {
     use crate::bit_io::BitReaderReversed;
 
-    let encoded: [u8; 16] = [
-        0xC1, 0x41, 0x08, 0x00, 0x00, 0xEC, 0xC8, 0x96, 0x42, 0x79, 0xD4, 0xBC, 0xF7, 0x2C, 0xD5,
-        0x48,
-    ];
+    let encoded: [u8; 16] = [0xC1, 0x41, 0x08, 0x00, 0x00, 0xEC, 0xC8, 0x96, 0x42, 0x79, 0xD4, 0xBC, 0xF7, 0x2C, 0xD5, 0x48];
     //just the u128 in encoded
     let num_rev: u128 = 0x48_D5_2C_F7_BC_D4_79_42_96_C8_EC_00_00_08_41_C1;
 
@@ -31,10 +28,7 @@ fn test_bitreader_reversed() {
     }
 
     if accumulator != num_rev {
-        panic!(
-            "Bitreader failed somewhere. Accumulated bits: {:?}, Should be: {:?}",
-            accumulator, num_rev
-        );
+        panic!("Bitreader failed somewhere. Accumulated bits: {:?}, Should be: {:?}", accumulator, num_rev);
     }
 }
 
@@ -42,10 +36,7 @@ fn test_bitreader_reversed() {
 fn test_bitreader_normal() {
     use crate::bit_io::BitReader;
 
-    let encoded: [u8; 16] = [
-        0xC1, 0x41, 0x08, 0x00, 0x00, 0xEC, 0xC8, 0x96, 0x42, 0x79, 0xD4, 0xBC, 0xF7, 0x2C, 0xD5,
-        0x48,
-    ];
+    let encoded: [u8; 16] = [0xC1, 0x41, 0x08, 0x00, 0x00, 0xEC, 0xC8, 0x96, 0x42, 0x79, 0xD4, 0xBC, 0xF7, 0x2C, 0xD5, 0x48];
     //just the u128 in encoded
     let num: u128 = 0x48_D5_2C_F7_BC_D4_79_42_96_C8_EC_00_00_08_41_C1;
 
@@ -71,9 +62,6 @@ fn test_bitreader_normal() {
     }
 
     if accumulator != num {
-        panic!(
-            "Bitreader failed somewhere. Accumulated bits: {:?}, Should be: {:?}",
-            accumulator, num
-        );
+        panic!("Bitreader failed somewhere. Accumulated bits: {:?}, Should be: {:?}", accumulator, num);
     }
 }
