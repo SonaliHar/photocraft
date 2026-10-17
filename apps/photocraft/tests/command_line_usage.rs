@@ -33,7 +33,7 @@ fn help_prints_usage_and_exits_0() {
         let (status, stdout, stderr) = run_photocraft(&[flag]);
         assert_eq!(status.code(), Some(0), "{flag} must exit 0, stderr: {stderr}");
         assert!(stdout.starts_with("Usage: photocraft"), "{flag} stdout: {stdout}");
-        for option in ["--safe-gpu", "--control <port>", "--version", "--"] {
+        for option in ["--safe-gpu", "--new-instance", "--control <port>", "--version", "--"] {
             assert!(stdout.contains(option), "{flag} usage must list {option}: {stdout}");
         }
         assert!(!stderr.contains("Couldn't open"), "{flag} was taken as a file: {stderr}");
@@ -81,6 +81,14 @@ fn arguments_after_double_dash_are_files() {
 fn macos_process_serial_number_is_still_ignored() {
     // Old macOS passes `-psn_<n>` when launching from Finder; it is neither a file nor an error.
     let (status, _, stderr) = run_photocraft(&["--control", "nope", "-psn_0_12345"]);
+    assert_eq!(status.code(), Some(2), "stderr: {stderr}");
+    assert!(stderr.contains("`nope` is not a valid port"), "stderr: {stderr}");
+    assert!(!stderr.contains("unknown option"), "stderr: {stderr}");
+}
+
+#[test]
+fn new_instance_is_a_known_option() {
+    let (status, _, stderr) = run_photocraft(&["--control", "nope", "--new-instance"]);
     assert_eq!(status.code(), Some(2), "stderr: {stderr}");
     assert!(stderr.contains("`nope` is not a valid port"), "stderr: {stderr}");
     assert!(!stderr.contains("unknown option"), "stderr: {stderr}");
