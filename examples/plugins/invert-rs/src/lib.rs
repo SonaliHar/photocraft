@@ -48,7 +48,6 @@ pub extern "C" fn pc_alloc(size: u32) -> u32 {
 /// # Safety
 /// The host guarantees `buf..buf + len` is a block it got from `pc_alloc`, holding `len / 4`
 /// samples.
-
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pc_filter(buf: *mut f32, len: u32, width: u32, height: u32, channels: u32, format: u32, _params: *const u8, _params_len: u32) -> i32 {
     let n = channels as usize;
