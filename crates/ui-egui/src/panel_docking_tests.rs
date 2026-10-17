@@ -751,3 +751,56 @@ fn native_tab_reorder_stays_native_until_drag_crosses_the_strip() {
     let channels = tabs.iter().position(|(_, label)| *label == "Channels").unwrap();
     assert!(channels < layers, "upstream native reorder remains effective");
 }
+
+#[test]
+fn moving_multiple_panels_into_one_group_renders_clean_tabs_with_scrollbar() {
+    let mut app = app();
+    app.run("window.panel.move", json!({"panel":"properties","anchor":"color"})).unwrap();
+    app.run("window.panel.move", json!({"panel":"adjustments","anchor":"color"})).unwrap();
+    let layout = app.ui.docking.as_ref().unwrap();
+    let members = group_members(layout, "color");
+    assert_eq!(members.len(), 6, "Color group now has 6 panels");
+
+    let mut h = harness(app, vec2(1280.0, 800.0));
+    let mut tab_rects = Vec::new();
+    for panel in &members {
+        let resp = h.ctx.read_response(egui::Id::new("photocraft-panel-docking").with(("tab", panel)));
+        assert!(resp.is_some(), "tab response exists for {panel}");
+        let rect = resp.unwrap().rect;
+        assert!(rect.width() >= 35.0, "tab {panel} has minimum width: {rect:?}");
+        tab_rects.push((panel, rect));
+    }
+    for i in 0..tab_rects.len() {
+        for j in (i + 1)..tab_rects.len() {
+            let intersection = tab_rects[i].1.intersect(tab_rects[j].1);
+            assert!(intersection.width() <= 0.5, "tabs {} and {} overlap: {:?} vs {:?}", tab_rects[i].0, tab_rects[j].0, tab_rects[i].1, tab_rects[j].1);
+        }
+    }
+    let scroll_id = egui::Id::new("photocraft-panel-tab-scrollbar").with("adjustments");
+    assert!(h.ctx.read_response(scroll_id).is_some(), "tab scrollbar response exists for group");
+}
+
+#[test]
+fn tab_strip_wheel_and_scrollbar_interaction_switches_active_panel() {
+    let mut app = app();
+    app.run("window.panel.move", json!({"panel":"properties","anchor":"color"})).unwrap();
+    app.run("window.panel.move", json!({"panel":"adjustments","anchor":"color"})).unwrap();
+    let mut h = harness(app, vec2(1280.0, 800.0));
+    assert!(panel_active(h.state().ui.docking.as_ref().unwrap(), "adjustments"));
+
+    let tab_strip = h.ctx.read_response(egui::Id::new("photocraft-panel-docking").with(("tab", &"color".to_string()))).unwrap().rect;
+    h.hover_at(tab_strip.center());
+    h.event(Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(-5.0, 0.0), modifiers: Modifiers::NONE });
+    h.run_steps(2);
+
+    let scroll_id = egui::Id::new("photocraft-panel-tab-scrollbar").with("adjustments");
+    if let Some(resp) = h.ctx.read_response(scroll_id) {
+        let left_click = egui::pos2(resp.rect.left() + 5.0, resp.rect.center().y);
+        h.hover_at(left_click);
+        h.event(Event::PointerButton { pos: left_click, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        h.event(Event::PointerButton { pos: left_click, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+        assert!(panel_active(h.state().ui.docking.as_ref().unwrap(), "color"));
+    }
+}

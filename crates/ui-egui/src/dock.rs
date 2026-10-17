@@ -571,6 +571,19 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                 peek_after = Some(g);
             }
         }
+        if resp.strip.hovered() && !collapsed && indices.len() > 1 {
+            let scroll = child.input(|i| i.smooth_scroll_delta.x + i.smooth_scroll_delta.y);
+            if scroll.abs() > 2.0 {
+                let next_sel = if scroll < -2.0 {
+                    (sel + 1).min(indices.len() - 1)
+                } else {
+                    sel.saturating_sub(1)
+                };
+                if next_sel != sel && let Some(&picked) = indices.get(next_sel) {
+                    *g.tab_mut(&mut app.ui.dock_tabs) = picked;
+                }
+            }
+        }
         // The strip uses visible indices; reorder in original ones.
         if !locked
             && let Some((from, before)) = resp.tab_reorder
