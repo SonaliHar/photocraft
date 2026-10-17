@@ -103,6 +103,8 @@ pub struct CameraRawDialog {
     pub(crate) detail: super::camera_raw_detail_ui::DetailPreview,
     display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
     pub(crate) viewport: Option<ERect>,
+    /// Whether the main window had focus last frame (see [`show`]).
+    main_focused: bool,
     pub(crate) float: bool,
     pub(crate) tex: Option<TextureHandle>,
     before_tex: Option<TextureHandle>,
@@ -724,6 +726,7 @@ fn open_pixels(
         ),
         display,
         viewport: None,
+        main_focused: false,
         float,
         tex: None,
         before_tex: None,
@@ -1153,14 +1156,26 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Camera Raw is modal, as in Photoshop: the main window is dimmed and takes no input while it
     // is open (in a separate window, or drawn over it where there are no extra windows).
     let main = ctx.content_rect();
-    egui::Area::new(egui::Id::new("camera-raw-modal")).order(egui::Order::Foreground).fixed_pos(main.min).show(ctx, |ui| {
-        let (r, _) = ui.allocate_exact_size(main.size(), Sense::click_and_drag());
+    let scrim = egui::Area::new(egui::Id::new("camera-raw-modal")).order(egui::Order::Foreground).fixed_pos(main.min).show(ctx, |ui| {
+        let (r, response) = ui.allocate_exact_size(main.size(), Sense::click_and_drag());
         ui.painter().rect_filled(r, 0.0, Tokens::get(ui.ctx()).scrim);
+        response
     });
+    let window = egui::ViewportId::from_hash_of("camera-raw-window");
+    // Coming back to PhotoCraft (⌘Tab, the Dock) can bring the main window over Camera Raw,
+    // leaving only the dimmed window that takes no input: the main window gaining focus, or a
+    // click on it, brings Camera Raw back to the front.
+    let main_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
+    if let Some(d) = app.camera_raw.as_mut() {
+        if raise_camera_raw(d.main_focused, main_focused, scrim.inner.clicked() || scrim.inner.drag_started()) {
+            ctx.send_viewport_cmd_to(window, egui::ViewportCommand::Focus);
+        }
+        d.main_focused = main_focused;
+    }
     // A window of its own (title bar, moved and resized like any window), like Adobe Camera Raw.
     let builder = egui::ViewportBuilder::default().with_title(window_title).with_inner_size([1632.0, 1046.0]).with_min_inner_size([960.0, 640.0]);
     let mut close = false;
-    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("camera-raw-window"), builder, |ui, class| {
+    ctx.show_viewport_immediate(window, builder, |ui, class| {
         if ui.ctx().input(|i| i.viewport().close_requested()) {
             close = true;
         }
@@ -1169,6 +1184,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if close && app.camera_raw.is_some() {
         cancel(app);
     }
+}
+
+/// Whether to bring Camera Raw's window to the front: when the main window has just gained focus
+/// (it came forward over Camera Raw's) or is clicked.
+fn raise_camera_raw(was_focused: bool, focused: bool, clicked: bool) -> bool {
+    (focused && !was_focused) || clicked
 }
 
 impl CameraRawDialog {
@@ -1953,6 +1974,17 @@ mod tests {
         frame(&mut app, true);
         assert!(app.camera_raw.is_none(), "closing the window is Cancel");
         assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+    }
+
+    /// Coming back to PhotoCraft can put the main window over Camera Raw's: the main window
+    /// gaining focus brings Camera Raw's window to the front, once per activation, and so does a
+    /// click on the dimmed main window.
+    #[test]
+    fn the_main_window_gaining_focus_brings_camera_raw_back_to_the_front() {
+        assert!(raise_camera_raw(false, true, false), "the main window came forward");
+        assert!(!raise_camera_raw(true, true, false), "only once, so Camera Raw's own focus isn't fought");
+        assert!(!raise_camera_raw(true, false, false) && !raise_camera_raw(false, false, false));
+        assert!(raise_camera_raw(true, true, true), "a click on the dimmed main window");
     }
 
     #[test]
