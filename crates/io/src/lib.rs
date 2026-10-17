@@ -40,6 +40,7 @@ pub mod blocks;
 pub mod camera_raw_xmp;
 mod channel_map;
 pub mod comps_map;
+pub mod doc_path;
 pub mod effects_map;
 pub mod exr_parts;
 mod flat;
@@ -248,6 +249,9 @@ pub struct ExportOptions {
     /// File Compatibility (see [`PsdExportOptions::maximize_compatibility`]). On by default, as
     /// Photoshop's Always.
     pub psd_maximize_compatibility: bool,
+    /// The path of the document's own file, which linked smart objects that PSD/PSB and layered
+    /// TIFF embed are resolved against ([`doc_path::resolve`]).
+    pub document_path: Option<std::path::PathBuf>,
 }
 
 impl Default for ExportOptions {
@@ -260,6 +264,7 @@ impl Default for ExportOptions {
             tga_bits: None,
             image_previews: true,
             psd_maximize_compatibility: true,
+            document_path: None,
         }
     }
 }
@@ -484,7 +489,12 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
         return Ok(ExportResult { bytes: photocraft_format::save_to_bytes(doc.as_ref(), &previews)?, warnings: Vec::new() }.into());
     }
     if ext == "psd" || ext == "psb" {
-        let o = PsdExportOptions { force_psb: opts.force_psb || ext == "psb", maximize_compatibility: opts.psd_maximize_compatibility, ..Default::default() };
+        let o = PsdExportOptions {
+            force_psb: opts.force_psb || ext == "psb",
+            maximize_compatibility: opts.psd_maximize_compatibility,
+            document_path: opts.document_path.clone(),
+            ..Default::default()
+        };
         // The preview is rendered first, while only the document is in memory: its full-size
         // render would otherwise come on top of the finished file model (#6607).
         let preview = opts.image_previews.then(|| psd_thumbnail::resource(doc));
