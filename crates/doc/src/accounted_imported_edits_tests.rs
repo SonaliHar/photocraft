@@ -118,10 +118,15 @@ fn cancelled_quota_and_unsupported_edits_preserve_original() {
     assert!(original.try_edit(AccountedEdit::LayerOpacity { layer: id, opacity: 0.5 }, &control()).is_err());
     drop(blocker);
     assert_eq!(original.document().layers[0].name, "retained");
-    assert!(original.try_edit(AccountedEdit::NativePixels { layer: id, rect: Rect::new(0, 0, 1, 1), bytes: &[0; 16] }, &control()).is_err());
+    let raw_noop = original.try_edit(AccountedEdit::NativePixels { layer: id, rect: Rect::new(0, 0, 1, 1), bytes: &[0; 16] }, &control()).unwrap();
+    assert!(raw_noop.shares_model(&original));
+    assert!(original.try_edit(AccountedEdit::NativePixels { layer: id, rect: Rect::new(0, 0, 1, 1), bytes: &[0; 15] }, &control()).is_err());
     let filtered = model(&q, "filtered", true, false);
     let id = filtered.document().layers[0].id;
-    assert!(filtered.try_edit(AccountedEdit::LayerName { layer: id, name: "new" }, &control()).is_err());
+    let renamed = filtered.try_edit(AccountedEdit::LayerName { layer: id, name: "new" }, &control()).unwrap();
+    assert_eq!(renamed.document().layers[0].name, "new");
+    assert_eq!(renamed.document().xcf_state.as_ref().unwrap().filter_stacks, filtered.document().xcf_state.as_ref().unwrap().filter_stacks);
+    assert_eq!(filtered.document().layers[0].name, "retained");
     let raw_selection = model(&q, "unguarded", false, true);
     let id = raw_selection.document().layers[0].id;
     assert!(raw_selection.try_edit(AccountedEdit::LayerVisibility { layer: id, visible: false }, &control()).is_err());
@@ -174,7 +179,7 @@ fn late_cancel_during_long_name_validation_and_repeated_comparison() {
         interrupt: &Interrupt::NONE,
         work: &|n| {
             let previous =
-                bytes.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |used| Some(used.saturating_add(n))).unwrap();
+                bytes.try_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |used| Some(used.saturating_add(n))).unwrap();
             if previous.saturating_add(n) > 65536 { Err(BackingError::Cancelled) } else { Ok(()) }
         },
     };
@@ -189,7 +194,7 @@ fn late_cancel_during_long_name_validation_and_repeated_comparison() {
         interrupt: &Interrupt::NONE,
         work: &|n| {
             let previous =
-                bytes.fetch_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |used| Some(used.saturating_add(n))).unwrap();
+                bytes.try_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |used| Some(used.saturating_add(n))).unwrap();
             if previous.saturating_add(n) > 65536 { Err(BackingError::Cancelled) } else { Ok(()) }
         },
     };

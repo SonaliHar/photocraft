@@ -13,45 +13,47 @@ use std::{
     sync::{Arc, Weak},
 };
 
-#[path = "accounted_imported_edits.rs"]
-mod imported_edits;
-#[path = "accounted_imported_translation.rs"]
-mod imported_translation;
-#[path = "accounted_imported_masked_translation.rs"]
-mod imported_masked_translation;
-#[path = "accounted_selection_rehydrate.rs"]
-mod selection_rehydrate;
 #[path = "accounted_filter_readonly.rs"]
 mod filter_readonly;
-#[path = "accounted_threshold_readonly.rs"]
-mod threshold_readonly;
-#[path = "accounted_point_readonly.rs"]
-mod point_readonly;
-#[path = "accounted_gaussian_group_readonly.rs"]
-mod gaussian_group_readonly;
-#[path = "accounted_flat_composite_readonly.rs"]
-mod flat_composite_readonly;
 #[path = "accounted_filtered_flat_readonly.rs"]
 mod filtered_flat_readonly;
+#[path = "accounted_flat_composite_readonly.rs"]
+mod flat_composite_readonly;
+#[path = "accounted_gaussian_group_readonly.rs"]
+mod gaussian_group_readonly;
+#[path = "accounted_imported_edits.rs"]
+mod imported_edits;
+#[path = "accounted_imported_masked_translation.rs"]
+mod imported_masked_translation;
+#[path = "accounted_imported_translation.rs"]
+mod imported_translation;
+#[path = "accounted_legacy_data.rs"]
+mod legacy_data;
 #[path = "accounted_masked_filtered_flat_readonly.rs"]
 mod masked_filtered_flat_readonly;
-#[path="accounted_normal_hierarchy_readonly.rs"]
+#[path = "accounted_normal_hierarchy_readonly.rs"]
 mod normal_hierarchy_readonly;
+#[path = "accounted_point_readonly.rs"]
+mod point_readonly;
 #[path = "accounted_programme_native.rs"]
 mod programme_native;
 #[path = "accounted_programme_selection.rs"]
 mod programme_selection;
-pub use programme_selection::CheckedProgrammeSelection;
-pub(crate) use programme_selection::{SelectionPermit, selection_disallowed};
-pub use programme_native::{CheckedProgrammeNativeTarget, ProgrammeNativeStorageKind};
+#[path = "accounted_selection_rehydrate.rs"]
+mod selection_rehydrate;
+#[path = "accounted_threshold_readonly.rs"]
+mod threshold_readonly;
+pub use filter_readonly::ThresholdAlphaPatch;
 pub use flat_composite_readonly::FlatCompositeCompositionPatch;
 pub use gaussian_group_readonly::{GaussianGroupEnabledPatch, GaussianGroupPatch};
 pub use point_readonly::{AssignedPointEnabledPatch, PointArgumentPatch, PointArgumentValue, PointFilterMovePatch, PointFilterPatch, PointFilterRemovePatch};
 pub use point_readonly::{
-    PointArgumentShape, PointStructuredArgumentPatch, PointStructuredFilterPatch,
-    point_argument_shape, point_argument_shape_with, point_value_shape, point_values_equal, point_values_same_shape,
+    PointArgumentShape, PointStructuredArgumentPatch, PointStructuredFilterPatch, point_argument_shape, point_argument_shape_with, point_value_shape,
+    point_values_equal, point_values_same_shape,
 };
-pub use filter_readonly::ThresholdAlphaPatch;
+pub use programme_native::{CheckedProgrammeNativeTarget, ProgrammeNativeStorageKind};
+pub use programme_selection::CheckedProgrammeSelection;
+pub(crate) use programme_selection::{SelectionPermit, selection_disallowed};
 pub use threshold_readonly::ThresholdPatch;
 #[path = "accounted_readonly_layer_name.rs"]
 mod readonly_layer_name;
@@ -59,24 +61,31 @@ pub use readonly_layer_name::ReadonlyLayerNamePatch;
 #[path = "accounted_readonly_layer_properties.rs"]
 mod readonly_layer_properties;
 pub use readonly_layer_properties::ReadonlyLayerPropertiesPatch;
-#[path = "accounted_document_name.rs"]
-mod document_name;
 #[cfg(test)]
 #[path = "accounted_constructor_requirements_tests.rs"]
 mod constructor_requirements_tests;
-#[path = "accounted_imported_selection.rs"]
-mod imported_selection;
+#[path = "accounted_document_name.rs"]
+mod document_name;
 #[path = "accounted_imported_isolated_group.rs"]
 mod imported_isolated_group;
+#[path = "accounted_imported_selection.rs"]
+mod imported_selection;
 #[path = "accounted_document/plain_xcf_inspection.rs"]
 mod plain_xcf_inspection;
 
 // Private accounting callback polymorphism; public ReadControl remains Sync.
 trait ModelControl {
-    fn check(&self,units:u64)->Result<(),BackingError>;
-    fn sync_control(&self)->&ReadControl<'_>;
+    fn check(&self, units: u64) -> Result<(), BackingError>;
+    fn sync_control(&self) -> &ReadControl<'_>;
 }
-impl ModelControl for ReadControl<'_>{fn check(&self,units:u64)->Result<(),BackingError>{ReadControl::check(self,units)}fn sync_control(&self)->&ReadControl<'_>{self}}
+impl ModelControl for ReadControl<'_> {
+    fn check(&self, units: u64) -> Result<(), BackingError> {
+        ReadControl::check(self, units)
+    }
+    fn sync_control(&self) -> &ReadControl<'_> {
+        self
+    }
+}
 struct ModelCharges {
     _index: QuotaLease,
     _payload: QuotaLease,
@@ -155,12 +164,31 @@ pub enum AccountedEdit<'a> {
         visible: Option<bool>,
         opacity: Option<f32>,
     },
-    LayerVisibility { layer: LayerId, visible: bool },
-    LayerOpacity { layer: LayerId, opacity: f32 },
-    LayerName { layer: LayerId, name: &'a str },
-    NativePixels { layer: LayerId, rect: Rect, bytes: &'a [u8] },
-    MaskEnabled { layer: LayerId, enabled: bool },
-    MaskLinked { layer: LayerId, linked: bool },
+    LayerVisibility {
+        layer: LayerId,
+        visible: bool,
+    },
+    LayerOpacity {
+        layer: LayerId,
+        opacity: f32,
+    },
+    LayerName {
+        layer: LayerId,
+        name: &'a str,
+    },
+    NativePixels {
+        layer: LayerId,
+        rect: Rect,
+        bytes: &'a [u8],
+    },
+    MaskEnabled {
+        layer: LayerId,
+        enabled: bool,
+    },
+    MaskLinked {
+        layer: LayerId,
+        linked: bool,
+    },
 }
 impl AccountedEdit<'_> {
     /// Target identity independent of the specific typed transaction.
@@ -233,10 +261,12 @@ impl AccountedHistory {
         let unchanged = if domain == imported_edits::EditDomain::GaussianGroup {
             gaussian_group_readonly::metadata::noop(self.current()?, edit, control)?
         } else if domain == imported_edits::EditDomain::NormalHierarchyMetadata {
-            normal_hierarchy_readonly::metadata::noop(self.current()?,edit,control)?
+            normal_hierarchy_readonly::metadata::noop(self.current()?, edit, control)?
         } else if domain == imported_edits::EditDomain::FilteredFlatMetadata {
             filtered_flat_readonly::metadata::noop(self.current()?, edit, control)?
-        } else { is_noop(self.current()?.document(), edit, control)? };
+        } else {
+            is_noop(self.current()?.document(), edit, control)?
+        };
         if unchanged {
             control.check(1)?;
             return Ok(());
@@ -288,7 +318,9 @@ impl AccountedHistory {
 }
 impl AccountedDocument {
     /// Exact storage identity hint; edit validation remains mandatory.
-    pub fn is_legacy_storage(&self)->bool{self.owner._storage_class==StorageClass::Legacy}
+    pub fn is_legacy_storage(&self) -> bool {
+        self.owner._storage_class == StorageClass::Legacy
+    }
 
     /// Existing `from_owned` owner/Arc index envelope. The codec's physical
     /// document/native storage guard is separate; this value grants no receipt
@@ -317,7 +349,16 @@ impl AccountedDocument {
         control.check(1)?;
         let Incoming { document, retention } = incoming;
         Ok(Self {
-            owner: Arc::new(ModelOwner { _storage_class: StorageClass::Legacy, document, _selection: None, _selection_view: None, retention, quota, _model: None, _allocation: Arc::new(lease) }),
+            owner: Arc::new(ModelOwner {
+                _storage_class: StorageClass::Legacy,
+                document,
+                _selection: None,
+                _selection_view: None,
+                retention,
+                quota,
+                _model: None,
+                _allocation: Arc::new(lease),
+            }),
         })
     }
     pub fn document(&self) -> &Document {
@@ -339,7 +380,9 @@ impl AccountedDocument {
     fn selection_noop(&self, selection: Option<&AccountedSelection>, control: &ReadControl<'_>) -> Result<bool, BackingError> {
         let doc = self.document();
         control.check(1)?;
-        if self.owner._storage_class != StorageClass::Legacy { return Err(BackingError::Unsupported); }
+        if self.owner._storage_class != StorageClass::Legacy {
+            return Err(BackingError::Unsupported);
+        }
         if doc.selection_channel_id.is_some() {
             return Err(BackingError::Unsupported);
         }
@@ -355,9 +398,7 @@ impl AccountedDocument {
             if !self.quota().shares_ledger(guard.quota()) {
                 return Err(BackingError::Integrity);
             }
-            if !selection_format_allowed(guard.format(), doc.depth)
-                || !doc.bounds().contains_rect(&guard.bounds())
-            {
+            if !selection_format_allowed(guard.format(), doc.depth) || !doc.bounds().contains_rect(&guard.bounds()) {
                 return Err(BackingError::Bounds);
             }
         }
@@ -394,11 +435,7 @@ impl AccountedDocument {
         let mut payload_lease = self.quota().reserve(QuotaKind::Resident, payload_envelope).map_err(|_| BackingError::Quota)?;
         let view = selection.map(|guard| guard.clone_view(control)).transpose()?;
         control.check(logical.total()?)?;
-        let copied = if imported_selection::applies(doc) {
-            imported_selection::copy_document(doc, control)?
-        } else {
-            clone_model_without_selection(doc)
-        };
+        let copied = if imported_selection::applies(doc) { imported_selection::copy_document(doc, control)? } else { clone_model_without_selection(doc) };
         let mut staged = ModelStaging { document: copied, selection_view: None };
         if let Some(SelectionView { surface, charges }) = view {
             staged.document.selection = Some(surface);
@@ -429,7 +466,9 @@ impl AccountedDocument {
     /// Borrowed preflight for the closed imported current-metadata transaction.
     /// No allocation or mutation authority; final try_edit repeats these gates.
     pub fn validate_imported_metadata_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<(), BackingError> {
-        if self.is_readonly_normal_hierarchy_storage(){return normal_hierarchy_readonly::metadata::validate(self,edit,control);}
+        if self.is_readonly_normal_hierarchy_storage() {
+            return normal_hierarchy_readonly::metadata::validate(self, edit, control);
+        }
 
         if self.is_readonly_filtered_flat_point_storage() || self.is_readonly_masked_filtered_flat_point_storage() {
             return filtered_flat_readonly::metadata::validate(self, edit, control);
@@ -441,12 +480,23 @@ impl AccountedDocument {
             return flat_composite_readonly::metadata::validate(self, edit, control);
         }
         if self.is_readonly_gaussian_group_storage() {
-            if !matches!(edit, AccountedEdit::LayerMetadata { .. }) { return Err(BackingError::Unsupported); }
+            if !matches!(edit, AccountedEdit::LayerMetadata { .. }) {
+                return Err(BackingError::Unsupported);
+            }
             return gaussian_group_readonly::metadata::validate(self, edit, control);
         }
-        if self.owner._storage_class != StorageClass::Legacy || !imported_selection::applies(self.document())
-            || !matches!(edit, AccountedEdit::LayerMetadata { .. } | AccountedEdit::LayerName { .. } | AccountedEdit::LayerVisibility { .. } | AccountedEdit::LayerOpacity { .. })
-        { return Err(BackingError::Unsupported); }
+        if self.owner._storage_class != StorageClass::Legacy
+            || !imported_selection::applies(self.document())
+            || !matches!(
+                edit,
+                AccountedEdit::LayerMetadata { .. }
+                    | AccountedEdit::LayerName { .. }
+                    | AccountedEdit::LayerVisibility { .. }
+                    | AccountedEdit::LayerOpacity { .. }
+            )
+        {
+            return Err(BackingError::Unsupported);
+        }
         imported_edits::validate_owner(self, edit, control)?;
         accounted_layer_access(self.document(), edit.layer_id(), control)?.ok_or(BackingError::Bounds)?;
         Ok(())
@@ -456,13 +506,18 @@ impl AccountedDocument {
     /// independently repeats storage, target and canonical association checks.
     pub fn validate_assigned_analytic_mask_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<(), BackingError> {
         if self.is_readonly_gaussian_group_storage() {
-            if !matches!(edit, AccountedEdit::MaskEnabled { .. }) { return Err(BackingError::Unsupported); }
+            if !matches!(edit, AccountedEdit::MaskEnabled { .. }) {
+                return Err(BackingError::Unsupported);
+            }
             return gaussian_group_readonly::metadata::validate(self, edit, control);
         }
         if self.owner._storage_class != StorageClass::Legacy || !matches!(edit, AccountedEdit::MaskEnabled { .. }) {
             return Err(BackingError::Unsupported);
         }
-        if !matches!(imported_edits::validate_owner(self, edit, control)?, imported_edits::EditDomain::AssignedGeometry | imported_edits::EditDomain::IsolatedGroup) {
+        if !matches!(
+            imported_edits::validate_owner(self, edit, control)?,
+            imported_edits::EditDomain::AssignedGeometry | imported_edits::EditDomain::IsolatedGroup
+        ) {
             return Err(BackingError::Unsupported);
         }
         let layer = accounted_layer_access(self.document(), edit.layer_id(), control)?.ok_or(BackingError::Bounds)?.layer;
@@ -473,9 +528,12 @@ impl AccountedDocument {
     /// plain class. Empty/outside regions and wrong native lengths refuse. This
     /// grants no mutable model access; final try_edit independently revalidates.
     pub fn validate_imported_native_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<(), BackingError> {
-        if self.owner._storage_class != StorageClass::Legacy || !imported_selection::applies(self.document())
+        if self.owner._storage_class != StorageClass::Legacy
+            || !imported_selection::applies(self.document())
             || !matches!(edit, AccountedEdit::NativePixels { .. })
-        { return Err(BackingError::Unsupported); }
+        {
+            return Err(BackingError::Unsupported);
+        }
         imported_edits::validate_owner(self, edit, control)?;
         accounted_layer_access(self.document(), edit.layer_id(), control)?.ok_or(BackingError::Bounds)?;
         Ok(())
@@ -484,7 +542,9 @@ impl AccountedDocument {
     /// Unknown collections refuse before clone. Native COW allocation uses the
     /// same source ledger and never replaces immutable source/default samples.
     pub fn try_edit(&self, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -> Result<Self, BackingError> {
-        if self.is_readonly_normal_hierarchy_storage(){return normal_hierarchy_readonly::metadata::edited(self,edit,control);}
+        if self.is_readonly_normal_hierarchy_storage() {
+            return normal_hierarchy_readonly::metadata::edited(self, edit, control);
+        }
 
         if self.is_readonly_filtered_flat_point_storage() || self.is_readonly_masked_filtered_flat_point_storage() {
             return filtered_flat_readonly::metadata::edited(self, edit, control);
@@ -498,9 +558,17 @@ impl AccountedDocument {
         if self.is_readonly_gaussian_group_storage() {
             return gaussian_group_readonly::metadata::edited(self, edit, control);
         }
-        if self.owner._storage_class != StorageClass::Legacy { return Err(BackingError::Unsupported); }
+        if self.owner._storage_class != StorageClass::Legacy {
+            return Err(BackingError::Unsupported);
+        }
         let domain = imported_edits::validate_owner(self, edit, control)?;
-        let imported = domain != imported_edits::EditDomain::Resident;
+        let legacy_data = domain == imported_edits::EditDomain::LegacyData;
+        let imported = domain != imported_edits::EditDomain::Resident && !legacy_data;
+        let _native_runtime = if legacy_data && matches!(edit, AccountedEdit::NativePixels { .. }) {
+            Some(self.quota().reserve(QuotaKind::Resident, 8192).map_err(|_| BackingError::Quota)?)
+        } else {
+            None
+        };
         if is_noop(self.document(), edit, control)? {
             control.check(1)?;
             return Ok(self.clone());
@@ -527,7 +595,7 @@ impl AccountedDocument {
         {
             return Err(BackingError::Unsupported);
         }
-        let logical = if imported {
+        let logical = if imported || legacy_data {
             selection_census(doc, false, self.owner._selection.as_ref(), self.quota(), control)?
         } else {
             census(doc, false, self.owner._selection.as_ref(), self.quota(), control)?
@@ -547,7 +615,13 @@ impl AccountedDocument {
             imported_selection::copy_isolated_group(doc, self.quota(), control)?
         } else if domain == imported_edits::EditDomain::AssignedGeometry {
             imported_selection::copy_masked_normal(doc, self.quota(), control)?
-        } else if imported { imported_selection::copy_document(doc, control)? } else { clone_model_without_selection(doc) };
+        } else if legacy_data {
+            legacy_data::copy(doc, control)?
+        } else if imported {
+            imported_selection::copy_document(doc, control)?
+        } else {
+            clone_model_without_selection(doc)
+        };
         let mut staged = ModelStaging { document: copied, selection_view: None };
         if let Some(SelectionView { surface, charges }) = view {
             staged.document.selection = Some(surface);
@@ -571,7 +645,7 @@ impl AccountedDocument {
             AccountedEdit::MaskEnabled { enabled, .. } => layer.mask.as_mut().ok_or(BackingError::Unsupported)?.enabled = enabled,
             AccountedEdit::MaskLinked { linked, .. } => layer.mask.as_mut().ok_or(BackingError::Unsupported)?.linked = linked,
             AccountedEdit::LayerName { name, .. } => {
-                if imported {
+                if imported || legacy_data {
                     layer.name = imported_edits::copy_name(name, control)?;
                 } else {
                     let mut owned = String::new();
@@ -591,12 +665,14 @@ impl AccountedDocument {
                 layer.content = LayerContent::BackedRaster(staged);
             }
         }
-        if imported {
+        if legacy_data {
+            legacy_data::synchronize(&mut staged.document, edit, control)?;
+        } else if imported {
             imported_edits::synchronize(&mut staged.document, edit, control)?;
         } else {
             sync_current_item(&mut staged.document, edit)?;
         }
-        let retained = if imported {
+        let retained = if imported || legacy_data {
             selection_census(&staged.document, true, self.owner._selection.as_ref(), self.quota(), control)?
         } else {
             census(&staged.document, true, self.owner._selection.as_ref(), self.quota(), control)?
@@ -633,13 +709,14 @@ fn is_noop(doc: &Document, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -
             }
             // Incoming fields were validated by validate_owner before this
             // private helper; every repeated name comparison is charged here.
-            let same_name = match name { Some(name) => imported_edits::names_equal(name, &layer.name, control)?, None => true };
+            let same_name = match name {
+                Some(name) => imported_edits::names_equal(name, &layer.name, control)?,
+                None => true,
+            };
             if opacity.is_some_and(|v| !v.is_finite() || !(0.0..=1.0).contains(&v)) {
                 return Err(BackingError::Bounds);
             }
-            Ok(same_name
-                && visible.is_none_or(|v| v == layer.visible)
-                && opacity.is_none_or(|v| v.to_bits() == layer.opacity.to_bits()))
+            Ok(same_name && visible.is_none_or(|v| v == layer.visible) && opacity.is_none_or(|v| v.to_bits() == layer.opacity.to_bits()))
         }
         AccountedEdit::LayerVisibility { visible, .. } => Ok(layer.visible == visible),
         AccountedEdit::LayerOpacity { opacity, .. } => {
@@ -649,15 +726,21 @@ fn is_noop(doc: &Document, edit: AccountedEdit<'_>, control: &ReadControl<'_>) -
             Ok(layer.opacity.to_bits() == opacity.to_bits())
         }
         AccountedEdit::LayerName { name, .. } => {
-            if imported_selection::applies(doc) { return imported_edits::names_equal(&layer.name, name, control); }
+            if imported_selection::applies(doc) {
+                return imported_edits::names_equal(&layer.name, name, control);
+            }
             if name.len() > 1 << 20 || name.contains('\0') {
                 return Err(BackingError::Length);
             }
             Ok(layer.name == name)
         }
         AccountedEdit::NativePixels { rect, bytes, .. } => {
-            if imported_selection::applies(doc) { imported_edits::native_is_noop(layer, rect, bytes, control) } else { Ok(false) }
-        },
+            if imported_selection::applies(doc) {
+                imported_edits::native_is_noop(layer, rect, bytes, control)
+            } else {
+                Ok(false)
+            }
+        }
         AccountedEdit::MaskEnabled { enabled, .. } => {
             let mask = validate_mask_control(doc, layer, control)?;
             Ok(mask.enabled == enabled)
@@ -712,11 +795,23 @@ impl AccountedDocument {
     /// larger canonical-row bound belongs only to the new runtime class and
     /// does not grant selection or command mutation authority.
     pub fn accounted_layer_access(&self, id: LayerId, control: &ReadControl<'_>) -> Result<Option<AccountedLayerAccess<'_>>, BackingError> {
-        let limit = if self.is_readonly_normal_hierarchy_storage() || self.is_readonly_filtered_flat_point_storage() || self.is_readonly_masked_filtered_flat_point_storage() { 8192 } else { 4096 };
+        let limit = if self.is_readonly_normal_hierarchy_storage()
+            || self.is_readonly_filtered_flat_point_storage()
+            || self.is_readonly_masked_filtered_flat_point_storage()
+        {
+            8192
+        } else {
+            4096
+        };
         accounted_layer_access_with_limit(self.document(), id, control, limit)
     }
 }
-fn accounted_layer_access_with_limit<'a>(doc: &'a Document, id: LayerId, control: &ReadControl<'_>, item_limit: usize) -> Result<Option<AccountedLayerAccess<'a>>, BackingError> {
+fn accounted_layer_access_with_limit<'a>(
+    doc: &'a Document,
+    id: LayerId,
+    control: &ReadControl<'_>,
+    item_limit: usize,
+) -> Result<Option<AccountedLayerAccess<'a>>, BackingError> {
     control.check(1)?;
     if doc.xcf_state.as_ref().is_some_and(|state| state.items.len() > item_limit) {
         return Err(BackingError::Length);
@@ -782,7 +877,9 @@ fn imported_item_locks_with_limit(
     let Some(state) = state else {
         return Ok(crate::xcf_state::ItemLocks::default());
     };
-    if state.items.len() > item_limit { return Err(BackingError::Length); }
+    if state.items.len() > item_limit {
+        return Err(BackingError::Length);
+    }
     let mut found = None;
     for (index, item) in state.items.iter().enumerate() {
         if item_limit == 8192 || index % 64 == 0 {
@@ -862,10 +959,22 @@ fn selection_format_allowed(format: photocraft_color::PixelFormat, depth: crate:
 
 /// Capacity census for an intentionally explicit bounded tree model-copy domain.
 /// Owned complex collections are refused, never assigned a fabricated size.
-fn census(doc: &Document, actual: bool, guard: Option<&AccountedSelection>, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+fn census(
+    doc: &Document,
+    actual: bool,
+    guard: Option<&AccountedSelection>,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<ModelCensus, BackingError> {
     census_inner(doc, actual, false, guard, quota, control, false)
 }
-fn selection_census(doc: &Document, actual: bool, guard: Option<&AccountedSelection>, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+fn selection_census(
+    doc: &Document,
+    actual: bool,
+    guard: Option<&AccountedSelection>,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<ModelCensus, BackingError> {
     census_inner(doc, actual, imported_selection::applies(doc), guard, quota, control, false)
 }
 fn census_inner(
@@ -877,8 +986,15 @@ fn census_inner(
     control: &ReadControl<'_>,
     readonly_filter_masks: bool,
 ) -> Result<ModelCensus, BackingError> {
-    census_with_mask_policy(doc, actual, imported_selection, selection_guard, expected_quota, control,
-        if readonly_filter_masks { ReadonlyMaskPolicy::Threshold } else { ReadonlyMaskPolicy::None })
+    census_with_mask_policy(
+        doc,
+        actual,
+        imported_selection,
+        selection_guard,
+        expected_quota,
+        control,
+        if readonly_filter_masks { ReadonlyMaskPolicy::Threshold } else { ReadonlyMaskPolicy::None },
+    )
 }
 fn point_readonly_census(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
     census_with_mask_policy(doc, true, true, None, quota, control, ReadonlyMaskPolicy::Point)
@@ -1215,7 +1331,12 @@ fn sync_current_item(document: &mut Document, edit: AccountedEdit<'_>) -> Result
 /// an evaluator. The codec/importer retains the original source and validation
 /// evidence; clones copy owned buffers and share immutable Arc payloads.
 #[derive(Clone, Copy)]
-enum ReadonlyMaskPolicy { None, Threshold, Point, FilteredFlat }
+enum ReadonlyMaskPolicy {
+    None,
+    Threshold,
+    Point,
+    FilteredFlat,
+}
 struct CanonicalCensus<'a> {
     readonly_masks: ReadonlyMaskPolicy,
     counted: ModelCensus,
@@ -1372,7 +1493,7 @@ impl<'a> CanonicalCensus<'a> {
         }
         match self.readonly_masks {
             ReadonlyMaskPolicy::None if !filter_masks.is_empty() => return Err(BackingError::Unsupported),
-            ReadonlyMaskPolicy::None => {},
+            ReadonlyMaskPolicy::None => {}
             ReadonlyMaskPolicy::Threshold => filter_readonly::mask_census(filter_masks, self)?,
             ReadonlyMaskPolicy::Point => point_readonly::mask_census(filter_masks, self)?,
             ReadonlyMaskPolicy::FilteredFlat => filtered_flat_readonly::mask_census(filter_masks, self)?,
@@ -1563,33 +1684,33 @@ fn clone_model_without_selection(doc: &Document) -> Document {
     Document {
         physical_resolution: physical_resolution.clone(),
         xcf_state: xcf_state.clone(),
-        sample_encoding: sample_encoding.clone(),
+        sample_encoding: *sample_encoding,
         source_color_context: source_color_context.clone(),
         working_profile_interpretation: working_profile_interpretation.clone(),
-        id: id.clone(),
+        id: *id,
         name: name.clone(),
-        size: size.clone(),
-        resolution_dpi: resolution_dpi.clone(),
-        mode: mode.clone(),
-        depth: depth.clone(),
+        size: *size,
+        resolution_dpi: *resolution_dpi,
+        mode: *mode,
+        depth: *depth,
         icc_profile: icc_profile.clone(),
         layers: layers.clone(),
         channels: channels.clone(),
         guides: guides.clone(),
         selection: None,
-        selection_channel_id: selection_channel_id.clone(),
+        selection_channel_id: *selection_channel_id,
         metadata: metadata.clone(),
-        global_light: global_light.clone(),
+        global_light: *global_light,
         paths: paths.clone(),
         work_path: work_path.clone(),
         clipping_path: clipping_path.clone(),
         quick_mask: quick_mask.clone(),
-        quick_mask_unselected: quick_mask_unselected.clone(),
+        quick_mask_unselected: *quick_mask_unselected,
         patterns: patterns.clone(),
         color_table: color_table.clone(),
         duotone: duotone.clone(),
         layer_comps: layer_comps.clone(),
-        last_applied_comp: last_applied_comp.clone(),
+        last_applied_comp: *last_applied_comp,
         last_document_state: last_document_state.clone(),
         measurement: measurement.clone(),
         notes: notes.clone(),
@@ -1597,7 +1718,7 @@ fn clone_model_without_selection(doc: &Document) -> Document {
         slices: slices.clone(),
         variables: variables.clone(),
         timeline: timeline.clone(),
-        file_encoding: file_encoding.clone(),
-        ruler_origin: ruler_origin.clone(),
+        file_encoding: *file_encoding,
+        ruler_origin: *ruler_origin,
     }
 }

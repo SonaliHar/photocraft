@@ -139,12 +139,21 @@ fn exhausted_index_refuses_before_cloning_model_or_mutating_source() {
     drop(held);
 }
 #[test]
-fn anonymous_imported_selection_does_not_unlock_legacy_generic_model_clone() {
+fn anonymous_imported_selection_metadata_copy_preserves_real_guard_and_source() {
     let q = quota();
     let doc = model(&q, "source", false, false);
     let s = selection(&q);
     let selected = doc.try_replace_selection(Some(&s), &control()).unwrap();
     let layer = selected.document().layers[0].id;
-    assert!(matches!(selected.try_edit(AccountedEdit::LayerVisibility { layer, visible: false }, &control()), Err(BackingError::Unsupported)));
+    let changed = selected.try_edit(AccountedEdit::LayerVisibility { layer, visible: false }, &control()).unwrap();
+    assert!(!changed.document().layers[0].visible);
+    assert!(s.matches(changed.document().selection.as_ref().unwrap(), &q, &control()).unwrap());
+    assert_eq!(changed.document().source_color_context, selected.document().source_color_context);
+    assert_eq!(changed.document().icc_profile, selected.document().icc_profile);
+    let denied = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(BackingError::Cancelled) };
+    let used = q.usage().unwrap();
+    assert!(matches!(selected.try_edit(AccountedEdit::LayerVisibility { layer, visible: false }, &denied), Err(BackingError::Cancelled)));
+    assert!(selected.try_edit(AccountedEdit::LayerVisibility { layer: LayerId(u64::MAX), visible: false }, &control()).is_err());
+    assert_eq!(q.usage().unwrap(), used);
     assert!(selected.document().layers[0].visible);
 }

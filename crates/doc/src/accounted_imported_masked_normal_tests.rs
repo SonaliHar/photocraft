@@ -326,3 +326,6 @@ fn operator_mismatch_out_of_domain_and_backdrop_nonunion_fail_without_fee_change
     let denied = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(BackingError::Work) };
     assert!(invalid.validate_assigned_analytic_geometry_storage(&denied).is_err());
 }
+
+#[path = "accounted_imported_masked_ordinary_metadata_tests.rs"]
+mod ordinary_metadata;

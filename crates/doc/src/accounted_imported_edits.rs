@@ -5,6 +5,7 @@ use super::*;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum EditDomain {
     Resident,
+    LegacyData,
     Plain,
     AssignedGeometry,
     IsolatedGroup,
@@ -16,7 +17,10 @@ pub(super) enum EditDomain {
 }
 
 pub(super) fn validate_owner(owner: &AccountedDocument, edit: AccountedEdit<'_>, c: &ReadControl<'_>) -> Result<EditDomain, BackingError> {
-    if owner.is_readonly_normal_hierarchy_storage(){normal_hierarchy_readonly::metadata::validate(owner,edit,c)?;return Ok(EditDomain::NormalHierarchyMetadata)}
+    if owner.is_readonly_normal_hierarchy_storage() {
+        normal_hierarchy_readonly::metadata::validate(owner, edit, c)?;
+        return Ok(EditDomain::NormalHierarchyMetadata);
+    }
 
     // Actual Point classes admit only the structural compound metadata plan.
     // This runs before generic no-op/history admission and grants no recipe.
@@ -41,6 +45,24 @@ pub(super) fn validate_owner(owner: &AccountedDocument, edit: AccountedEdit<'_>,
         return Ok(EditDomain::GaussianGroup);
     }
     let imported = imported_selection::applies(owner.document());
+    // Ordinary scenes have a distinct retained epoch from the restrictive
+    // assigned-geometry lane despite sharing Legacy storage and XCF version 12.
+    // This selects only the existing complete Legacy data metadata validator.
+    if imported
+        && matches!(edit, AccountedEdit::LayerName { .. } | AccountedEdit::LayerVisibility { .. } | AccountedEdit::LayerOpacity { .. })
+        && super::legacy_data::ordinary_metadata_intent(owner.document(), c)?
+    {
+        super::legacy_data::validate(owner, edit, c)?;
+        return Ok(EditDomain::LegacyData);
+    }
+    // Legacy is a genuine pure-data owner. Imported metadata alone must not
+    // select a renderer-specific flat shape or discard groups/masks/programmes.
+    // A real anonymous selection still requires its exact retained guard.
+    if imported && !super::legacy_data::closed_geometry_intent(owner.document(), c)? && !matches!(edit, AccountedEdit::LayerMetadata { .. }) {
+        super::legacy_data::validate(owner, edit, c)?;
+        return Ok(EditDomain::LegacyData);
+    }
+
     if imported {
         // Only this exact bounded group lane can copy recursive containers;
         // selecting it is authoritative and never falls back to the flat lane.
@@ -330,4 +352,6 @@ pub(super) fn copy_name(name: &str, c: &ReadControl<'_>) -> Result<String, Backi
 
 #[cfg(test)]
 #[path = "accounted_imported_edits_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unreachable)]
 mod tests;
