@@ -98,7 +98,7 @@ fn only_siblings_next_to_each_other_meet_at_a_line() {
     s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
     s.execute("layer.new.layer", json!({"name": "d"})).unwrap();
     s.execute("layer.new.layer", json!({"name": "c"})).unwrap();
-    s.execute("layer.groupLayers", json!({"name": "g"})).unwrap();
+    s.execute("layer.groupLayers", json!({"name": "g", "expanded": true})).unwrap();
     let mut doc: Document = (*s.active().unwrap().doc).clone();
     let [g, c, d, bg] = ["g", "c", "d", "Background"].map(|n| named(&doc, n));
     let open = [row(g, 0.0), row(c, 32.0), row(d, 64.0), row(bg, 96.0)];
