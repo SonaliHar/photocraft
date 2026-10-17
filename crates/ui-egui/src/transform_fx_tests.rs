@@ -683,3 +683,49 @@ fn the_rest_of_a_moving_part_is_rendered_once_per_scale() {
     assert!(h.state().ui.transform.is_none());
     assert!(photocraft_compose::effects::has_effects(st.doc.layer(st.active_layer.unwrap()).unwrap()));
 }
+
+/// From @FredApps' review of #5537: over a translucent backdrop the preview is the layer's own
+/// share, so the canvas with the preview drawn over it is the committed composite (it used to lay
+/// the backdrop down twice: colour and opacity off).
+#[test]
+fn a_translucent_backdrop_is_not_composited_twice() {
+    for blend in [BlendMode::Multiply, BlendMode::Screen, BlendMode::Overlay, BlendMode::Difference] {
+        let mut app = blended("rgb", 8, blend);
+        app.session
+            .edit("translucent backdrop and foreground", |doc, active| {
+                let id = active.unwrap();
+                for layer in &mut doc.layers {
+                    layer.opacity = 0.5;
+                }
+                assert_eq!(doc.layers.last().unwrap().id, id);
+                Ok(())
+            })
+            .unwrap();
+        begin(&mut app);
+        let (shown, plan) = on_canvas(&app);
+        let p = at(&(shown.clone(), plan), 80.0, 70.0);
+        let at_rest = committed(&mut app, shown.rect);
+        let i = ((70 - at_rest.rect.y0) * at_rest.rect.width() as i32 + 80 - at_rest.rect.x0) as usize;
+        let expected = at_rest.px[i];
+        assert!(p.iter().zip(expected).all(|(a, b)| (*a - b).abs() <= 2.0 / 255.0), "{blend:?}: preview {p:?}, committed {expected:?}");
+        let (mean, off) = difference(&shown, &at_rest);
+        assert!(mean <= 0.006 && off * 500 <= shown.px.len(), "{blend:?}: mean {mean}, {off} differ");
+    }
+    // Moved and turned, over the translucent backdrop.
+    let mut app = blended("rgb", 16, BlendMode::Multiply);
+    app.session
+        .edit("translucent", |doc, _| {
+            for layer in &mut doc.layers {
+                layer.opacity = 0.5;
+            }
+            Ok(())
+        })
+        .unwrap();
+    begin(&mut app);
+    set_quad(&mut app, turned());
+    app.ui.transform.as_mut().unwrap().interpolation = "bilinear".into();
+    let (shown, plan) = on_canvas(&app);
+    let after = committed(&mut app, plan.shown);
+    let (mean, off) = difference(&shown, &after);
+    assert!(mean <= 0.006 && off * 500 <= shown.px.len(), "turned: mean {mean}, {off} differ");
+}

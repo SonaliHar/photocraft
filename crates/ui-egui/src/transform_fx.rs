@@ -18,8 +18,9 @@
 //!
 //! A layer with a blend mode other than Normal is composited the same way, onto the layers under
 //! it rather than onto transparency (#5513): the document under the box is rendered at the same
-//! scale ([`backdrop`]), the layer blends onto it as the compositor blends it, and only the pixels
-//! the layer changed are drawn. Without a blend mode (or where the layers under it aren't all the
+//! scale ([`backdrop`]), the layer blends onto it as the compositor blends it, and only the layer's
+//! own share of the result is drawn over the canvas, which shows that backdrop already (so a
+//! translucent backdrop isn't laid down twice). Without a blend mode (or where the layers under it aren't all the
 //! layer blends with, see `transform_tool::blends_with_canvas`) the composite is drawn over
 //! transparency with Normal blending, like the mesh it replaces.
 //!
@@ -298,8 +299,10 @@ pub fn compose_over(doc: &Document, work: &Layer, plan: &Plan, source: &Source, 
             psblend::with_hdr(hdr, || effects::composite_with_effects(work, &crop(&content, band), &mut over, &maps, plan.bounds, &doc.patterns))
         });
         for (i, (o, p)) in px.iter_mut().zip(over.px).enumerate() {
-            let was = under.as_ref().and_then(|u| u.px.get(i));
-            *o = if was.is_some_and(|w| same(*w, p)) { [0.0; 4] } else { p };
+            *o = match under.as_ref().and_then(|u| u.px.get(i)) {
+                Some(w) => contribution(*w, p),
+                None => p,
+            };
         }
     });
     Some(out)
@@ -313,6 +316,28 @@ fn over(top: [f32; 4], under: [f32; 4]) -> [f32; 4] {
     }
     let c = |k: usize| (top[k] * top[3] + under[k] * under[3] * (1.0 - top[3])) / a;
     [c(0), c(1), c(2), a]
+}
+
+/// What to draw over `under`, which the canvas shows already, so that it shows `result`: the
+/// layer's own share. Drawn with ordinary alpha blending, `result = d + (1 − d.α)·under`
+/// (premultiplied), so `d.α = 1 − (1 − result.α) / (1 − under.α)` and `d = result − (1 − d.α)·under`.
+/// Over an opaque backdrop that is `result` itself; over a translucent one, drawing `result` would
+/// lay the backdrop down twice. Straight alpha in and out.
+fn contribution(under: [f32; 4], result: [f32; 4]) -> [f32; 4] {
+    if same(under, result) {
+        return [0.0; 4];
+    }
+    let (ua, ra) = (under[3].clamp(0.0, 1.0), result[3].clamp(0.0, 1.0));
+    if ua >= 1.0 - 1.0 / 4096.0 {
+        return result;
+    }
+    let da = (1.0 - (1.0 - ra) / (1.0 - ua)).clamp(0.0, 1.0);
+    if da <= 0.0 {
+        return [0.0; 4];
+    }
+    let keep = 1.0 - da;
+    let c = |k: usize| (result[k] * ra - keep * under[k] * ua).max(0.0) / da;
+    [c(0), c(1), c(2), da]
 }
 
 /// Two composite pixels that look the same at 8 bits.
