@@ -97,7 +97,25 @@ fn stat(v: &mut [f32], s: Stat, scratch: &mut EntropyScratch) -> f32 {
         _ => {}
     }
     let mean = v.iter().sum::<f32>() / n;
-    let m = |k: i32| v.iter().map(|x| (x - mean).powi(k)).sum::<f32>() / n;
+    // Fixed multiplication order keeps the original moment bits across targets and
+    // optimization levels. powi lowering changed Kurtosis by one ulp on Windows.
+    let m = |k: i32| {
+        v.iter()
+            .map(|x| {
+                let d = x - mean;
+                match k {
+                    2 => d * d,
+                    3 => d * d * d,
+                    4 => {
+                        let square = d * d;
+                        square * square
+                    }
+                    _ => d.powi(k),
+                }
+            })
+            .sum::<f32>()
+            / n
+    };
     match s {
         Stat::Mean => mean,
         Stat::Variance => m(2),
