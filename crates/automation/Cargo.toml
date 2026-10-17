@@ -36,6 +36,8 @@ same-file = "1.0.6"
 rustix = { version = "=1.1.5", features = ["fs"] }
 
 [dev-dependencies]
+photocraft-color = { workspace = true }
+photocraft-algo = { workspace = true }
 sha2 = "0.10"
 photocraft-cms = { workspace = true }
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
