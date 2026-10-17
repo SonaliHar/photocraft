@@ -430,6 +430,10 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+fn opacity(p: &Value, cmd: &str) -> Result<f32> {
+    Ok(crate::eraser_cmds::number(p, cmd, "opacity", 100.0, 1.0..=100.0)? as f32 / 100.0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -736,8 +740,4 @@ mod tests {
             assert!((px(&s, 5, 5)[0] - 128.0 / 255.0).abs() < 0.01, "{cmd}: null opacity is 100%");
         }
     }
-}
-
-fn opacity(p: &Value, cmd: &str) -> Result<f32> {
-    Ok(crate::eraser_cmds::number(p, cmd, "opacity", 100.0, 1.0..=100.0)? as f32 / 100.0)
 }

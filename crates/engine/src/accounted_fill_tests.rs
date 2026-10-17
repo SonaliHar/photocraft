@@ -18,6 +18,8 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 #[path = "../../xcf/tests/common/mod.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod xcf;
 
 fn ctl() -> ReadControl<'static> {
@@ -30,7 +32,6 @@ fn fixture(mode: ColorMode, sample: SampleType, alpha_lock: bool) -> Session {
         SampleType::U32 => (350, 0x80000001u32.to_be_bytes().to_vec(), 0xc0000001u32.to_be_bytes().to_vec()),
         SampleType::F32 => (650, 0.5f32.to_be_bytes().to_vec(), 0.75f32.to_be_bytes().to_vec()),
         SampleType::F64 => (750, (0.5 + 2f64.powi(-44)).to_be_bytes().to_vec(), 0.75f64.to_be_bytes().to_vec()),
-        _ => panic!(),
     };
     let mut pixel = color.repeat(if mode == ColorMode::Grayscale { 1 } else { 3 });
     pixel.extend(alpha);
@@ -140,7 +141,7 @@ fn registered_reply_history_noop_redo_and_alpha_lock_are_preserved() {
     assert_eq!(result, json!({"contents":"white"}));
     assert_eq!(session.active().unwrap().history.past_len(), past + 1);
     let changed = native(&session);
-    for (a, b) in old.chunks_exact(16).zip(changed.chunks_exact(16)) {
+    for (a, b) in old.as_chunks::<16>().0.iter().zip(changed.as_chunks::<16>().0.iter()) {
         assert_eq!(&a[12..], &b[12..]);
     }
     session.execute("edit.undo", json!({})).unwrap();

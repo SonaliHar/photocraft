@@ -91,8 +91,10 @@ impl<'a> Prepared<'a> {
         let owner = st.doc.accounted().ok_or(BackingError::Unsupported)?;
         let kind = accounted_programme_current::kind(owner).ok_or(BackingError::Unsupported)?;
         selection_context(owner, command)?;
-        let selection_guard=owner.checked_programme_selection(c)?;
-        if !selection_guard.matches_owner(owner){return Err(BackingError::Integrity.into())}
+        let selection_guard = owner.checked_programme_selection(c)?;
+        if !selection_guard.matches_owner(owner) {
+            return Err(BackingError::Integrity.into());
+        }
         accounted_programme_current::validate(owner, kind, c)?;
         let view = st.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
         if st.active_layer != view.target().active
@@ -284,8 +286,7 @@ impl<'a> Prepared<'a> {
             }
             let staged = owner.try_edit_programme_preserving_native(AccountedEdit::NativePixels { layer: id, rect: area, bytes: &stage.output }, c)?;
             accounted_programme_current::validate(&staged, kind, c)?;
-            history.max_states = s.prefs().performance.history_states.max(1) as usize;
-            history.max_bytes = s.prefs().performance.history_budget_bytes();
+            history.set_accounted_state_limit(s.prefs().performance.history_states.max(1) as usize)?;
             history.set_current_layers_borrowed(view.target(), c)?;
             history.try_commit_prepared_accounted(owner, staged, operation.label(), view.target(), c)?
         } else {
@@ -356,8 +357,10 @@ impl<'a> Prepared<'a> {
             return Err(bad(command, "the prepared programme pixels target older document/view/source/tool/history state"));
         }
         selection_context(owner, command)?;
-        let selection_guard=owner.checked_programme_selection(c)?;
-        if !selection_guard.matches_owner(owner){return Err(BackingError::Integrity.into())}
+        let selection_guard = owner.checked_programme_selection(c)?;
+        if !selection_guard.matches_owner(owner) {
+            return Err(BackingError::Integrity.into());
+        }
         let alpha_locked = locks(owner, self.witness.layer, self.operation, c)?;
         if (alpha_locked || self.operation.keeps_alpha()) != self.preserve_alpha {
             return Err(BackingError::Integrity.into());
@@ -390,4 +393,8 @@ impl<'a> Prepared<'a> {
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_programme_native_pixels_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod tests;

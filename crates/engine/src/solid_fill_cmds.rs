@@ -98,20 +98,24 @@ mod tests {
             s.execute("layer.layerMask.revealAll", json!({})).unwrap();
             s.execute("layer.vectorMask.revealAll", json!({})).unwrap();
             let before = s.active().unwrap().doc.clone();
-            let count = s.active().unwrap().history.entries().len();
+            let count = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
             let color = Color { mode: ColorMode::Lab, c: [0.512345, 0.48, 0.6, 0.0], alpha: 0.345678 };
             s.execute(SET, json!({"layer": id, "color": color})).unwrap();
             let mut expected = (*before).clone();
             expected.layer_mut(photocraft_doc::LayerId(id)).unwrap().content = LayerContent::Fill(Fill::Solid(color));
             assert_eq!(*s.active().unwrap().doc, expected);
-            assert_eq!(s.active().unwrap().history.entries().len(), count + 1);
+            assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), count + 1);
             s.execute("edit.undo", json!({})).unwrap();
             assert_eq!(*s.active().unwrap().doc, *before);
             s.execute("edit.redo", json!({})).unwrap();
             assert_eq!(s.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().content, LayerContent::Fill(Fill::Solid(color)));
-            let count = s.active().unwrap().history.entries().len();
+            let count = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
             s.execute(SET, json!({"color": color})).unwrap();
-            assert_eq!(s.active().unwrap().history.entries().len(), count, "unchanged colour is not a history step");
+            assert_eq!(
+                s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(),
+                count,
+                "unchanged colour is not a history step"
+            );
             s.execute(SET, json!({"color": "#abcdef"})).unwrap();
             let LayerContent::Fill(Fill::Solid(changed)) = s.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().content else { panic!() };
             assert_eq!(changed.alpha, color.alpha);
@@ -126,7 +130,7 @@ mod tests {
         let pixels = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
         s.execute("layer.newFillLayer.solidColor", json!({})).unwrap();
         let before = s.active().unwrap().doc.clone();
-        let count = s.active().unwrap().history.entries().len();
+        let count = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
         for p in [
             json!({}),
             json!(null),
@@ -140,8 +144,8 @@ mod tests {
             json!({"document": u64::MAX, "color": "#ffffff"}),
         ] {
             assert!(s.execute(SET, p.clone()).is_err(), "{p}");
-            assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
-            assert_eq!(s.active().unwrap().history.entries().len(), count);
+            assert!(before.shares_state(&s.active().unwrap().doc));
+            assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), count);
         }
     }
 
@@ -154,7 +158,7 @@ mod tests {
             s.execute("layer.setProps", json!({"locks": locks})).unwrap();
             let before = s.active().unwrap().doc.clone();
             assert!(s.execute(SET, json!({"color": "#abcdef00"})).is_err());
-            assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
+            assert!(before.shares_state(&s.active().unwrap().doc));
         }
         s.execute(SET, json!({"color": "#abcdef"})).unwrap();
     }
@@ -173,7 +177,7 @@ mod tests {
                 _ => panic!(),
             };
             assert_eq!(s.active().unwrap().doc.mode, mode);
-            let count = s.active().unwrap().history.entries().len();
+            let count = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
             for (value, rgb) in [
                 (json!("#336699"), Color::rgba(51.0 / 255.0, 102.0 / 255.0, 153.0 / 255.0, original.alpha)),
                 (json!([0.25, 0.5, 0.75]), Color::rgba(0.25, 0.5, 0.75, original.alpha)),
@@ -185,12 +189,12 @@ mod tests {
                 assert_eq!(stored, expected);
                 assert_eq!(stored.alpha, original.alpha);
             }
-            assert_eq!(s.active().unwrap().history.entries().len(), count + 2);
+            assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), count + 2);
             // Reapplying the same RGB array is a no-op, including after mode conversion.
             let before_noop = s.active().unwrap().doc.clone();
             s.execute(SET, json!({"layer": id, "color": [0.25, 0.5, 0.75]})).unwrap();
-            assert!(std::sync::Arc::ptr_eq(&before_noop, &s.active().unwrap().doc));
-            assert_eq!(s.active().unwrap().history.entries().len(), count + 2);
+            assert!(before_noop.shares_state(&s.active().unwrap().doc));
+            assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), count + 2);
             let expected = Color::rgba(0.25, 0.5, 0.75, 0.25).in_mode(mode);
             s.execute(SET, json!({"layer": id, "color": [0.25, 0.5, 0.75, 0.25]})).unwrap();
             let LayerContent::Fill(Fill::Solid(stored)) = s.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().content else { panic!() };
@@ -213,11 +217,11 @@ mod tests {
         let imported = Color { mode: ColorMode::Lab, c: [0.5123457, 0.4987654, 0.5678912, 0.0], alpha: 0.3456789 };
         s.execute(SET, json!({"color": imported})).unwrap();
         let before = s.active().unwrap().doc.clone();
-        let count = s.active().unwrap().history.entries().len();
+        let count = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
         let result = s.execute(SET, json!({"color": imported})).unwrap();
         assert_eq!(serde_json::from_value::<Color>(result["color"].clone()).unwrap(), imported);
-        assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
-        assert_eq!(s.active().unwrap().history.entries().len(), count);
+        assert!(before.shares_state(&s.active().unwrap().doc));
+        assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), count);
     }
 
     #[test]
@@ -226,7 +230,7 @@ mod tests {
         s.execute("file.new", json!({"width": 4, "height": 4})).unwrap();
         s.execute("layer.newFillLayer.solidColor", json!({})).unwrap();
         let before = s.active().unwrap().doc.clone();
-        let count = s.active().unwrap().history.entries().len();
+        let count = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
         for color in [
             json!([5.0, 0.0, 0.0]),
             json!([-0.01, 0.0, 0.0]),
@@ -242,8 +246,8 @@ mod tests {
         ] {
             let err = s.execute(SET, json!({"color": color})).unwrap_err();
             assert!(matches!(err, EngineError::BadParams { .. }), "{err}");
-            assert!(std::sync::Arc::ptr_eq(&before, &s.active().unwrap().doc));
-            assert_eq!(s.active().unwrap().history.entries().len(), count);
+            assert!(before.shares_state(&s.active().unwrap().doc));
+            assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), count);
         }
         // Stored non-RGB colours are not subject to the RGB picker component limits.
         let wide = Color { mode: ColorMode::Lab, c: [1.1, -0.1, 0.6, 0.0], alpha: 0.75 };

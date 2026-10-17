@@ -357,12 +357,18 @@ fn wide_fill(
     Ok(json!({"contents":contents}))
 }
 
-fn read_rgba(src:&Surface,area:Rect,label:&str)->Result<Vec<[f32;4]>> {
-    if matches!(src.format().sample,photocraft_doc::SampleType::U32|photocraft_doc::SampleType::F64){return Err(bad(format!("{label}: authoritative U32/F64 arithmetic is unsupported")));}
-    src.try_validate_tile_origins().map_err(|e|bad(format!("{label}: {e}")))?;
-    let bytes=photocraft_raster::checked_region_byte_len(area,photocraft_color::PixelFormat::RGBA32F).map_err(|e|bad(format!("{label}: {e}")))?;
-    let count=bytes/16;let mut px=Vec::new();px.try_reserve_exact(count).map_err(|_|bad(format!("{label}: allocation failed")))?;
-    px.resize(count,[0.0;4]);src.read_rgba_into(area,&mut px);Ok(px)
+fn read_rgba(src: &Surface, area: Rect, label: &str) -> Result<Vec<[f32; 4]>> {
+    if matches!(src.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64) {
+        return Err(bad(format!("{label}: authoritative U32/F64 arithmetic is unsupported")));
+    }
+    src.try_validate_tile_origins().map_err(|e| bad(format!("{label}: {e}")))?;
+    let bytes = photocraft_raster::checked_region_byte_len(area, photocraft_color::PixelFormat::RGBA32F).map_err(|e| bad(format!("{label}: {e}")))?;
+    let count = bytes / 16;
+    let mut px = Vec::new();
+    px.try_reserve_exact(count).map_err(|_| bad(format!("{label}: allocation failed")))?;
+    px.resize(count, [0.0; 4]);
+    src.read_rgba_into(area, &mut px);
+    Ok(px)
 }
 
 /// The selection filled from its surroundings (`photocraft_algo::content_aware`), as straight
@@ -659,6 +665,28 @@ fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rec
             photocraft_raster::encode_pixel(fmt, enc.get(..m.min(n)).unwrap_or(&[]), pb);
         }
     }
+}
+
+fn color_source(s: &Session, c: [f32; 4]) -> Source {
+    match s.tools.picked_cmyk([c[0], c[1], c[2]]) {
+        Some(cmyk) if c[3] >= 1.0 => Source::Cmyk { rgba: c, cmyk },
+        _ => Source::Color(c),
+    }
+}
+
+fn encode_color(fmt: &photocraft_color::PixelFormat, source: &Source, enc: &mut [f32; 8]) -> Option<usize> {
+    let (rgba, cmyk) = match source {
+        Source::Color(c) if c[3] >= 1.0 => (*c, None),
+        Source::Cmyk { rgba, cmyk } => (*rgba, Some(*cmyk)),
+        _ => return None,
+    };
+    let n = from_rgba_into(fmt, rgba, enc);
+    if let Some(k) = cmyk
+        && fmt.mode == photocraft_color::ColorMode::Cmyk
+    {
+        enc[..4].copy_from_slice(&k);
+    }
+    Some(n)
 }
 
 #[cfg(test)]
@@ -965,26 +993,4 @@ mod tests {
             s.execute("select.deselect", json!({})).unwrap();
         }
     }
-}
-
-fn color_source(s: &Session, c: [f32; 4]) -> Source {
-    match s.tools.picked_cmyk([c[0], c[1], c[2]]) {
-        Some(cmyk) if c[3] >= 1.0 => Source::Cmyk { rgba: c, cmyk },
-        _ => Source::Color(c),
-    }
-}
-
-fn encode_color(fmt: &photocraft_color::PixelFormat, source: &Source, enc: &mut [f32; 8]) -> Option<usize> {
-    let (rgba, cmyk) = match source {
-        Source::Color(c) if c[3] >= 1.0 => (*c, None),
-        Source::Cmyk { rgba, cmyk } => (*rgba, Some(*cmyk)),
-        _ => return None,
-    };
-    let n = from_rgba_into(fmt, rgba, enc);
-    if let Some(k) = cmyk
-        && fmt.mode == photocraft_color::ColorMode::Cmyk
-    {
-        enc[..4].copy_from_slice(&k);
-    }
-    Some(n)
 }

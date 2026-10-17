@@ -35,13 +35,17 @@ mod programme;
 pub(crate) fn programme_candidate(session: &Session) -> bool {
     session.active().and_then(|s| s.doc.accounted()).and_then(crate::accounted_programme_current::kind).is_some()
 }
+// Keep the prepaid inline representation; boxing introduces a separate heap owner and quota lifetime.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Prepared<'a> {
     Legacy(LegacyPrepared<'a>),
     Programme(programme::Prepared<'a>),
 }
 impl<'a> Prepared<'a> {
     pub(crate) fn prepare_clear(s: &Session, p: &'a Value, c: &ReadControl<'_>) -> Result<Self> {
-        if programme_candidate(s) { return Ok(Self::Programme(programme::Prepared::prepare(s, p, c, Operation::Clear)?)); }
+        if programme_candidate(s) {
+            return Ok(Self::Programme(programme::Prepared::prepare(s, p, c, Operation::Clear)?));
+        }
         Ok(Self::Legacy(LegacyPrepared::prepare_clear(s, p, c)?))
     }
     pub(crate) fn prepare_fill(s: &Session, p: &'a Value, c: &ReadControl<'_>) -> Result<Self> {
@@ -52,7 +56,10 @@ impl<'a> Prepared<'a> {
         Ok(Self::Legacy(LegacyPrepared::prepare_fill(s, p, c)?))
     }
     pub(crate) fn execute(self, s: &mut Session, c: &ReadControl<'_>) -> Result<Value> {
-        match self { Self::Legacy(p) => p.execute(s, c), Self::Programme(p) => p.execute(s, c) }
+        match self {
+            Self::Legacy(p) => p.execute(s, c),
+            Self::Programme(p) => p.execute(s, c),
+        }
     }
 }
 
@@ -291,7 +298,17 @@ impl<'a> LegacyPrepared<'a> {
             // complete stored tiles/defaults, not just the selected rectangle.
             let scan = add(mul(mask.tile_count(), add(mul(65536, mask.format().bytes_per_pixel())?, 256)?)?, mask.default_bytes().len())?;
             prepay(c, units(mul(scan, 32)?)?)?;
-            let bounds = mask.try_content_bounds_with_interrupt(c.interrupt).map_err(|e| raster(e, command))?;
+            // Encoded content bounds describe deviations from the default, not
+            // selection coverage. A positive implicit default selects the whole
+            // guarded canvas even when every stored word equals that default.
+            c.check(32)?;
+            let default = photocraft_color::try_read_sample_f64(mask.default_bytes(), mask.format().sample, 0).map_err(|_| BackingError::Integrity)?;
+            let bounds = if default > 0.0 {
+                owner.document().bounds()
+            } else {
+                // Numeric zero includes -0; retain the existing sparse path.
+                mask.try_content_bounds_with_interrupt(c.interrupt).map_err(|e| raster(e, command))?
+            };
             if matches!(operation, Operation::Fill(_)) { bounds.intersect(&owner.document().bounds()) } else { bounds }
         } else {
             owner.document().bounds()

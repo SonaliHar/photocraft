@@ -2,6 +2,8 @@
 //! internal compatibility/custody expectations, not GIMP command math oracles.
 use super::*;
 #[path = "accounted_programme_paint_test_support.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod f;
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -44,7 +46,7 @@ fn concrete_native_programme_transaction_stages_before_publication() {
             // Independent canonical endpoint expectations for the existing
             // full-coverage kernels: transparent zero or opaque black.
             let pixel: Vec<u8> = if clear { vec![0; 16] } else { [0f32, 0., 0., 1.].into_iter().flat_map(f32::to_ne_bytes).collect() };
-            assert!(staged.chunks_exact(16).all(|v| v == pixel.as_slice()));
+            assert!(staged.as_chunks::<16>().0.iter().all(|v| v == pixel.as_slice()));
             prepared.execute(&mut s, &f::ctl()).unwrap();
             assert_eq!(s.active().unwrap().revision, revision + 1);
             assert_eq!(s.active().unwrap().history.past_len(), past + 1);
@@ -123,7 +125,7 @@ fn original_control_owns_all_preparation_and_final_publication_work() {
     drop(prepared);
     assert_eq!(q.usage().unwrap(), baseline);
     let left = AtomicU64::new(used.load(Ordering::Relaxed) - 1);
-    let work = |n| left.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+    let work = |n| left.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
     assert!(Prepared::prepare(&s, &p, &ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &work }, Operation::Clear).is_err());
     assert_eq!(q.usage().unwrap(), baseline);
     assert!(before.shares_state(&s.active().unwrap().doc));

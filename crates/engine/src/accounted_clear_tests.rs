@@ -11,6 +11,8 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 #[path = "../../xcf/tests/common/mod.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod xcf;
 fn ctl() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
@@ -22,7 +24,6 @@ fn fixture(depth: SampleType, width: u32, height: u32, locked: bool) -> Session 
         SampleType::U32 => (350, 0x80000001u32.to_be_bytes().to_vec()),
         SampleType::F32 => (650, 0.5f32.to_be_bytes().to_vec()),
         SampleType::F64 => (750, (0.5 + 2f64.powi(-40)).to_be_bytes().to_vec()),
-        _ => panic!(),
     };
     let mut raw = word.repeat(width as usize * height as usize * 4);
     if depth == SampleType::F64 {
@@ -126,12 +127,12 @@ fn ordinary_fractional_selection_and_native_wide_alpha_rules_match_clear_policy(
         let format = before.pixel_format();
         let bpp = format.bytes_per_pixel();
         let mut expected = raw_fractional.clone();
-        let alpha = photocraft_color::try_read_sample_f64(&raw_fractional[bpp..2*bpp], depth, 3).unwrap();
-        photocraft_color::try_write_sample_f64(&mut expected[bpp..2*bpp], depth, 3, alpha * (1.0 - 128.0/255.0)).unwrap();
-        expected[2*bpp..].fill(0);
+        let alpha = photocraft_color::try_read_sample_f64(&raw_fractional[bpp..2 * bpp], depth, 3).unwrap();
+        photocraft_color::try_write_sample_f64(&mut expected[bpp..2 * bpp], depth, 3, alpha * (1.0 - 128.0 / 255.0)).unwrap();
+        expected[2 * bpp..].fill(0);
         s.execute(ID, json!({})).unwrap();
         assert_eq!(native(&s), expected);
-        assert_eq!(&native(&s)[bpp..bpp+3*(bpp/4)], &raw_fractional[bpp..bpp+3*(bpp/4)]);
+        assert_eq!(&native(&s)[bpp..bpp + 3 * (bpp / 4)], &raw_fractional[bpp..bpp + 3 * (bpp / 4)]);
         assert!(s.undo_with_control(&ctl()).unwrap());
         assert_eq!(native(&s), raw_fractional);
         assert!(before.shares_state(&s.active().unwrap().doc));
@@ -211,3 +212,68 @@ fn native_roi_cap_refuses_large_canvas_before_clear_or_journal_publication() {
 
 #[path = "accounted_fractional_clear_tests.rs"]
 mod fractional_tests;
+
+#[test]
+fn default_coverage_is_not_sparse_content_bounds_for_clear_or_fill() {
+    use photocraft_color::{ColorMode, PixelFormat};
+    for sample in [SampleType::U8, SampleType::U16, SampleType::U32, SampleType::F32, SampleType::F64] {
+        let mut unit = vec![0; sample.bytes()];
+        photocraft_color::try_write_sample_f64(&mut unit, sample, 0, 1.0).unwrap();
+        let mut defaults = vec![unit.clone(), vec![0; sample.bytes()]];
+        if matches!(sample, SampleType::F32 | SampleType::F64) {
+            let mut negative_zero = vec![0; sample.bytes()];
+            photocraft_color::try_write_sample_f64(&mut negative_zero, sample, 0, -0.0).unwrap();
+            defaults.push(negative_zero);
+        }
+        for word in defaults {
+            let value = photocraft_color::try_read_sample_f64(&word, sample, 0).unwrap();
+            for fill in [false, true] {
+                if fill && matches!(sample, SampleType::U32 | SampleType::F64) {
+                    continue;
+                }
+                let mut s = fixture(sample, 3, 2, false);
+                let d = &s.active().unwrap().doc;
+                let selected = AccountedSelection::try_from_native(
+                    PixelFormat::new(ColorMode::Grayscale, sample, false),
+                    d.bounds(),
+                    &word,
+                    &word.repeat(6),
+                    CoverageDomain::FiniteUnit,
+                    d.quota().unwrap(),
+                    &ctl(),
+                )
+                .unwrap();
+                let target = crate::accounted_selection_session::AccountedSelectionTarget::capture_with_control(&s, &ctl()).unwrap();
+                s.replace_accounted_selection(target, "implicit default regression", Some(&selected), &ctl()).unwrap();
+                let st = s.active().unwrap();
+                assert!(st.doc.accounted().unwrap().is_legacy_storage());
+                st.doc.accounted().unwrap().validate_selection_replacement(&ctl()).unwrap();
+                let mask = st.doc.selection.as_ref().unwrap();
+                assert_eq!(mask.default_bytes(), word);
+                assert!(mask.try_content_bounds_with_interrupt(&Interrupt::NONE).unwrap().is_empty());
+                let before = st.doc.clone();
+                let source = st.source.clone();
+                let raw = native(&s);
+                let past = st.history.past_len();
+                if fill {
+                    s.execute("edit.fill", json!({"contents":"white"})).unwrap();
+                } else {
+                    s.execute(ID, json!({})).unwrap();
+                }
+                if value == 0.0 {
+                    assert_eq!(native(&s), raw);
+                    assert!(before.shares_state(&s.active().unwrap().doc));
+                    assert_eq!(s.active().unwrap().history.past_len(), past);
+                } else {
+                    let expected = if fill { unit.repeat(24) } else { vec![0; sample.bytes() * 24] };
+                    assert_eq!(native(&s), expected);
+                    assert_eq!(s.active().unwrap().history.past_len(), past + 1);
+                    assert!(s.undo_with_control(&ctl()).unwrap());
+                    assert_eq!(native(&s), raw);
+                }
+                assert_eq!(s.active().unwrap().source, source);
+                assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().default_bytes(), word);
+            }
+        }
+    }
+}

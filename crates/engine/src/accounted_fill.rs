@@ -56,4 +56,6 @@ impl<'a> Prepared<'a> {
 
 #[cfg(test)]
 #[path = "accounted_fill_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
