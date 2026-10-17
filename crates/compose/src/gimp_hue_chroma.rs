@@ -220,7 +220,13 @@ impl OwnedHueChroma {
     fn input_lch(&self, pixel: [f64; 4], control: &Interrupt<'_>, work: &dyn Fn(u64) -> std::result::Result<(), RasterInputError>) -> Result<[f32; 4]> {
         self.input_lch_mode(pixel, control, work, false)
     }
-    fn input_lch_mode(&self, pixel: [f64; 4], control: &Interrupt<'_>, work: &dyn Fn(u64) -> std::result::Result<(), RasterInputError>, derived: bool) -> Result<[f32; 4]> {
+    fn input_lch_mode(
+        &self,
+        pixel: [f64; 4],
+        control: &Interrupt<'_>,
+        work: &dyn Fn(u64) -> std::result::Result<(), RasterInputError>,
+        derived: bool,
+    ) -> Result<[f32; 4]> {
         work(0)?;
         control.check().map_err(|_| RasterInputError::Cancelled)?;
         if pixel.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&pixel[3]) || (!derived && pixel.iter().any(|v| !(0.0..=1.0).contains(v))) {
@@ -252,13 +258,31 @@ impl OwnedHueChroma {
         self.apply_mode(pixel, enabled, control, work, false)
     }
     /// Only the paid ordered-root compiler admits a previous stage's finite HDR.
-    pub(crate) fn validate_derived_input(&self, pixel: [f64; 4], control: &Interrupt<'_>, work: &dyn Fn(u64) -> std::result::Result<(), RasterInputError>) -> Result<()> {
+    pub(crate) fn validate_derived_input(
+        &self,
+        pixel: [f64; 4],
+        control: &Interrupt<'_>,
+        work: &dyn Fn(u64) -> std::result::Result<(), RasterInputError>,
+    ) -> Result<()> {
         self.input_lch_mode(pixel, control, work, true).map(|_| ())
     }
-    pub(crate) fn apply_derived(&self, pixel: [f64; 4], enabled: bool, control: &Interrupt<'_>, work: &dyn Fn(u64) -> std::result::Result<(), RasterInputError>) -> Result<[f64; 4]> {
+    pub(crate) fn apply_derived(
+        &self,
+        pixel: [f64; 4],
+        enabled: bool,
+        control: &Interrupt<'_>,
+        work: &dyn Fn(u64) -> std::result::Result<(), RasterInputError>,
+    ) -> Result<[f64; 4]> {
         self.apply_mode(pixel, enabled, control, work, true)
     }
-    fn apply_mode(&self, pixel: [f64; 4], enabled: bool, control: &Interrupt<'_>, work: &dyn Fn(u64) -> std::result::Result<(), RasterInputError>, derived: bool) -> Result<[f64; 4]> {
+    fn apply_mode(
+        &self,
+        pixel: [f64; 4],
+        enabled: bool,
+        control: &Interrupt<'_>,
+        work: &dyn Fn(u64) -> std::result::Result<(), RasterInputError>,
+        derived: bool,
+    ) -> Result<[f64; 4]> {
         let input = self.input_lch_mode(pixel, control, work, derived)?;
         if !enabled {
             return Ok(pixel);
@@ -316,7 +340,7 @@ pub(crate) fn qualify_mask(state: &photocraft_doc::XcfState, node: &FilterNode, 
     }
     let size = sample.bytes();
     let check = |bytes: &[u8]| -> Result<()> {
-        if bytes.len() % size != 0 {
+        if !bytes.len().is_multiple_of(size) {
             return Err(scope());
         }
         for block in bytes.chunks(size * 64) {

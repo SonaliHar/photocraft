@@ -40,6 +40,8 @@ pub(crate) use owned::OwnedNeighborhoodSurface;
 
 const CACHE_BYTES: u64 = 16 * 1024 * 1024;
 const JOB_BYTES: u64 = CACHE_BYTES * 2;
+// Keep the bounded inline representation; boxing adds a new allocation and changes its controlled storage schedule.
+#[allow(clippy::large_enum_variant)]
 enum Stage {
     Point(PointStack),
     Curves(Box<crate::gimp_curves::CurvesNode>),
@@ -60,7 +62,7 @@ pub(crate) struct OrderedStack {
     integer_point_storage: Option<u64>,
     current_point_sample: Option<photocraft_color::SampleType>,
     filter_output_precision: photocraft_doc::FilterOutputPrecision,
-    stock_disabled:bool,
+    stock_disabled: bool,
 }
 /// Conservative capacity for one scalar stage/space per source node. Scalar
 /// PointStack ownership and analytic profile clones are charged separately.
@@ -71,23 +73,33 @@ pub(crate) fn scalar_preparation_bytes(nodes: usize) -> Result<u64> {
     u64::try_from(bytes).map_err(|_| CompositionError::Invalid("ordered preparation size overflow"))
 }
 /// Exact sealed configured box/temporary envelopes, separate from stage Vecs.
-pub(crate) fn stock_configured_preparation_bytes(name:&str)->Result<u64> {
-    let bytes=match name {
-        "gimp:curves"=>std::mem::size_of::<crate::gimp_curves::CurvesNode>().checked_mul(3).and_then(|v|v.checked_add(5*512*8+5*std::mem::size_of::<Vec<f64>>())),
-        "gimp:levels"=>std::mem::size_of::<crate::gimp_levels::LevelsNode>().checked_add(65536),
-        "gimp:color-balance"=>std::mem::size_of::<crate::gimp_color_balance::ColorBalanceNode>().checked_add(65536),
-        _=>return Err(CompositionError::Unsupported("stock configured preparation")),
-    }.ok_or(CompositionError::Invalid("stock configured envelope"))?;
-    u64::try_from(bytes).map_err(|_|CompositionError::Invalid("stock configured envelope"))
+pub(crate) fn stock_configured_preparation_bytes(name: &str) -> Result<u64> {
+    let bytes = match name {
+        "gimp:curves" => {
+            std::mem::size_of::<crate::gimp_curves::CurvesNode>().checked_mul(3).and_then(|v| v.checked_add(5 * 512 * 8 + 5 * std::mem::size_of::<Vec<f64>>()))
+        }
+        "gimp:levels" => std::mem::size_of::<crate::gimp_levels::LevelsNode>().checked_add(65536),
+        "gimp:color-balance" => std::mem::size_of::<crate::gimp_color_balance::ColorBalanceNode>().checked_add(65536),
+        _ => return Err(CompositionError::Unsupported("stock configured preparation")),
+    }
+    .ok_or(CompositionError::Invalid("stock configured envelope"))?;
+    u64::try_from(bytes).map_err(|_| CompositionError::Invalid("stock configured envelope"))
 }
 impl OrderedStack {
     /// Explicit current identity recipe. No profile/step is manufactured and
     /// no working-space conversion or integer storage boundary is installed.
     pub(crate) fn empty_for_stock(extent: Rect, control: &Interrupt<'_>) -> Result<Self> {
         control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
-        Ok(Self { stages: Vec::new(), extent, output_extent: extent, spaces: Vec::new(),
-            integer_point_storage: None, current_point_sample: None,
-            filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical, stock_disabled: false })
+        Ok(Self {
+            stages: Vec::new(),
+            extent,
+            output_extent: extent,
+            spaces: Vec::new(),
+            integer_point_storage: None,
+            current_point_sample: None,
+            filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical,
+            stock_disabled: false,
+        })
     }
     /// Actual Vec capacities for the scalar-only preparation class. Complex
     /// stages remain accounting-unsupported even if separately render-qualified.
@@ -111,16 +123,31 @@ impl OrderedStack {
     pub(crate) fn new(source: &FilterStack, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, qualified: [bool; 3]) -> Result<Self> {
         Self::new_with_interrupt(source, profile, stored, version, extent, qualified, &Interrupt::NONE)
     }
-    pub(crate) fn new_with_interrupt(source: &FilterStack, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, qualified: [bool; 3], control: &Interrupt<'_>) -> Result<Self> {
+    pub(crate) fn new_with_interrupt(
+        source: &FilterStack,
+        profile: &Profile,
+        stored: SampleEncoding,
+        version: u32,
+        extent: Rect,
+        qualified: [bool; 3],
+        control: &Interrupt<'_>,
+    ) -> Result<Self> {
         control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
         let result = Self::prepare_with_interrupt(source, profile, stored, version, extent, qualified, control, false, false);
         control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
         result
     }
-    pub(crate) fn new_for_stock(source:&FilterStack,profile:&Profile,stored:SampleEncoding,version:u32,extent:Rect,control:&Interrupt<'_>)->Result<Self> {
-        control.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
-        let result=Self::prepare_with_interrupt(source,profile,stored,version,extent,[false;3],control,true,false);
-        control.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
+    pub(crate) fn new_for_stock(
+        source: &FilterStack,
+        profile: &Profile,
+        stored: SampleEncoding,
+        version: u32,
+        extent: Rect,
+        control: &Interrupt<'_>,
+    ) -> Result<Self> {
+        control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
+        let result = Self::prepare_with_interrupt(source, profile, stored, version, extent, [false; 3], control, true, false);
+        control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
         result
     }
     /// Prepared-only owned Point route. The caller holds the actual combined
@@ -129,13 +156,35 @@ impl OrderedStack {
         control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
         let mut stages = Vec::new();
         stages.try_reserve_exact(1).map_err(|_| photocraft_raster::RasterInputError::AllocationFailed)?;
-        if stages.capacity() > 2 { return Err(photocraft_raster::RasterInputError::AllocationFailed.into()); }
+        if stages.capacity() > 2 {
+            return Err(photocraft_raster::RasterInputError::AllocationFailed.into());
+        }
         stages.push(Stage::Point(point));
         control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
-        Ok(Self { stages, extent, output_extent: extent, spaces: Vec::new(), integer_point_storage: None, current_point_sample: None,
-            filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical, stock_disabled: false })
+        Ok(Self {
+            stages,
+            extent,
+            output_extent: extent,
+            spaces: Vec::new(),
+            integer_point_storage: None,
+            current_point_sample: None,
+            filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical,
+            stock_disabled: false,
+        })
     }
-    fn prepare_with_interrupt(source: &FilterStack, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, qualified: [bool; 3], control: &Interrupt<'_>, stock:bool, owned:bool) -> Result<Self> {
+    // Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_with_interrupt(
+        source: &FilterStack,
+        profile: &Profile,
+        stored: SampleEncoding,
+        version: u32,
+        extent: Rect,
+        qualified: [bool; 3],
+        control: &Interrupt<'_>,
+        stock: bool,
+        owned: bool,
+    ) -> Result<Self> {
         if source.nodes.len() > 256 {
             return Err(CompositionError::Invalid("ordered filter stack limit"));
         }
@@ -152,33 +201,20 @@ impl OrderedStack {
         let mut spaces = Vec::new();
         spaces.try_reserve_exact(source.nodes.len()).map_err(|_| CompositionError::Invalid("ordered space allocation denied"))?;
         stages.try_reserve_exact(source.nodes.len()).map_err(|_| CompositionError::Invalid("ordered preparation allocation denied"))?;
-        if owned && (stages.capacity()>source.nodes.len().saturating_mul(2) || spaces.capacity()>source.nodes.len().saturating_mul(2)) {
+        if owned && (stages.capacity() > source.nodes.len().saturating_mul(2) || spaces.capacity() > source.nodes.len().saturating_mul(2)) {
             return Err(CompositionError::Invalid("owned neighborhood preparation capacity"));
         }
-        if stock && source.nodes.first().is_some_and(|n|matches!(n.operation.name.as_str(),"gimp:curves"|"gimp:levels"|"gimp:color-balance")) {
-            let [node]=source.nodes.as_slice() else {return Err(CompositionError::Unsupported("stock configured singleton"))};
-            let stage=match node.operation.name.as_str() {
-                "gimp:curves"=>Stage::Curves(Box::new(crate::gimp_curves::CurvesNode::new_with_interrupt(node,version,control)?)),
-                "gimp:levels"=>Stage::Levels(Box::new(crate::gimp_levels::LevelsNode::new_with_interrupt(node,profile,stored,version,control)?)),
-                "gimp:color-balance"=>Stage::ColorBalance(Box::new(crate::gimp_color_balance::ColorBalanceNode::new_with_interrupt(node,profile,stored,version,control)?)),
-                _=>return Err(CompositionError::Unsupported("stock configured stage")),
+        if stock && source.nodes.first().is_some_and(|n| matches!(n.operation.name.as_str(), "gimp:curves" | "gimp:levels" | "gimp:color-balance")) {
+            let [node] = source.nodes.as_slice() else { return Err(CompositionError::Unsupported("stock configured singleton")) };
+            let stage = match node.operation.name.as_str() {
+                "gimp:curves" => Stage::Curves(Box::new(crate::gimp_curves::CurvesNode::new_with_interrupt(node, version, control)?)),
+                "gimp:levels" => Stage::Levels(Box::new(crate::gimp_levels::LevelsNode::new_with_interrupt(node, profile, stored, version, control)?)),
+                "gimp:color-balance" => {
+                    Stage::ColorBalance(Box::new(crate::gimp_color_balance::ColorBalanceNode::new_with_interrupt(node, profile, stored, version, control)?))
+                }
+                _ => return Err(CompositionError::Unsupported("stock configured stage")),
             };
             stages.push(stage);
-            return Ok(Self {stages,extent,output_extent,spaces,integer_point_storage:None,current_point_sample:None,filter_output_precision:photocraft_doc::FilterOutputPrecision::Canonical,stock_disabled:!node.enabled});
-        }
-        if stock || source
-            .nodes
-            .iter()
-            .any(|node| node.operation.name == "gegl:unpremultiply"
-                || crate::gimp_semi_flatten::claims(node)
-                || crate::gimp_video_degradation::claims_video(node)
-                || crate::gimp_red_eye::claims_geometry(node)
-                || node.composition.as_ref().is_some_and(|policy| policy.compatibility_epoch == crate::gimp_filters::POINT_REPLACE_COMPATIBILITY_EPOCH))
-        {
-            // Disabled current nodes still require their closed typed schema;
-            // activation must not be an escape from source-state validation.
-            stages.push(Stage::Point(if stock { PointStack::from_nodes_at_for_stock(&source.nodes,profile,stored,version,extent,control)? }
-                else { PointStack::from_nodes_at_with_interrupt(&source.nodes, profile, stored, version, extent, control)? }));
             return Ok(Self {
                 stages,
                 extent,
@@ -187,7 +223,34 @@ impl OrderedStack {
                 integer_point_storage: None,
                 current_point_sample: None,
                 filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical,
-                stock_disabled:false,
+                stock_disabled: !node.enabled,
+            });
+        }
+        if stock
+            || source.nodes.iter().any(|node| {
+                node.operation.name == "gegl:unpremultiply"
+                    || crate::gimp_semi_flatten::claims(node)
+                    || crate::gimp_video_degradation::claims_video(node)
+                    || crate::gimp_red_eye::claims_geometry(node)
+                    || node.composition.as_ref().is_some_and(|policy| policy.compatibility_epoch == crate::gimp_filters::POINT_REPLACE_COMPATIBILITY_EPOCH)
+            })
+        {
+            // Disabled current nodes still require their closed typed schema;
+            // activation must not be an escape from source-state validation.
+            stages.push(Stage::Point(if stock {
+                PointStack::from_nodes_at_for_stock(&source.nodes, profile, stored, version, extent, control)?
+            } else {
+                PointStack::from_nodes_at_with_interrupt(&source.nodes, profile, stored, version, extent, control)?
+            }));
+            return Ok(Self {
+                stages,
+                extent,
+                output_extent,
+                spaces,
+                integer_point_storage: None,
+                current_point_sample: None,
+                filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical,
+                stock_disabled: false,
             });
         }
         if source.nodes.iter().any(|node| node.operation.schema_epoch == crate::gimp_filters::STACK_EDITS_EPOCH) {
@@ -206,7 +269,7 @@ impl OrderedStack {
                 integer_point_storage: None,
                 current_point_sample: None,
                 filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical,
-                stock_disabled:false,
+                stock_disabled: false,
             });
         }
         for node in source.nodes.iter().filter(|n| n.enabled || owned) {
@@ -223,7 +286,8 @@ impl OrderedStack {
                     {
                         return Err(CompositionError::Unsupported("finite Gaussian raster source context"));
                     }
-                    let (params, filter) = if owned {raster_gaussian::parameters_for_owned(node,version)?} else {raster_gaussian::parameters(node, version)?};
+                    let (params, filter) =
+                        if owned { raster_gaussian::parameters_for_owned(node, version)? } else { raster_gaussian::parameters(node, version)? };
                     spaces.push(WorkingSpace::new_with_interrupt(profile, stored, GimpSpace::LinearRgb, control)?);
                     stages.push(Stage::GaussianFinite { working: spaces.len() - 1, params, filter });
                     continue;
@@ -235,7 +299,7 @@ impl OrderedStack {
                 if !qualified[0] || profile.channels() != 3 || stored != SampleEncoding::NonlinearProfile || source.nodes.len() != 1 {
                     return Err(CompositionError::Unsupported("Box Blur source context"));
                 }
-                let radius = if owned {box_blur::radius_for_owned(node,version,extent)?} else {box_blur::radius(node, version, extent)?};
+                let radius = if owned { box_blur::radius_for_owned(node, version, extent)? } else { box_blur::radius(node, version, extent)? };
                 output_extent = photocraft_algo::gimp::neighborhood::box_blur_extent(extent, radius)?;
                 spaces.push(WorkingSpace::new_with_interrupt(profile, stored, GimpSpace::LinearRgb, control)?);
                 stages.push(Stage::BoxBlur { working: spaces.len() - 1, radius });
@@ -243,7 +307,7 @@ impl OrderedStack {
                 if !qualified[0] || profile.channels() != 3 || stored != SampleEncoding::NonlinearProfile || source.nodes.len() != 1 {
                     return Err(CompositionError::Unsupported("Motion source context"));
                 }
-                let params = if owned {motion_blur::parameters_for_owned(node,version,extent)?} else {motion_blur::parameters(node, version, extent)?};
+                let params = if owned { motion_blur::parameters_for_owned(node, version, extent)? } else { motion_blur::parameters(node, version, extent)? };
                 output_extent = photocraft_algo::gimp::neighborhood::motion_blur_extent(extent, params)?;
                 spaces.push(WorkingSpace::new_with_interrupt(profile, stored, GimpSpace::LinearRgb, control)?);
                 stages.push(Stage::MotionBlur { working: spaces.len() - 1, params });
@@ -251,7 +315,7 @@ impl OrderedStack {
                 if !qualified[0] || profile.channels() != 3 || stored != SampleEncoding::NonlinearProfile || source.nodes.len() != 1 {
                     return Err(CompositionError::Unsupported("Pixelize source context"));
                 }
-                let params = if owned {pixelize::parameters_for_owned(node,version,extent)?} else {pixelize::parameters(node, version, extent)?};
+                let params = if owned { pixelize::parameters_for_owned(node, version, extent)? } else { pixelize::parameters(node, version, extent)? };
                 spaces.push(WorkingSpace::new_with_interrupt(profile, stored, GimpSpace::LinearRgb, control)?);
                 stages.push(Stage::Pixelize { working: spaces.len() - 1, params });
             } else if node.operation.name == "gegl:median-blur" {
@@ -263,7 +327,9 @@ impl OrderedStack {
                 if !separable || profile.a2b.iter().any(Option::is_some) || profile.b2a.iter().any(Option::is_some) {
                     return Err(CompositionError::Unsupported("Median separable profile domain"));
                 }
-                stages.push(Stage::MedianBlur { params: if owned {median_blur::parameters_for_owned(node,version,extent)?} else {median_blur::parameters(node, version, extent)?} });
+                stages.push(Stage::MedianBlur {
+                    params: if owned { median_blur::parameters_for_owned(node, version, extent)? } else { median_blur::parameters(node, version, extent)? },
+                });
             } else if node.operation.name == "gimp:curves" {
                 if !qualified[1] {
                     return Err(CompositionError::Unsupported("FREE curves source color/extent domain"));
@@ -283,50 +349,112 @@ impl OrderedStack {
                 stages.push(Stage::Point(PointStack::from_nodes_at_with_interrupt(std::slice::from_ref(node), profile, stored, version, extent, control)?));
             }
         }
-        let disabled=owned && source.nodes.first().is_some_and(|node|!node.enabled);
+        let disabled = owned && source.nodes.first().is_some_and(|node| !node.enabled);
         if disabled {
             // Parsed metadata and preparation were validated above. Retain no
             // operator/working-space owner for the legacy disabled identity.
-            stages.clear();spaces.clear();output_extent=extent;
+            stages.clear();
+            spaces.clear();
+            output_extent = extent;
         }
         Ok(Self {
-            stages,extent,output_extent,spaces,integer_point_storage:None,current_point_sample:None,
-            filter_output_precision:photocraft_doc::FilterOutputPrecision::Canonical,stock_disabled:disabled,
+            stages,
+            extent,
+            output_extent,
+            spaces,
+            integer_point_storage: None,
+            current_point_sample: None,
+            filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical,
+            stock_disabled: disabled,
         })
     }
-    pub(crate) fn new_owned_neighborhood(source:&FilterStack,profile:&Profile,stored:SampleEncoding,version:u32,extent:Rect,control:&Interrupt<'_>)->Result<Self> {
-        let [node]=source.nodes.as_slice() else {return Err(CompositionError::Unsupported("owned neighborhood singleton"))};
-        if !matches!(node.operation.name.as_str(), "gegl:box-blur"|"gegl:median-blur"|"gegl:motion-blur-linear"|"gegl:pixelize"|"gegl:gaussian-blur") {
+    pub(crate) fn new_owned_neighborhood(
+        source: &FilterStack,
+        profile: &Profile,
+        stored: SampleEncoding,
+        version: u32,
+        extent: Rect,
+        control: &Interrupt<'_>,
+    ) -> Result<Self> {
+        let [node] = source.nodes.as_slice() else { return Err(CompositionError::Unsupported("owned neighborhood singleton")) };
+        if !matches!(node.operation.name.as_str(), "gegl:box-blur" | "gegl:median-blur" | "gegl:motion-blur-linear" | "gegl:pixelize" | "gegl:gaussian-blur") {
             return Err(CompositionError::Unsupported("owned neighborhood recipe"));
         }
-        let result=Self::prepare_with_interrupt(source,profile,stored,version,extent,[true,false,false],control,false,true)?;
+        let result = Self::prepare_with_interrupt(source, profile, stored, version, extent, [true, false, false], control, false, true)?;
         if !node.enabled {
-            if !result.stock_disabled || !result.stages.is_empty() || !result.spaces.is_empty() || result.output_extent!=extent {return Err(CompositionError::Invalid("owned disabled neighborhood identity"));}
+            if !result.stock_disabled || !result.stages.is_empty() || !result.spaces.is_empty() || result.output_extent != extent {
+                return Err(CompositionError::Invalid("owned disabled neighborhood identity"));
+            }
             return Ok(result);
         }
-        let [stage]=result.stages.as_slice() else {return Err(CompositionError::Unsupported("owned neighborhood stage"))};
-        if !matches!(stage,Stage::BoxBlur{..}|Stage::MotionBlur{..}|Stage::Pixelize{..}|Stage::MedianBlur{..}|Stage::GaussianFinite{..}|Stage::Gaussian{..}) {
+        let [stage] = result.stages.as_slice() else { return Err(CompositionError::Unsupported("owned neighborhood stage")) };
+        if !matches!(
+            stage,
+            Stage::BoxBlur { .. }
+                | Stage::MotionBlur { .. }
+                | Stage::Pixelize { .. }
+                | Stage::MedianBlur { .. }
+                | Stage::GaussianFinite { .. }
+                | Stage::Gaussian { .. }
+        ) {
             return Err(CompositionError::Unsupported("owned finite neighborhood stage"));
         }
         Ok(result)
     }
-    pub(crate) fn neighborhood_retained_bytes(&self)->Result<u64> {
-        let own=self.stages.capacity().checked_mul(std::mem::size_of::<Stage>()).and_then(|v|self.spaces.capacity().checked_mul(std::mem::size_of::<WorkingSpace>()).and_then(|s|v.checked_add(s))).ok_or(CompositionError::Invalid("neighborhood retained size"))?;
-        if (self.stock_disabled && (!self.stages.is_empty() || !self.spaces.is_empty())) || (!self.stock_disabled && self.stages.len()!=1) || self.stages.capacity()>2 || self.spaces.capacity()>2 {return Err(CompositionError::Invalid("neighborhood retained capacity"));}
-        (own as u64).checked_add((self.spaces.len() as u64)*65536).ok_or(CompositionError::Invalid("neighborhood retained size"))
+    pub(crate) fn neighborhood_retained_bytes(&self) -> Result<u64> {
+        let own = self
+            .stages
+            .capacity()
+            .checked_mul(std::mem::size_of::<Stage>())
+            .and_then(|v| self.spaces.capacity().checked_mul(std::mem::size_of::<WorkingSpace>()).and_then(|s| v.checked_add(s)))
+            .ok_or(CompositionError::Invalid("neighborhood retained size"))?;
+        if (self.stock_disabled && (!self.stages.is_empty() || !self.spaces.is_empty()))
+            || (!self.stock_disabled && self.stages.len() != 1)
+            || self.stages.capacity() > 2
+            || self.spaces.capacity() > 2
+        {
+            return Err(CompositionError::Invalid("neighborhood retained capacity"));
+        }
+        (own as u64).checked_add((self.spaces.len() as u64) * 65536).ok_or(CompositionError::Invalid("neighborhood retained size"))
     }
-    pub(crate) fn output_bounds(&self)->Rect {self.output_extent}
-    pub(crate) fn evaluate_owned(&self,source:&Surface,quota:&photocraft_raster::backing::quota::BackingQuota,control:&photocraft_raster::backing::ReadControl<'_>)->std::result::Result<OwnedNeighborhoodSurface,crate::backed_normal::BackedNormalError> {
-        owned::evaluate(self,source,quota,control)
+    pub(crate) fn output_bounds(&self) -> Rect {
+        self.output_extent
     }
-    pub(crate) fn stock_retained_bytes(&self)->Result<u64> {
-        let own=self.stages.capacity().checked_mul(std::mem::size_of::<Stage>()).and_then(|n|self.spaces.capacity().checked_mul(std::mem::size_of::<WorkingSpace>()).and_then(|v|n.checked_add(v))).ok_or(CompositionError::Invalid("stock ordered capacity"))? as u64;
-        if self.stages.is_empty() { return Ok(own); }
-        let [stage]=self.stages.as_slice() else {return Err(CompositionError::Unsupported("stock singleton stage"))};
-        let payload=match stage {Stage::Point(point)=>point.stock_retained_bytes()?,Stage::Curves(node)=>node.stock_retained_bytes(),Stage::Levels(node)=>node.stock_retained_bytes(),Stage::ColorBalance(node)=>node.stock_retained_bytes(),_=>return Err(CompositionError::Unsupported("stock retained stage"))};
+    pub(crate) fn evaluate_owned(
+        &self,
+        source: &Surface,
+        quota: &photocraft_raster::backing::quota::BackingQuota,
+        control: &photocraft_raster::backing::ReadControl<'_>,
+    ) -> std::result::Result<OwnedNeighborhoodSurface, crate::backed_normal::BackedNormalError> {
+        owned::evaluate(self, source, quota, control)
+    }
+    pub(crate) fn stock_retained_bytes(&self) -> Result<u64> {
+        let own = self
+            .stages
+            .capacity()
+            .checked_mul(std::mem::size_of::<Stage>())
+            .and_then(|n| self.spaces.capacity().checked_mul(std::mem::size_of::<WorkingSpace>()).and_then(|v| n.checked_add(v)))
+            .ok_or(CompositionError::Invalid("stock ordered capacity"))? as u64;
+        if self.stages.is_empty() {
+            return Ok(own);
+        }
+        let [stage] = self.stages.as_slice() else { return Err(CompositionError::Unsupported("stock singleton stage")) };
+        let payload = match stage {
+            Stage::Point(point) => point.stock_retained_bytes()?,
+            Stage::Curves(node) => node.stock_retained_bytes(),
+            Stage::Levels(node) => node.stock_retained_bytes(),
+            Stage::ColorBalance(node) => node.stock_retained_bytes(),
+            _ => return Err(CompositionError::Unsupported("stock retained stage")),
+        };
         own.checked_add(payload).ok_or(CompositionError::Invalid("stock ordered capacity"))
     }
-    pub(crate) fn validate_stock_input(&self,position:(i32,i32),pixel:[f64;4],control:&Interrupt<'_>,poll:&mut impl FnMut(WideWork)->Result<()>)->Result<()> {
+    pub(crate) fn validate_stock_input(
+        &self,
+        position: (i32, i32),
+        pixel: [f64; 4],
+        control: &Interrupt<'_>,
+        poll: &mut impl FnMut(WideWork) -> Result<()>,
+    ) -> Result<()> {
         if self.stages.is_empty() {
             control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
             poll(WideWork::SampleUnits(4))?;
@@ -335,8 +463,14 @@ impl OrderedStack {
             }
             return Ok(());
         }
-        let [stage]=self.stages.as_slice() else {return Err(CompositionError::Unsupported("stock singleton stage"))};
-        match stage {Stage::Point(point)=>point.validate_stock_input(position,pixel,control,poll),Stage::Curves(node)=>node.validate_stock_input(pixel,poll),Stage::Levels(node)=>node.validate_stock_input(pixel,poll),Stage::ColorBalance(node)=>node.validate_stock_input(pixel,poll),_=>Err(CompositionError::Unsupported("stock input stage"))}
+        let [stage] = self.stages.as_slice() else { return Err(CompositionError::Unsupported("stock singleton stage")) };
+        match stage {
+            Stage::Point(point) => point.validate_stock_input(position, pixel, control, poll),
+            Stage::Curves(node) => node.validate_stock_input(pixel, poll),
+            Stage::Levels(node) => node.validate_stock_input(pixel, poll),
+            Stage::ColorBalance(node) => node.validate_stock_input(pixel, poll),
+            _ => Err(CompositionError::Unsupported("stock input stage")),
+        }
     }
     /// The qualified U8/U32 point source writes an integer drawable buffer before
     /// layer composition. Round stored colors at that boundary, preserving
@@ -413,7 +547,9 @@ impl OrderedStack {
         self.point_with(pixel, None, poll)
     }
     fn point_with(&self, mut pixel: [f64; 4], position: Option<(i32, i32)>, poll: &mut impl FnMut(WideWork) -> Result<()>) -> Result<[f64; 4]> {
-        if self.stock_disabled {return Ok(pixel)}
+        if self.stock_disabled {
+            return Ok(pixel);
+        }
         for stage in &self.stages {
             pixel = match stage {
                 Stage::Point(point) => {
@@ -679,15 +815,21 @@ pub(crate) fn qualify_selection_mask(state: &photocraft_doc::XcfState, node: &Fi
 // Only expanded geometry in the seven residual/configured domains uses this
 // grid-sized allowance. The old 8x6 payload/token behavior remains unchanged.
 fn expanded_residual_mask_limit(node: &FilterNode, extent: Rect, format: PixelFormat) -> Result<Option<u64>> {
-    if !crate::gimp_render::residual_origin_node(node) || extent == Rect::from_xywh(0, 0, 8, 6) { return Ok(None) }
+    if !crate::gimp_render::residual_origin_node(node) || extent == Rect::from_xywh(0, 0, 8, 6) {
+        return Ok(None);
+    }
     if !crate::gimp_render::residual_origin_extent(extent) || format.mode != photocraft_color::ColorMode::Grayscale || format.alpha {
         return Err(CompositionError::Unsupported("residual origin mask geometry/format"));
     }
     let side = photocraft_geom::TILE_SIZE as u64;
     let columns = u64::from(extent.width()).checked_add(side - 1).ok_or(CompositionError::Invalid("residual mask columns"))? / side;
     let rows = u64::from(extent.height()).checked_add(side - 1).ok_or(CompositionError::Invalid("residual mask rows"))? / side;
-    let bytes = columns.checked_mul(rows).and_then(|n| n.checked_mul(side)).and_then(|n| n.checked_mul(side))
-        .and_then(|n| n.checked_mul(format.bytes_per_pixel() as u64)).and_then(|n| n.checked_add(format.bytes_per_pixel() as u64))
+    let bytes = columns
+        .checked_mul(rows)
+        .and_then(|n| n.checked_mul(side))
+        .and_then(|n| n.checked_mul(side))
+        .and_then(|n| n.checked_mul(format.bytes_per_pixel() as u64))
+        .and_then(|n| n.checked_add(format.bytes_per_pixel() as u64))
         .ok_or(CompositionError::Invalid("residual mask grid capacity"))?;
     Ok(Some(bytes.min(CACHE_BYTES)))
 }
@@ -698,70 +840,113 @@ fn residual_mask_payload_fits(surface: &photocraft_raster::Surface, limit: u64) 
     let per_tile = 65536u64.checked_mul(surface.format().bytes_per_pixel() as u64).ok_or(CompositionError::Invalid("residual mask tile bytes"))?;
     let default = u64::try_from(surface.default_bytes().len()).map_err(|_| CompositionError::Invalid("residual mask default bytes"))?;
     let count = u64::try_from(surface.tile_count()).map_err(|_| CompositionError::Invalid("residual mask tile count"))?;
-    if per_tile == 0 || limit.checked_sub(default).is_none_or(|remaining| count > remaining / per_tile) { return Ok(false) }
+    if per_tile == 0 || limit.checked_sub(default).is_none_or(|remaining| count > remaining / per_tile) {
+        return Ok(false);
+    }
     Ok(surface.resident_payload_bytes()? <= limit)
 }
 /// No physical scan: admit actual expanded-mask storage before its prepaid scan
 /// work. Retained zero tiles, including out-of-grid ones, are never pruned.
 pub(crate) fn qualify_expanded_residual_mask_storage(state: &photocraft_doc::XcfState, node: &FilterNode, extent: Rect) -> Result<()> {
-    if !crate::gimp_render::residual_origin_node(node) || extent == Rect::from_xywh(0, 0, 8, 6) { return Ok(()) }
+    if !crate::gimp_render::residual_origin_node(node) || extent == Rect::from_xywh(0, 0, 8, 6) {
+        return Ok(());
+    }
     let [mask] = state.filter_masks.as_slice() else { return Err(CompositionError::Unsupported("residual origin singleton mask")) };
     let limit = expanded_residual_mask_limit(node, extent, mask.surface.format())?.ok_or(CompositionError::Invalid("residual mask capacity"))?;
-    if node.mask != Some(photocraft_doc::item_identity::ItemRef::Mask(mask.id)) || mask.owner != node.id || mask.bounds != extent || !residual_mask_payload_fits(&mask.surface, limit)? {
+    if node.mask != Some(photocraft_doc::item_identity::ItemRef::Mask(mask.id))
+        || mask.owner != node.id
+        || mask.bounds != extent
+        || !residual_mask_payload_fits(&mask.surface, limit)?
+    {
         return Err(CompositionError::Unsupported("residual origin physical mask storage"));
     }
     Ok(())
 }
-pub(crate) fn qualify_selection_mask_with_interrupt(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, extent: Rect, control: &Interrupt<'_>) -> Result<()> {
+pub(crate) fn qualify_selection_mask_with_interrupt(
+    state: &photocraft_doc::XcfState,
+    node: &FilterNode,
+    owner: photocraft_doc::LayerId,
+    extent: Rect,
+    control: &Interrupt<'_>,
+) -> Result<()> {
     mask_controlled::prepare(control, |control| qualify_selection_mask_controlled(state, node, owner, extent, control))
 }
-fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, extent: Rect, control: &Interrupt<'_>) -> Result<()> {
+fn qualify_selection_mask_controlled(
+    state: &photocraft_doc::XcfState,
+    node: &FilterNode,
+    owner: photocraft_doc::LayerId,
+    extent: Rect,
+    control: &Interrupt<'_>,
+) -> Result<()> {
     qualify_expanded_residual_mask_storage(state, node, extent)?;
     if crate::gimp_semi_flatten::claims(node) {
-        let [mask] = state.filter_masks.as_slice() else { return Err(CompositionError::Unsupported("Semi-Flatten singleton selection mask")); };
+        let [mask] = state.filter_masks.as_slice() else {
+            return Err(CompositionError::Unsupported("Semi-Flatten singleton selection mask"));
+        };
         crate::gimp_semi_flatten::positive_origin(extent)?;
-        if state.items.len() != 2 { return Err(CompositionError::Unsupported("Semi-Flatten owner mask cardinality")); }
-        let owner_extent = state.items.iter().find(|item| item.item == photocraft_doc::item_identity::ItemRef::Layer(owner))
-            .and_then(|item| item.raster_bounds);
+        if state.items.len() != 2 {
+            return Err(CompositionError::Unsupported("Semi-Flatten owner mask cardinality"));
+        }
+        let owner_extent =
+            state.items.iter().find(|item| item.item == photocraft_doc::item_identity::ItemRef::Layer(owner)).and_then(|item| item.raster_bounds);
         if owner_extent != Some(extent) || !matches!(mask.surface.format().sample, photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64) {
             return Err(CompositionError::Unsupported("Semi-Flatten exact selection mask precision"));
         }
         return crate::gimp_semi_flatten::qualify_mask(state, node, owner, mask.surface.format().sample, control);
     }
     if crate::gimp_red_eye::claims_geometry(node) {
-        let mask = node.mask.and_then(|reference| match reference {
-            photocraft_doc::item_identity::ItemRef::Mask(id) => mask_controlled::iter(&state.filter_masks, control).find(|mask| mask.id == id),
-            _ => None,
-        }).ok_or(CompositionError::Unsupported("Red Eye owner geometry requires its saved canvas mask"))?;
-        if node.operation.name != "gegl:red-eye-removal" || node.operation.schema_epoch != crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH
+        let mask = node
+            .mask
+            .and_then(|reference| match reference {
+                photocraft_doc::item_identity::ItemRef::Mask(id) => mask_controlled::iter(&state.filter_masks, control).find(|mask| mask.id == id),
+                _ => None,
+            })
+            .ok_or(CompositionError::Unsupported("Red Eye owner geometry requires its saved canvas mask"))?;
+        if node.operation.name != "gegl:red-eye-removal"
+            || node.operation.schema_epoch != crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH
             || !node.composition.as_ref().is_some_and(|policy| policy.compatibility_epoch == crate::gimp_red_eye::RED_EYE_OWNER_GEOMETRY_EPOCH)
             || !matches!(extent, Rect { x0: 0, y0: 0, x1: 37, y1: 29 } | Rect { x0: 0, y0: 0, x1: 259, y1: 17 })
             || mask.surface.format() != PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::F32, false)
-            || mask_controlled::iter(&state.items, control).any(|item| item.item == photocraft_doc::item_identity::ItemRef::Mask(mask.id) && (item.composition.is_some() || item.source_flags != 0)) {
+            || mask_controlled::iter(&state.items, control)
+                .any(|item| item.item == photocraft_doc::item_identity::ItemRef::Mask(mask.id) && (item.composition.is_some() || item.source_flags != 0))
+        {
             return Err(CompositionError::Unsupported("Red Eye owner geometry exact canvas mask context"));
         }
         return qualify_point_canvas_mask(state, node, owner, extent, control);
     }
     if crate::gimp_video_degradation::claims_options_epoch(node) {
-        let mask = node.mask.and_then(|reference| match reference {
-            photocraft_doc::item_identity::ItemRef::Mask(id) => mask_controlled::iter(&state.filter_masks, control).find(|mask| mask.id == id),
-            _ => None,
-        }).ok_or(CompositionError::Unsupported("Video options requires its saved canvas selection mask"))?;
+        let mask = node
+            .mask
+            .and_then(|reference| match reference {
+                photocraft_doc::item_identity::ItemRef::Mask(id) => mask_controlled::iter(&state.filter_masks, control).find(|mask| mask.id == id),
+                _ => None,
+            })
+            .ok_or(CompositionError::Unsupported("Video options requires its saved canvas selection mask"))?;
         if extent != Rect::new(0, 0, 16, 16)
             || mask.surface.format() != PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::F32, false)
-            || mask_controlled::iter(&state.items, control).any(|item| item.item == photocraft_doc::item_identity::ItemRef::Mask(mask.id) && item.composition.is_some())
+            || mask_controlled::iter(&state.items, control)
+                .any(|item| item.item == photocraft_doc::item_identity::ItemRef::Mask(mask.id) && item.composition.is_some())
         {
             return Err(CompositionError::Unsupported("Video options exact Float canvas mask context"));
         }
         return qualify_point_canvas_mask(state, node, owner, extent, control);
     }
     if node.operation.name == "gegl:unpremultiply" {
-        let mask = node.mask.and_then(|reference| match reference { photocraft_doc::item_identity::ItemRef::Mask(id) => mask_controlled::iter(&state.filter_masks, control).find(|mask| mask.id == id), _ => None })
+        let mask = node
+            .mask
+            .and_then(|reference| match reference {
+                photocraft_doc::item_identity::ItemRef::Mask(id) => mask_controlled::iter(&state.filter_masks, control).find(|mask| mask.id == id),
+                _ => None,
+            })
             .ok_or(CompositionError::Unsupported("Unpremultiply requires its saved selection mask"))?;
-        if extent != Rect::new(0, 0, 8, 6) || mask.surface.format() != PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::F32, false) {
+        if extent != Rect::new(0, 0, 8, 6)
+            || mask.surface.format() != PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::F32, false)
+        {
             return Err(CompositionError::Unsupported("Unpremultiply exact Float mask extent"));
         }
-        if mask_controlled::iter(&state.items, control).any(|item| item.item == photocraft_doc::item_identity::ItemRef::Mask(mask.id) && item.composition.is_some()) {
+        if mask_controlled::iter(&state.items, control)
+            .any(|item| item.item == photocraft_doc::item_identity::ItemRef::Mask(mask.id) && item.composition.is_some())
+        {
             return Err(CompositionError::Unsupported("Unpremultiply mask current composition"));
         }
         return qualify_point_canvas_mask(state, node, owner, extent, control);
@@ -796,10 +981,10 @@ fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &Fi
     let format = mask.surface.format();
     let expanded_residual_limit = expanded_residual_mask_limit(node, extent, format)?;
     // Cap before the first default/region/physical scan, also for direct users.
-    if let Some(limit) = expanded_residual_limit {
-        if !residual_mask_payload_fits(&mask.surface, limit)? {
-            return Err(CompositionError::Unsupported("residual origin physical mask capacity"));
-        }
+    if let Some(limit) = expanded_residual_limit
+        && !residual_mask_payload_fits(&mask.surface, limit)?
+    {
+        return Err(CompositionError::Unsupported("residual origin physical mask capacity"));
     }
     let rgb_clip_mask = node.operation.name == "gegl:rgb-clip"
         && node.operation.schema_epoch == crate::gimp_filters::RGB_CLIP_HDR_EPOCH
@@ -840,7 +1025,8 @@ fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &Fi
         && format.mode == photocraft_color::ColorMode::Grayscale
         && !format.alpha
         && matches!(format.sample, photocraft_color::SampleType::U16 | photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64);
-    let color_temperature_precision_mask = (node.operation.name == "gimp:threshold" && node.operation.schema_epoch == crate::gimp_filters::THRESHOLD_PRECISION_EPOCH
+    let color_temperature_precision_mask = (node.operation.name == "gimp:threshold"
+        && node.operation.schema_epoch == crate::gimp_filters::THRESHOLD_PRECISION_EPOCH
         || node.operation.name == "gegl:saturation"
             && matches!(
                 node.operation.schema_epoch.as_str(),
@@ -858,7 +1044,11 @@ fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &Fi
                 node.operation.schema_epoch.as_str(),
                 crate::gimp_filters::COLOR_TEMPERATURE_PRECISION_EPOCH | crate::gimp_filters::COLOR_TEMPERATURE_OFFGRID_EPOCH
             ))
-        && (if crate::gimp_render::residual_origin_node(node) { crate::gimp_render::residual_origin_extent(extent) } else { extent == Rect::from_xywh(0, 0, 8, 6) })
+        && (if crate::gimp_render::residual_origin_node(node) {
+            crate::gimp_render::residual_origin_extent(extent)
+        } else {
+            extent == Rect::from_xywh(0, 0, 8, 6)
+        })
         && format.mode == photocraft_color::ColorMode::Grayscale
         && !format.alpha
         && matches!(format.sample, photocraft_color::SampleType::U16 | photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64);
@@ -885,18 +1075,21 @@ fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &Fi
         && !format.alpha
         && (matches!(format.sample, photocraft_color::SampleType::U16 | photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64)
             || color_balance_depth && matches!(format.sample, photocraft_color::SampleType::U8 | photocraft_color::SampleType::U32));
-    if expanded_residual_limit.is_some() && (!mask_controlled::bytes_zero(mask.surface.default_bytes(), control)? || !mask_controlled::tiles_zero(&mask.surface, control)?) {
+    if expanded_residual_limit.is_some()
+        && (!mask_controlled::bytes_zero(mask.surface.default_bytes(), control)? || !mask_controlled::tiles_zero(&mask.surface, control)?)
+    {
         return Err(CompositionError::Unsupported("residual origin physical mask bits"));
     }
-    if expanded_residual_limit.is_none() && (rgb_clip_mask
-        || value_precision_mask
-        || brightness_precision_mask
-        || gegl_levels_precision_mask
-        || exposure_black_precision_mask
-        || threshold_alpha_precision_mask
-        || color_temperature_precision_mask
-        || saturation_yuv_mask
-        || color_balance_mask)
+    if expanded_residual_limit.is_none()
+        && (rgb_clip_mask
+            || value_precision_mask
+            || brightness_precision_mask
+            || gegl_levels_precision_mask
+            || exposure_black_precision_mask
+            || threshold_alpha_precision_mask
+            || color_temperature_precision_mask
+            || saturation_yuv_mask
+            || color_balance_mask)
         && (!mask_controlled::bytes_zero(mask.surface.default_bytes(), control)? || !mask_controlled::region_zero(&mask.surface, extent, control)?)
     {
         return Err(CompositionError::Unsupported("unqualified precision point selection mask bits"));
@@ -923,7 +1116,9 @@ fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &Fi
                     alpha: false
                 }
             ));
-    let mask_payload_limit = if let Some(limit) = expanded_residual_limit { limit } else if threshold_alpha_precision_mask {
+    let mask_payload_limit = if let Some(limit) = expanded_residual_limit {
+        limit
+    } else if threshold_alpha_precision_mask {
         // Price the actual sparse full-canvas grid, retaining the existing
         // preparation ceiling. Extra tiles outside that grid are not inert.
         let side = photocraft_geom::TILE_SIZE as u64;
@@ -931,13 +1126,12 @@ fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &Fi
         let rows = u64::from(extent.height()).checked_add(side - 1).ok_or(CompositionError::Invalid("threshold mask rows"))? / side;
         for (coordinate, _) in mask.surface.tiles() {
             mask_controlled::poll(control)?;
-            if u64::try_from(coordinate.tx).ok().is_none_or(|x| x >= columns)
-                || u64::try_from(coordinate.ty).ok().is_none_or(|y| y >= rows)
-            {
+            if u64::try_from(coordinate.tx).ok().is_none_or(|x| x >= columns) || u64::try_from(coordinate.ty).ok().is_none_or(|y| y >= rows) {
                 return Err(CompositionError::Invalid("threshold mask tile outside canvas"));
             }
         }
-        columns.checked_mul(rows)
+        columns
+            .checked_mul(rows)
             .and_then(|n| n.checked_mul(side))
             .and_then(|n| n.checked_mul(side))
             .and_then(|n| n.checked_mul(format.bytes_per_pixel() as u64))
@@ -994,7 +1188,13 @@ fn qualify_selection_mask_controlled(state: &photocraft_doc::XcfState, node: &Fi
 /// canvas rather than the drawable extent. The caller validates operation,
 /// source model/precision/profile and matching mask sample depth separately.
 /// No absent mask or nonzero selection is inferred as unrestricted filtering.
-fn qualify_point_canvas_mask(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, canvas: Rect, control: &Interrupt<'_>) -> Result<()> {
+fn qualify_point_canvas_mask(
+    state: &photocraft_doc::XcfState,
+    node: &FilterNode,
+    owner: photocraft_doc::LayerId,
+    canvas: Rect,
+    control: &Interrupt<'_>,
+) -> Result<()> {
     use photocraft_doc::item_identity::ItemRef;
     let Some(ItemRef::Mask(id)) = node.mask else {
         return Err(CompositionError::Unsupported("point Replace requires its saved canvas selection mask"));
@@ -1087,9 +1287,20 @@ fn qualify_exposure_canvas_mask(state: &photocraft_doc::XcfState, node: &FilterN
     }
     consume_empty_selection_state(state, node, owner, mask.bounds, mask.surface.format(), control)
 }
-fn consume_empty_selection_state(state: &photocraft_doc::XcfState, node: &FilterNode, owner: photocraft_doc::LayerId, bounds: Rect, format: PixelFormat, control: &Interrupt<'_>) -> Result<()> {
+fn consume_empty_selection_state(
+    state: &photocraft_doc::XcfState,
+    node: &FilterNode,
+    owner: photocraft_doc::LayerId,
+    bounds: Rect,
+    format: PixelFormat,
+    control: &Interrupt<'_>,
+) -> Result<()> {
     let prepared = crate::gimp_filter_mask_state::prepare_empty_selection(
-        state, node, owner, bounds, format,
+        state,
+        node,
+        owner,
+        bounds,
+        format,
         crate::gimp_filter_mask_state::MaskStateLimits { resident_bytes: CACHE_BYTES, work_units: CACHE_BYTES },
         control,
     )?;
@@ -1114,12 +1325,16 @@ fn map_pixels_at(
     interrupt: &Interrupt<'_>,
     f: impl FnMut((i32, i32), [f64; 4]) -> Result<[f64; 4]>,
 ) -> Result<Surface> {
-    map_pixels_at_bounded(source,roi,poll,interrupt,f,None)
+    map_pixels_at_bounded(source, roi, poll, interrupt, f, None)
 }
 fn map_pixels_at_bounded(
-    source:&Surface,roi:Rect,poll:&mut impl FnMut(WideWork)->Result<()>,interrupt:&Interrupt<'_>,
-    mut f:impl FnMut((i32,i32),[f64;4])->Result<[f64;4]>,capacity_limit:Option<usize>
-)->Result<Surface> {
+    source: &Surface,
+    roi: Rect,
+    poll: &mut impl FnMut(WideWork) -> Result<()>,
+    interrupt: &Interrupt<'_>,
+    mut f: impl FnMut((i32, i32), [f64; 4]) -> Result<[f64; 4]>,
+    capacity_limit: Option<usize>,
+) -> Result<Surface> {
     let mut out = Surface::new(PixelFormat::RGBA64F);
     let count =
         u64::from(roi.width()).checked_mul(u64::from(roi.height())).and_then(|v| v.checked_mul(4)).ok_or(CompositionError::Invalid("filter scratch size"))?;
@@ -1130,7 +1345,9 @@ fn map_pixels_at_bounded(
     samples
         .try_reserve_exact(usize::try_from(count).map_err(|_| CompositionError::Invalid("filter scratch size"))?)
         .map_err(|_| CompositionError::Invalid("filter scratch allocation denied"))?;
-    if capacity_limit.is_some_and(|limit|samples.capacity()>limit) {return Err(CompositionError::Invalid("owned filter scratch capacity"));}
+    if capacity_limit.is_some_and(|limit| samples.capacity() > limit) {
+        return Err(CompositionError::Invalid("owned filter scratch capacity"));
+    }
     for y in roi.y0..roi.y1 {
         poll(WideWork::SampleUnits(u64::from(roi.width()) * 128))?;
         if interrupt.cancelled() {
@@ -1226,7 +1443,7 @@ mod gray_scratch_tests {
             integer_point_storage: None,
             current_point_sample: None,
             filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical,
-                stock_disabled:false,
+            stock_disabled: false,
         };
         // A Levels result this small must become zero in the U8 buffer before
         // nonlinear display conversion. Coverage remains the original sample.
@@ -1248,7 +1465,7 @@ mod gray_scratch_tests {
             integer_point_storage: None,
             current_point_sample: None,
             filter_output_precision: photocraft_doc::FilterOutputPrecision::Canonical,
-                stock_disabled:false,
+            stock_disabled: false,
         };
         let input = [-0.125, 1.125, 0.25 / 4294967295.0, -0.0];
         assert_eq!(wide.stored_point_result(input, false), input);
@@ -1463,13 +1680,13 @@ mod exposure_canvas_mask_tests {
 }
 
 #[cfg(test)]
-pub(crate) fn legacy_disabled_neighborhood_parameters_refuse(node:&FilterNode,extent:Rect)->bool {
+pub(crate) fn legacy_disabled_neighborhood_parameters_refuse(node: &FilterNode, extent: Rect) -> bool {
     match node.operation.name.as_str() {
-        "gegl:box-blur"=>box_blur::radius(node,22,extent).is_err(),
-        "gegl:median-blur"=>median_blur::parameters(node,22,extent).is_err(),
-        "gegl:motion-blur-linear"=>motion_blur::parameters(node,22,extent).is_err(),
-        "gegl:pixelize"=>pixelize::parameters(node,22,extent).is_err(),
-        "gegl:gaussian-blur"=>raster_gaussian::parameters(node,22).is_err(),
-        _=>false,
+        "gegl:box-blur" => box_blur::radius(node, 22, extent).is_err(),
+        "gegl:median-blur" => median_blur::parameters(node, 22, extent).is_err(),
+        "gegl:motion-blur-linear" => motion_blur::parameters(node, 22, extent).is_err(),
+        "gegl:pixelize" => pixelize::parameters(node, 22, extent).is_err(),
+        "gegl:gaussian-blur" => raster_gaussian::parameters(node, 22).is_err(),
+        _ => false,
     }
 }

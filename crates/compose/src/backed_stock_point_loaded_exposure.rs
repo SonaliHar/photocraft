@@ -1,6 +1,8 @@
 //! Private paid singleton loaded Exposure V2 backend. Raw words are immutable.
 //! The raw Source entry is strict; actual Point CURRENT uses its own full proof.
 use super::*;
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn prepare<B: PlanBudget>(
     doc: &Document,
     supplied: Option<&Profile>,
@@ -38,7 +40,7 @@ pub(super) fn prepare<B: PlanBudget>(
         || !state.source_items.is_empty()
         || !state.editable_indexed.is_empty()
         || state.floating.is_some()
-        || (doc.selection.is_some() && !selection_allowed(doc,purpose,selection))
+        || (doc.selection.is_some() && !selection_allowed(doc, purpose, selection))
         || doc.selection_channel_id.is_some()
         || !doc.channels.is_empty()
         || !doc.paths.is_empty()

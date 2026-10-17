@@ -9,12 +9,14 @@ pub(super) struct Recipes<L> {
     _fee: L,
 }
 
+type PreparedSource<L> = (Recipes<L>, Spaces<L>);
+
 pub(super) fn prepare<B: crate::gimp_render::PreparationBudget>(
     doc: &Document,
     interrupt: &Interrupt<'_>,
     budget: &mut B,
     header: usize,
-) -> Result<(Recipes<B::Lease>, Spaces<B::Lease>), E> {
+) -> Result<PreparedSource<B::Lease>, E> {
     let check = |budget: &mut B, n| {
         if interrupt.cancelled() {
             return Err(E::Backing(BackingError::Cancelled));

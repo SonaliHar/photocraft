@@ -129,7 +129,7 @@ fn unmodified_corrupt_missing_and_transformed_source_evidence_is_rejected() {
                 }
             }
             1 => source.cache = None,
-            2 => source.cache.as_mut().unwrap().bytes[0] = 1,
+            2 => std::sync::Arc::make_mut(&mut source.cache.as_mut().unwrap().bytes)[0] = 1,
             3 => source.transform = Some(TransformState { matrix_f64_bits: [0; 9], interpolation: 0, pre_offset: [0; 2] }),
             _ => {
                 source.source = EditableSource::Linked {

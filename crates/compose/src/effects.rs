@@ -3242,12 +3242,12 @@ mod tests {
     }
 }
 
-mod controlled_distance;
-mod controlled_glow;
-mod controlled_euclidean;
-mod controlled_stroke;
 mod controlled_bevel;
 mod controlled_contour;
+mod controlled_distance;
+mod controlled_euclidean;
+mod controlled_glow;
+mod controlled_stroke;
 
 // Additive checked preparation kernels; legacy rendering retains its existing API.
 mod checked_prepare {
@@ -3542,7 +3542,8 @@ mod checked_prepare {
             let (radius, blur) = spread_split(shadow.size, shadow.spread);
             let (tent_radius, _, _) = box_geom(blur);
             let sides = u64::from(rect.width()).checked_add(u64::from(rect.height())).ok_or(E::LimitExceeded)?;
-            let line_work = u64::try_from(tent_radius).map_err(|_| E::LimitExceeded)?.checked_mul(sides).and_then(|n| n.checked_mul(16)).ok_or(E::LimitExceeded)?;
+            let line_work =
+                u64::try_from(tent_radius).map_err(|_| E::LimitExceeded)?.checked_mul(sides).and_then(|n| n.checked_mul(16)).ok_or(E::LimitExceeded)?;
             let pixel_work = pixels.checked_mul(if radius > 0.0 { 320 } else { 128 }).ok_or(E::LimitExceeded)?;
             work = work.checked_add(super::controlled_contour::requirements(&shadow.contour, None, false)?.work_units).ok_or(E::LimitExceeded)?;
             work = work.checked_add(pixel_work).and_then(|n| n.checked_add(line_work)).ok_or(E::LimitExceeded)?;
@@ -3701,7 +3702,8 @@ mod checked_prepare {
             noise: 0.17,
             source: GlowSource::Center,
         };
-        let mut layer = Layer::new("Mixed glow draft", photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8)));
+        let mut layer =
+            Layer::new("Mixed glow draft", photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8)));
         layer.effects.items = vec![Effect::default_drop_shadow(), Effect::OuterGlow(glow.clone()), Effect::InnerGlow(glow)];
         let original = layer.clone();
         let rect = Rect::new(-3, 7, 30, 34);
@@ -3724,7 +3726,7 @@ mod checked_prepare {
     #[cfg(test)]
     #[test]
     fn checked_spread_shadows_match_existing_maps_and_refuse_privately() {
-        use photocraft_doc::{Color, LayerContent, Surface};
+        use photocraft_doc::{LayerContent, Surface};
         for spread in [0.0, 0.02, 0.4, 1.0] {
             let mut layer = Layer::new("Spread draft", LayerContent::Raster(Surface::new(photocraft_color::PixelFormat::RGBA8)));
             let mut effect = Effect::default_drop_shadow();
@@ -3908,26 +3910,17 @@ mod checked_prepare {
             assert!(checked_with_stroke.din.is_some());
             assert!(checked_with_stroke.dout.is_some());
             assert!(checked_with_stroke.dout_exact.is_none());
-            for (a,b) in [(&checked_with_stroke.din,&expected_with_stroke.din),(&checked_with_stroke.dout,&expected_with_stroke.dout)] {
-                assert_eq!(a.as_ref().map(|v|v.iter().map(|v|v.to_bits()).collect::<Vec<_>>()),b.as_ref().map(|v|v.iter().map(|v|v.to_bits()).collect::<Vec<_>>()));
+            for (a, b) in [(&checked_with_stroke.din, &expected_with_stroke.din), (&checked_with_stroke.dout, &expected_with_stroke.dout)] {
+                assert_eq!(
+                    a.as_ref().map(|v| v.iter().map(|v| v.to_bits()).collect::<Vec<_>>()),
+                    b.as_ref().map(|v| v.iter().map(|v| v.to_bits()).collect::<Vec<_>>())
+                );
             }
             assert!(checked_with_stroke.per.last().unwrap().is_empty());
         }
     }
 }
 
-/// No-texture regression entry for the checked ordinary style-map preparation.
-#[cfg(test)]
-pub(crate) fn try_build_shadow_maps(
-    layer: &Layer,
-    shape: Vec<f32>,
-    rect: Rect,
-    light: &GlobalLight,
-    budget: usize,
-    control: &photocraft_raster::Interrupt<'_>,
-) -> Result<FxMaps, photocraft_raster::RasterInputError> {
-    checked_prepare::build(layer, shape, rect, light, budget, control)
-}
 /// Checked existing style-map preparation with already charged pattern pixels.
 pub(crate) fn try_build_effect_maps_with_texture(
     layer: &Layer,
@@ -3946,7 +3939,8 @@ pub(crate) fn validate_checked_shadows(layer: &Layer) -> Result<usize, photocraf
 
 /// Borrowed checked-shadow metadata validation under the renderer token.
 pub(crate) fn validate_checked_shadows_with_interrupt(
-    layer: &Layer, control: &photocraft_raster::Interrupt<'_>,
+    layer: &Layer,
+    control: &photocraft_raster::Interrupt<'_>,
 ) -> Result<usize, photocraft_raster::RasterInputError> {
     checked_prepare::validate_with_interrupt(layer, control)
 }

@@ -126,7 +126,7 @@ fn transfer(value: &FilterArgument, kind: Kind) -> Result<Transfer, RasterInputE
         _ => Err(unsupported()),
     }
 }
-fn channels<'a>(node: &'a FilterNode, kind: Kind) -> Result<(&'a [FilterArgument], Transfer, bool, bool), RasterInputError> {
+fn channels(node: &FilterNode, kind: Kind) -> Result<(&[FilterArgument], Transfer, bool, bool), RasterInputError> {
     let (trc, config, clamp_input, clamp_output) = match (kind, node.arguments.as_slice()) {
         (Kind::Curves { .. }, [trc, config]) => (trc, config, false, false),
         (Kind::Levels, [trc, ci, co, config]) if ci.name == "clamp-input" && co.name == "clamp-output" => {
@@ -310,40 +310,76 @@ impl BoundSource<'_> {
 }
 
 /// Exact retained operation/schema identity, without a guessed working profile.
-#[derive(Clone,Copy,Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct RetainedSchemaIdentity<'a> {
-    pub xcf_version:u32,
-    pub expected_epoch:&'a str,
-    pub schema_sha256:&'a str,
+    pub xcf_version: u32,
+    pub expected_epoch: &'a str,
+    pub schema_sha256: &'a str,
 }
 /// Borrowed five-selector/TRC admission before profile allocation. Numeric
 /// preparation later consumes the same retained fields; no getter proxy is used.
-pub fn retained_source_transfer(node:&FilterNode,identity:RetainedSchemaIdentity<'_>,control:&Interrupt<'_>)->Result<Transfer,RasterInputError>{
+pub fn retained_source_transfer(node: &FilterNode, identity: RetainedSchemaIdentity<'_>, control: &Interrupt<'_>) -> Result<Transfer, RasterInputError> {
     poll(control)?;
-    let (kind,schema)=match node.operation.name.as_str(){"gimp:levels"=>(Kind::Levels,LEVELS_SCHEMA),"gimp:curves"=>(Kind::Curves{requested_samples:[256;5]},CURVES_SCHEMA),_=>return Err(unsupported())};
-    if identity.xcf_version!=22||identity.expected_epoch.is_empty()||identity.expected_epoch.len()>128||identity.expected_epoch.contains('\0')||node.id.0==0||node.operation.stored_version!="0:0"||node.operation.schema_epoch!=identity.expected_epoch||identity.schema_sha256!=schema{return Err(unsupported());}
-    let (groups,trc,_,_)=channels(node,kind)?;
+    let (kind, schema) = match node.operation.name.as_str() {
+        "gimp:levels" => (Kind::Levels, LEVELS_SCHEMA),
+        "gimp:curves" => (Kind::Curves { requested_samples: [256; 5] }, CURVES_SCHEMA),
+        _ => return Err(unsupported()),
+    };
+    if identity.xcf_version != 22
+        || identity.expected_epoch.is_empty()
+        || identity.expected_epoch.len() > 128
+        || identity.expected_epoch.contains('\0')
+        || node.id.0 == 0
+        || node.operation.stored_version != "0:0"
+        || node.operation.schema_epoch != identity.expected_epoch
+        || identity.schema_sha256 != schema
+    {
+        return Err(unsupported());
+    }
+    let (groups, trc, _, _) = channels(node, kind)?;
     for group in groups {
         poll(control)?;
-        match (kind,&group.value) {
-            (Kind::Curves{..},FilterValue::Curve{points_f64_bits,point_types,samples_f64_bits,..}) if points_f64_bits.len()<=64&&point_types.len()==points_f64_bits.len()&&samples_f64_bits.len()==256&&point_types.iter().all(|tag|matches!(tag,0|1))=>{
-                let mut prior=None;
-                for point in points_f64_bits {poll(control)?;let [x,y]=point.map(f64::from_bits);if !x.is_finite()||!y.is_finite()||!(0.0..=1.0).contains(&x)||!(0.0..=1.0).contains(&y)||prior.is_some_and(|p|x<=p){return Err(unsupported());}prior=Some(x);}
-                let mut samples=[0.0;256];for (bits,value) in samples_f64_bits.iter().zip(samples.iter_mut()){poll(control)?;*value=f64::from_bits(*bits);}
-                photocraft_algo::gimp::curves::FreeCurve{samples:&samples}.validate()?;
-            },
-            (Kind::Levels,FilterValue::Config(fields)) if fields.len()==5=>{
-                let mut values=[0.0;5];
-                for ((field,name),value) in fields.iter().zip(["low-input","high-input","gamma","low-output","high-output"]).zip(values.iter_mut()) {
-                    if field.name!=name{return Err(unsupported());}
-                    let FilterValue::Number(ExactNumber::Float64Bits(bits))=field.value else{return Err(unsupported());};*value=f64::from_bits(bits);
+        match (kind, &group.value) {
+            (Kind::Curves { .. }, FilterValue::Curve { points_f64_bits, point_types, samples_f64_bits, .. })
+                if points_f64_bits.len() <= 64
+                    && point_types.len() == points_f64_bits.len()
+                    && samples_f64_bits.len() == 256
+                    && point_types.iter().all(|tag| matches!(tag, 0 | 1)) =>
+            {
+                let mut prior = None;
+                for point in points_f64_bits {
+                    poll(control)?;
+                    let [x, y] = point.map(f64::from_bits);
+                    if !x.is_finite() || !y.is_finite() || !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) || prior.is_some_and(|p| x <= p) {
+                        return Err(unsupported());
+                    }
+                    prior = Some(x);
                 }
-                let [low_input,high_input,gamma,low_output,high_output]=values;
-                let channel=photocraft_algo::gimp::levels::LevelsChannel{low_input,high_input,gamma,low_output,high_output};
-                photocraft_algo::gimp::levels::LevelsConfiguration{channels:[channel;5],clamp_input:false,clamp_output:false}.validate()?;
-            },
-            _=>return Err(unsupported()),
+                let mut samples = [0.0; 256];
+                for (bits, value) in samples_f64_bits.iter().zip(samples.iter_mut()) {
+                    poll(control)?;
+                    *value = f64::from_bits(*bits);
+                }
+                photocraft_algo::gimp::curves::FreeCurve { samples: &samples }.validate()?;
+            }
+            (Kind::Levels, FilterValue::Config(fields)) if fields.len() == 5 => {
+                let mut values = [0.0; 5];
+                for ((field, name), value) in fields.iter().zip(["low-input", "high-input", "gamma", "low-output", "high-output"]).zip(values.iter_mut()) {
+                    if field.name != name {
+                        return Err(unsupported());
+                    }
+                    let FilterValue::Number(ExactNumber::Float64Bits(bits)) = field.value else {
+                        return Err(unsupported());
+                    };
+                    *value = f64::from_bits(bits);
+                }
+                let [low_input, high_input, gamma, low_output, high_output] = values;
+                let channel = photocraft_algo::gimp::levels::LevelsChannel { low_input, high_input, gamma, low_output, high_output };
+                photocraft_algo::gimp::levels::LevelsConfiguration { channels: [channel; 5], clamp_input: false, clamp_output: false }.validate()?;
+            }
+            _ => return Err(unsupported()),
         }
     }
-    poll(control)?;Ok(trc)
+    poll(control)?;
+    Ok(trc)
 }

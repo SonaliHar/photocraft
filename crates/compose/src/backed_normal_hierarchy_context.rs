@@ -173,8 +173,8 @@ impl<S, L> LeasedNormalHierarchyPipeline<S, L> {
         let index = doc.checked_normal_hierarchy_index_with_reservation(
             NormalHierarchyLimits::STANDARD,
             i,
-            &|n| cell.borrow_mut().consume_preparation_work(n).map_err(&record),
-            &mut |n| cell.borrow_mut().reserve_hierarchy_index(n).map(|lease| SourceIndexLease { _lease: lease, bytes: n }).map_err(&record),
+            &|n| cell.borrow_mut().consume_preparation_work(n).map_err(record),
+            &mut |n| cell.borrow_mut().reserve_hierarchy_index(n).map(|lease| SourceIndexLease { _lease: lease, bytes: n }).map_err(record),
         );
         if let Some(e) = failed.into_inner() {
             return Err(e);
@@ -211,8 +211,8 @@ impl<S, L> LeasedNormalHierarchyPipeline<S, L> {
         let index = doc.checked_normal_hierarchy_index_with_reservation(
             NormalHierarchyLimits::STANDARD,
             i,
-            &|n| cell.borrow_mut().consume_preparation_work(n).map_err(&record),
-            &mut |n| cell.borrow_mut().reserve_hierarchy_index(n).map(|lease| SourceIndexLease { _lease: lease, bytes: n }).map_err(&record),
+            &|n| cell.borrow_mut().consume_preparation_work(n).map_err(record),
+            &mut |n| cell.borrow_mut().reserve_hierarchy_index(n).map(|lease| SourceIndexLease { _lease: lease, bytes: n }).map_err(record),
         );
         if let Some(e) = failed.into_inner() {
             return Err(e);
@@ -249,8 +249,8 @@ impl<S, L> LeasedNormalHierarchyPipeline<S, L> {
         let index = doc.checked_normal_hierarchy_mask_index_with_reservation(
             NormalHierarchyLimits::STANDARD,
             i,
-            &|n| cell.borrow_mut().consume_preparation_work(n).map_err(&record),
-            &mut |n| cell.borrow_mut().reserve_hierarchy_index(n).map(|lease| SourceIndexLease { _lease: lease, bytes: n }).map_err(&record),
+            &|n| cell.borrow_mut().consume_preparation_work(n).map_err(record),
+            &mut |n| cell.borrow_mut().reserve_hierarchy_index(n).map(|lease| SourceIndexLease { _lease: lease, bytes: n }).map_err(record),
         );
         if let Some(e) = failed.into_inner() {
             return Err(e);
@@ -331,9 +331,13 @@ fn plain_quantized(doc: &Document, mut check: impl FnMut(u64) -> Result<(), E>) 
     }
     Ok(true)
 }
-fn header_mode(doc:&Document,plain_integer:bool)->Result<(),E>{header_mode_current(doc,plain_integer,None)}
-fn header_mode_current(doc: &Document, plain_integer: bool, selection:Option<&CheckedProgrammeSelection<'_>>) -> Result<(), E> {
-    if selection.is_some_and(|proof|!proof.matches_document(doc)||proof.storage_kind()!=ProgrammeNativeStorageKind::NormalHierarchy){return Err(scope());}
+fn header_mode(doc: &Document, plain_integer: bool) -> Result<(), E> {
+    header_mode_current(doc, plain_integer, None)
+}
+fn header_mode_current(doc: &Document, plain_integer: bool, selection: Option<&CheckedProgrammeSelection<'_>>) -> Result<(), E> {
+    if selection.is_some_and(|proof| !proof.matches_document(doc) || proof.storage_kind() != ProgrammeNativeStorageKind::NormalHierarchy) {
+        return Err(scope());
+    }
     let s = doc.xcf_state.as_ref().ok_or_else(scope)?;
     let source = doc.source_color_context.as_ref().ok_or_else(scope)?;
     crate::gimp_semi_flatten::positive_origin(doc.bounds()).map_err(E::Color)?;
@@ -468,20 +472,32 @@ fn qualify_node(
 
     Ok(())
 }
-fn compile<'doc,P:TreeIndex<'doc>,B:PlanBudget>(doc:&'doc Document,index:&P,purpose:Purpose,outer:u64,i:&Interrupt<'_>,b:&mut B)->Result<(Plan<B::Lease>,B::Lease),E>{
-    compile_current(doc,index,purpose,None,outer,i,b)
+fn compile<'doc, P: TreeIndex<'doc>, B: PlanBudget>(
+    doc: &'doc Document,
+    index: &P,
+    purpose: Purpose,
+    outer: u64,
+    i: &Interrupt<'_>,
+    b: &mut B,
+) -> Result<(Plan<B::Lease>, B::Lease), E> {
+    compile_current(doc, index, purpose, None, outer, i, b)
 }
 fn compile_current<'doc, P: TreeIndex<'doc>, B: PlanBudget>(
     doc: &'doc Document,
     index: &P,
     purpose: Purpose,
-    selection:Option<&CheckedProgrammeSelection<'_>>,
+    selection: Option<&CheckedProgrammeSelection<'_>>,
     outer: u64,
     i: &Interrupt<'_>,
     b: &mut B,
 ) -> Result<(Plan<B::Lease>, B::Lease), E> {
     charge(b, i, 1)?;
-    if selection.is_some(){charge(b,i,128)?;if !matches!(purpose,Purpose::MaskedCurrent){return Err(scope());}}
+    if selection.is_some() {
+        charge(b, i, 128)?;
+        if !matches!(purpose, Purpose::MaskedCurrent) {
+            return Err(scope());
+        }
+    }
     if matches!(purpose, Purpose::MaskedCurrent | Purpose::PlainIntegerSource) {
         let plain = plain_quantized(doc, |n| charge(b, i, n))?;
         if matches!(purpose, Purpose::PlainIntegerSource) && !plain {
@@ -763,9 +779,15 @@ impl<'a> Context<'a> {
             return Err(scope());
         }
         let plain = plain_quantized(owner.document(), |n| c.check(n).map_err(E::Backing))?;
-        let _selection_fee=if owner.document().selection.is_some(){Some(owner.quota().reserve(QuotaKind::Index,(std::mem::size_of::<CheckedProgrammeSelection<'_>>()+128)as u64).map_err(E::Quota)?)}else{None};
-        let proof=if owner.document().selection.is_some(){Some(owner.checked_programme_selection(c).map_err(E::Backing)?)}else{None};
-        if proof.is_some(){c.check(128).map_err(E::Backing)?;}
+        let _selection_fee = if owner.document().selection.is_some() {
+            Some(owner.quota().reserve(QuotaKind::Index, (std::mem::size_of::<CheckedProgrammeSelection<'_>>() + 128) as u64).map_err(E::Quota)?)
+        } else {
+            None
+        };
+        let proof = if owner.document().selection.is_some() { Some(owner.checked_programme_selection(c).map_err(E::Backing)?) } else { None };
+        if proof.is_some() {
+            c.check(128).map_err(E::Backing)?;
+        }
         header_mode_current(owner.document(), plain, proof.as_ref())?;
         owner.validate_readonly_normal_hierarchy_current_storage(c).map_err(E::Backing)?;
         let index = owner.checked_readonly_normal_hierarchy_current_index(c).map_err(E::Backing)?;
@@ -799,4 +821,6 @@ impl<'a> Context<'a> {
 
 #[cfg(test)]
 #[path = "backed_normal_hierarchy_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unreachable)]
 mod tests;

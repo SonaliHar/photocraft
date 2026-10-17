@@ -100,10 +100,25 @@ impl PreparedSemiFlatten {
     pub(crate) fn new(node: &FilterNode, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, control: &Interrupt<'_>) -> Result<Self> {
         Self::new_mode(node, profile, stored, version, extent, control, false)
     }
-    pub(crate) fn new_mixed_opacity(node: &FilterNode, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, control: &Interrupt<'_>) -> Result<Self> {
+    pub(crate) fn new_mixed_opacity(
+        node: &FilterNode,
+        profile: &Profile,
+        stored: SampleEncoding,
+        version: u32,
+        extent: Rect,
+        control: &Interrupt<'_>,
+    ) -> Result<Self> {
         Self::new_mode(node, profile, stored, version, extent, control, true)
     }
-    fn new_mode(node: &FilterNode, profile: &Profile, stored: SampleEncoding, version: u32, extent: Rect, control: &Interrupt<'_>, current: bool) -> Result<Self> {
+    fn new_mode(
+        node: &FilterNode,
+        profile: &Profile,
+        stored: SampleEncoding,
+        version: u32,
+        extent: Rect,
+        control: &Interrupt<'_>,
+        current: bool,
+    ) -> Result<Self> {
         control.check().map_err(|_| RasterInputError::Cancelled)?;
         canonical_mode(node, stored, version, extent, current)?;
         if profile != Builtin::Srgb.profile() {
@@ -140,16 +155,24 @@ impl PreparedSemiFlatten {
     }
     /// Derived stage input is finite RGB/unit alpha, never original-source authority.
     pub(crate) fn validate_derived_input(&self, pixel: [f64; 4]) -> Result<()> {
-        if pixel.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&pixel[3]) { return Err(scope()); }
+        if pixel.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&pixel[3]) {
+            return Err(scope());
+        }
         let color = self.working.convert([pixel[0], pixel[1], pixel[2]], true)?;
-        if color.iter().any(|v| !(*v as f32).is_finite()) { return Err(scope()); }
+        if color.iter().any(|v| !(*v as f32).is_finite()) {
+            return Err(scope());
+        }
         Ok(())
     }
     pub(crate) fn apply_derived(&self, pixel: [f64; 4], enabled: bool) -> Result<[f64; 4]> {
         self.apply_mode(pixel, enabled, true)
     }
     fn apply_mode(&self, pixel: [f64; 4], enabled: bool, derived: bool) -> Result<[f64; 4]> {
-        if derived { self.validate_derived_input(pixel)?; } else { self.validate_input(pixel)?; }
+        if derived {
+            self.validate_derived_input(pixel)?;
+        } else {
+            self.validate_input(pixel)?;
+        }
         if !enabled {
             return Ok(pixel);
         }
@@ -158,7 +181,11 @@ impl PreparedSemiFlatten {
         let color = self.working.convert([pixel[0], pixel[1], pixel[2]], true)?;
         let input = [color[0], color[1], color[2], pixel[3]].map(|v| f64::from(v as f32));
         let mut output = [0.; 4];
-        if derived { self.derived_operation.try_eval_derived_pixel(&input, 3, &mut output)?; } else { self.operation.try_eval_pixel(&input, 3, &mut output)?; }
+        if derived {
+            self.derived_operation.try_eval_derived_pixel(&input, 3, &mut output)?;
+        } else {
+            self.operation.try_eval_pixel(&input, 3, &mut output)?;
+        }
         let native = self.working.convert([output[0], output[1], output[2]], false)?;
         let result = [native[0], native[1], native[2], output[3]];
         if result.iter().any(|v| !v.is_finite()) || !(0.0..=1.0).contains(&result[3]) {
@@ -224,7 +251,7 @@ pub(crate) fn qualify_mask(state: &photocraft_doc::XcfState, node: &FilterNode, 
     }
     let word = sample.bytes();
     let check = |bytes: &[u8]| -> Result<()> {
-        if bytes.len() % word != 0 {
+        if !bytes.len().is_multiple_of(word) {
             return Err(scope());
         }
         for block in bytes.chunks(word * 64) {

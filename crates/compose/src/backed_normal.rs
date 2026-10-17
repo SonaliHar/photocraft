@@ -138,6 +138,8 @@ impl PreparedBackedNormal<'_> {
     }
     /// Explicit typed current operator; it grants no raw-policy/source eligibility.
     /// Existing constructors remain Union. Working-space equations are shared.
+    // Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_composite_operator<'a>(
         layer: &'a BackedLayer,
         profile: &Profile,

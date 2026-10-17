@@ -81,6 +81,8 @@ struct RetainedPlan {
     plan: Plan<QuotaLease>,
     _lease: QuotaLease,
 }
+// Keep the bounded inline representation; boxing adds a new allocation and changes its controlled storage schedule.
+#[allow(clippy::large_enum_variant)]
 enum ProfileBinding<L> {
     Implicit(Profile),
     Assigned(BoundAssignedNeighborhoodProfile<L>),

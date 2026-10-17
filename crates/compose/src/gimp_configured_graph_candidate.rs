@@ -113,10 +113,10 @@ pub fn evaluate_with_sample_policy(
     {
         return Err(GraphExecuteError::Roi);
     }
-    if let Some(plan) = input.footprint {
-        if plan.output() != request.roi || plan.source_read() != request.roi || plan.support() != request.roi {
-            return Err(GraphExecuteError::Roi);
-        }
+    if let Some(plan) = input.footprint
+        && (plan.output() != request.roi || plan.source_read() != request.roi || plan.support() != request.roi)
+    {
+        return Err(GraphExecuteError::Roi);
     }
     let format = binding.domain.format;
     let first = TileCoord::containing(request.roi.x0, request.roi.y0);

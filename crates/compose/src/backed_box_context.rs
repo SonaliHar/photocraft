@@ -94,6 +94,8 @@ impl PlanBudget for Budget<'_, '_> {
         self.c.check(n).map_err(E::Backing)
     }
 }
+// Keep the bounded inline representation; boxing adds a new allocation and changes its controlled storage schedule.
+#[allow(clippy::large_enum_variant)]
 enum ProfileOwner {
     Implicit(Profile),
     Assigned(BoundAssignedNeighborhoodProfile<QuotaLease>),
@@ -454,7 +456,7 @@ impl<'a> PreparedBackedBoxContext<'a> {
             return Err(E::Allocation);
         }
         tile._lease.reconcile_capacity(actual).map_err(E::Quota)?;
-        for bytes in tile.raw.chunks_exact_mut(32) {
+        for bytes in tile.raw.as_chunks_mut::<32>().0 {
             c.check(4 + 3 * 128).map_err(E::Backing)?;
             let p = decode(bytes)?;
             valid(p)?;

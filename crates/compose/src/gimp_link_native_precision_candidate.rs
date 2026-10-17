@@ -138,7 +138,9 @@ pub fn prepare(request: Request<'_>, limits: Limits, c: &Interrupt<'_>) -> Resul
             output.copy_from_slice(input);
         }
     } else {
-        for (i, (input, output)) in request.raw_source.chunks_exact(8).zip(bytes.chunks_exact_mut(request.current_format.bytes_per_pixel())).enumerate() {
+        for (i, (input, output)) in
+            request.raw_source.as_chunks::<8>().0.iter().zip(bytes.chunks_exact_mut(request.current_format.bytes_per_pixel())).enumerate()
+        {
             if i.is_multiple_of(256) {
                 poll(c)?;
             }
@@ -278,7 +280,7 @@ mod tests {
             let state = TransformState { matrix_f64_bits: Homography::IDENTITY.0.map(f64::to_bits), interpolation: 0, pre_offset: [-2, 1] };
             let transformed = prepare_nearest(request, &state, extent, limits, &Interrupt::NONE).unwrap();
             assert_eq!(transformed.try_read_interleaved(extent).unwrap(), prepared.bytes());
-            for (pixel, source) in prepared.bytes().chunks_exact(request.current_format.bytes_per_pixel()).zip(words.chunks_exact(4)) {
+            for (pixel, source) in prepared.bytes().chunks_exact(request.current_format.bytes_per_pixel()).zip(words.as_chunks::<4>().0.iter()) {
                 for (ch, word) in source.iter().enumerate() {
                     let expected = if sample == SampleType::U16 { f64::from(*word) / 65535. } else { f64::from((f64::from(*word) / 65535.) as f32) };
                     assert_eq!(try_read_sample_f64(pixel, sample, ch).unwrap(), expected);

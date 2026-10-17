@@ -2,6 +2,8 @@
 //! entered through the fixed scalar candidate preparation envelope.
 use super::*;
 
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn prepare<B: PlanBudget>(
     doc: &Document,
     supplied: Option<&Profile>,

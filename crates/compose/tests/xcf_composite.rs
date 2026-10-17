@@ -66,7 +66,27 @@ fn explicit_encoding_overrides_depth_for_exposure() {
         let mut b = Buffer { rect: d.bounds(), px: vec![[0.5, 0.5, 0.5, 1.0]] };
         apply_depth(&Adjustment::Exposure { exposure: 1.0, offset: 0.0, gamma: 1.0 }, &mut b, Transfer::for_doc(&d), Some(depth));
         let expected = photocraft_color::convert::linear_to_srgb(photocraft_color::convert::srgb_to_linear(0.5) * 2.0);
-        assert!((b.px[0][0] - expected).abs() < 0.0001);
+        assert!((b.px[0][0] - expected).abs() < 0.0001, "{depth:?}: {} versus {expected}", b.px[0][0]);
+    }
+}
+
+#[test]
+fn linear_float_exposure_keeps_signed_hdr_samples() {
+    use photocraft_compose::{
+        Buffer,
+        adjust::{Transfer, apply_depth},
+    };
+    use photocraft_doc::Adjustment;
+    for explicit in [None, Some(SampleEncoding::Linear)] {
+        let mut d = Document::new("linear HDR", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+        d.sample_encoding = explicit;
+        let mut b = Buffer { rect: d.bounds(), px: vec![[-0.25, 0.5, 2.0, 0.5]] };
+        apply_depth(&Adjustment::Exposure { exposure: 1.0, offset: 0.0, gamma: 1.0 }, &mut b, Transfer::for_doc(&d), Some(d.depth));
+        assert_eq!(b.px[0].map(f32::to_bits), [-0.5_f32, 1.0, 4.0, 0.5].map(f32::to_bits));
+        let hidden = [-0.25, 0.5, 2.0, -0.0];
+        b.px[0] = hidden;
+        apply_depth(&Adjustment::Exposure { exposure: 1.0, offset: 0.0, gamma: 1.0 }, &mut b, Transfer::for_doc(&d), Some(d.depth));
+        assert_eq!(b.px[0].map(f32::to_bits), hidden.map(f32::to_bits));
     }
 }
 

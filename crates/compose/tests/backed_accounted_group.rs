@@ -108,7 +108,7 @@ fn layer(root: &Path, r: &Value, doc: &Document, q: &BackingQuota, state: &mut X
             parent: None,
             source_tattoo: None,
             source_flags: 0,
-            raster_bounds: None,
+            raster_bounds: Some(rect),
             composition: None,
             mask: Some(MaskState {
                 owner: ItemRef::Layer(result.id),
@@ -163,7 +163,26 @@ fn fixture(root: &Path, row: &Value) -> (photocraft_doc::accounted_document::Acc
     let raw = read(root, &row["assigned_icc"]);
     let profile = photocraft_cms::Profile::parse(&raw).unwrap();
     doc.icc_profile = Some(Arc::new(raw));
+    doc.source_color_context = Some(SourceColorContext {
+        original_icc: doc.icc_profile.clone(),
+        source_precision: match depth {
+            SampleType::U16 => 250,
+            SampleType::F32 => 650,
+            SampleType::F64 => 750,
+            _ => panic!("oracle depth"),
+        },
+    });
     let mut state = XcfState::default();
+    // Retain the recorded source metadata in this synthetic Legacy owner;
+    // this does not invoke or qualify an imported Source factory.
+    let source = read(root, &row["source"]);
+    state.provenance.format = "xcf".into();
+    state.provenance.format_version = if source.starts_with(b"gimp xcf v013\0") {
+        13
+    } else {
+        assert!(source.starts_with(b"gimp xcf v012\0"));
+        12
+    };
     let mut next = 0;
     doc.layers = row["layers"].as_array().unwrap().iter().rev().map(|r| layer(root, r, &doc, &q, &mut state, None, &mut next)).collect();
     doc.xcf_state = Some(state);
@@ -348,11 +367,9 @@ fn unqualified_group_contexts_and_invalid_mask_samples_refuse_atomically() {
     doc.layers[1].mask.as_mut().unwrap().surface =
         Arc::new(Surface::try_with_default_bytes(PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false), &f64::NAN.to_ne_bytes()).unwrap());
     let altered = photocraft_doc::accounted_document::AccountedDocument::from_owned(doc, Arc::new((owner.clone(), copy, source)), q.clone(), &ctl()).unwrap();
-    let p = PreparedBackedDocument::new_accounted(&altered, &profile, NormalBandLimits::default(), &ctl()).unwrap();
     let before = q.usage().unwrap();
-    assert!(p.render_band(Rect::new(0, 0, 4, 3), &ctl()).is_err());
+    assert!(PreparedBackedDocument::new_accounted(&altered, &profile, NormalBandLimits::default(), &ctl()).is_err());
     assert_eq!(q.usage().unwrap(), before);
-    drop(p);
     drop(altered);
     drop(owner);
     assert_eq!(q.usage().unwrap(), QuotaUsage::default());
@@ -391,7 +408,7 @@ fn typed_group_mask_and_visibility_history_matches_independent_controls_and_reta
     assert!(Arc::ptr_eq(current_mask, original_mask));
     assert!(original.document().layers[1].mask.as_ref().unwrap().enabled);
     assert!(!history.current().unwrap().document().layers[1].mask.as_ref().unwrap().enabled);
-    history.try_commit(AccountedEdit::LayerVisibility { layer: id, visible: false }, &ctl()).unwrap();
+    history.try_commit(AccountedEdit::LayerMetadata { layer: id, name: None, visible: Some(false), opacity: None }, &ctl()).unwrap();
     let hidden_output = render(history.current().unwrap(), hidden);
     assert!(history.undo(&ctl()).unwrap());
     let restored_disabled = render(history.current().unwrap(), disabled);

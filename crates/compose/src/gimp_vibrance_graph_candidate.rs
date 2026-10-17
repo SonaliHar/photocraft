@@ -182,6 +182,7 @@ impl StagingBudget for BuilderBudget {
     }
 }
 fn validate_pixels(source: &Surface, roi: Rect, c: &Interrupt<'_>) -> Result<(), E> {
+    poll(c)?;
     source.try_validate_tile_origins_with(c).map_err(E::Raster)?;
     for (coord, _) in source.tiles() {
         poll(c)?;
@@ -247,10 +248,10 @@ pub fn evaluate(binding: &Binding<'_, '_>, request: NodeRequest<'_>, budget: &mu
             poll(c)?;
             let cell = Rect::new(x, y, x.checked_add(64).ok_or(E::Roi)?, y.checked_add(64).ok_or(E::Roi)?);
             source.try_read_interleaved_into_with(cell, &mut raw, c).map_err(E::Raster)?;
-            for (row, pixels) in raw.chunks_exact_mut(64 * 16).enumerate() {
+            for (row, pixels) in raw.as_chunks_mut::<{ 64 * 16 }>().0.iter_mut().enumerate() {
                 poll(c)?;
                 let py = y.checked_add(i32::try_from(row).map_err(|_| E::Roi)?).ok_or(E::Roi)?;
-                for (column, pixel) in pixels.chunks_exact_mut(16).enumerate() {
+                for (column, pixel) in pixels.as_chunks_mut::<16>().0.iter_mut().enumerate() {
                     let px = x.checked_add(i32::try_from(column).map_err(|_| E::Roi)?).ok_or(E::Roi)?;
                     if px < request.roi.x0 || px >= request.roi.x1 || py < request.roi.y0 || py >= request.roi.y1 {
                         continue;

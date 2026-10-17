@@ -136,7 +136,7 @@ pub fn config_bits(arguments: &[FilterArgument]) -> Result<[u64; 23]> {
 }
 fn parameters(bits: [u64; 23]) -> math::Parameters {
     let mut ranges = [[0u64; 3]; 7];
-    for (range, words) in ranges.iter_mut().zip(bits[1..22].chunks_exact(3)) {
+    for (range, words) in ranges.iter_mut().zip(bits[1..22].as_chunks::<3>().0.iter()) {
         range.copy_from_slice(words);
     }
     math::Parameters { time_bits: Some(bits[0]), ranges, overlap_bits: bits[22] }
@@ -447,7 +447,6 @@ mod tests {
             assert!(output.iter().all(|v| v.is_finite()));
             assert_ne!(output, input);
             assert_eq!(prepared.original_node(), &before);
-            drop(prepared);
             if let FilterValue::Config(fields) = &mut named.arguments[0].value {
                 fields[22].value = FilterValue::Number(ExactNumber::Float64Bits(0.5f64.to_bits()));
             }

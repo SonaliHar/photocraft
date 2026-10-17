@@ -254,6 +254,8 @@ impl<L> graph::Validator for CheckerboardSourceBinding<'_, L> {
         Ok(())
     }
 }
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn bind<'a, B: PreparationBudget>(
     n: &'a FilterNode,
     node: &'a GraphNode,

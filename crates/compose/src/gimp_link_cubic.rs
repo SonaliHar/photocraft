@@ -304,10 +304,9 @@ mod tests {
         let state =
             TransformState { matrix_f64_bits: [1.0f64, 0.0, 0.25, 0.0, 1.0, 0.375, 0.0, 0.0, 1.0].map(f64::to_bits), interpolation: 2, pre_offset: [254, -1] };
         let bounds = Rect::new(254, -1, 260, 3);
-        let expected = legacy_row_reference(&bytes, 5, 3, PixelFormat::RGBA8, &state, bounds, &profile, &Interrupt::NONE).unwrap();
-        let req = requirements(&bytes, 5, 3, PixelFormat::RGBA8, &state, bounds, &profile, &Interrupt::NONE).unwrap();
-        let actual =
-            transform_with_profile_and_limits(&bytes, 5, 3, PixelFormat::RGBA8, &state, bounds, &profile, Limits::default(), &Interrupt::NONE).unwrap();
+        let expected = legacy_row_reference(&bytes, 5, 3, PixelFormat::RGBA8, &state, bounds, profile, &Interrupt::NONE).unwrap();
+        let req = requirements(&bytes, 5, 3, PixelFormat::RGBA8, &state, bounds, profile, &Interrupt::NONE).unwrap();
+        let actual = transform_with_profile_and_limits(&bytes, 5, 3, PixelFormat::RGBA8, &state, bounds, profile, Limits::default(), &Interrupt::NONE).unwrap();
         assert_eq!(actual, expected);
         assert!(
             transform_with_profile_and_limits(
@@ -317,7 +316,7 @@ mod tests {
                 PixelFormat::RGBA8,
                 &state,
                 bounds,
-                &profile,
+                profile,
                 Limits { resident_bytes: req.peak_resident_bytes - 1, work_units: req.work_units },
                 &Interrupt::NONE
             )
@@ -331,14 +330,14 @@ mod tests {
                 PixelFormat::RGBA8,
                 &state,
                 bounds,
-                &profile,
+                profile,
                 Limits { resident_bytes: req.peak_resident_bytes, work_units: req.work_units - 1 },
                 &Interrupt::NONE
             )
             .is_err()
         );
         assert!(
-            transform_with_profile_and_limits(&bytes, 5, 3, PixelFormat::RGBA8, &state, bounds, &profile, Limits::default(), &Interrupt::cancel_only(&|| true))
+            transform_with_profile_and_limits(&bytes, 5, 3, PixelFormat::RGBA8, &state, bounds, profile, Limits::default(), &Interrupt::cancel_only(&|| true))
                 .is_err()
         );
     }

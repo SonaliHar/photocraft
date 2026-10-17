@@ -110,15 +110,14 @@ pub fn evaluate(binding: &Binding<'_>, request: NodeRequest<'_>, budget: &mut No
     {
         return Err(GraphExecuteError::Domain);
     }
-    if let Some(plan) = input.footprint {
-        if plan.output() != request.roi
+    if let Some(plan) = input.footprint
+        && (plan.output() != request.roi
             || plan.support() != request.roi
             || plan.source_read() != request.roi
             || plan.source_extent() != binding.source_extent
-            || plan.abyss() != Abyss::None
-        {
-            return Err(GraphExecuteError::Roi);
-        }
+            || plan.abyss() != Abyss::None)
+    {
+        return Err(GraphExecuteError::Roi);
     }
     budget.charge_work(requirements_preparation_work(input.surface, transforms).map_err(raster)?)?;
     let required = requirements_color_candidate(input.surface, request.roi, transforms, budget.interrupt()).map_err(raster)?;
@@ -253,15 +252,14 @@ pub fn evaluate_prepared(
     {
         return Err(GraphExecuteError::Domain);
     }
-    if let Some(plan) = input.footprint {
-        if plan.output() != request.roi
+    if let Some(plan) = input.footprint
+        && (plan.output() != request.roi
             || plan.support() != request.roi
             || plan.source_read() != request.roi
             || plan.source_extent() != binding.source_extent
-            || plan.abyss() != Abyss::None
-        {
-            return Err(GraphExecuteError::Roi);
-        }
+            || plan.abyss() != Abyss::None)
+    {
+        return Err(GraphExecuteError::Roi);
     }
     budget.charge_work(requirements_preparation_work(input.surface, transforms).map_err(raster)?)?;
     let required = requirements_color_candidate(input.surface, request.roi, transforms, budget.interrupt()).map_err(raster)?;
@@ -306,6 +304,9 @@ pub fn evaluate_prepared_available(
     graph_execute::evaluate_materialized(request, budget, |request, budget| evaluate_prepared(binding, request, budget))
 }
 
-#[path="gimp_configured_color_graph_candidate/profile_owned.rs"]
+#[path = "gimp_configured_color_graph_candidate/profile_owned.rs"]
 mod profile_owned;
-pub use profile_owned::{ProfileOwnedBinding,ProfileOwnedBindingReceipt,ProfileOwnedParameters,prepare_profile_owned_binding,evaluate_profile_owned,evaluate_profile_owned_available,footprint_profile_owned,accepts_profile_owned_port};
+pub use profile_owned::{
+    ProfileOwnedBinding, ProfileOwnedBindingReceipt, ProfileOwnedParameters, accepts_profile_owned_port, evaluate_profile_owned,
+    evaluate_profile_owned_available, footprint_profile_owned, prepare_profile_owned_binding,
+};

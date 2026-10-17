@@ -202,6 +202,8 @@ fn pixel(surface: &Surface, x: i32, y: i32) -> Result<[f64; 4], E> {
 fn policy<'a>(doc: &'a Document, layer: &Layer) -> Result<&'a photocraft_doc::import_compositing::GimpComposition, E> {
     doc.xcf_state.as_ref().and_then(|s| s.items.iter().find(|i| i.item == ItemRef::Layer(layer.id))).and_then(|i| i.composition.as_ref()).ok_or_else(scope)
 }
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 fn compose(doc: &Document, layer: &Layer, p: &Prepared, bg: [f64; 4], source: [f64; 4], opacity: f64, seed: bool, c: &ReadControl<'_>) -> Result<[f64; 4], E> {
     c.check(128).map_err(E::Backing)?;
     let policy = policy(doc, layer)?;

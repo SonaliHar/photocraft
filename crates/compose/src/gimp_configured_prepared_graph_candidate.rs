@@ -122,15 +122,14 @@ pub fn evaluate(binding: &Binding<'_, '_>, request: NodeRequest<'_>, budget: &mu
     {
         return Err(Error::Domain);
     }
-    if let Some(plan) = input.footprint {
-        if plan.output() != request.roi
+    if let Some(plan) = input.footprint
+        && (plan.output() != request.roi
             || plan.source_read() != request.roi
             || plan.support() != request.roi
             || plan.source_extent() != binding.source_extent
-            || plan.abyss() != Abyss::None
-        {
-            return Err(Error::Roi);
-        }
+            || plan.abyss() != Abyss::None)
+    {
+        return Err(Error::Roi);
     }
     let first = TileCoord::containing(request.roi.x0, request.roi.y0);
     let last = TileCoord::containing(request.roi.x1.checked_sub(1).ok_or(Error::Roi)?, request.roi.y1.checked_sub(1).ok_or(Error::Roi)?);

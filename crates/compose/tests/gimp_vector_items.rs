@@ -112,7 +112,7 @@ fn regenerates_current_geometry_not_cache_and_tracks_path_edit() {
     }
     let b = render_source(&doc, &item, &Interrupt::NONE, &mut |_| Ok(()), &mut |_| Ok(())).unwrap();
     assert_eq!(b.bounds, Rect::new(10, 17, 44, 36));
-    assert_eq!(item.cache.as_ref().unwrap().bytes, [0; 4]);
+    assert_eq!(item.cache.as_ref().unwrap().bytes.as_slice(), [0; 4]);
 }
 #[test]
 fn rejects_unknown_duplicate_modified_profile_cache_and_budget() {
@@ -130,7 +130,7 @@ fn rejects_unknown_duplicate_modified_profile_cache_and_budget() {
                 }
             }
             2 => doc.source_color_context.as_mut().unwrap().source_precision = 650,
-            3 => item.cache.as_mut().unwrap().bytes[0] = 1,
+            3 => std::sync::Arc::make_mut(&mut item.cache.as_mut().unwrap().bytes)[0] = 1,
             4 => doc.icc_profile = Some(std::sync::Arc::new(vec![0; 64])),
             _ => {
                 if let EditableSource::Vector { configuration, .. } = &mut item.source {

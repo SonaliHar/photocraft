@@ -597,6 +597,7 @@ mod tests {
         let mut profile = photocraft_cms::Builtin::AdobeRgbCompat.profile().clone();
         let curve = photocraft_cms::curve::srgb_trc();
         profile.trc = Some([curve.clone(), curve.clone(), curve]);
+        let profile = profile.with_encoded_bytes();
         let parsed = Profile::parse(&profile.to_bytes()).unwrap();
         for curve in parsed.trc.as_ref().unwrap() {
             assert!(declared_srgb(curve));

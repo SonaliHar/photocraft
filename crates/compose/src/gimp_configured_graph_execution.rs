@@ -372,7 +372,8 @@ mod tests {
         assert_eq!(census.bytes(), expected);
         assert!(census.work() >= length);
         let stop = || true;
-        let mut cancelled = Census::new(ExecutionLimits::default(), &Interrupt::cancel_only(&stop));
+        let cancelled_control = Interrupt::cancel_only(&stop);
+        let mut cancelled = Census::new(ExecutionLimits::default(), &cancelled_control);
         assert_eq!(cancelled.args(&args, 0).unwrap_err(), E::Cancelled);
     }
     use photocraft_color::PixelFormat;

@@ -358,6 +358,8 @@ fn parameters_valid(w: &ConfiguredWitness<'_>, c: &Interrupt<'_>) -> Result<(), 
 }
 /// Shared bounded graph/source/config census; no CMS construction or allocations.
 /// Caller context backing stays explicit and no source locator is read.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn validate_witnesses(
     graph: &FilterGraph,
     witnesses: &[ConfiguredWitness<'_>],
@@ -371,6 +373,8 @@ pub fn validate_witnesses(
 ) -> Result<(), E> {
     borrowed_census(graph, witnesses, sources, backing, external, external_domain, assignments, limits, control).map(|_| ())
 }
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 fn borrowed_census(
     graph: &FilterGraph,
     witnesses: &[ConfiguredWitness<'_>],
@@ -402,10 +406,10 @@ fn borrowed_census(
     {
         return Err(E::InvalidPlan);
     }
-    if let Some(s) = external {
-        if s.format() != external_domain.format {
-            return Err(E::Domain);
-        }
+    if let Some(s) = external
+        && s.format() != external_domain.format
+    {
+        return Err(E::Domain);
     }
     let mut c = Census::new(limits, control);
     let index = c.graph_storage(graph, witnesses.len(), sources.len(), assignments.len())?;

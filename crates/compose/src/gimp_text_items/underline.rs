@@ -32,7 +32,7 @@ fn qualify_with_font<'a>(
         &fallback
     };
     // Stack-only outline eligibility; actual shaping/preparation is charged below.
-    photocraft_text::xcf::qualify_scaled_rectilinear_geometry(&font, qualified.request, ctl).map_err(text_error)?;
+    photocraft_text::xcf::qualify_scaled_rectilinear_geometry(font, qualified.request, ctl).map_err(text_error)?;
     Ok(qualified)
 }
 fn prepare<'a>(
@@ -63,7 +63,7 @@ fn prepare<'a>(
     // The current compositor seam supplies only resident accounting. Bound
     // kernel work separately here; this is not aggregate caller work accounting.
     let mut work = 0_u64;
-    let prepared = prepare_underlined_with_charge(&font, q, 8 << 20, ctl, &mut resident, &mut |n| {
+    let prepared = prepare_underlined_with_charge(font, q, 8 << 20, ctl, &mut resident, &mut |n| {
         work = work.checked_add(n).ok_or(TextSourceError::Budget)?;
         if work > 1_u64 << 36 { Err(TextSourceError::Budget) } else { Ok(()) }
     });

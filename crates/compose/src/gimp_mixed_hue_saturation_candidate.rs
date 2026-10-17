@@ -136,7 +136,7 @@ pub fn config_bits(arguments: &[FilterArgument]) -> Result<[u64; 23]> {
 }
 fn parameters(bits: [u64; 23]) -> math::Parameters {
     let mut ranges = [[0u64; 3]; 7];
-    for (range, words) in ranges.iter_mut().zip(bits[1..22].chunks_exact(3)) {
+    for (range, words) in ranges.iter_mut().zip(bits[1..22].as_chunks::<3>().0.iter()) {
         range.copy_from_slice(words);
     }
     math::Parameters { time_bits: Some(bits[0]), ranges, overlap_bits: bits[22] }

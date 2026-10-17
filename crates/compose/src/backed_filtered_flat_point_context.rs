@@ -120,32 +120,65 @@ impl<S, L> LeasedFilteredFlatPointPipeline<S, L> {
     /// Fresh original-XCF mapper contract only: retained property groups prove
     /// exact F32 opacity promotion before Source-topology preparation. This is
     /// not CURRENT provenance recovery or an ordinary Point source endpoint.
-    pub fn new_opacity_source_budgeted<B: PreparationBudget<Lease=L>>(
-        doc:&Document, interrupt:&Interrupt<'_>, budget:&mut B, source_lease:S,
-    )->Result<Self,CompositionError> {
-        let header=u64::try_from(std::mem::size_of::<Self>()).map_err(|_|CompositionError::Invalid("filtered flat opacity source header"))?;
-        let(plan,lease)=compile(doc,Purpose::SourceOpacity,None,header,interrupt,&mut SharedBudget(budget)).map_err(preparation_error)?;
-        Ok(Self{_plan:plan,_source:source_lease,_lease:lease})
+    pub fn new_opacity_source_budgeted<B: PreparationBudget<Lease = L>>(
+        doc: &Document,
+        interrupt: &Interrupt<'_>,
+        budget: &mut B,
+        source_lease: S,
+    ) -> Result<Self, CompositionError> {
+        let header = u64::try_from(std::mem::size_of::<Self>()).map_err(|_| CompositionError::Invalid("filtered flat opacity source header"))?;
+        let (plan, lease) = compile(doc, Purpose::SourceOpacity, None, header, interrupt, &mut SharedBudget(budget)).map_err(preparation_error)?;
+        Ok(Self { _plan: plan, _source: source_lease, _lease: lease })
     }
 }
 /// Separate fresh masked Source endpoint; original quota and work ledger are explicit.
-pub struct LeasedMaskedFilteredFlatPointPipeline<S,L>{_plan:Plan<L>,_source:S,_lease:L}
-struct SourceProofLease<L>{_lease:L,bytes:u64}
-impl<L> photocraft_doc::xcf_filter_masks::MaskCoverageSetLease for SourceProofLease<L>{
- fn bytes(&self)->u64{self.bytes}
+pub struct LeasedMaskedFilteredFlatPointPipeline<S, L> {
+    _plan: Plan<L>,
+    _source: S,
+    _lease: L,
 }
-impl<S,L> LeasedMaskedFilteredFlatPointPipeline<S,L>{
- pub fn new_budgeted<B:crate::backed_masked_filtered_flat_point_context::MaskedFilterPreparationBudget<Lease=L>>(doc:&Document,interrupt:&Interrupt<'_>,budget:&mut B,source_lease:S)->Result<Self,CompositionError>{
- let cell=std::cell::RefCell::new(budget);let failed=std::cell::RefCell::new(None);
- let record=|error:CompositionError|{let cancelled=interrupt.check().is_err();if failed.borrow().is_none(){*failed.borrow_mut()=Some(error);}if cancelled{BackingError::Cancelled}else{BackingError::Work}};
- let proofs=doc.checked_f32_filter_mask_coverages_with_reservation(photocraft_doc::xcf_filter_masks::MaskCoverageSetLimits::STANDARD,interrupt,&|units|cell.borrow_mut().consume_preparation_work(units).map_err(&record),&|bytes|cell.borrow_mut().reserve_filter_mask_proof_index(bytes).map(|lease|SourceProofLease{_lease:lease,bytes}).map_err(&record));
- if let Some(error)=failed.into_inner(){return Err(error);}
- let proofs=proofs.map_err(|e|preparation_error(E::Backing(e)))?;
- let original=cell.into_inner();let mut budget=SharedBudget(&mut *original);
- let bindings=MaskBindings::build(doc,&proofs,interrupt,&mut budget).map_err(preparation_error)?;
- let(plan,lease)=compile(doc,Purpose::MaskedSource,Some(bindings),std::mem::size_of::<Self>()as u64,interrupt,&mut budget).map_err(preparation_error)?;
- Ok(Self{_plan:plan,_source:source_lease,_lease:lease})
- }
+struct SourceProofLease<L> {
+    _lease: L,
+    bytes: u64,
+}
+impl<L> photocraft_doc::xcf_filter_masks::MaskCoverageSetLease for SourceProofLease<L> {
+    fn bytes(&self) -> u64 {
+        self.bytes
+    }
+}
+impl<S, L> LeasedMaskedFilteredFlatPointPipeline<S, L> {
+    pub fn new_budgeted<B: crate::backed_masked_filtered_flat_point_context::MaskedFilterPreparationBudget<Lease = L>>(
+        doc: &Document,
+        interrupt: &Interrupt<'_>,
+        budget: &mut B,
+        source_lease: S,
+    ) -> Result<Self, CompositionError> {
+        let cell = std::cell::RefCell::new(budget);
+        let failed = std::cell::RefCell::new(None);
+        let record = |error: CompositionError| {
+            let cancelled = interrupt.check().is_err();
+            if failed.borrow().is_none() {
+                *failed.borrow_mut() = Some(error);
+            }
+            if cancelled { BackingError::Cancelled } else { BackingError::Work }
+        };
+        let proofs = doc.checked_f32_filter_mask_coverages_with_reservation(
+            photocraft_doc::xcf_filter_masks::MaskCoverageSetLimits::STANDARD,
+            interrupt,
+            &|units| cell.borrow_mut().consume_preparation_work(units).map_err(record),
+            &|bytes| cell.borrow_mut().reserve_filter_mask_proof_index(bytes).map(|lease| SourceProofLease { _lease: lease, bytes }).map_err(record),
+        );
+        if let Some(error) = failed.into_inner() {
+            return Err(error);
+        }
+        let proofs = proofs.map_err(|e| preparation_error(E::Backing(e)))?;
+        let original = cell.into_inner();
+        let mut budget = SharedBudget(&mut *original);
+        let bindings = MaskBindings::build(doc, &proofs, interrupt, &mut budget).map_err(preparation_error)?;
+        let (plan, lease) =
+            compile(doc, Purpose::MaskedSource, Some(bindings), std::mem::size_of::<Self>() as u64, interrupt, &mut budget).map_err(preparation_error)?;
+        Ok(Self { _plan: plan, _source: source_lease, _lease: lease })
+    }
 }
 fn unit(raw: &[u8], format: PixelFormat) -> Result<(), E> {
     if raw.len() != format.bytes_per_pixel() {
@@ -161,7 +194,7 @@ fn unit(raw: &[u8], format: PixelFormat) -> Result<(), E> {
 }
 fn numeric_zero(bytes: &[u8], sample: SampleType, i: &Interrupt<'_>) -> Result<(), E> {
     let size = sample.bytes();
-    if bytes.len() % size != 0 {
+    if !bytes.len().is_multiple_of(size) {
         return Err(length());
     }
     for block in bytes.chunks(size * 64) {
@@ -175,49 +208,126 @@ fn numeric_zero(bytes: &[u8], sample: SampleType, i: &Interrupt<'_>) -> Result<(
     }
     Ok(())
 }
-struct MaskBindings<'a,L>{rows:Vec<(&'a photocraft_doc::FilterMask,bool)>,offsets:Vec<usize>,_fee:L}
-impl<'a,L> MaskBindings<'a,L>{
- fn build<B:PlanBudget<Lease=L>,P:photocraft_doc::xcf_filter_masks::MaskCoverageSetLease>(doc:&'a Document,proofs:&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverageSet<'_,P>,i:&Interrupt<'_>,b:&mut B)->Result<Self,E>{
- doc.validate_xcf_state_with_checked_filter_masks(proofs,i).map_err(|_|if i.check().is_err(){E::Backing(BackingError::Cancelled)}else{scope()})?;
- let state=doc.xcf_state.as_ref().ok_or_else(scope)?;
- let count=state.filter_masks.len();let offsets=state.filter_stacks.len().checked_add(1).ok_or_else(length)?;
- let bytes=count.checked_mul(2).and_then(|n|n.checked_mul(std::mem::size_of::<(&photocraft_doc::FilterMask,bool)>())).and_then(|n|n.checked_add(offsets.checked_mul(2)?.checked_mul(std::mem::size_of::<usize>())?)).and_then(|n|n.checked_add(std::mem::size_of::<Self>()+128)).ok_or_else(length)?;
- let fee=b.reserve(bytes as u64)?;
- let mut result=Self{rows:Vec::new(),offsets:Vec::new(),_fee:fee};
- result.rows.try_reserve_exact(count).map_err(|_|E::Allocation)?;result.offsets.try_reserve_exact(offsets).map_err(|_|E::Allocation)?;
- if result.rows.capacity()>count.checked_mul(2).ok_or_else(length)?||result.offsets.capacity()>offsets.checked_mul(2).ok_or_else(length)?{return Err(E::Allocation);}
- let mut nonempty=0usize;
- for stack in &state.filter_stacks{result.offsets.push(result.rows.len());for node in &stack.nodes{
- let mut found=None;
- for(ordinal,mask)in state.filter_masks.iter().enumerate(){charge(b,i,1)?;if node.mask==Some(ItemRef::Mask(mask.id)){if found.is_some()||mask.owner!=node.id{return Err(scope());}found=Some((ordinal,mask));}}
- let(ordinal,mask)=found.ok_or_else(scope)?;let class=proofs.classification_for_mask(ordinal,mask).map_err(E::Backing)?;
- let raw=class==photocraft_doc::xcf_filter_masks::FilterMaskCoverageClass::RawNonemptyCoverage;
- nonempty=nonempty.checked_add(usize::from(raw)).ok_or_else(length)?;
- if result.rows.len()>=count{return Err(scope());}result.rows.push((mask,raw));
- }}result.offsets.push(result.rows.len());if result.rows.len()!=count{return Err(scope());}
- // Source-only nonempty requirement is checked by compile; CURRENT may retain empty anchors.
- let _=nonempty;
- Ok(result)
- }
- fn stack(&self,index:usize)->Result<&[(&'a photocraft_doc::FilterMask,bool)],E>{let start=*self.offsets.get(index).ok_or_else(length)?;let end=*self.offsets.get(index.checked_add(1).ok_or_else(length)?).ok_or_else(length)?;self.rows.get(start..end).ok_or_else(length)}
- fn at(&self,stack:usize,node:usize)->Result<(&'a photocraft_doc::FilterMask,bool),E>{self.stack(stack)?.get(node).copied().ok_or_else(length)}
+struct MaskBindings<'a, L> {
+    rows: Vec<(&'a photocraft_doc::FilterMask, bool)>,
+    offsets: Vec<usize>,
+    _fee: L,
+}
+impl<'a, L> MaskBindings<'a, L> {
+    fn build<B: PlanBudget<Lease = L>, P: photocraft_doc::xcf_filter_masks::MaskCoverageSetLease>(
+        doc: &'a Document,
+        proofs: &photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverageSet<'_, P>,
+        i: &Interrupt<'_>,
+        b: &mut B,
+    ) -> Result<Self, E> {
+        doc.validate_xcf_state_with_checked_filter_masks(proofs, i)
+            .map_err(|_| if i.check().is_err() { E::Backing(BackingError::Cancelled) } else { scope() })?;
+        let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
+        let count = state.filter_masks.len();
+        let offsets = state.filter_stacks.len().checked_add(1).ok_or_else(length)?;
+        let bytes = count
+            .checked_mul(2)
+            .and_then(|n| n.checked_mul(std::mem::size_of::<(&photocraft_doc::FilterMask, bool)>()))
+            .and_then(|n| n.checked_add(offsets.checked_mul(2)?.checked_mul(std::mem::size_of::<usize>())?))
+            .and_then(|n| n.checked_add(std::mem::size_of::<Self>() + 128))
+            .ok_or_else(length)?;
+        let fee = b.reserve(bytes as u64)?;
+        let mut result = Self { rows: Vec::new(), offsets: Vec::new(), _fee: fee };
+        result.rows.try_reserve_exact(count).map_err(|_| E::Allocation)?;
+        result.offsets.try_reserve_exact(offsets).map_err(|_| E::Allocation)?;
+        if result.rows.capacity() > count.checked_mul(2).ok_or_else(length)? || result.offsets.capacity() > offsets.checked_mul(2).ok_or_else(length)? {
+            return Err(E::Allocation);
+        }
+        let mut nonempty = 0usize;
+        for stack in &state.filter_stacks {
+            result.offsets.push(result.rows.len());
+            for node in &stack.nodes {
+                let mut found = None;
+                for (ordinal, mask) in state.filter_masks.iter().enumerate() {
+                    charge(b, i, 1)?;
+                    if node.mask == Some(ItemRef::Mask(mask.id)) {
+                        if found.is_some() || mask.owner != node.id {
+                            return Err(scope());
+                        }
+                        found = Some((ordinal, mask));
+                    }
+                }
+                let (ordinal, mask) = found.ok_or_else(scope)?;
+                let class = proofs.classification_for_mask(ordinal, mask).map_err(E::Backing)?;
+                let raw = class == photocraft_doc::xcf_filter_masks::FilterMaskCoverageClass::RawNonemptyCoverage;
+                nonempty = nonempty.checked_add(usize::from(raw)).ok_or_else(length)?;
+                if result.rows.len() >= count {
+                    return Err(scope());
+                }
+                result.rows.push((mask, raw));
+            }
+        }
+        result.offsets.push(result.rows.len());
+        if result.rows.len() != count {
+            return Err(scope());
+        }
+        // Source-only nonempty requirement is checked by compile; CURRENT may retain empty anchors.
+        let _ = nonempty;
+        Ok(result)
+    }
+    fn stack(&self, index: usize) -> Result<&[(&'a photocraft_doc::FilterMask, bool)], E> {
+        let start = *self.offsets.get(index).ok_or_else(length)?;
+        let end = *self.offsets.get(index.checked_add(1).ok_or_else(length)?).ok_or_else(length)?;
+        self.rows.get(start..end).ok_or_else(length)
+    }
+    fn at(&self, stack: usize, node: usize) -> Result<(&'a photocraft_doc::FilterMask, bool), E> {
+        self.stack(stack)?.get(node).copied().ok_or_else(length)
+    }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Purpose { Source, SourceOpacity, Current, MaskedSource, MaskedCurrent }
+enum Purpose {
+    Source,
+    SourceOpacity,
+    Current,
+    MaskedSource,
+    MaskedCurrent,
+}
 impl Purpose {
-    fn source_topology(self)->bool { matches!(self,Self::Source|Self::SourceOpacity|Self::MaskedSource) }
-    fn allows_mixed_opacity(self)->bool { matches!(self,Self::SourceOpacity|Self::Current|Self::MaskedCurrent) }
-    fn masked(self)->bool { matches!(self,Self::MaskedSource|Self::MaskedCurrent) }
+    fn source_topology(self) -> bool {
+        matches!(self, Self::Source | Self::SourceOpacity | Self::MaskedSource)
+    }
+    fn allows_mixed_opacity(self) -> bool {
+        matches!(self, Self::SourceOpacity | Self::Current | Self::MaskedCurrent)
+    }
+    fn masked(self) -> bool {
+        matches!(self, Self::MaskedSource | Self::MaskedCurrent)
+    }
 }
-fn compile<B: PlanBudget>(doc:&Document,purpose:Purpose,mask_bindings:Option<MaskBindings<'_,B::Lease>>,header:u64,interrupt:&Interrupt<'_>,budget:&mut B)->Result<(Plan<B::Lease>,B::Lease),E>{
-    compile_current(doc,purpose,mask_bindings,None,header,interrupt,budget)
+fn compile<B: PlanBudget>(
+    doc: &Document,
+    purpose: Purpose,
+    mask_bindings: Option<MaskBindings<'_, B::Lease>>,
+    header: u64,
+    interrupt: &Interrupt<'_>,
+    budget: &mut B,
+) -> Result<(Plan<B::Lease>, B::Lease), E> {
+    compile_current(doc, purpose, mask_bindings, None, header, interrupt, budget)
 }
-fn compile_current<B: PlanBudget>(doc: &Document, purpose: Purpose, mask_bindings:Option<MaskBindings<'_,B::Lease>>, selection:Option<&CheckedProgrammeSelection<'_>>, header: u64, interrupt: &Interrupt<'_>, budget: &mut B) -> Result<(Plan<B::Lease>, B::Lease), E> {
+fn compile_current<B: PlanBudget>(
+    doc: &Document,
+    purpose: Purpose,
+    mask_bindings: Option<MaskBindings<'_, B::Lease>>,
+    selection: Option<&CheckedProgrammeSelection<'_>>,
+    header: u64,
+    interrupt: &Interrupt<'_>,
+    budget: &mut B,
+) -> Result<(Plan<B::Lease>, B::Lease), E> {
     charge(budget, interrupt, 1)?;
-    if let Some(proof)=selection{
-        charge(budget,interrupt,128)?;
-        let expected=match purpose{Purpose::Current=>ProgrammeNativeStorageKind::FilteredFlatPoint,Purpose::MaskedCurrent=>ProgrammeNativeStorageKind::MaskedFilteredFlatPoint,_=>return Err(scope())};
-        if !proof.matches_document(doc)||proof.storage_kind()!=expected{return Err(scope());}
+    if let Some(proof) = selection {
+        charge(budget, interrupt, 128)?;
+        let expected = match purpose {
+            Purpose::Current => ProgrammeNativeStorageKind::FilteredFlatPoint,
+            Purpose::MaskedCurrent => ProgrammeNativeStorageKind::MaskedFilteredFlatPoint,
+            _ => return Err(scope()),
+        };
+        if !proof.matches_document(doc) || proof.storage_kind() != expected {
+            return Err(scope());
+        }
     }
     let state = doc.xcf_state.as_ref().ok_or_else(scope)?;
     let source = doc.source_color_context.as_ref().ok_or_else(scope)?;
@@ -255,16 +365,31 @@ fn compile_current<B: PlanBudget>(doc: &Document, purpose: Purpose, mask_binding
     let mut nodes = 0usize;
     for stack in &state.filter_stacks {
         charge(budget, interrupt, 1)?;
-        if (purpose.source_topology() && stack.nodes.is_empty()) || stack.nodes.len() > 1024 { return Err(scope()); }
+        if (purpose.source_topology() && stack.nodes.is_empty()) || stack.nodes.len() > 1024 {
+            return Err(scope());
+        }
         nodes = nodes.checked_add(stack.nodes.len()).ok_or_else(length)?;
-        if nodes > 4096 { return Err(scope()); }
+        if nodes > 4096 {
+            return Err(scope());
+        }
     }
-    if (purpose.source_topology() && (nodes == 0 || (count == 1 && nodes < 2))) || state.filter_masks.len() != nodes || state.items.len() != count.checked_add(nodes).ok_or_else(length)? { return Err(scope()); }
-    if purpose == Purpose::SourceOpacity { source_opacity::verify(doc, interrupt, budget)?; }
-    if purpose.masked()!=mask_bindings.is_some(){return Err(scope());}
-    if let Some(bindings)=&mask_bindings {
-        charge(budget,interrupt,nodes as u64)?;
-        if purpose==Purpose::MaskedSource&&!bindings.rows.iter().any(|(_,raw)|*raw){return Err(scope());}
+    if (purpose.source_topology() && (nodes == 0 || (count == 1 && nodes < 2)))
+        || state.filter_masks.len() != nodes
+        || state.items.len() != count.checked_add(nodes).ok_or_else(length)?
+    {
+        return Err(scope());
+    }
+    if purpose == Purpose::SourceOpacity {
+        source_opacity::verify(doc, interrupt, budget)?;
+    }
+    if purpose.masked() != mask_bindings.is_some() {
+        return Err(scope());
+    }
+    if let Some(bindings) = &mask_bindings {
+        charge(budget, interrupt, nodes as u64)?;
+        if purpose == Purpose::MaskedSource && !bindings.rows.iter().any(|(_, raw)| *raw) {
+            return Err(scope());
+        }
     }
     // All dynamic retained state is admitted before Vec reserve/fill or profile
     // construction; source adapters retain the full conservative bound.
@@ -281,33 +406,40 @@ fn compile_current<B: PlanBudget>(doc: &Document, purpose: Purpose, mask_binding
         return Err(E::Allocation);
     }
     if !purpose.masked() {
-    // Preserve the original root's physical-mask allowance across all its
-    // ordered nodes; no per-node multiplier. Admit counts before census/scans.
-    for stack in &state.filter_stacks {
-        let mut root_tiles = 0usize;
-        for node in &stack.nodes {
-            charge(budget, interrupt, 1)?;
-            let Some(ItemRef::Mask(id)) = node.mask else { return Err(scope()) };
-            let mut found = None;
-            for mask in &state.filter_masks {
+        // Preserve the original root's physical-mask allowance across all its
+        // ordered nodes; no per-node multiplier. Admit counts before census/scans.
+        for stack in &state.filter_stacks {
+            let mut root_tiles = 0usize;
+            for node in &stack.nodes {
                 charge(budget, interrupt, 1)?;
-                if mask.id == id { if found.is_some() { return Err(scope()); } found = Some(mask); }
+                let Some(ItemRef::Mask(id)) = node.mask else { return Err(scope()) };
+                let mut found = None;
+                for mask in &state.filter_masks {
+                    charge(budget, interrupt, 1)?;
+                    if mask.id == id {
+                        if found.is_some() {
+                            return Err(scope());
+                        }
+                        found = Some(mask);
+                    }
+                }
+                root_tiles = root_tiles.checked_add(found.ok_or_else(scope)?.surface.tile_count()).ok_or_else(length)?;
+                if root_tiles > 4096 {
+                    return Err(scope());
+                }
             }
-            root_tiles = root_tiles.checked_add(found.ok_or_else(scope)?.surface.tile_count()).ok_or_else(length)?;
-            if root_tiles > 4096 { return Err(scope()); }
         }
-    }
-    // O(1) per-mask cap and checked global actual work before physical scans.
-    let mut physical_work = 0u64;
-    for mask in &state.filter_masks {
-        charge(budget, interrupt, 1)?;
-        if mask.surface.tile_count() > 4096 {
-            return Err(scope());
+        // O(1) per-mask cap and checked global actual work before physical scans.
+        let mut physical_work = 0u64;
+        for mask in &state.filter_masks {
+            charge(budget, interrupt, 1)?;
+            if mask.surface.tile_count() > 4096 {
+                return Err(scope());
+            }
+            let pixels = (mask.surface.tile_count() as u64).checked_mul(65536).and_then(|n| n.checked_add(1)).ok_or_else(length)?;
+            physical_work = physical_work.checked_add(pixels.checked_mul(32).ok_or_else(length)?).ok_or_else(length)?;
         }
-        let pixels = (mask.surface.tile_count() as u64).checked_mul(65536).and_then(|n| n.checked_add(1)).ok_or_else(length)?;
-        physical_work = physical_work.checked_add(pixels.checked_mul(32).ok_or_else(length)?).ok_or_else(length)?;
-    }
-    charge(budget, interrupt, physical_work)?;
+        charge(budget, interrupt, physical_work)?;
     }
     let (current, basis) = bound_profile(doc, None, budget, interrupt)?;
     let semantic = photocraft_cms::xcf_color::semantic_analytic_profile_work_ceiling(basis).map_err(|_| scope())?;
@@ -401,52 +533,111 @@ fn compile_current<B: PlanBudget>(doc: &Document, purpose: Purpose, mask_binding
         }
         unit(descriptor.default_bytes(), format)?;
         let mut root_stack = None;
-        for (stack_index,stack) in state.filter_stacks.iter().enumerate() {
+        for (stack_index, stack) in state.filter_stacks.iter().enumerate() {
             charge(budget, interrupt, 1)?;
             if stack.owner == ItemRef::Layer(layer.id) {
                 if root_stack.is_some() {
                     return Err(scope());
                 }
-                root_stack = Some((stack_index,stack))
+                root_stack = Some((stack_index, stack))
             }
         }
-        let (point, root_lease) = if let Some((stack_index,stack)) = root_stack {
+        let (point, root_lease) = if let Some((stack_index, stack)) = root_stack {
             found_stacks = found_stacks.checked_add(1).ok_or_else(length)?;
-            for (node_index,node) in stack.nodes.iter().enumerate() {
-                let nonempty=if let Some(bindings)=&mask_bindings {bindings.at(stack_index,node_index)?.1}else{false};
+            for (node_index, node) in stack.nodes.iter().enumerate() {
+                let nonempty = if let Some(bindings) = &mask_bindings { bindings.at(stack_index, node_index)?.1 } else { false };
                 if node.id.0 == 0 {
                     return Err(scope());
                 }
                 // Exact family canonical policies are unchanged, separately selected.
                 if nonempty {
-                    charge(budget,interrupt,512)?;
-                    if !crate::gimp_masked_mixed::claims(node){return Err(scope());}
-                    crate::gimp_masked_mixed::canonical(node,bounds).map_err(E::Color)?;
+                    charge(budget, interrupt, 512)?;
+                    if !crate::gimp_masked_mixed::claims(node) {
+                        return Err(scope());
+                    }
+                    crate::gimp_masked_mixed::canonical(node, bounds).map_err(E::Color)?;
                 } else if crate::gimp_stock_rgb::claims(node) {
-                    charge(budget,interrupt,crate::gimp_stock_rgb::CANONICAL_WORK)?;
-                    (if purpose.allows_mixed_opacity(){crate::gimp_stock_rgb::canonical_mixed_opacity}else{crate::gimp_stock_rgb::canonical})(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?;
+                    charge(budget, interrupt, crate::gimp_stock_rgb::CANONICAL_WORK)?;
+                    (if purpose.allows_mixed_opacity() { crate::gimp_stock_rgb::canonical_mixed_opacity } else { crate::gimp_stock_rgb::canonical })(
+                        node,
+                        SampleEncoding::NonlinearProfile,
+                        22,
+                        bounds,
+                    )
+                    .map_err(E::Color)?;
                 } else if crate::gimp_affine::claims(node) {
-                    charge(budget,interrupt,512)?;
-                    (if purpose.allows_mixed_opacity(){crate::gimp_affine::canonical_mixed_opacity}else{crate::gimp_affine::canonical})(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?;
+                    charge(budget, interrupt, 512)?;
+                    (if purpose.allows_mixed_opacity() { crate::gimp_affine::canonical_mixed_opacity } else { crate::gimp_affine::canonical })(
+                        node,
+                        SampleEncoding::NonlinearProfile,
+                        22,
+                        bounds,
+                    )
+                    .map_err(E::Color)?;
                 } else if crate::gimp_invert::claims(node) {
-                    charge(budget,interrupt,128)?;
-                    (if purpose.allows_mixed_opacity() { crate::gimp_invert::canonical_mixed_opacity } else { crate::gimp_invert::canonical })(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?;
+                    charge(budget, interrupt, 128)?;
+                    (if purpose.allows_mixed_opacity() { crate::gimp_invert::canonical_mixed_opacity } else { crate::gimp_invert::canonical })(
+                        node,
+                        SampleEncoding::NonlinearProfile,
+                        22,
+                        bounds,
+                    )
+                    .map_err(E::Color)?;
                 } else if crate::gimp_exposure::claims(node) {
-                    charge(budget,interrupt,512)?;
-                    if node.operation.schema_epoch==crate::gimp_exposure::LOADED_MIXED_EPOCH { let parameters=(if purpose.allows_mixed_opacity() { crate::gimp_exposure::canonical_loaded_mixed_opacity } else { crate::gimp_exposure::canonical_loaded_mixed })(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?; let [_,raw_black]=parameters.raw_words(); if purpose.source_topology() && !matches!(raw_black,0x3dcc_cccd|0xbdcc_cccd) {return Err(scope());} } else { (if purpose.allows_mixed_opacity() { crate::gimp_exposure::canonical_mixed_opacity } else { crate::gimp_exposure::canonical })(node,SampleEncoding::NonlinearProfile,22,bounds).map_err(E::Color)?; }
+                    charge(budget, interrupt, 512)?;
+                    if node.operation.schema_epoch == crate::gimp_exposure::LOADED_MIXED_EPOCH {
+                        let parameters = (if purpose.allows_mixed_opacity() {
+                            crate::gimp_exposure::canonical_loaded_mixed_opacity
+                        } else {
+                            crate::gimp_exposure::canonical_loaded_mixed
+                        })(node, SampleEncoding::NonlinearProfile, 22, bounds)
+                        .map_err(E::Color)?;
+                        let [_, raw_black] = parameters.raw_words();
+                        if purpose.source_topology() && !matches!(raw_black, 0x3dcc_cccd | 0xbdcc_cccd) {
+                            return Err(scope());
+                        }
+                    } else {
+                        (if purpose.allows_mixed_opacity() { crate::gimp_exposure::canonical_mixed_opacity } else { crate::gimp_exposure::canonical })(
+                            node,
+                            SampleEncoding::NonlinearProfile,
+                            22,
+                            bounds,
+                        )
+                        .map_err(E::Color)?;
+                    }
                 } else if crate::gimp_semi_flatten::claims(node) {
-                    (if purpose.allows_mixed_opacity() { crate::gimp_semi_flatten::canonical_mixed_opacity } else { crate::gimp_semi_flatten::canonical })(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
+                    (if purpose.allows_mixed_opacity() { crate::gimp_semi_flatten::canonical_mixed_opacity } else { crate::gimp_semi_flatten::canonical })(
+                        node,
+                        SampleEncoding::NonlinearProfile,
+                        22,
+                        bounds,
+                    )
+                    .map_err(E::Color)?;
                 } else if crate::gimp_hue_chroma::claims(node) {
-                    (if purpose.allows_mixed_opacity() { crate::gimp_hue_chroma::canonical_mixed_opacity } else { crate::gimp_hue_chroma::canonical })(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
+                    (if purpose.allows_mixed_opacity() { crate::gimp_hue_chroma::canonical_mixed_opacity } else { crate::gimp_hue_chroma::canonical })(
+                        node,
+                        SampleEncoding::NonlinearProfile,
+                        22,
+                        bounds,
+                    )
+                    .map_err(E::Color)?;
                 } else if crate::gimp_vibrance::claims(node) {
-                    (if purpose.allows_mixed_opacity() { crate::gimp_vibrance::canonical_mixed_opacity } else { crate::gimp_vibrance::canonical })(node, SampleEncoding::NonlinearProfile, 22, bounds).map_err(E::Color)?;
+                    (if purpose.allows_mixed_opacity() { crate::gimp_vibrance::canonical_mixed_opacity } else { crate::gimp_vibrance::canonical })(
+                        node,
+                        SampleEncoding::NonlinearProfile,
+                        22,
+                        bounds,
+                    )
+                    .map_err(E::Color)?;
                 } else {
                     return Err(scope());
                 }
                 for other in &state.filter_stacks {
                     for retained in &other.nodes {
                         charge(budget, interrupt, 1)?;
-                        if !std::ptr::eq(retained, node) && (retained.id == node.id || retained.mask == node.mask) { return Err(scope()); }
+                        if !std::ptr::eq(retained, node) && (retained.id == node.id || retained.mask == node.mask) {
+                            return Err(scope());
+                        }
                     }
                 }
                 let Some(ItemRef::Mask(mask_id)) = node.mask else { return Err(scope()) };
@@ -494,14 +685,14 @@ fn compile_current<B: PlanBudget>(doc: &Document, purpose: Purpose, mask_binding
                     return Err(scope());
                 }
                 if !purpose.masked() {
-                numeric_zero(mask.surface.default_bytes(), doc.depth, interrupt)?;
-                for (coordinate, tile) in mask.surface.tiles() {
-                    if tile.bytes().len() != 65536usize.checked_mul(doc.depth.bytes()).ok_or_else(length)? {
-                        return Err(length());
+                    numeric_zero(mask.surface.default_bytes(), doc.depth, interrupt)?;
+                    for (coordinate, tile) in mask.surface.tiles() {
+                        if tile.bytes().len() != 65536usize.checked_mul(doc.depth.bytes()).ok_or_else(length)? {
+                            return Err(length());
+                        }
+                        crate::gimp_semi_flatten::mask_tile(bounds, *coordinate).map_err(E::Color)?;
+                        numeric_zero(tile.bytes(), doc.depth, interrupt)?;
                     }
-                    crate::gimp_semi_flatten::mask_tile(bounds, *coordinate).map_err(E::Color)?;
-                    numeric_zero(tile.bytes(), doc.depth, interrupt)?;
-                }
                 }
             }
             found_filters = found_filters.checked_add(stack.nodes.len()).ok_or_else(length)?;
@@ -510,9 +701,11 @@ fn compile_current<B: PlanBudget>(doc: &Document, purpose: Purpose, mask_binding
                 // existing plain Normal path; no lost operation is inferred.
                 (None, None)
             } else {
-                let(plan,fee)=if let Some(bindings)=&mask_bindings {
-                    RootPointPlan::prepare_masked(stack,bindings.stack(stack_index)?,format,bounds,purpose.allows_mixed_opacity(),interrupt,budget)?
-                }else{RootPointPlan::prepare(stack, format, bounds, purpose.allows_mixed_opacity(), interrupt, budget)?};
+                let (plan, fee) = if let Some(bindings) = &mask_bindings {
+                    RootPointPlan::prepare_masked(stack, bindings.stack(stack_index)?, format, bounds, purpose.allows_mixed_opacity(), interrupt, budget)?
+                } else {
+                    RootPointPlan::prepare(stack, format, bounds, purpose.allows_mixed_opacity(), interrupt, budget)?
+                };
                 (Some(plan), Some(fee))
             }
         } else {
@@ -598,22 +791,51 @@ impl<'a> Context<'a> {
         }
         owner.validate_readonly_filtered_flat_point_storage(c).map_err(E::Backing)?;
         let header = u64::try_from(std::mem::size_of::<Self>()).map_err(|_| length())?;
-        let _selection_fee=if owner.document().selection.is_some(){Some(owner.quota().reserve(QuotaKind::Index,(std::mem::size_of::<CheckedProgrammeSelection<'_>>()+128)as u64).map_err(E::Quota)?)}else{None};
-        let proof=if owner.document().selection.is_some(){Some(owner.checked_programme_selection(c).map_err(E::Backing)?)}else{None};
-        let (plan, lease) = compile_current(owner.document(), Purpose::Current, None, proof.as_ref(), header, c.interrupt, &mut NativeBudget { quota: owner.quota(), control: c })?;
+        let _selection_fee = if owner.document().selection.is_some() {
+            Some(owner.quota().reserve(QuotaKind::Index, (std::mem::size_of::<CheckedProgrammeSelection<'_>>() + 128) as u64).map_err(E::Quota)?)
+        } else {
+            None
+        };
+        let proof = if owner.document().selection.is_some() { Some(owner.checked_programme_selection(c).map_err(E::Backing)?) } else { None };
+        let (plan, lease) = compile_current(
+            owner.document(),
+            Purpose::Current,
+            None,
+            proof.as_ref(),
+            header,
+            c.interrupt,
+            &mut NativeBudget { quota: owner.quota(), control: c },
+        )?;
         Ok(Self { owner, plan, limits, _lease: lease })
     }
-    pub(crate) fn new_masked(owner:&'a AccountedDocument,limits:NormalBandLimits,c:&ReadControl<'_>)->Result<Self,E>{
-        let maximum=NormalBandLimits::default();
-        if limits.max_rows==0||limits.max_rows>maximum.max_rows||limits.max_pixels==0||limits.max_pixels>maximum.max_pixels{return Err(scope());}
+    pub(crate) fn new_masked(owner: &'a AccountedDocument, limits: NormalBandLimits, c: &ReadControl<'_>) -> Result<Self, E> {
+        let maximum = NormalBandLimits::default();
+        if limits.max_rows == 0 || limits.max_rows > maximum.max_rows || limits.max_pixels == 0 || limits.max_pixels > maximum.max_pixels {
+            return Err(scope());
+        }
         owner.validate_readonly_masked_filtered_flat_point_storage(c).map_err(E::Backing)?;
-        let proofs=owner.document().checked_f32_filter_mask_coverages_with(photocraft_doc::xcf_filter_masks::MaskCoverageSetLimits::STANDARD,owner.quota(),c).map_err(E::Backing)?;
-        let mut budget=NativeBudget{quota:owner.quota(),control:c};
-        let bindings=MaskBindings::build(owner.document(),&proofs,c.interrupt,&mut budget)?;
-        let _selection_fee=if owner.document().selection.is_some(){Some(owner.quota().reserve(QuotaKind::Index,(std::mem::size_of::<CheckedProgrammeSelection<'_>>()+128)as u64).map_err(E::Quota)?)}else{None};
-        let proof=if owner.document().selection.is_some(){Some(owner.checked_programme_selection(c).map_err(E::Backing)?)}else{None};
-        let(plan,lease)=compile_current(owner.document(),Purpose::MaskedCurrent,Some(bindings),proof.as_ref(),std::mem::size_of::<Self>()as u64,c.interrupt,&mut budget)?;
-        Ok(Self{owner,plan,limits,_lease:lease})
+        let proofs = owner
+            .document()
+            .checked_f32_filter_mask_coverages_with(photocraft_doc::xcf_filter_masks::MaskCoverageSetLimits::STANDARD, owner.quota(), c)
+            .map_err(E::Backing)?;
+        let mut budget = NativeBudget { quota: owner.quota(), control: c };
+        let bindings = MaskBindings::build(owner.document(), &proofs, c.interrupt, &mut budget)?;
+        let _selection_fee = if owner.document().selection.is_some() {
+            Some(owner.quota().reserve(QuotaKind::Index, (std::mem::size_of::<CheckedProgrammeSelection<'_>>() + 128) as u64).map_err(E::Quota)?)
+        } else {
+            None
+        };
+        let proof = if owner.document().selection.is_some() { Some(owner.checked_programme_selection(c).map_err(E::Backing)?) } else { None };
+        let (plan, lease) = compile_current(
+            owner.document(),
+            Purpose::MaskedCurrent,
+            Some(bindings),
+            proof.as_ref(),
+            std::mem::size_of::<Self>() as u64,
+            c.interrupt,
+            &mut budget,
+        )?;
+        Ok(Self { owner, plan, limits, _lease: lease })
     }
     pub(crate) fn bounds(&self) -> Rect {
         self.plan.bounds
@@ -633,5 +855,5 @@ impl<'a> Context<'a> {
 }
 
 #[cfg(test)]
-#[path="backed_filtered_flat_point_tests.rs"]
+#[path = "backed_filtered_flat_point_tests.rs"]
 mod tests;

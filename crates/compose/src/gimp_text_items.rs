@@ -112,7 +112,7 @@ fn qualify_layout_source_impl<'a>(
         fallback = ExactFont::bundled_inter(ctl).map_err(text_error)?;
         &fallback
     };
-    photocraft_text::xcf::qualify_layout_rectilinear_geometry(&font, qualified, ctl).map_err(text_error)?;
+    photocraft_text::xcf::qualify_layout_rectilinear_geometry(font, qualified, ctl).map_err(text_error)?;
     doc.working_profile_interpretation.validate_with(doc.icc_profile.as_deref().map(Vec::as_slice), doc.mode).map_err(|_| unsupported())?;
     Ok(qualified)
 }
@@ -271,7 +271,7 @@ fn current_source_layout_bounds_impl(
             TextSourceError::Budget
         })
     };
-    let prepared = photocraft_text::xcf::prepare_qualified_rectilinear_with_charge(&font, qualified, 8 << 20, ctl, &mut account);
+    let prepared = photocraft_text::xcf::prepare_qualified_rectilinear_with_charge(font, qualified, 8 << 20, ctl, &mut account);
     if let Some(error) = denied {
         return Err(error);
     }
@@ -343,7 +343,7 @@ fn render_source_impl(
             TextSourceError::Budget
         })
     };
-    let output = photocraft_text::xcf::prepare_qualified_rectilinear_with_charge(&font, qualified, 8 << 20, ctl, &mut render_charge)
+    let output = photocraft_text::xcf::prepare_qualified_rectilinear_with_charge(font, qualified, 8 << 20, ctl, &mut render_charge)
         .and_then(|prepared| prepared.render_color_with_charge(qualified.antialias, encoded, 8 << 20, ctl, &mut render_charge));
     if let Some(error) = denied {
         return Err(error);

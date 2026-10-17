@@ -32,10 +32,10 @@ mod plain_normal;
 mod plain_point;
 #[path = "gimp_prepare_control.rs"]
 mod prepare_control;
-#[path = "gimp_text_budgeted.rs"]
-mod text_budgeted;
 #[path = "gimp_scene_budget.rs"]
 pub mod scene_budget;
+#[path = "gimp_text_budgeted.rs"]
+mod text_budgeted;
 
 /// Caller-owned aggregate accounting for ordinary-scene preparation.
 /// A successful reservation must remain charged until its returned lease drops.
@@ -749,27 +749,24 @@ fn prepare<'a>(
                                                 .is_some_and(|expected| bytes.len() == expected)
                                         } else {
                                             bytes.len() == (if exposure_geometry { 257 * 129 } else { 48 }) * surface.channels() * width
+                                        }) && bytes.chunks_exact(width).all(|raw| match doc.depth {
+                                            photocraft_color::SampleType::U8 | photocraft_color::SampleType::U16 | photocraft_color::SampleType::U32 => true,
+                                            photocraft_color::SampleType::F32 => {
+                                                let Ok(raw) = <[u8; 4]>::try_from(raw) else { return false };
+                                                let value = f32::from_ne_bytes(raw);
+                                                value.is_finite()
+                                                    && (0.0..=1.0).contains(&value)
+                                                    && (!precision_balance_depth
+                                                        || !matches!(source_precision, Some(500 | 550 | 575))
+                                                        || photocraft_color::try_round_f32_to_f16_bits(value)
+                                                            .is_ok_and(|bits| photocraft_color::widen_f16_to_f32_bits(bits) == value.to_bits()))
+                                            }
+                                            photocraft_color::SampleType::F64 => {
+                                                let Ok(raw) = <[u8; 8]>::try_from(raw) else { return false };
+                                                let value = f64::from_ne_bytes(raw);
+                                                value.is_finite() && (0.0..=1.0).contains(&value)
+                                            }
                                         })
-                                            && bytes.chunks_exact(width).all(|raw| match doc.depth {
-                                                photocraft_color::SampleType::U8 | photocraft_color::SampleType::U16 | photocraft_color::SampleType::U32 => {
-                                                    true
-                                                }
-                                                photocraft_color::SampleType::F32 => {
-                                                    let Ok(raw) = <[u8; 4]>::try_from(raw) else { return false };
-                                                    let value = f32::from_ne_bytes(raw);
-                                                    value.is_finite()
-                                                        && (0.0..=1.0).contains(&value)
-                                                        && (!precision_balance_depth
-                                                            || !matches!(source_precision, Some(500 | 550 | 575))
-                                                            || photocraft_color::try_round_f32_to_f16_bits(value)
-                                                                .is_ok_and(|bits| photocraft_color::widen_f16_to_f32_bits(bits) == value.to_bits()))
-                                                }
-                                                photocraft_color::SampleType::F64 => {
-                                                    let Ok(raw) = <[u8; 8]>::try_from(raw) else { return false };
-                                                    let value = f64::from_ne_bytes(raw);
-                                                    value.is_finite() && (0.0..=1.0).contains(&value)
-                                                }
-                                            })
                                     })
                             });
                         if !qualified {
@@ -1179,10 +1176,17 @@ pub(crate) fn qualify_generic_point_storage_metadata(
 
 // Only genuine class-validated CURRENT callers may use dynamic layer coverage.
 // This changes neither the native filter output nor original-source eligibility.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn qualify_current_point_layer_coverage_metadata(
-    doc: &Document, layer: &Layer, state: &photocraft_doc::XcfState,
-    stack: &photocraft_doc::xcf_filters::FilterStack, extent: Rect,
-    stored: SampleEncoding, format: photocraft_color::PixelFormat, default_bytes: &[u8],
+    doc: &Document,
+    layer: &Layer,
+    state: &photocraft_doc::XcfState,
+    stack: &photocraft_doc::xcf_filters::FilterStack,
+    extent: Rect,
+    stored: SampleEncoding,
+    format: photocraft_color::PixelFormat,
+    default_bytes: &[u8],
 ) -> Result<()> {
     qualify_point_storage_metadata(doc, layer, state, stack, extent, stored, format, default_bytes, PointLayerCoverage::Current)
 }
@@ -1190,71 +1194,151 @@ pub(crate) fn qualify_current_point_layer_coverage_metadata(
 pub(crate) fn residual_origin_node(node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
     match node.operation.name.as_str() {
         "gimp:desaturate" => node.operation.schema_epoch == crate::gimp_filters::DESATURATE_PRECISION_EPOCH,
-        "gegl:saturation" => matches!(node.operation.schema_epoch.as_str(), crate::gimp_filters::SATURATION_PRECISION_EPOCH | crate::gimp_filters::SATURATION_GRAY_PRECISION_EPOCH | crate::gimp_filters::SATURATION_RGB_YUV_PRECISION_EPOCH),
+        "gegl:saturation" => matches!(
+            node.operation.schema_epoch.as_str(),
+            crate::gimp_filters::SATURATION_PRECISION_EPOCH
+                | crate::gimp_filters::SATURATION_GRAY_PRECISION_EPOCH
+                | crate::gimp_filters::SATURATION_RGB_YUV_PRECISION_EPOCH
+        ),
         "gegl:value-invert" => node.operation.schema_epoch == crate::gimp_filters::VALUE_INVERT_PRECISION_EPOCH,
         "gimp:color-balance" => matches!(node.operation.schema_epoch.as_str(), crate::gimp_color_balance::EPOCH | crate::gimp_color_balance::DEPTH_EPOCH),
         _ => false,
     }
 }
 pub(crate) fn residual_origin_extent(extent: Rect) -> bool {
-    extent.x0 == 0 && extent.y0 == 0 && !extent.is_empty()
-        && extent.width() <= 262144 && extent.height() <= 262144
+    extent.x0 == 0
+        && extent.y0 == 0
+        && !extent.is_empty()
+        && extent.width() <= 262144
+        && extent.height() <= 262144
         && u64::from(extent.width()).checked_mul(u64::from(extent.height())).is_some_and(|pixels| pixels <= 1 << 30)
 }
 /// Join plain Document canonical geometry to the actual native descriptor before
 /// profile construction or physical mask traversal. L1 custody is not assumed.
-pub(crate) fn qualify_residual_origin_context(doc: &Document, layer: &Layer, state: &photocraft_doc::XcfState, stack: &photocraft_doc::xcf_filters::FilterStack, extent: Rect) -> Result<()> {
-    if !stack.nodes.first().is_some_and(residual_origin_node) { return Ok(()) }
+pub(crate) fn qualify_residual_origin_context(
+    doc: &Document,
+    layer: &Layer,
+    state: &photocraft_doc::XcfState,
+    stack: &photocraft_doc::xcf_filters::FilterStack,
+    extent: Rect,
+) -> Result<()> {
+    if !stack.nodes.first().is_some_and(residual_origin_node) {
+        return Ok(());
+    }
     let [actual_layer] = doc.layers.as_slice() else { return Err(CompositionError::Unsupported("residual origin singleton layer")) };
     let [actual_stack] = state.filter_stacks.as_slice() else { return Err(CompositionError::Unsupported("residual origin singleton stack")) };
-    if state.items.len() != 2 || state.filter_masks.len() != 1 || stack.nodes.len() != 1 || actual_stack.nodes.len() != 1
-        || actual_layer.id != layer.id || stack.owner != ItemRef::Layer(layer.id) || actual_stack.owner != stack.owner
+    if state.items.len() != 2
+        || state.filter_masks.len() != 1
+        || stack.nodes.len() != 1
+        || actual_stack.nodes.len() != 1
+        || actual_layer.id != layer.id
+        || stack.owner != ItemRef::Layer(layer.id)
+        || actual_stack.owner != stack.owner
         || actual_stack.nodes.first().map(|node| node.id) != stack.nodes.first().map(|node| node.id)
-        || !residual_origin_extent(extent) || extent != doc.bounds() || extent.size() != doc.size
+        || !residual_origin_extent(extent)
+        || extent != doc.bounds()
+        || extent.size() != doc.size
         || state.items.iter().find(|item| item.item == ItemRef::Layer(layer.id)).and_then(|item| item.raster_bounds) != Some(extent)
-    { return Err(CompositionError::Unsupported("residual checked origin canonical/native extent")); }
+    {
+        return Err(CompositionError::Unsupported("residual checked origin canonical/native extent"));
+    }
     Ok(())
 }
 /// Metadata portion of the existing scoped precision-point/current raster gates.
 /// Native input validation stays with the caller's real controlled reader.
 /// These identities retain their own epochs and never use PointReplace aliases.
 pub(crate) fn qualify_residual_point_metadata(
-    doc:&Document, layer:&Layer, state:&photocraft_doc::XcfState,
-    stack:&photocraft_doc::xcf_filters::FilterStack, extent:Rect,
-    stored:SampleEncoding, interrupt:&photocraft_raster::Interrupt<'_>,
-)->Result<()> {
-    interrupt.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
+    doc: &Document,
+    layer: &Layer,
+    state: &photocraft_doc::XcfState,
+    stack: &photocraft_doc::xcf_filters::FilterStack,
+    extent: Rect,
+    stored: SampleEncoding,
+    interrupt: &photocraft_raster::Interrupt<'_>,
+) -> Result<()> {
+    interrupt.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
     qualify_residual_origin_context(doc, layer, state, stack, extent)?;
-    let [node]=stack.nodes.as_slice() else { return Ok(()) };
-    let desaturate=node.operation.name=="gimp:desaturate" && node.operation.schema_epoch==crate::gimp_filters::DESATURATE_PRECISION_EPOCH;
-    let saturation=node.operation.name=="gegl:saturation" && matches!(node.operation.schema_epoch.as_str(),crate::gimp_filters::SATURATION_PRECISION_EPOCH|crate::gimp_filters::SATURATION_GRAY_PRECISION_EPOCH|crate::gimp_filters::SATURATION_RGB_YUV_PRECISION_EPOCH);
-    let value=node.operation.name=="gegl:value-invert" && node.operation.schema_epoch==crate::gimp_filters::VALUE_INVERT_PRECISION_EPOCH;
-    let posterize=node.operation.name=="gimp:posterize" && node.operation.schema_epoch=="xcf-22-stock-point-replace";
-    if !(desaturate||saturation||value||posterize) { return Ok(()) }
-    let gray=saturation && node.operation.schema_epoch==crate::gimp_filters::SATURATION_GRAY_PRECISION_EPOCH;
-    let yuv=saturation && !gray && (node.operation.schema_epoch==crate::gimp_filters::SATURATION_RGB_YUV_PRECISION_EPOCH || node.arguments.iter().any(|arg|arg.name=="colorspace" && matches!(&arg.value,photocraft_doc::xcf_filters::FilterValue::Enum{domain,value:2} if domain=="GeglSaturationType")));
-    let precision=if value { matches!((doc.depth,stored),
-        (photocraft_color::SampleType::U16,SampleEncoding::NonlinearProfile)|
-        (photocraft_color::SampleType::F32,SampleEncoding::Linear)|
-        (photocraft_color::SampleType::F64,SampleEncoding::NonlinearProfile))
-    } else if posterize { doc.depth==photocraft_color::SampleType::U8 && stored==SampleEncoding::NonlinearProfile
-    } else { matches!(doc.depth,photocraft_color::SampleType::U16|photocraft_color::SampleType::F32|photocraft_color::SampleType::F64) && matches!(stored,SampleEncoding::Linear|SampleEncoding::NonlinearProfile) };
-    if (posterize && (doc.size!=photocraft_doc::Size::new(32,32) || extent!=Rect::new(0,0,32,32)))
-        || doc.mode!=if gray {ColorMode::Grayscale} else {ColorMode::Rgb}
-        || !precision || (yuv && !matches!(doc.depth,photocraft_color::SampleType::U16|photocraft_color::SampleType::F32))
-        || doc.layers.len()!=1 || !doc.channels.is_empty() || !doc.paths.is_empty() || !state.source_items.is_empty()
-        || state.filter_stacks.len()!=1 || layer.mask.is_some() || !layer.visible || layer.opacity.to_bits()!=1f32.to_bits()
-        || doc.source_color_context.as_ref().is_none_or(|context|context.original_icc.is_some())
-        || state.items.iter().find(|item|item.item==ItemRef::Layer(layer.id)).and_then(|item|item.composition.as_ref()).is_none_or(|policy|policy.source_mode!=28 || (policy.stored_blend_space,policy.stored_composite_space,policy.stored_operator)!=(0,-1,-1) || policy.legacy || policy.pass_through)
-    { return Err(CompositionError::Unsupported("unqualified residual point current raster context")); }
-    interrupt.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
+    let [node] = stack.nodes.as_slice() else { return Ok(()) };
+    let desaturate = node.operation.name == "gimp:desaturate" && node.operation.schema_epoch == crate::gimp_filters::DESATURATE_PRECISION_EPOCH;
+    let saturation = node.operation.name == "gegl:saturation"
+        && matches!(
+            node.operation.schema_epoch.as_str(),
+            crate::gimp_filters::SATURATION_PRECISION_EPOCH
+                | crate::gimp_filters::SATURATION_GRAY_PRECISION_EPOCH
+                | crate::gimp_filters::SATURATION_RGB_YUV_PRECISION_EPOCH
+        );
+    let value = node.operation.name == "gegl:value-invert" && node.operation.schema_epoch == crate::gimp_filters::VALUE_INVERT_PRECISION_EPOCH;
+    let posterize = node.operation.name == "gimp:posterize" && node.operation.schema_epoch == "xcf-22-stock-point-replace";
+    if !(desaturate || saturation || value || posterize) {
+        return Ok(());
+    }
+    let gray = saturation && node.operation.schema_epoch == crate::gimp_filters::SATURATION_GRAY_PRECISION_EPOCH;
+    let yuv = saturation
+        && !gray
+        && (node.operation.schema_epoch == crate::gimp_filters::SATURATION_RGB_YUV_PRECISION_EPOCH
+            || node.arguments.iter().any(|arg| {
+                arg.name == "colorspace" && matches!(&arg.value,photocraft_doc::xcf_filters::FilterValue::Enum{domain,value:2} if domain=="GeglSaturationType")
+            }));
+    let precision = if value {
+        matches!(
+            (doc.depth, stored),
+            (photocraft_color::SampleType::U16, SampleEncoding::NonlinearProfile)
+                | (photocraft_color::SampleType::F32, SampleEncoding::Linear)
+                | (photocraft_color::SampleType::F64, SampleEncoding::NonlinearProfile)
+        )
+    } else if posterize {
+        doc.depth == photocraft_color::SampleType::U8 && stored == SampleEncoding::NonlinearProfile
+    } else {
+        matches!(doc.depth, photocraft_color::SampleType::U16 | photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64)
+            && matches!(stored, SampleEncoding::Linear | SampleEncoding::NonlinearProfile)
+    };
+    if (posterize && (doc.size != photocraft_doc::Size::new(32, 32) || extent != Rect::new(0, 0, 32, 32)))
+        || doc.mode != if gray { ColorMode::Grayscale } else { ColorMode::Rgb }
+        || !precision
+        || (yuv && !matches!(doc.depth, photocraft_color::SampleType::U16 | photocraft_color::SampleType::F32))
+        || doc.layers.len() != 1
+        || !doc.channels.is_empty()
+        || !doc.paths.is_empty()
+        || !state.source_items.is_empty()
+        || state.filter_stacks.len() != 1
+        || layer.mask.is_some()
+        || !layer.visible
+        || layer.opacity.to_bits() != 1f32.to_bits()
+        || doc.source_color_context.as_ref().is_none_or(|context| context.original_icc.is_some())
+        || state.items.iter().find(|item| item.item == ItemRef::Layer(layer.id)).and_then(|item| item.composition.as_ref()).is_none_or(|policy| {
+            policy.source_mode != 28
+                || (policy.stored_blend_space, policy.stored_composite_space, policy.stored_operator) != (0, -1, -1)
+                || policy.legacy
+                || policy.pass_through
+        })
+    {
+        return Err(CompositionError::Unsupported("unqualified residual point current raster context"));
+    }
+    interrupt.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
     Ok(())
 }
-pub(crate) fn qualify_current_point_optional_mask_metadata(doc:&Document,layer:&Layer,state:&photocraft_doc::XcfState,stack:&photocraft_doc::xcf_filters::FilterStack,extent:Rect,stored:SampleEncoding,format:photocraft_color::PixelFormat,default_bytes:&[u8])->Result<()> {
-    qualify_point_storage_metadata(doc,layer,state,stack,extent,stored,format,default_bytes,PointLayerCoverage::CurrentOptionalMask)
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn qualify_current_point_optional_mask_metadata(
+    doc: &Document,
+    layer: &Layer,
+    state: &photocraft_doc::XcfState,
+    stack: &photocraft_doc::xcf_filters::FilterStack,
+    extent: Rect,
+    stored: SampleEncoding,
+    format: photocraft_color::PixelFormat,
+    default_bytes: &[u8],
+) -> Result<()> {
+    qualify_point_storage_metadata(doc, layer, state, stack, extent, stored, format, default_bytes, PointLayerCoverage::CurrentOptionalMask)
 }
 #[derive(Clone, Copy)]
-enum PointLayerCoverage { OriginalRecipe, Current, CurrentOptionalMask }
+enum PointLayerCoverage {
+    OriginalRecipe,
+    Current,
+    CurrentOptionalMask,
+}
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 fn qualify_point_storage_metadata(
     doc: &Document,
     layer: &Layer,
@@ -1285,9 +1369,16 @@ fn qualify_point_storage_metadata(
         || layer.mask.is_some()
         || (matches!(coverage_policy, PointLayerCoverage::OriginalRecipe) && !layer.visible)
         || (matches!(coverage_policy, PointLayerCoverage::OriginalRecipe) && layer.opacity.to_bits() != 1f32.to_bits())
-        || (matches!(coverage_policy, PointLayerCoverage::Current|PointLayerCoverage::CurrentOptionalMask)
+        || (matches!(coverage_policy, PointLayerCoverage::Current | PointLayerCoverage::CurrentOptionalMask)
             && (!layer.opacity.is_finite() || !(0.0..=1.0).contains(&layer.opacity) || item.is_none_or(|item| item.visible != layer.visible)))
-        || !matches!(doc.depth, photocraft_color::SampleType::U8 | photocraft_color::SampleType::U16 | photocraft_color::SampleType::U32 | photocraft_color::SampleType::F32 | photocraft_color::SampleType::F64)
+        || !matches!(
+            doc.depth,
+            photocraft_color::SampleType::U8
+                | photocraft_color::SampleType::U16
+                | photocraft_color::SampleType::U32
+                | photocraft_color::SampleType::F32
+                | photocraft_color::SampleType::F64
+        )
         || !matches!(stored, SampleEncoding::Linear | SampleEncoding::NonlinearProfile | SampleEncoding::Perceptual)
         || format != doc.pixel_format()
         || !format.alpha
@@ -1298,10 +1389,10 @@ fn qualify_point_storage_metadata(
                 || policy.pass_through
                 || (policy.stored_blend_space, policy.stored_composite_space, policy.stored_operator) != (0, -1, -1)
         })
-        || stack.nodes.iter().any(|node| {
-            match node.mask {
-                None=>!matches!(coverage_policy,PointLayerCoverage::CurrentOptionalMask),
-                Some(reference)=>!state.filter_masks.iter().any(|mask|ItemRef::Mask(mask.id)==reference && mask.owner==node.id && mask.surface.format().sample==doc.depth),
+        || stack.nodes.iter().any(|node| match node.mask {
+            None => !matches!(coverage_policy, PointLayerCoverage::CurrentOptionalMask),
+            Some(reference) => {
+                !state.filter_masks.iter().any(|mask| ItemRef::Mask(mask.id) == reference && mask.owner == node.id && mask.surface.format().sample == doc.depth)
             }
         })
     {
@@ -1324,13 +1415,23 @@ pub(crate) struct PointCurrentFamilies {
 /// The exact existing current family extent/precision/output predicates. No
 /// Surface/native samples, source correspondence or runtime tag are supplied.
 /// The caller must prepay its bounded singleton metadata comparisons.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn qualify_point_family_context(
-    doc:&Document,layer:&Layer,state:&photocraft_doc::XcfState,stack:&photocraft_doc::xcf_filters::FilterStack,
-    extent:Rect,profile:&Profile,stored:SampleEncoding,interrupt:&photocraft_raster::Interrupt<'_>,
-)->Result<PointCurrentFamilies> {
-    interrupt.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
+    doc: &Document,
+    layer: &Layer,
+    state: &photocraft_doc::XcfState,
+    stack: &photocraft_doc::xcf_filters::FilterStack,
+    extent: Rect,
+    profile: &Profile,
+    stored: SampleEncoding,
+    interrupt: &photocraft_raster::Interrupt<'_>,
+) -> Result<PointCurrentFamilies> {
+    interrupt.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
     if let Some(node) = stack.nodes.iter().find(|node| crate::gimp_semi_flatten::claims(node)) {
-        if stack.nodes.len() != 1 { return Err(CompositionError::Unsupported("Semi-Flatten current singleton")); }
+        if stack.nodes.len() != 1 {
+            return Err(CompositionError::Unsupported("Semi-Flatten current singleton"));
+        }
         crate::gimp_semi_flatten::qualify_context(doc, extent, node)?;
     }
     let channel_mixer = stack.nodes.first().is_some_and(|node| {
@@ -1399,7 +1500,7 @@ pub(crate) fn qualify_point_family_context(
             && node.operation.stored_version == "0:0"
     });
     if red_eye {
-        let item=state.items.iter().find(|item|item.item==ItemRef::Layer(layer.id));
+        let item = state.items.iter().find(|item| item.item == ItemRef::Layer(layer.id));
         let node = stack.nodes.first().ok_or(CompositionError::Invalid("Red Eye current node"))?;
         let dimensions = i64::from(extent.x1)
             .checked_sub(i64::from(extent.x0))
@@ -1490,8 +1591,8 @@ pub(crate) fn qualify_point_family_context(
             return Err(CompositionError::Unsupported("point checked origin canonical/native extent"));
         }
     }
-    interrupt.check().map_err(|_|photocraft_raster::RasterInputError::Cancelled)?;
-    Ok(PointCurrentFamilies {channel_mixer,mono_signed,color_overlay,color_rotate,unpremultiply,absolute,red_eye,component_extract,alpha_clip})
+    interrupt.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)?;
+    Ok(PointCurrentFamilies { channel_mixer, mono_signed, color_overlay, color_rotate, unpremultiply, absolute, red_eye, component_extract, alpha_clip })
 }
 
 /// Current structural/profile semantics, independent of inert original provenance.
@@ -1515,7 +1616,8 @@ fn qualify_generic_point_context(
         (photocraft_doc::WorkingProfileInterpretation::ImplicitSrgb { .. }, ColorMode::Rgb)
             | (photocraft_doc::WorkingProfileInterpretation::ImplicitSGray { .. }, ColorMode::Grayscale)
     );
-    let PointCurrentFamilies {channel_mixer,mono_signed,color_overlay,color_rotate,unpremultiply,absolute,red_eye,component_extract,alpha_clip}=qualify_point_family_context(doc,layer,state,stack,extent,profile,stored,interrupt)?;
+    let PointCurrentFamilies { channel_mixer, mono_signed, color_overlay, color_rotate, unpremultiply, absolute, red_eye, component_extract, alpha_clip } =
+        qualify_point_family_context(doc, layer, state, stack, extent, profile, stored, interrupt)?;
     qualify_generic_point_storage_metadata(doc, layer, state, stack, extent, stored, surface.format(), surface.default_bytes())?;
     if !implicit || profile.to_bytes() != profile_kind.profile().to_bytes() {
         return Err(CompositionError::Unsupported("unqualified generic point current raster context"));

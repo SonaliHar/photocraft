@@ -185,6 +185,8 @@ pub fn requirements(
     }
     Ok(Requirements { retained_bytes: retained, peak_resident_bytes: peak, index_bytes: index, preparation_work_units: work, metadata_bytes: metadata })
 }
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn prepare<'a, B: PreparationBudget>(
     n: &'a FilterNode,
     g: &'a FilterGraph,

@@ -195,6 +195,8 @@ pub struct LeasedStreamedBoxPipeline<S, L> {
     _source: S,
     _lease: L,
 }
+// Keep the bounded inline representation; boxing adds a new allocation and changes its controlled storage schedule.
+#[allow(clippy::large_enum_variant)]
 enum SourceProfile<L> {
     Implicit(Profile),
     Assigned(BoundAssignedNeighborhoodProfile<L>),

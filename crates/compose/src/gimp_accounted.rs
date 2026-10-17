@@ -499,6 +499,7 @@ mod tests {
         let owner_policy = state.items[0].composition.as_mut().unwrap();
         owner_policy.stored_composite_space = 2;
         owner_policy.stored_operator = 1;
+        owner_policy.resolved.as_mut().unwrap().composite_space = photocraft_doc::import_compositing::GimpSpace::ProfileRgb;
         let node = &mut state.filter_stacks[0].nodes[0];
         node.mask = None;
         node.operation.schema_epoch = crate::gimp_filters::STACK_EDITS_EPOCH.into();
@@ -524,7 +525,10 @@ mod tests {
     // must be paid, even when all retained words are signed zero.
     #[test]
     fn empty_mask_preparation_accounts_for_physical_padding_per_invocation() {
-        use photocraft_doc::{item_identity::{ItemRef, MaskId}, xcf_filter_masks::FilterMask};
+        use photocraft_doc::{
+            item_identity::{ItemRef, MaskId},
+            xcf_filter_masks::FilterMask,
+        };
         let mut sparse = points();
         let bounds = sparse.bounds();
         let format = PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false);

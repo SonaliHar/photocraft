@@ -346,7 +346,7 @@ mod tests {
         let limits = Limits { resident_bytes: 64 << 20, work_units: 100_000_000 };
         let a = Request {
             preparation: source(&bytes, SampleType::F32),
-            profile: BoundProfile { definition: &profile, context: context() },
+            profile: BoundProfile { definition: profile, context: context() },
             transform: &state,
             bounds,
             input_precision: InputUnitPrecision::RoundUnitToF32BeforeTransfer,
@@ -356,7 +356,7 @@ mod tests {
         let b = Request { preparation: source(&bytes, SampleType::F64), final_quantization: FinalQuantization::Float32ThenPromoteF64, ..a };
         let actual32 = prepare_transform(a, limits, &Interrupt::NONE).unwrap().try_read_interleaved(bounds).unwrap();
         let actual64 = prepare_transform(b, limits, &Interrupt::NONE).unwrap().try_read_interleaved(bounds).unwrap();
-        for (p32, p64) in actual32.chunks_exact(16).zip(actual64.chunks_exact(32)) {
+        for (p32, p64) in actual32.as_chunks::<16>().0.iter().zip(actual64.as_chunks::<32>().0.iter()) {
             for ch in 0..4 {
                 assert_eq!(try_read_sample_f64(p32, SampleType::F32, ch).unwrap(), try_read_sample_f64(p64, SampleType::F64, ch).unwrap());
             }
