@@ -3779,7 +3779,11 @@ fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// Grey colours have no meaningful hue, so the wheel keeps the last hue and
 /// saturation selected while its brightness remains at zero.
 fn wheel_display_hsv(current: egui::ecolor::Hsva, remembered: (f32, f32)) -> egui::ecolor::Hsva {
-    if current.s < 0.001 || current.v < 0.001 { egui::ecolor::Hsva::new(remembered.0, remembered.1, current.v, current.a) } else { current }
+    if current.v < 0.001 {
+        egui::ecolor::Hsva::new(remembered.0, remembered.1, current.v, current.a)
+    } else {
+        current
+    }
 }
 fn set_tool_color(app: &mut PhotocraftApp, bg_active: bool, color: [f32; 4]) {
     if bg_active {
@@ -3810,7 +3814,7 @@ fn color_wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui, bg_active: bool) {
             let mut brightness = hsva.v * 100.0;
 
             ui.horizontal(|ui| {
-                ui.label("H");
+                ui.label(tl!("H"));
                 ui.add(egui::Slider::new(&mut hue, 0.0..=360.0).show_value(false));
                 if widgets::value_field(ui, &mut hue, 0.0..=360.0, "", 48.0).changed() {
                     changed = true;
@@ -3818,7 +3822,7 @@ fn color_wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui, bg_active: bool) {
             });
 
             ui.horizontal(|ui| {
-                ui.label("S");
+                ui.label(tl!("S"));
                 ui.add(egui::Slider::new(&mut saturation, 0.0..=100.0).show_value(false));
                 if widgets::value_field(ui, &mut saturation, 0.0..=100.0, "", 48.0).changed() {
                     changed = true;
@@ -3826,7 +3830,7 @@ fn color_wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui, bg_active: bool) {
             });
 
             ui.horizontal(|ui| {
-                ui.label("B");
+                ui.label(tl!("B"));
                 ui.add(egui::Slider::new(&mut brightness, 0.0..=100.0).show_value(false));
                 if widgets::value_field(ui, &mut brightness, 0.0..=100.0, "", 48.0).changed() {
                     changed = true;
@@ -6724,11 +6728,10 @@ mod color_wheel_tests {
 
         let displayed = wheel_display_hsv(current, remembered);
 
-        assert!((displayed.h - 120.0 / 360.0).abs() < 1e-6);
-        assert!((displayed.s - 0.8).abs() < 1e-6);
+        assert!((displayed.h - 240.0 / 360.0).abs() < 1e-6);
+        assert!((displayed.s - 0.0).abs() < 1e-6);
         assert!((displayed.v - 0.5).abs() < 1e-6);
     }
-
     #[test]
     fn wheel_preserves_hue_when_brightness_is_zero() {
         let current = egui::ecolor::Hsva::new(240.0 / 360.0, 0.7, 0.0, 1.0);
@@ -6752,4 +6755,20 @@ mod color_wheel_tests {
         assert!((displayed.s - 0.7).abs() < 1e-6);
         assert!((displayed.v - 0.5).abs() < 1e-6);
     }
+    #[test]
+    fn wheel_hue_only_edit_keeps_grey_achromatic() {
+        // Simule un gris actuel et une saturation mémorisée
+        let current = egui::ecolor::Hsva::new(240.0 / 360.0, 0.0, 0.5, 1.0);
+        let remembered = (120.0 / 360.0, 0.8);
+
+        // L'utilisateur ne change que le hue (pas la saturation)
+        let hue_only_edit = egui::ecolor::Hsva::new(90.0 / 360.0, current.s, current.v, current.a);
+
+        let displayed = wheel_display_hsv(hue_only_edit, remembered);
+
+        // La couleur doit rester achromatique : saturation toujours 0
+        assert!((displayed.s - 0.0).abs() < 1e-6);
+        assert!((displayed.v - 0.5).abs() < 1e-6);
+    }
+    
 }

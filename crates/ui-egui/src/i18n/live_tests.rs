@@ -426,3 +426,10 @@ fn czech_shortcut_conflicts_keep_warning_state_and_shortcut_codes() {
         assert_eq!(fields["overrides"]["file.new"], json!("Cmd+O"));
     });
 }
+#[test]
+fn french_color_wheel_labels_are_translated() {
+    let fr = lang("fr");
+    assert_eq!(tr(fr, "H"), "T");
+    assert_eq!(tr(fr, "S"), "S");
+    assert_eq!(tr(fr, "B"), "V");
+}
