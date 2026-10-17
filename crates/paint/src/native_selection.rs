@@ -29,7 +29,7 @@ impl<'s> CheckedNativeSelection<'s> {
         // the installed map/default/tiles; no Surface or native-word clone.
         let view = CheckedRasterView::resident_with_control(surface, source.logical_bounds(), c)?;
         let check = |raw: &[u8]| -> NResult<()> {
-            if raw.len() % format.bytes_per_pixel() != 0 {
+            if !raw.len().is_multiple_of(format.bytes_per_pixel()) {
                 return invalid("native selection sample length");
             }
             for block in raw.chunks(65536) {

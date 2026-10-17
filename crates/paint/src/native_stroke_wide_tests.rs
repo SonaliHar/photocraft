@@ -45,9 +45,9 @@ fn pure_wide_pixels_preserve_scalar_order_and_raw_shortcuts() {
                 let sa = src[a] * 0.375;
                 let oa = sa + da * (1. - sa);
                 let mut expected = original.clone();
-                for ch in 0..a {
+                for (ch, source_color) in src.iter().copied().enumerate().take(a) {
                     let d = try_read_sample_f64(&original, sample, ch).unwrap();
-                    let value = (src[ch] * sa + d * da * (1. - sa)) / oa;
+                    let value = (source_color * sa + d * da * (1. - sa)) / oa;
                     try_write_sample_f64(&mut expected, sample, ch, value).unwrap();
                 }
                 if !lock {

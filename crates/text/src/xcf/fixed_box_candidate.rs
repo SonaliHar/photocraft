@@ -123,44 +123,6 @@ pub fn render_with_charge(
     Ok(StemRendered { surface, rect, resident_bytes: req.peak_bytes })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn measured_envelope_is_closed_and_lower_only() {
-        let valid = Request { requested_output_format: PixelFormat::RGBA8, content: "II\nI", origin: [8, 4], alignment: Alignment::Center };
-        assert!(requirements(valid, Limits::default()).is_ok());
-        for format in [PixelFormat::RGBA16, PixelFormat::RGBA32, PixelFormat::RGBA32F, PixelFormat::RGBA64F] {
-            assert!(requirements(Request { requested_output_format: format, ..valid }, Limits::default()).is_err());
-        }
-        assert!(requirements(Request { requested_output_format: PixelFormat::RGBA8, content: "III\nI", ..valid }, Limits::default()).is_err());
-        assert!(requirements(valid, Limits { resident_bytes: 1, ..Limits::default() }).is_err());
-        assert!(requirements(valid, Limits { resident_bytes: (8 << 20) + 1, ..Limits::default() }).is_err());
-    }
-    #[test]
-    fn measured_rows_use_real_outline_candidate() {
-        let control = Interrupt::NONE;
-        let font = ExactFont::bundled_inter(&control).expect("authorized existing Inter");
-        for (alignment, first, second) in [(Alignment::Left, 3, 3), (Alignment::Center, 42, 47), (Alignment::Right, 81, 90)] {
-            let rendered = render_with_charge(
-                &font,
-                Request { requested_output_format: PixelFormat::RGBA8, content: "II\nI", origin: [0, 0], alignment },
-                Limits::default(),
-                &control,
-                &mut |_| Ok(()),
-            )
-            .expect("candidate");
-            let mut row = [0u8; 384];
-            for (y, x, count) in [(8, first, 6), (47, second, 3)] {
-                rendered.surface.try_read_interleaved_into_with(Rect::new(0, y, 96, y + 1), &mut row, &control).expect("row");
-                let xs: Vec<_> = row.chunks_exact(4).enumerate().filter_map(|(x, p)| (p[3] != 0).then_some(x)).collect();
-                assert_eq!(xs.first(), Some(&x));
-                assert_eq!(xs.len(), count);
-            }
-        }
-    }
-}
-
 use photocraft_doc::{
     item_identity::ItemRef,
     xcf_filters::{ExactNumber, FilterArgument, FilterValue},
@@ -475,4 +437,42 @@ pub fn bind_retained_source<'a>(
     requirements(request, Limits::default())?;
     poll(control)?;
     Ok(request)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn measured_envelope_is_closed_and_lower_only() {
+        let valid = Request { requested_output_format: PixelFormat::RGBA8, content: "II\nI", origin: [8, 4], alignment: Alignment::Center };
+        assert!(requirements(valid, Limits::default()).is_ok());
+        for format in [PixelFormat::RGBA16, PixelFormat::RGBA32, PixelFormat::RGBA32F, PixelFormat::RGBA64F] {
+            assert!(requirements(Request { requested_output_format: format, ..valid }, Limits::default()).is_err());
+        }
+        assert!(requirements(Request { requested_output_format: PixelFormat::RGBA8, content: "III\nI", ..valid }, Limits::default()).is_err());
+        assert!(requirements(valid, Limits { resident_bytes: 1, ..Limits::default() }).is_err());
+        assert!(requirements(valid, Limits { resident_bytes: (8 << 20) + 1, ..Limits::default() }).is_err());
+    }
+    #[test]
+    fn measured_rows_use_real_outline_candidate() {
+        let control = Interrupt::NONE;
+        let font = ExactFont::bundled_inter(&control).expect("authorized existing Inter");
+        for (alignment, first, second) in [(Alignment::Left, 3, 3), (Alignment::Center, 42, 47), (Alignment::Right, 81, 90)] {
+            let rendered = render_with_charge(
+                &font,
+                Request { requested_output_format: PixelFormat::RGBA8, content: "II\nI", origin: [0, 0], alignment },
+                Limits::default(),
+                &control,
+                &mut |_| Ok(()),
+            )
+            .expect("candidate");
+            let mut row = [0u8; 384];
+            for (y, x, count) in [(8, first, 6), (47, second, 3)] {
+                rendered.surface.try_read_interleaved_into_with(Rect::new(0, y, 96, y + 1), &mut row, &control).expect("row");
+                let xs: Vec<_> = row.as_chunks::<4>().0.iter().enumerate().filter_map(|(x, p)| (p[3] != 0).then_some(x)).collect();
+                assert_eq!(xs.first(), Some(&x));
+                assert_eq!(xs.len(), count);
+            }
+        }
+    }
 }

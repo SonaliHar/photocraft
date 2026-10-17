@@ -134,9 +134,9 @@ fn selected_weights_preserve_native_precision_and_original_association() {
                                         } else {
                                             let sa = paint[a] * w;
                                             let oa = sa + da * (1. - sa);
-                                            for ch in 0..a {
+                                            for (ch, source_color) in paint.iter().copied().enumerate().take(a) {
                                                 let d = try_read_sample_f64(&pixel, sample, ch).unwrap();
-                                                let v = (paint[ch] * sa + d * da * (1. - sa)) / oa;
+                                                let v = (source_color * sa + d * da * (1. - sa)) / oa;
                                                 try_write_sample_f64(&mut pixel, sample, ch, v).unwrap();
                                             }
                                             if !lock {
