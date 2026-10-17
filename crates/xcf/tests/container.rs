@@ -131,7 +131,7 @@ fn cancellation_resident_and_sample_work_are_transactional() {
 #[test]
 fn caller_snapshot_leases_count_once_and_survive_decoded_field_moves() {
     let plain = common::image(12, 150, 0, 1, 1, &[1, 2, 3, 255]);
-    for bytes in [plain.clone(), gzip(&plain)] {
+    for (wrapped, bytes) in [(false, plain.clone()), (true, gzip(&plain))] {
         let limits = ResourceLimits::for_policy(ResourcePolicy::default()).unwrap();
         let budget = Budget::new(limits, None);
         let encoded = budget.reserve(BudgetKind::Encoded, bytes.len() as u64, "snapshot").unwrap();
@@ -143,18 +143,28 @@ fn caller_snapshot_leases_count_once_and_survive_decoded_field_moves() {
         assert_eq!(reservations.encoded_bytes(), 0);
         assert_eq!(budget.used(BudgetKind::Encoded), bytes.len() as u64);
         assert_eq!(budget.used(BudgetKind::Resident), decoded.file.charged_bytes as u64);
-        assert_eq!(budget.used(BudgetKind::Work), 13); // snapshot9 plus four decoded samples
+        let performed_work = budget.used(BudgetKind::Work);
+        if wrapped {
+            // The bounded prefix and authoritative full wrapper decoder both
+            // retain their performed work on the original caller budget.
+            assert!(performed_work > 13);
+        } else {
+            assert_eq!(performed_work, 13); // snapshot9 plus four decoded samples
+        }
         let retained = reservations.retained_bytes();
         let plane = decoded.file.layers.into_iter().next().unwrap().plane.unwrap();
         assert_eq!(plane.bytes, [1, 2, 3, 255]);
+        assert_eq!(budget.used(BudgetKind::Work), performed_work);
         reservations.resize_retained(retained + 4, "mapped output").unwrap();
         assert_eq!(budget.used(BudgetKind::Resident), bytes.len() as u64 + retained + 4);
+        assert_eq!(budget.used(BudgetKind::Work), performed_work);
         drop(reservations);
         assert_eq!(budget.used(BudgetKind::Resident), bytes.len() as u64);
-        assert_eq!(budget.used(BudgetKind::Work), 13);
+        assert_eq!(budget.used(BudgetKind::Work), performed_work);
         drop(resident);
         drop(encoded);
         assert_eq!(budget.used(BudgetKind::Resident), 0);
+        assert_eq!(budget.used(BudgetKind::Work), performed_work);
     }
 }
 #[test]
@@ -231,4 +241,30 @@ fn lowered_options_cover_caller_allocations_during_progress() {
     let options = DecodeOptions { limits: Limits { resident_bytes: 1 << 20, ..Default::default() }, progress: Some(&progress), ..Default::default() };
     assert_eq!(decode_candidate_with_budget(&plain, &options, &budget, SourceAccounting::Borrowed).unwrap_err().kind, ErrorKind::Limit);
     assert_eq!(budget.used(BudgetKind::Resident), 1 << 20);
+}
+
+#[test]
+fn non_xcf_prefix_stops_without_full_output_but_claimed_xcf_keeps_full_errors() {
+    let limits = ResourceLimits::for_policy(ResourcePolicy::default()).unwrap().lowered(&[("logicalBytes", 64), ("residentBytes", 2 << 20)]).unwrap();
+    let svg = [b"<svg xmlns".as_slice(), &vec![b' '; 1 << 20]].concat();
+    let wrapped = gzip(&svg);
+    let budget = Budget::new(limits.clone(), None);
+    assert!(decode_candidate_with_budget(&wrapped, &Default::default(), &budget, SourceAccounting::Borrowed).unwrap().is_none());
+    assert!(budget.peak(BudgetKind::Resident) < 1 << 20, "never allocate full non-XCF output");
+    assert!(budget.used(BudgetKind::Work) > 0);
+    for kind in [BudgetKind::Resident, BudgetKind::Decoder, BudgetKind::Index, BudgetKind::Encoded] {
+        assert_eq!(budget.used(kind), 0);
+    }
+    let denied = limits.lowered(&[("sampleWorkUnits", 0)]).unwrap();
+    assert_eq!(decode_candidate(&wrapped, &Default::default(), &denied).unwrap_err().kind, ErrorKind::Limit);
+    let stop = || true;
+    assert_eq!(decode_candidate(&wrapped, &DecodeOptions { cancelled: Some(&stop), ..Default::default() }, &limits).unwrap_err().kind, ErrorKind::Cancelled);
+    let plain = common::image(12, 150, 0, 1, 1, &[1, 2, 3, 255]);
+    for original in [gzip(&plain), BZIP.to_vec(), XZ.to_vec()] {
+        let mut trailing = original.clone();
+        trailing.push(1);
+        assert!(decode_candidate(&trailing, &Default::default(), &ResourceLimits::for_policy(Default::default()).unwrap()).is_err());
+        let truncated = original.get(..original.len() - 1).unwrap();
+        assert!(decode_candidate(truncated, &Default::default(), &ResourceLimits::for_policy(Default::default()).unwrap()).is_err());
+    }
 }

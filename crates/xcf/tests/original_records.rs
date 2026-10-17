@@ -170,7 +170,9 @@ fn original_curve_levels_configuration_selector_matrix() {
                 assert!(v.channels.iter().all(|c| c.curve.samples_bits.len() == c.curve.n_samples as usize));
                 v.channels.iter().map(|c| c.channel.as_str()).collect()
             }
-            TypedConfiguration::ColorBalance(_) => panic!("expected Levels or Curves source configuration"),
+            TypedConfiguration::ColorBalance(_) | TypedConfiguration::BrightnessContrast(_) | TypedConfiguration::HueSaturation(_) => {
+                panic!("expected Levels or Curves source configuration")
+            }
         };
         assert_eq!(channels, ["value", "red", "green", "blue", "alpha"], "{name}");
         count += 1;

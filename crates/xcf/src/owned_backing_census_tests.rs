@@ -54,11 +54,13 @@ fn actual_spare_capacity_replaces_stale_decoder_counter() {
 #[test]
 fn graph_typed_configuration_and_boxed_masks_count_deep_backing() {
     let mut f = file();
-    let mut d = Drawable::<Plane>::default();
-    d.mask = Some(Box::new(Drawable {
-        plane: Some(Plane { width: 1, height: 1, channels: 1, sample: Sample::U8, bytes: Vec::with_capacity(77) }),
+    let mut d = Drawable::<Plane> {
+        mask: Some(Box::new(Drawable {
+            plane: Some(Plane { width: 1, height: 1, channels: 1, sample: Sample::U8, bytes: Vec::with_capacity(77) }),
+            ..Drawable::default()
+        })),
         ..Drawable::default()
-    }));
+    };
     let config = EffectConfiguration {
         nodes: vec![ConfigNode {
             start: 0,

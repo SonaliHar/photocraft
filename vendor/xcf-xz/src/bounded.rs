@@ -80,3 +80,58 @@ pub fn decode_with_reservation(
     }
     Ok(result)
 }
+
+/// Prefix-only content routing. Metadata/state/index remain bounded, but this
+/// does not validate payload checksums/EOF and never allocates full footer output.
+#[allow(clippy::too_many_arguments)]
+pub fn decode_prefix_with_reservation(
+    bytes: &[u8],
+    input: usize,
+    output: usize,
+    state: usize,
+    index: usize,
+    poll: &mut dyn FnMut() -> io::Result<()>,
+    admit: &mut dyn FnMut(Reservation, usize) -> io::Result<()>,
+) -> io::Result<Vec<u8>> {
+    poll()?;
+    admit(Reservation::IndexPeak, index)?;
+    let streams = crate::strict_xz::validate(bytes, input, index, 1_000_000, poll)?;
+    let total = streams.iter().try_fold(0u64, |n, s| n.checked_add(s.2).ok_or_else(|| io::Error::other("logical overflow")))?;
+    let prefix_bytes = total.min(9);
+    if prefix_bytes > output as u64 {
+        return Err(io::Error::other("logical budget"));
+    }
+    poll()?;
+    admit(Reservation::OutputPeak, usize::try_from(prefix_bytes).map_err(|_| io::Error::other("logical width"))?)?;
+    let mut result = Vec::new();
+    result
+        .try_reserve_exact(usize::try_from(prefix_bytes).map_err(|_| io::Error::other("logical width"))?)
+        .map_err(|_| io::Error::other("output allocation"))?;
+    for (start, end, logical) in streams {
+        let source = Guard { bytes: bytes.get(start..end).ok_or_else(|| io::Error::other("stream extent"))?, poll, admit, state, index };
+        let cap = u32::try_from(state / 1024).map_err(|_| io::Error::other("state width"))?;
+        let mut reader = crate::XzReader::new_mem_limit(source, cap);
+        let mut buf = [0; 4096];
+        let mut decoded = 0u64;
+        loop {
+            let count = 9usize.checked_sub(result.len()).ok_or_else(|| io::Error::other("prefix extent"))?;
+            let target = buf.get_mut(..count).ok_or_else(|| io::Error::other("prefix buffer"))?;
+            let n = reader.read(target)?;
+            if n == 0 {
+                break;
+            }
+            decoded = decoded.checked_add(n as u64).ok_or_else(|| io::Error::other("output overflow"))?;
+            if decoded > logical {
+                return Err(io::Error::other("output mismatch"));
+            }
+            result.extend_from_slice(buf.get(..n).ok_or_else(|| io::Error::other("prefix output"))?);
+            if result.len() == 9 {
+                return Ok(result);
+            }
+        }
+        if decoded != logical {
+            return Err(io::Error::other("output mismatch"));
+        }
+    }
+    Ok(result)
+}

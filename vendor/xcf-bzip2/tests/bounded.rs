@@ -121,3 +121,42 @@ fn generated_historical_randomized_block_matches_independent_decoder() {
     assert_eq!(oracle, expected);
     assert_eq!(decode(&bytes, expected.len(), &mut || Ok(()), &mut |_, _| Ok(())).unwrap(), expected);
 }
+
+#[test]
+fn signature_probe_is_bounded_not_full_validation_and_keeps_original_controls() {
+    let raw = [b"<svg xmlns".as_slice(), &vec![b' '; 131072]].concat();
+    let bytes = encode(&raw);
+    let mut peak = 0;
+    let mut polls = 0;
+    let prefix = xcf_bzip2::decode_prefix_with_reservation(
+        &bytes,
+        2_000_000,
+        9,
+        4_000_000,
+        &mut || {
+            polls += 1;
+            Ok(())
+        },
+        &mut |kind, n| {
+            if matches!(kind, Reservation::OutputOverlap) {
+                peak = peak.max(n);
+            }
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(prefix, &raw[..9]);
+    assert!(peak <= 18, "only actual prefix output, not full logical payload");
+    assert!(polls > 0);
+    assert!(xcf_bzip2::decode_prefix_with_reservation(&bytes, 2_000_000, 8, 4_000_000, &mut || Ok(()), &mut |_, _| Ok(())).is_err());
+    assert!(
+        xcf_bzip2::decode_prefix_with_reservation(&bytes, 2_000_000, 9, 4_000_000, &mut || Err(io::Error::other("cancelled")), &mut |_, _| Ok(())).is_err()
+    );
+    assert!(
+        xcf_bzip2::decode_prefix_with_reservation(&bytes, 2_000_000, 9, 4_000_000, &mut || Ok(()), &mut |_, _| Err(io::Error::other("reservation denied")))
+            .is_err()
+    );
+    let mut trailing = bytes.clone();
+    trailing.push(1);
+    assert!(decode(&trailing, raw.len(), &mut || Ok(()), &mut |_, _| Ok(())).is_err(), "strict decoder remains authoritative");
+}

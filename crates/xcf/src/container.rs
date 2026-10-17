@@ -3,6 +3,8 @@ use crate::*;
 use std::{borrow::Cow, cell::RefCell, io};
 #[path = "decode_control.rs"]
 mod decode_control;
+#[path = "container_prefix.rs"]
+mod prefix;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SourceContainer {
@@ -199,8 +201,9 @@ fn unwrap<'a, 'b, 'c>(
 pub fn decode_with_resources(bytes: &[u8], options: &DecodeOptions<'_>, limits: &ResourceLimits) -> Result<DecodedImport, XcfError> {
     decode_candidate(bytes, options, limits)?.ok_or_else(|| XcfError::new(ErrorKind::Header, 0, "wrapper does not contain plain GIMP XCF"))
 }
-/// Decode once for content-first routing. None means a valid non-XCF logical signature;
-/// malformed wrappers and malformed actual XCF remain errors. Nested wrappers are rejected.
+/// Bounded content-first routing. None means an unclaimed non-XCF prefix;
+/// its actual format loader owns complete validation. Claimed XCF receives full
+/// checksum/EOF validation with final refusal. Nested wrappers are rejected.
 pub fn decode_candidate(bytes: &[u8], options: &DecodeOptions<'_>, limits: &ResourceLimits) -> Result<Option<DecodedImport>, XcfError> {
     let budget = Budget::new(limits.clone(), options.cancelled);
     Ok(decode_candidate_with_budget(bytes, options, &budget, SourceAccounting::Borrowed)?.map(|result| result.decoded))
@@ -282,6 +285,24 @@ pub fn decode_candidate_with_budget<'b, 'a>(
             (None, None)
         }
     };
+    if kind != SourceContainer::Plain {
+        // A prefix only chooses authority. Its bytes are dropped before their
+        // live fee; a claimed XCF still goes through the complete old decoder.
+        struct Probe<'p, 'b, 'a> {
+            bytes: Cow<'p, [u8]>,
+            _lease: Option<Reservation<'b, 'a>>,
+        }
+        let (bytes, lease) = prefix::probe(bytes, kind, budget, limits, options.cancelled)?;
+        let probe = Probe { bytes, _lease: lease };
+        budget.consume_work(probe.bytes.len() as u64 + 1, "logical signature routing")?;
+        if !is_xcf(&probe.bytes) {
+            if classify_container(&probe.bytes).is_some() {
+                return Err(XcfError::new(ErrorKind::Header, 0, "recursive wrapper rejected"));
+            }
+            return Ok(None);
+        }
+        drop(probe);
+    }
     let (logical, logical_lease) = unwrap(bytes, kind, budget, limits, options.cancelled)?;
     if !is_xcf(&logical) {
         if classify_container(&logical).is_some() {
@@ -377,7 +398,7 @@ pub fn decode_plain_source_into_sink_with_budget<'b, 'a, S: PlaneSink>(
     accounting: PlainSourceAccounting,
     sink: &mut S,
 ) -> Result<BudgetDecodedImport<'b, 'a, S::Plane>, XcfError> {
-    decode_plain_source_into_sink_mode(source,options,budget,accounting,sink,false)
+    decode_plain_source_into_sink_mode(source, options, budget, accounting, sink, false)
 }
 /// Read bounded original metadata and plane descriptors without accessing pixel
 /// hierarchy/tile payloads. This is NOT pixel validation or a source grant.
@@ -385,16 +406,38 @@ pub fn decode_plain_source_into_sink_with_budget<'b, 'a, S: PlaneSink>(
 /// a later decode must use the same immutable Source and original Budget.
 /// Retains actual metadata allocations and entry/header allowance. Pixel
 /// payloads are absent and this type cannot be used as a decoded native plane.
-pub struct PlainSourceMetadata<'b,'a>{parsed:BudgetDecodedImport<'b,'a,PlaneDescriptor>,_header:Reservation<'b,'a>}
-impl PlainSourceMetadata<'_, '_>{pub fn file(&self)->&XcfFile<PlaneDescriptor>{&self.parsed.decoded.file}}
-pub fn read_plain_source_metadata_with_budget<'b,'a>(source:&mut dyn Source,options:&DecodeOptions<'_>,budget:&'b Budget<'a>,accounting:PlainSourceAccounting)->Result<PlainSourceMetadata<'b,'a>,XcfError>{
-    let header=(std::mem::size_of::<PlainSourceMetadata<'_, '_>>() as u64).checked_add(std::mem::size_of::<crate::sink::MetadataPlaneSink>()as u64).and_then(|n|n.checked_add(std::mem::size_of::<crate::reader::Reader<'_, '_>>()as u64)).ok_or_else(||XcfError::new(ErrorKind::Limit,0,"metadata planning entry size"))?;
-    let fee=budget.reserve(BudgetKind::Resident,header,"metadata planning entry/header")?;
-    budget.consume_work(512,"metadata planning entry")?;
-    let parsed=decode_plain_source_into_sink_mode(source,options,budget,accounting,&mut crate::sink::MetadataPlaneSink::new(),true)?;
-    Ok(PlainSourceMetadata{parsed,_header:fee})
+pub struct PlainSourceMetadata<'b, 'a> {
+    parsed: BudgetDecodedImport<'b, 'a, PlaneDescriptor>,
+    _header: Reservation<'b, 'a>,
 }
-fn decode_plain_source_into_sink_mode<'b,'a,S:PlaneSink>(source:&mut dyn Source,options:&DecodeOptions<'_>,budget:&'b Budget<'a>,accounting:PlainSourceAccounting,sink:&mut S,metadata_only:bool)->Result<BudgetDecodedImport<'b,'a,S::Plane>,XcfError>{
+impl PlainSourceMetadata<'_, '_> {
+    pub fn file(&self) -> &XcfFile<PlaneDescriptor> {
+        &self.parsed.decoded.file
+    }
+}
+pub fn read_plain_source_metadata_with_budget<'b, 'a>(
+    source: &mut dyn Source,
+    options: &DecodeOptions<'_>,
+    budget: &'b Budget<'a>,
+    accounting: PlainSourceAccounting,
+) -> Result<PlainSourceMetadata<'b, 'a>, XcfError> {
+    let header = (std::mem::size_of::<PlainSourceMetadata<'_, '_>>() as u64)
+        .checked_add(std::mem::size_of::<crate::sink::MetadataPlaneSink>() as u64)
+        .and_then(|n| n.checked_add(std::mem::size_of::<crate::reader::Reader<'_, '_>>() as u64))
+        .ok_or_else(|| XcfError::new(ErrorKind::Limit, 0, "metadata planning entry size"))?;
+    let fee = budget.reserve(BudgetKind::Resident, header, "metadata planning entry/header")?;
+    budget.consume_work(512, "metadata planning entry")?;
+    let parsed = decode_plain_source_into_sink_mode(source, options, budget, accounting, &mut crate::sink::MetadataPlaneSink::new(), true)?;
+    Ok(PlainSourceMetadata { parsed, _header: fee })
+}
+fn decode_plain_source_into_sink_mode<'b, 'a, S: PlaneSink>(
+    source: &mut dyn Source,
+    options: &DecodeOptions<'_>,
+    budget: &'b Budget<'a>,
+    accounting: PlainSourceAccounting,
+    sink: &mut S,
+    metadata_only: bool,
+) -> Result<BudgetDecodedImport<'b, 'a, S::Plane>, XcfError> {
     decode_control::poll(budget, options.cancelled, "plain source admission")?;
     let size = source.len();
     let limits = budget.limits();
@@ -444,7 +487,11 @@ fn decode_plain_source_into_sink_mode<'b,'a,S:PlaneSink>(source:&mut dyn Source,
         cancelled: options.cancelled,
         progress: options.progress,
     };
-    let mut file = if metadata_only{crate::reader::decode_source_metadata(source,&local,budget,sink)?}else{crate::reader::decode_source(source, &local, budget, sink)?};
+    let mut file = if metadata_only {
+        crate::reader::decode_source_metadata(source, &local, budget, sink)?
+    } else {
+        crate::reader::decode_source(source, &local, budget, sink)?
+    };
     decode_control::poll(budget, options.cancelled, "plain parsed handoff")?;
     let parsed = file.charged_bytes as u64;
     let retained = budget.reserve(BudgetKind::Resident, parsed, "plain parsed state handoff")?;

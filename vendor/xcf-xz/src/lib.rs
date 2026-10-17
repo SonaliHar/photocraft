@@ -408,4 +408,4 @@ impl<W: Write> Write for CountingWriter<W> {
 
 mod bounded;
 mod strict_xz;
-pub use bounded::{Reservation, decode_with_reservation};
+pub use bounded::{Reservation, decode_prefix_with_reservation, decode_with_reservation};

@@ -10,6 +10,6 @@ mod crc;
 mod header;
 mod huffman;
 mod move_to_front;
-pub use bounded::{Reservation, decode_with_reservation};
+pub use bounded::{Reservation, decode_prefix_with_reservation, decode_with_reservation};
 const LEN_258: usize = 512;
 mod randtable;

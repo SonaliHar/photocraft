@@ -77,3 +77,65 @@ fn exact_big_endian_integer_float_and_half_samples() {
         }
     }
 }
+
+#[test]
+fn all_eighteen_precision_tags_keep_encoding_and_exact_native_samples() {
+    // Literal tag/sample/encoding expectations are independent of the reader dispatch.
+    // No Source admission, colour conversion, or rendering is exercised here.
+    let cases = [
+        (100, Sample::U8, Encoding::Linear),
+        (150, Sample::U8, Encoding::NonlinearProfile),
+        (175, Sample::U8, Encoding::Perceptual),
+        (200, Sample::U16, Encoding::Linear),
+        (250, Sample::U16, Encoding::NonlinearProfile),
+        (275, Sample::U16, Encoding::Perceptual),
+        (300, Sample::U32, Encoding::Linear),
+        (350, Sample::U32, Encoding::NonlinearProfile),
+        (375, Sample::U32, Encoding::Perceptual),
+        (500, Sample::F16, Encoding::Linear),
+        (550, Sample::F16, Encoding::NonlinearProfile),
+        (575, Sample::F16, Encoding::Perceptual),
+        (600, Sample::F32, Encoding::Linear),
+        (650, Sample::F32, Encoding::NonlinearProfile),
+        (675, Sample::F32, Encoding::Perceptual),
+        (700, Sample::F64, Encoding::Linear),
+        (750, Sample::F64, Encoding::NonlinearProfile),
+        (775, Sample::F64, Encoding::Perceptual),
+    ];
+    for (tag, source_sample, encoding) in cases {
+        let (stored, expected): (Vec<u8>, Vec<u8>) = match source_sample {
+            Sample::U8 => (vec![0, 1, 254, 255], vec![0, 1, 254, 255]),
+            Sample::U16 => {
+                let values = [0u16, 1, u16::MAX - 1, u16::MAX];
+                (values.iter().flat_map(|v| v.to_be_bytes()).collect(), values.iter().flat_map(|v| v.to_ne_bytes()).collect())
+            }
+            Sample::U32 => {
+                let values = [0u32, 1, u32::MAX - 1, u32::MAX];
+                (values.iter().flat_map(|v| v.to_be_bytes()).collect(), values.iter().flat_map(|v| v.to_ne_bytes()).collect())
+            }
+            Sample::F16 => (
+                [0x8000u16, 0x0001, 0x3800, 0x3c00].iter().flat_map(|v| v.to_be_bytes()).collect(),
+                // IEEE binary16 -0, minimum subnormal 2^-24, 1/2, 1 widened to binary32.
+                [0x80000000u32, 0x33800000, 0x3f000000, 0x3f800000].iter().flat_map(|v| v.to_ne_bytes()).collect(),
+            ),
+            Sample::F32 => {
+                let bits = [0x80000000u32, 0x3f000001, 0xc0200000, 0x3f800000];
+                (bits.iter().flat_map(|v| v.to_be_bytes()).collect(), bits.iter().flat_map(|v| v.to_ne_bytes()).collect())
+            }
+            Sample::F64 => {
+                let bits = [0x8000000000000000u64, 0x3ff0000000000001, 0xc004000000000000, 0x3ff0000000000000];
+                (bits.iter().flat_map(|v| v.to_be_bytes()).collect(), bits.iter().flat_map(|v| v.to_ne_bytes()).collect())
+            }
+        };
+        for compression in 0..=2 {
+            let encoded = common::image(12, tag, compression, 1, 1, &stored);
+            let file = decode(&encoded, &Default::default()).unwrap();
+            assert_eq!((file.version, file.precision, file.sample, file.encoding), (12, tag, source_sample, encoding), "tag {tag}, compression {compression}");
+            assert_eq!(file.layers.len(), 1);
+            let plane = file.layers[0].plane.as_ref().unwrap();
+            assert_eq!((plane.width, plane.height, plane.channels), (1, 1, 4));
+            assert_eq!(plane.sample, if source_sample == Sample::F16 { Sample::F32 } else { source_sample });
+            assert_eq!(plane.bytes, expected, "tag {tag}, compression {compression}");
+        }
+    }
+}
