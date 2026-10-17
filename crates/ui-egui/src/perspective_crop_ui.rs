@@ -161,9 +161,10 @@ fn size_params(app: &PhotocraftApp, p: &mut Value) {
     let o = &app.ui.tool_options;
     let res = crate::crop_size::resolution_ppi(o);
     let dpi = res.unwrap_or_else(|| app.session.active().map_or(72.0, |st| f64::from(st.doc.resolution_dpi)));
+    let pt_per_in = app.session.prefs().units_and_rulers.point_size.per_inch();
     let px = |text: &str| {
         let (v, u) = crate::crop_size::parse_length(text, Unit::Pixels)?;
-        let px = u.to_px(v, dpi, 0.0, 72.0).round();
+        let px = u.to_px(v, dpi, 0.0, pt_per_in).round();
         (px.is_finite() && px >= 1.0).then_some(px)
     };
     if let Some(w) = px(&o.crop_width) {
