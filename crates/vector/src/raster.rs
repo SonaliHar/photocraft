@@ -13,6 +13,9 @@
 //! exactly.
 
 mod checked;
+#[path = "raster/checked_shape_alpha.rs"]
+mod checked_shape_alpha;
+pub use checked_shape_alpha::CheckedShapeAlpha;
 use photocraft_doc::{FillRule, PathOp};
 use photocraft_geom::Rect;
 
