@@ -1,11 +1,34 @@
 """Regression tests for the overlay auditor's coverage and registration guarantees."""
 import unittest
+import json
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
 from PIL import Image
 from compare_camera_raw import audit_elements
 from capture_camera_raw import ordered_panels
 
 
 class ElementAuditTests(unittest.TestCase):
+    def test_wrong_reference_hash_is_rejected_before_writing_overlay_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.png"
+            Image.new("RGB", (40, 40), "black").save(source)
+            specification = root / "regions.json"
+            specification.write_text(json.dumps({"sourceSha256": "0" * 64, "elements": []}), encoding="utf-8")
+            output = root / "output"
+            result = subprocess.run([sys.executable, str(Path(__file__).with_name("compare_camera_raw.py")),
+                                     "--source", str(source), "--candidate", str(source),
+                                     "--source-rect", "0", "0", "40", "40",
+                                     "--candidate-rect", "0", "0", "40", "40",
+                                     "--width", "40", "--regions", str(specification), "--output", str(output)],
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("SHA256 mismatch", result.stderr)
+            self.assertFalse(output.exists())
+
     def test_capture_order_keeps_the_sections_following_a_scroll_target_together(self):
         order = ["Light", "Color", "Curve", "Color Mixer", "Optics", "Lens Blur", "Calibration"]
         self.assertEqual(ordered_panels(order, "Optics"), ["Optics", "Lens Blur", "Calibration", "Light", "Color", "Curve", "Color Mixer"])

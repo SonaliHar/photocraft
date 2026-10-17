@@ -1,0 +1,950 @@
+{
+  "scope": "Reference2 Save Options dialog: naming, format, metadata, sizing and sharpening. Planned visible UI regions only: native screen not yet captured. Dynamic paths/account/file values are not copied into product code. No individual comparison or parity pass.",
+  "normalizedWidth": 1574,
+  "sourceRect": [
+    0,
+    0,
+    1574,
+    2256
+  ],
+  "sourceSha256": "8ee8a680fa61cd07b0dd7278c72bce46bf2972900a933e89f1e2307aa36c5243",
+  "sourceImage": 2,
+  "elements": [
+    {
+      "id": "window-frame",
+      "rect": [
+        2,
+        4,
+        1554,
+        2236
+      ]
+    },
+    {
+      "id": "title",
+      "rect": [
+        658,
+        10,
+        902,
+        56
+      ]
+    },
+    {
+      "id": "save-button",
+      "rect": [
+        1316,
+        98,
+        1504,
+        166
+      ]
+    },
+    {
+      "id": "cancel-button",
+      "rect": [
+        1316,
+        172,
+        1504,
+        236
+      ]
+    },
+    {
+      "id": "outer-group-frame",
+      "rect": [
+        34,
+        114,
+        1264,
+        2198
+      ]
+    },
+    {
+      "id": "preset-label",
+      "rect": [
+        52,
+        98,
+        152,
+        144
+      ]
+    },
+    {
+      "id": "preset-field",
+      "rect": [
+        152,
+        98,
+        1216,
+        140
+      ]
+    },
+    {
+      "id": "preset-arrow",
+      "rect": [
+        1182,
+        102,
+        1214,
+        138
+      ]
+    },
+    {
+      "id": "destination-group",
+      "rect": [
+        78,
+        196,
+        1222,
+        334
+      ]
+    },
+    {
+      "id": "select-folder",
+      "rect": [
+        114,
+        246,
+        330,
+        298
+      ]
+    },
+    {
+      "id": "destination-path-value",
+      "rect": [
+        348,
+        246,
+        1156,
+        302
+      ]
+    },
+    {
+      "id": "destination-label",
+      "rect": [
+        98,
+        182,
+        246,
+        222
+      ]
+    },
+    {
+      "id": "destination-field",
+      "rect": [
+        246,
+        178,
+        644,
+        226
+      ]
+    },
+    {
+      "id": "destination-arrow",
+      "rect": [
+        610,
+        182,
+        642,
+        224
+      ]
+    },
+    {
+      "id": "naming-group",
+      "rect": [
+        78,
+        366,
+        1222,
+        702
+      ]
+    },
+    {
+      "id": "naming-heading",
+      "rect": [
+        98,
+        348,
+        244,
+        388
+      ]
+    },
+    {
+      "id": "example-label",
+      "rect": [
+        106,
+        390,
+        220,
+        432
+      ]
+    },
+    {
+      "id": "example-value",
+      "rect": [
+        222,
+        390,
+        620,
+        432
+      ]
+    },
+    {
+      "id": "naming-part1-field",
+      "rect": [
+        112,
+        440,
+        612,
+        488
+      ]
+    },
+    {
+      "id": "naming-part1-arrow",
+      "rect": [
+        578,
+        444,
+        610,
+        486
+      ]
+    },
+    {
+      "id": "naming-part2-field",
+      "rect": [
+        654,
+        440,
+        1154,
+        488
+      ]
+    },
+    {
+      "id": "naming-part2-arrow",
+      "rect": [
+        1120,
+        444,
+        1152,
+        486
+      ]
+    },
+    {
+      "id": "naming-part3-field",
+      "rect": [
+        112,
+        502,
+        612,
+        548
+      ]
+    },
+    {
+      "id": "naming-part3-arrow",
+      "rect": [
+        578,
+        506,
+        610,
+        546
+      ]
+    },
+    {
+      "id": "naming-part4-field",
+      "rect": [
+        654,
+        502,
+        1154,
+        548
+      ]
+    },
+    {
+      "id": "naming-part4-arrow",
+      "rect": [
+        1120,
+        506,
+        1152,
+        546
+      ]
+    },
+    {
+      "id": "naming-join1",
+      "rect": [
+        618,
+        440,
+        652,
+        488
+      ]
+    },
+    {
+      "id": "naming-join2",
+      "rect": [
+        1160,
+        440,
+        1192,
+        488
+      ]
+    },
+    {
+      "id": "begin-number-label",
+      "rect": [
+        110,
+        564,
+        318,
+        612
+      ]
+    },
+    {
+      "id": "begin-number-field",
+      "rect": [
+        316,
+        558,
+        480,
+        612
+      ]
+    },
+    {
+      "id": "extension-label",
+      "rect": [
+        148,
+        622,
+        316,
+        668
+      ]
+    },
+    {
+      "id": "extension-field",
+      "rect": [
+        316,
+        620,
+        480,
+        666
+      ]
+    },
+    {
+      "id": "extension-arrow",
+      "rect": [
+        446,
+        624,
+        478,
+        664
+      ]
+    },
+    {
+      "id": "format-group",
+      "rect": [
+        78,
+        740,
+        1222,
+        1080
+      ]
+    },
+    {
+      "id": "format-label",
+      "rect": [
+        96,
+        720,
+        204,
+        766
+      ]
+    },
+    {
+      "id": "format-field",
+      "rect": [
+        202,
+        720,
+        642,
+        766
+      ]
+    },
+    {
+      "id": "format-arrow",
+      "rect": [
+        608,
+        724,
+        640,
+        764
+      ]
+    },
+    {
+      "id": "compatibility-label",
+      "rect": [
+        116,
+        792,
+        290,
+        836
+      ]
+    },
+    {
+      "id": "compatibility-field",
+      "rect": [
+        288,
+        790,
+        788,
+        838
+      ]
+    },
+    {
+      "id": "compatibility-arrow",
+      "rect": [
+        754,
+        794,
+        786,
+        836
+      ]
+    },
+    {
+      "id": "jpeg-preview-label",
+      "rect": [
+        112,
+        854,
+        290,
+        900
+      ]
+    },
+    {
+      "id": "jpeg-preview-field",
+      "rect": [
+        288,
+        852,
+        788,
+        900
+      ]
+    },
+    {
+      "id": "jpeg-preview-arrow",
+      "rect": [
+        754,
+        856,
+        786,
+        898
+      ]
+    },
+    {
+      "id": "fast-load-checkbox",
+      "rect": [
+        114,
+        920,
+        140,
+        946
+      ]
+    },
+    {
+      "id": "fast-load-label",
+      "rect": [
+        148,
+        914,
+        580,
+        954
+      ]
+    },
+    {
+      "id": "lossy-checkbox",
+      "rect": [
+        114,
+        966,
+        140,
+        992
+      ]
+    },
+    {
+      "id": "lossy-label",
+      "rect": [
+        148,
+        960,
+        422,
+        1000
+      ]
+    },
+    {
+      "id": "lossy-count-field",
+      "rect": [
+        422,
+        958,
+        1020,
+        1006
+      ]
+    },
+    {
+      "id": "lossy-count-arrow",
+      "rect": [
+        982,
+        962,
+        1018,
+        1002
+      ]
+    },
+    {
+      "id": "embed-original-checkbox",
+      "rect": [
+        114,
+        1014,
+        140,
+        1040
+      ]
+    },
+    {
+      "id": "embed-original-label",
+      "rect": [
+        148,
+        1008,
+        582,
+        1048
+      ]
+    },
+    {
+      "id": "credentials-group",
+      "rect": [
+        78,
+        1110,
+        1222,
+        1416
+      ]
+    },
+    {
+      "id": "credentials-heading",
+      "rect": [
+        98,
+        1090,
+        368,
+        1132
+      ]
+    },
+    {
+      "id": "apply-credentials-checkbox",
+      "rect": [
+        114,
+        1142,
+        140,
+        1168
+      ]
+    },
+    {
+      "id": "apply-credentials-label",
+      "rect": [
+        148,
+        1136,
+        586,
+        1176
+      ]
+    },
+    {
+      "id": "credentials-storage-label",
+      "rect": [
+        108,
+        1182,
+        300,
+        1230
+      ]
+    },
+    {
+      "id": "credentials-storage-field",
+      "rect": [
+        298,
+        1180,
+        744,
+        1230
+      ]
+    },
+    {
+      "id": "credentials-storage-arrow",
+      "rect": [
+        710,
+        1184,
+        742,
+        1228
+      ]
+    },
+    {
+      "id": "credentials-info-heading",
+      "rect": [
+        108,
+        1234,
+        478,
+        1276
+      ]
+    },
+    {
+      "id": "account-name-checkbox",
+      "rect": [
+        114,
+        1286,
+        140,
+        1312
+      ]
+    },
+    {
+      "id": "account-name-label",
+      "rect": [
+        148,
+        1280,
+        934,
+        1320
+      ]
+    },
+    {
+      "id": "connected-accounts-checkbox",
+      "rect": [
+        114,
+        1324,
+        140,
+        1350
+      ]
+    },
+    {
+      "id": "connected-accounts-label",
+      "rect": [
+        148,
+        1318,
+        718,
+        1358
+      ]
+    },
+    {
+      "id": "edits-activity-checkbox",
+      "rect": [
+        114,
+        1362,
+        140,
+        1388
+      ]
+    },
+    {
+      "id": "edits-activity-label",
+      "rect": [
+        148,
+        1356,
+        510,
+        1396
+      ]
+    },
+    {
+      "id": "color-group",
+      "rect": [
+        78,
+        1446,
+        1222,
+        1728
+      ]
+    },
+    {
+      "id": "color-heading",
+      "rect": [
+        98,
+        1428,
+        254,
+        1472
+      ]
+    },
+    {
+      "id": "hdr-output-checkbox",
+      "rect": [
+        114,
+        1494,
+        140,
+        1520
+      ]
+    },
+    {
+      "id": "hdr-output-label",
+      "rect": [
+        148,
+        1488,
+        398,
+        1528
+      ]
+    },
+    {
+      "id": "compatibility-max-checkbox",
+      "rect": [
+        114,
+        1538,
+        140,
+        1564
+      ]
+    },
+    {
+      "id": "compatibility-max-label",
+      "rect": [
+        148,
+        1532,
+        562,
+        1572
+      ]
+    },
+    {
+      "id": "space-label",
+      "rect": [
+        110,
+        1582,
+        208,
+        1628
+      ]
+    },
+    {
+      "id": "space-field",
+      "rect": [
+        204,
+        1580,
+        752,
+        1628
+      ]
+    },
+    {
+      "id": "space-arrow",
+      "rect": [
+        718,
+        1584,
+        750,
+        1626
+      ]
+    },
+    {
+      "id": "depth-label",
+      "rect": [
+        782,
+        1582,
+        878,
+        1628
+      ]
+    },
+    {
+      "id": "depth-field",
+      "rect": [
+        874,
+        1580,
+        1174,
+        1628
+      ]
+    },
+    {
+      "id": "depth-arrow",
+      "rect": [
+        1140,
+        1584,
+        1172,
+        1626
+      ]
+    },
+    {
+      "id": "intent-label",
+      "rect": [
+        112,
+        1644,
+        208,
+        1690
+      ]
+    },
+    {
+      "id": "intent-field",
+      "rect": [
+        204,
+        1642,
+        752,
+        1690
+      ]
+    },
+    {
+      "id": "intent-arrow",
+      "rect": [
+        718,
+        1646,
+        750,
+        1688
+      ]
+    },
+    {
+      "id": "sizing-group",
+      "rect": [
+        78,
+        1758,
+        1222,
+        2008
+      ]
+    },
+    {
+      "id": "sizing-heading",
+      "rect": [
+        98,
+        1742,
+        280,
+        1786
+      ]
+    },
+    {
+      "id": "resize-fit-checkbox",
+      "rect": [
+        114,
+        1810,
+        140,
+        1836
+      ]
+    },
+    {
+      "id": "resize-fit-label",
+      "rect": [
+        148,
+        1804,
+        306,
+        1844
+      ]
+    },
+    {
+      "id": "resize-mode-field",
+      "rect": [
+        300,
+        1798,
+        822,
+        1850
+      ]
+    },
+    {
+      "id": "resize-mode-arrow",
+      "rect": [
+        782,
+        1802,
+        818,
+        1846
+      ]
+    },
+    {
+      "id": "dont-enlarge-checkbox",
+      "rect": [
+        842,
+        1808,
+        868,
+        1834
+      ]
+    },
+    {
+      "id": "dont-enlarge-label",
+      "rect": [
+        876,
+        1802,
+        1174,
+        1842
+      ]
+    },
+    {
+      "id": "resize-value",
+      "rect": [
+        300,
+        1860,
+        422,
+        1910
+      ]
+    },
+    {
+      "id": "resize-units-field",
+      "rect": [
+        428,
+        1860,
+        820,
+        1910
+      ]
+    },
+    {
+      "id": "resize-units-arrow",
+      "rect": [
+        782,
+        1864,
+        818,
+        1906
+      ]
+    },
+    {
+      "id": "resolution-label",
+      "rect": [
+        164,
+        1924,
+        300,
+        1974
+      ]
+    },
+    {
+      "id": "resolution-value",
+      "rect": [
+        300,
+        1922,
+        422,
+        1974
+      ]
+    },
+    {
+      "id": "resolution-units-field",
+      "rect": [
+        428,
+        1922,
+        820,
+        1974
+      ]
+    },
+    {
+      "id": "resolution-units-arrow",
+      "rect": [
+        782,
+        1926,
+        818,
+        1970
+      ]
+    },
+    {
+      "id": "sharpen-group",
+      "rect": [
+        78,
+        2040,
+        1222,
+        2166
+      ]
+    },
+    {
+      "id": "sharpen-heading",
+      "rect": [
+        98,
+        2026,
+        334,
+        2070
+      ]
+    },
+    {
+      "id": "output-sharpen-checkbox",
+      "rect": [
+        114,
+        2090,
+        140,
+        2116
+      ]
+    },
+    {
+      "id": "output-sharpen-label",
+      "rect": [
+        148,
+        2084,
+        304,
+        2124
+      ]
+    },
+    {
+      "id": "sharpen-medium-field",
+      "rect": [
+        300,
+        2080,
+        736,
+        2130
+      ]
+    },
+    {
+      "id": "sharpen-medium-arrow",
+      "rect": [
+        696,
+        2084,
+        732,
+        2126
+      ]
+    },
+    {
+      "id": "sharpen-amount-label",
+      "rect": [
+        764,
+        2084,
+        882,
+        2134
+      ]
+    },
+    {
+      "id": "sharpen-amount-field",
+      "rect": [
+        874,
+        2080,
+        1174,
+        2130
+      ]
+    },
+    {
+      "id": "sharpen-amount-arrow",
+      "rect": [
+        1134,
+        2084,
+        1170,
+        2126
+      ]
+    }
+  ]
+}

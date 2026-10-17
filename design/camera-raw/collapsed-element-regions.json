@@ -1,5 +1,5 @@
 {
-  "scope": "Current reference 11, all ten collapsed Edit sections. Individual header labels, disclosures, bypass eyes and separators share one full-dock registration. Histogram/metadata and Edit/Profile bars remain separate measurements.",
+  "scope": "Current reference 8, all ten collapsed Edit sections. Individual header labels, disclosures, bypass eyes and separators share one full-dock registration. Histogram/metadata and Edit/Profile bars remain separate measurements.",
   "normalizedWidth": 540,
   "sourceRect": [
     14,
@@ -368,5 +368,7 @@
         1181
       ]
     }
-  ]
+  ],
+  "sourceSha256": "d3d3314bebbe51f53d46cd929bb3cfeb2db3b0b8ae276f1e18feac60da636c7b",
+  "sourceImage": 8
 }

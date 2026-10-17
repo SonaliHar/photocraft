@@ -1,0 +1,761 @@
+{
+  "scope": "Reference9 Crop & Expand: measured visible controls. This is an unaudited specification until the native tab exists; no processing or appearance parity claim.",
+  "normalizedWidth": 540,
+  "sourceRect": [
+    98,
+    432,
+    638,
+    1892
+  ],
+  "sourceSha256": "063a131976b1086ae63823b73962d03f55ea0755895bef0e120d927566a30e83",
+  "sourceImage": 9,
+  "elements": [
+    {
+      "id": "heading",
+      "rect": [
+        35,
+        20,
+        322,
+        64
+      ]
+    },
+    {
+      "id": "crop-overlay-toggle",
+      "rect": [
+        385,
+        16,
+        430,
+        64
+      ]
+    },
+    {
+      "id": "reset",
+      "rect": [
+        439,
+        19,
+        480,
+        63
+      ]
+    },
+    {
+      "id": "expand-checkbox",
+      "rect": [
+        36,
+        91,
+        67,
+        124
+      ]
+    },
+    {
+      "id": "expand-label",
+      "rect": [
+        75,
+        88,
+        333,
+        126
+      ]
+    },
+    {
+      "id": "preset-label",
+      "rect": [
+        36,
+        161,
+        122,
+        203
+      ]
+    },
+    {
+      "id": "preset-field",
+      "rect": [
+        123,
+        160,
+        370,
+        201
+      ]
+    },
+    {
+      "id": "preset-arrow",
+      "rect": [
+        342,
+        169,
+        365,
+        193
+      ]
+    },
+    {
+      "id": "swap-orientation",
+      "rect": [
+        391,
+        162,
+        432,
+        204
+      ]
+    },
+    {
+      "id": "aspect-lock",
+      "rect": [
+        442,
+        162,
+        478,
+        204
+      ]
+    },
+    {
+      "id": "angle-label",
+      "rect": [
+        36,
+        236,
+        138,
+        276
+      ]
+    },
+    {
+      "id": "angle-value",
+      "rect": [
+        317,
+        230,
+        406,
+        270
+      ]
+    },
+    {
+      "id": "angle-track",
+      "rect": [
+        38,
+        275,
+        411,
+        286
+      ]
+    },
+    {
+      "id": "angle-handle",
+      "rect": [
+        204,
+        265,
+        244,
+        301
+      ]
+    },
+    {
+      "id": "angle-level-tool",
+      "rect": [
+        428,
+        245,
+        474,
+        284
+      ]
+    },
+    {
+      "id": "rotation-divider",
+      "rect": [
+        38,
+        310,
+        476,
+        316
+      ]
+    },
+    {
+      "id": "rotate-flip-label",
+      "rect": [
+        36,
+        342,
+        233,
+        383
+      ]
+    },
+    {
+      "id": "rotate-left",
+      "rect": [
+        251,
+        338,
+        293,
+        382
+      ]
+    },
+    {
+      "id": "rotate-right",
+      "rect": [
+        309,
+        338,
+        353,
+        382
+      ]
+    },
+    {
+      "id": "flip-horizontal",
+      "rect": [
+        366,
+        338,
+        413,
+        382
+      ]
+    },
+    {
+      "id": "flip-vertical",
+      "rect": [
+        429,
+        338,
+        476,
+        382
+      ]
+    },
+    {
+      "id": "generative-expand-panel",
+      "rect": [
+        20,
+        406,
+        492,
+        472
+      ]
+    },
+    {
+      "id": "generative-expand-glyph",
+      "rect": [
+        37,
+        418,
+        82,
+        464
+      ]
+    },
+    {
+      "id": "generative-expand-title",
+      "rect": [
+        88,
+        418,
+        340,
+        464
+      ]
+    },
+    {
+      "id": "generative-expand-eye",
+      "rect": [
+        385,
+        424,
+        427,
+        460
+      ]
+    },
+    {
+      "id": "generative-expand-disclosure",
+      "rect": [
+        441,
+        421,
+        480,
+        465
+      ]
+    },
+    {
+      "id": "trim-panel",
+      "rect": [
+        20,
+        482,
+        492,
+        548
+      ]
+    },
+    {
+      "id": "trim-glyph",
+      "rect": [
+        37,
+        494,
+        82,
+        540
+      ]
+    },
+    {
+      "id": "trim-title",
+      "rect": [
+        88,
+        494,
+        340,
+        540
+      ]
+    },
+    {
+      "id": "trim-eye",
+      "rect": [
+        385,
+        500,
+        427,
+        536
+      ]
+    },
+    {
+      "id": "trim-disclosure",
+      "rect": [
+        441,
+        497,
+        480,
+        541
+      ]
+    },
+    {
+      "id": "geometry-panel",
+      "rect": [
+        20,
+        558,
+        492,
+        624
+      ]
+    },
+    {
+      "id": "geometry-glyph",
+      "rect": [
+        37,
+        570,
+        82,
+        616
+      ]
+    },
+    {
+      "id": "geometry-title",
+      "rect": [
+        88,
+        570,
+        340,
+        616
+      ]
+    },
+    {
+      "id": "geometry-eye",
+      "rect": [
+        385,
+        576,
+        427,
+        612
+      ]
+    },
+    {
+      "id": "geometry-disclosure",
+      "rect": [
+        441,
+        573,
+        480,
+        617
+      ]
+    },
+    {
+      "id": "anamorphic-panel",
+      "rect": [
+        20,
+        1352,
+        492,
+        1418
+      ]
+    },
+    {
+      "id": "anamorphic-glyph",
+      "rect": [
+        37,
+        1364,
+        82,
+        1410
+      ]
+    },
+    {
+      "id": "anamorphic-title",
+      "rect": [
+        88,
+        1364,
+        340,
+        1410
+      ]
+    },
+    {
+      "id": "anamorphic-eye",
+      "rect": [
+        385,
+        1370,
+        427,
+        1406
+      ]
+    },
+    {
+      "id": "anamorphic-disclosure",
+      "rect": [
+        441,
+        1367,
+        480,
+        1411
+      ]
+    },
+    {
+      "id": "expand-options",
+      "rect": [
+        385,
+        416,
+        425,
+        458
+      ]
+    },
+    {
+      "id": "upright-off",
+      "rect": [
+        87,
+        646,
+        139,
+        704
+      ]
+    },
+    {
+      "id": "upright-auto",
+      "rect": [
+        145,
+        646,
+        197,
+        704
+      ]
+    },
+    {
+      "id": "upright-level",
+      "rect": [
+        203,
+        646,
+        255,
+        704
+      ]
+    },
+    {
+      "id": "upright-vertical",
+      "rect": [
+        260,
+        646,
+        312,
+        704
+      ]
+    },
+    {
+      "id": "upright-full",
+      "rect": [
+        318,
+        646,
+        370,
+        704
+      ]
+    },
+    {
+      "id": "upright-guided",
+      "rect": [
+        374,
+        646,
+        426,
+        704
+      ]
+    },
+    {
+      "id": "geometry-info-glyph",
+      "rect": [
+        68,
+        729,
+        101,
+        759
+      ]
+    },
+    {
+      "id": "geometry-info-text",
+      "rect": [
+        108,
+        724,
+        453,
+        785
+      ]
+    },
+    {
+      "id": "geometry-divider",
+      "rect": [
+        40,
+        800,
+        472,
+        806
+      ]
+    },
+    {
+      "id": "projection-label",
+      "rect": [
+        42,
+        825,
+        281,
+        867
+      ]
+    },
+    {
+      "id": "projection-value",
+      "rect": [
+        382,
+        825,
+        471,
+        866
+      ]
+    },
+    {
+      "id": "projection-track",
+      "rect": [
+        40,
+        869,
+        474,
+        879
+      ]
+    },
+    {
+      "id": "projection-handle",
+      "rect": [
+        28,
+        859,
+        64,
+        893
+      ]
+    },
+    {
+      "id": "vertical-label",
+      "rect": [
+        42,
+        887,
+        281,
+        929
+      ]
+    },
+    {
+      "id": "vertical-value",
+      "rect": [
+        382,
+        887,
+        471,
+        928
+      ]
+    },
+    {
+      "id": "vertical-track",
+      "rect": [
+        40,
+        931,
+        474,
+        941
+      ]
+    },
+    {
+      "id": "vertical-handle",
+      "rect": [
+        238,
+        921,
+        274,
+        955
+      ]
+    },
+    {
+      "id": "horizontal-label",
+      "rect": [
+        42,
+        949,
+        281,
+        991
+      ]
+    },
+    {
+      "id": "horizontal-value",
+      "rect": [
+        382,
+        949,
+        471,
+        990
+      ]
+    },
+    {
+      "id": "horizontal-track",
+      "rect": [
+        40,
+        993,
+        474,
+        1003
+      ]
+    },
+    {
+      "id": "horizontal-handle",
+      "rect": [
+        238,
+        983,
+        274,
+        1017
+      ]
+    },
+    {
+      "id": "rotate-label",
+      "rect": [
+        42,
+        1011,
+        281,
+        1053
+      ]
+    },
+    {
+      "id": "rotate-value",
+      "rect": [
+        382,
+        1011,
+        471,
+        1052
+      ]
+    },
+    {
+      "id": "rotate-track",
+      "rect": [
+        40,
+        1055,
+        474,
+        1065
+      ]
+    },
+    {
+      "id": "rotate-handle",
+      "rect": [
+        238,
+        1045,
+        274,
+        1079
+      ]
+    },
+    {
+      "id": "aspect-label",
+      "rect": [
+        42,
+        1073,
+        281,
+        1115
+      ]
+    },
+    {
+      "id": "aspect-value",
+      "rect": [
+        382,
+        1073,
+        471,
+        1114
+      ]
+    },
+    {
+      "id": "aspect-track",
+      "rect": [
+        40,
+        1117,
+        474,
+        1127
+      ]
+    },
+    {
+      "id": "aspect-handle",
+      "rect": [
+        238,
+        1107,
+        274,
+        1141
+      ]
+    },
+    {
+      "id": "scale-label",
+      "rect": [
+        42,
+        1135,
+        281,
+        1177
+      ]
+    },
+    {
+      "id": "scale-value",
+      "rect": [
+        382,
+        1135,
+        471,
+        1176
+      ]
+    },
+    {
+      "id": "scale-track",
+      "rect": [
+        40,
+        1179,
+        474,
+        1189
+      ]
+    },
+    {
+      "id": "scale-handle",
+      "rect": [
+        238,
+        1169,
+        274,
+        1203
+      ]
+    },
+    {
+      "id": "offset-x-label",
+      "rect": [
+        42,
+        1197,
+        281,
+        1239
+      ]
+    },
+    {
+      "id": "offset-x-value",
+      "rect": [
+        382,
+        1197,
+        471,
+        1238
+      ]
+    },
+    {
+      "id": "offset-x-track",
+      "rect": [
+        40,
+        1241,
+        474,
+        1251
+      ]
+    },
+    {
+      "id": "offset-x-handle",
+      "rect": [
+        238,
+        1231,
+        274,
+        1265
+      ]
+    },
+    {
+      "id": "offset-y-label",
+      "rect": [
+        42,
+        1259,
+        281,
+        1301
+      ]
+    },
+    {
+      "id": "offset-y-value",
+      "rect": [
+        382,
+        1259,
+        471,
+        1300
+      ]
+    },
+    {
+      "id": "offset-y-track",
+      "rect": [
+        40,
+        1303,
+        474,
+        1313
+      ]
+    },
+    {
+      "id": "offset-y-handle",
+      "rect": [
+        238,
+        1293,
+        274,
+        1327
+      ]
+    }
+  ]
+}

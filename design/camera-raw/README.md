@@ -372,3 +372,99 @@ Fresh interactive comparisons are ref11-collapsed-v8-element-audit,
 ref10-lens-calibration-v8-element-audit, ref9-grading-v8-element-audit,
 ref8-curve-mixer-v8 and ref9-grading-detail-v8. These are incomplete parity evidence,
 not complete reference passes. No desktop build or hosted executable promotion.
+
+### Active 19-reference set and Red Eye panel (2026-10-17)
+
+The goal's reference set is now `004b6ab0-f1b0-4278-a478-4890b6fff1d0`.
+All 19 hashes match the preceding set; image numbering is different. The current
+inventory is authoritative and keeps `previousImage` and `legacyImage`. Current
+images: 1 Info, 2 Save Options, 3 Preferences, 4 Light/Color/Effects, 5 Curve/Mixer,
+6 Grading/Detail, 7 Optics/Lens Blur/Calibration, 8 collapsed Edit, 9 Crop,
+10 Remove, 11 Masking, 12 Red Eye, 13 Snapshots, 14 Presets, 15 Settings menu,
+and 16-19 full-window views. Previous comparison directory numbers are historical.
+
+The native workspace now accepts `preview.tab: "redEye"`. It renders the measured
+header/reset/preview, Type field, Auto, Pupil Size/Darken fields/tracks/handles,
+divider and Overlay checkbox. These controls are unavailable for processing:
+PhotoCraft has an existing click-local engine operation, but Camera Raw does not
+yet replay that operation inside its editable transaction. No working Auto,
+correction or processing-parity claim. Native view navigation must preserve the
+photo recipe, preview revision and history.
+
+Vertical geometry is live under layout JSON `redEye` (height, typeTop, pupilTop,
+darkenTop, dividerTop, overlayTop), with finite, ordered, bounded validation.
+`red-eye-element-regions.json` covers 18 named regions using a single registration:
+source image12 rectangle (28,432)-(568,812), native 2x rectangle
+(2260,360)-(2800,740), normalized width540. No control moves independently.
+
+Initial native capture and element audit are in
+`target/acr18/parity-20261017/native-red-eye-baseline` and
+`ref12-red-eye-baseline`. Requested view/photo invariants passed. Overlay inspection
+identified incorrect bright track gradients, checkbox accent/placement and numeric
+field offsets. Source revisions address these; final validation/recapture pending.
+The baseline is diagnostic evidence, not a parity pass. Six Python auditor tests
+pass, including rejecting a mismatched reference hash before writing evidence.
+All existing region specifications now identify their reference SHA256 as well.
+
+Full every-element/every-reference parity remains incomplete. Missing native tool
+screens/dialogs and shared chrome remain in the inventory; per-element region
+coverage is not full-window coverage. Hosted builds have not been promoted.
+
+Validation/evidence follow-up: nine workspace tests pass, including unavailable
+Red Eye controls and recipe/history invariants. The initial test query matched
+the unrelated toolbar Type button; corrected by selecting the disabled node.
+Native14-state font11 capture passed every requested view/photo invariant.
+`scripts/audit_camera_raw_reference_views.py` generated235 region audits, listing
+all19 references and explicitly recording13 references without individual audits.
+It verifies all source hashes and keeps each panel's fixed registration. It does
+not claim unlisted/shared-element or whole-reference completeness.
+
+JSON panelFontSize11 matches measured reference ink widths: Pupil Size99px,
+Darken71px (previously108/77px). Type/Overlay are within about1px of reference
+widths; offsets still differ. Grading whole-crop error fell from about6.90 to6.74;
+Info from13.36 to13.32 (diagnostic RGB means, not parity scores).
+
+A further Grading footer gap14.5 moves footer rows20px down and reduces that crop's
+RGB mean to about5.05, but also moves the following Detail header20px down. The
+source now adds independent gradingBottomPadding, set13 instead of23, to preserve
+that boundary. This combined correction awaits a rebuilt capture; do not treat
+the footer-only capture as a successful overall change. Final pipeline session
+53266 builds/captures/audits current source and runs workspace/library/clippy/
+layers/wasm gates. Exact source hashes, live handles and next steps are in
+`target/acr18/parity-20261017/active-work.json`. No hosted promotion or full parity.
+
+### Curve/Mixer individual audits and native region strip (2026-10-17)
+
+The preceding Grading padding build was captured in all14 states. Inspection of
+`reference-audit-padding-final` verifies that footer gap14.5 plus bottom padding13
+moves the Grading footer20px down while retaining the Detail boundary. Grading RGB
+mean is about5.05, versus6.74 before; Detail remains7.16. Neither is pixel-identical.
+
+New source specifications measure114 regions in reference4 and98 in reference5.
+The complete current report contains447 named regions. References2,3,9,10,11,14,
+15,16,17,18,19 still have no individual audits. Histogram/metadata/photo values,
+shared rail/footer and unavailable behavior remain unverified even where a region
+is measured. The Curve sub-element graph regions overlap intentionally.
+
+Those overlays exposed a narrow/early Curve graph and absent parametric region
+strip, which also pulled Mixer upward. Source now gives Curve independent
+left/right/bottom padding and selector/graph/strip spacing, all live JSON. The
+three strip handles edit existing curveSplits parameters, remain1percent apart,
+accept drag/arrow keys and reset by double-click. A workspace drag test checks
+60percent after dragging the middle handle,74percent before its75percent neighbor,
+unchanged other parameters and no committed history. Graph painting now uses a
+continuous histogram mesh, square frame, and theme-derived graph/grid/curve ink.
+These source changes await their new native build; do not treat the old Curve
+capture as evidence for them.
+
+White Balance's measured track is7px early in the prior overlay. The source now
+exposes whiteBalanceBottomGap (JSON9.5 instead of hard-coded6 native points) and
+uses the existing chevron glyph. Native recapture must confirm the correction.
+
+The preceding library run passed58 tests and failed the Camera Raw catalog scan
+for missing Not available. Added its cameraRaw translation in all20 catalogs.
+Nine workspace tests passed on the preceding source. Final Curve source uses
+pipeline95549: snapshot,14-state capture,447-region audit and focused tests plus
+clippy/layers/wasm;80389 is its queued check,53266 is the preceding padding gate
+pipeline. Active handles and exact source hashes are in active-work.json. Full
+19-reference/every-element parity remains incomplete. No hosted promotion or push.

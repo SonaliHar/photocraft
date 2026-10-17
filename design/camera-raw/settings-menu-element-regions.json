@@ -1,0 +1,383 @@
+{
+  "scope": "Reference15 Settings menu: enabled/disabled commands and submenus. Planned visible UI regions only: native screen not yet captured. Dynamic paths/account/file values are not copied into product code. No individual comparison or parity pass.",
+  "normalizedWidth": 540,
+  "sourceRect": [
+    18,
+    48,
+    558,
+    1282
+  ],
+  "sourceSha256": "1e5a324963e79927450295c8dfff646fb88a53c85d0c3bb0ef52e388fc4ca8fa",
+  "sourceImage": 15,
+  "elements": [
+    {
+      "id": "menu-frame",
+      "rect": [
+        0,
+        0,
+        540,
+        1234
+      ]
+    },
+    {
+      "id": "reset-open-label",
+      "rect": [
+        26,
+        15,
+        433,
+        59
+      ]
+    },
+    {
+      "id": "reset-default-label",
+      "rect": [
+        26,
+        59,
+        433,
+        103
+      ]
+    },
+    {
+      "id": "previous-settings-label",
+      "rect": [
+        26,
+        124,
+        433,
+        168
+      ]
+    },
+    {
+      "id": "apply-snapshot-label",
+      "rect": [
+        26,
+        168,
+        433,
+        212
+      ]
+    },
+    {
+      "id": "favorite-preset-label",
+      "rect": [
+        26,
+        212,
+        433,
+        256
+      ]
+    },
+    {
+      "id": "create-snapshot-label",
+      "rect": [
+        26,
+        279,
+        433,
+        323
+      ]
+    },
+    {
+      "id": "create-snapshot-shortcut",
+      "rect": [
+        434,
+        280,
+        520,
+        324
+      ]
+    },
+    {
+      "id": "create-preset-label",
+      "rect": [
+        26,
+        323,
+        433,
+        367
+      ]
+    },
+    {
+      "id": "create-preset-shortcut",
+      "rect": [
+        434,
+        324,
+        520,
+        368
+      ]
+    },
+    {
+      "id": "copy-settings-label",
+      "rect": [
+        26,
+        389,
+        433,
+        433
+      ]
+    },
+    {
+      "id": "copy-settings-shortcut",
+      "rect": [
+        434,
+        390,
+        520,
+        434
+      ]
+    },
+    {
+      "id": "copy-selected-label",
+      "rect": [
+        26,
+        433,
+        433,
+        477
+      ]
+    },
+    {
+      "id": "copy-selected-shortcut",
+      "rect": [
+        434,
+        434,
+        520,
+        478
+      ]
+    },
+    {
+      "id": "paste-settings-label",
+      "rect": [
+        26,
+        477,
+        433,
+        521
+      ]
+    },
+    {
+      "id": "paste-settings-shortcut",
+      "rect": [
+        434,
+        478,
+        520,
+        522
+      ]
+    },
+    {
+      "id": "load-settings-label",
+      "rect": [
+        26,
+        543,
+        433,
+        587
+      ]
+    },
+    {
+      "id": "save-settings-label",
+      "rect": [
+        26,
+        587,
+        433,
+        631
+      ]
+    },
+    {
+      "id": "update-ai-label",
+      "rect": [
+        26,
+        653,
+        433,
+        697
+      ]
+    },
+    {
+      "id": "update-ai-shortcut",
+      "rect": [
+        434,
+        654,
+        520,
+        698
+      ]
+    },
+    {
+      "id": "ignore-ai-label",
+      "rect": [
+        26,
+        697,
+        433,
+        741
+      ]
+    },
+    {
+      "id": "flatten-ai-label",
+      "rect": [
+        26,
+        741,
+        433,
+        785
+      ]
+    },
+    {
+      "id": "reset-flattened-label",
+      "rect": [
+        26,
+        785,
+        433,
+        829
+      ]
+    },
+    {
+      "id": "save-image-label",
+      "rect": [
+        26,
+        851,
+        433,
+        895
+      ]
+    },
+    {
+      "id": "save-image-submenu",
+      "rect": [
+        434,
+        852,
+        520,
+        896
+      ]
+    },
+    {
+      "id": "render-dng-label",
+      "rect": [
+        26,
+        917,
+        433,
+        961
+      ]
+    },
+    {
+      "id": "export-xmp-label",
+      "rect": [
+        26,
+        983,
+        433,
+        1027
+      ]
+    },
+    {
+      "id": "update-dng-previews-label",
+      "rect": [
+        26,
+        1049,
+        433,
+        1093
+      ]
+    },
+    {
+      "id": "raw-defaults-label",
+      "rect": [
+        26,
+        1115,
+        433,
+        1159
+      ]
+    },
+    {
+      "id": "ai-downloads-label",
+      "rect": [
+        26,
+        1181,
+        433,
+        1225
+      ]
+    },
+    {
+      "id": "menu-separator-1",
+      "rect": [
+        28,
+        108,
+        513,
+        113
+      ]
+    },
+    {
+      "id": "menu-separator-2",
+      "rect": [
+        28,
+        262,
+        513,
+        267
+      ]
+    },
+    {
+      "id": "menu-separator-3",
+      "rect": [
+        28,
+        372,
+        513,
+        377
+      ]
+    },
+    {
+      "id": "menu-separator-4",
+      "rect": [
+        28,
+        526,
+        513,
+        531
+      ]
+    },
+    {
+      "id": "menu-separator-5",
+      "rect": [
+        28,
+        636,
+        513,
+        641
+      ]
+    },
+    {
+      "id": "menu-separator-6",
+      "rect": [
+        28,
+        834,
+        513,
+        839
+      ]
+    },
+    {
+      "id": "menu-separator-7",
+      "rect": [
+        28,
+        900,
+        513,
+        905
+      ]
+    },
+    {
+      "id": "menu-separator-8",
+      "rect": [
+        28,
+        966,
+        513,
+        971
+      ]
+    },
+    {
+      "id": "menu-separator-9",
+      "rect": [
+        28,
+        1032,
+        513,
+        1037
+      ]
+    },
+    {
+      "id": "menu-separator-10",
+      "rect": [
+        28,
+        1098,
+        513,
+        1103
+      ]
+    },
+    {
+      "id": "menu-separator-11",
+      "rect": [
+        28,
+        1164,
+        513,
+        1169
+      ]
+    }
+  ]
+}

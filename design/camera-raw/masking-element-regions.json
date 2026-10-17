@@ -1,0 +1,329 @@
+{
+  "scope": "Reference11 Masking: visible creation cards, tools, shortcuts, People message and help. Native tab missing; no individual audit or processing parity.",
+  "normalizedWidth": 540,
+  "sourceRect": [
+    34,
+    432,
+    574,
+    1492
+  ],
+  "sourceSha256": "e62a47b721983a5ebb1d378e832683fff74c2db28476840062926451a8e88798",
+  "sourceImage": 11,
+  "elements": [
+    {
+      "id": "heading",
+      "rect": [
+        34,
+        21,
+        365,
+        72
+      ]
+    },
+    {
+      "id": "subject-card",
+      "rect": [
+        55,
+        86,
+        171,
+        204
+      ]
+    },
+    {
+      "id": "subject-glyph",
+      "rect": [
+        82,
+        112,
+        147,
+        179
+      ]
+    },
+    {
+      "id": "subject-label",
+      "rect": [
+        68,
+        207,
+        169,
+        245
+      ]
+    },
+    {
+      "id": "sky-card",
+      "rect": [
+        198,
+        86,
+        314,
+        204
+      ]
+    },
+    {
+      "id": "sky-glyph",
+      "rect": [
+        221,
+        110,
+        289,
+        180
+      ]
+    },
+    {
+      "id": "sky-label",
+      "rect": [
+        229,
+        206,
+        288,
+        245
+      ]
+    },
+    {
+      "id": "background-card",
+      "rect": [
+        340,
+        86,
+        456,
+        204
+      ]
+    },
+    {
+      "id": "background-glyph",
+      "rect": [
+        365,
+        111,
+        435,
+        179
+      ]
+    },
+    {
+      "id": "background-label",
+      "rect": [
+        330,
+        206,
+        469,
+        245
+      ]
+    },
+    {
+      "id": "cards-divider",
+      "rect": [
+        36,
+        263,
+        478,
+        271
+      ]
+    },
+    {
+      "id": "landscape-glyph",
+      "rect": [
+        28,
+        295,
+        78,
+        343
+      ]
+    },
+    {
+      "id": "landscape-label",
+      "rect": [
+        83,
+        295,
+        393,
+        343
+      ]
+    },
+    {
+      "id": "objects-glyph",
+      "rect": [
+        28,
+        363,
+        78,
+        411
+      ]
+    },
+    {
+      "id": "objects-label",
+      "rect": [
+        83,
+        363,
+        393,
+        411
+      ]
+    },
+    {
+      "id": "brush-glyph",
+      "rect": [
+        28,
+        431,
+        78,
+        479
+      ]
+    },
+    {
+      "id": "brush-label",
+      "rect": [
+        83,
+        431,
+        393,
+        479
+      ]
+    },
+    {
+      "id": "linear-gradient-glyph",
+      "rect": [
+        28,
+        499,
+        78,
+        547
+      ]
+    },
+    {
+      "id": "linear-gradient-label",
+      "rect": [
+        83,
+        499,
+        393,
+        547
+      ]
+    },
+    {
+      "id": "radial-gradient-glyph",
+      "rect": [
+        28,
+        567,
+        78,
+        615
+      ]
+    },
+    {
+      "id": "radial-gradient-label",
+      "rect": [
+        83,
+        567,
+        393,
+        615
+      ]
+    },
+    {
+      "id": "range-glyph",
+      "rect": [
+        28,
+        635,
+        78,
+        683
+      ]
+    },
+    {
+      "id": "range-label",
+      "rect": [
+        83,
+        635,
+        393,
+        683
+      ]
+    },
+    {
+      "id": "brush-shortcut",
+      "rect": [
+        436,
+        434,
+        478,
+        476
+      ]
+    },
+    {
+      "id": "linear-gradient-shortcut",
+      "rect": [
+        436,
+        502,
+        478,
+        544
+      ]
+    },
+    {
+      "id": "radial-gradient-shortcut",
+      "rect": [
+        436,
+        570,
+        478,
+        612
+      ]
+    },
+    {
+      "id": "range-menu-indicator",
+      "rect": [
+        154,
+        654,
+        174,
+        677
+      ]
+    },
+    {
+      "id": "tools-divider",
+      "rect": [
+        36,
+        700,
+        478,
+        708
+      ]
+    },
+    {
+      "id": "people-disclosure",
+      "rect": [
+        58,
+        746,
+        89,
+        776
+      ]
+    },
+    {
+      "id": "people-label",
+      "rect": [
+        100,
+        736,
+        243,
+        782
+      ]
+    },
+    {
+      "id": "people-warning-icon",
+      "rect": [
+        57,
+        797,
+        88,
+        833
+      ]
+    },
+    {
+      "id": "people-warning-text",
+      "rect": [
+        102,
+        793,
+        474,
+        855
+      ]
+    },
+    {
+      "id": "help-divider",
+      "rect": [
+        36,
+        910,
+        478,
+        918
+      ]
+    },
+    {
+      "id": "help-icon",
+      "rect": [
+        38,
+        949,
+        78,
+        993
+      ]
+    },
+    {
+      "id": "help-text",
+      "rect": [
+        99,
+        941,
+        474,
+        1000
+      ]
+    }
+  ]
+}

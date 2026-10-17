@@ -1,5 +1,5 @@
 {
-  "scope": "Reference 9 Detail: every visible enhancement, sharpening and manual-noise control. Unsupported enhancement processing is disabled; matching layout does not establish processing parity.",
+  "scope": "reference 6 Detail: every visible enhancement, sharpening and manual-noise control. Unsupported enhancement processing is disabled; matching layout does not establish processing parity.",
   "normalizedWidth": 540,
   "sourceRect": [
     10,
@@ -188,5 +188,7 @@
         454
       ]
     }
-  ]
+  ],
+  "sourceSha256": "2237262f3311ba0b11cc7106587d249a2d57d4fdcbfe45316898527dc3ee6253",
+  "sourceImage": 6
 }

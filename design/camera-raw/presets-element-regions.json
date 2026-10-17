@@ -1,0 +1,806 @@
+{
+  "scope": "Reference14 Presets: visible header, amount, group disclosures/labels and scrollbar. Native tab missing; no preset recipes are copied and no comparison is claimed.",
+  "normalizedWidth": 540,
+  "sourceRect": [
+    26,
+    432,
+    566,
+    2532
+  ],
+  "sourceSha256": "b7cb9423e42a7debc9902a4784161ae4bce306ff026847ea5c801bc51b2a883b",
+  "sourceImage": 14,
+  "elements": [
+    {
+      "id": "heading",
+      "rect": [
+        30,
+        18,
+        281,
+        64
+      ]
+    },
+    {
+      "id": "create-preset",
+      "rect": [
+        407,
+        18,
+        439,
+        57
+      ]
+    },
+    {
+      "id": "settings-menu",
+      "rect": [
+        455,
+        18,
+        493,
+        56
+      ]
+    },
+    {
+      "id": "heading-divider",
+      "rect": [
+        0,
+        74,
+        540,
+        79
+      ]
+    },
+    {
+      "id": "amount-preset-label",
+      "rect": [
+        21,
+        97,
+        212,
+        137
+      ]
+    },
+    {
+      "id": "amount-value",
+      "rect": [
+        421,
+        91,
+        509,
+        135
+      ]
+    },
+    {
+      "id": "amount-track",
+      "rect": [
+        16,
+        135,
+        513,
+        149
+      ]
+    },
+    {
+      "id": "amount-divider",
+      "rect": [
+        0,
+        173,
+        540,
+        179
+      ]
+    },
+    {
+      "id": "list-scrollbar",
+      "rect": [
+        511,
+        181,
+        540,
+        1980
+      ]
+    },
+    {
+      "id": "adaptive-portrait-disclosure",
+      "rect": [
+        8,
+        194,
+        37,
+        230
+      ]
+    },
+    {
+      "id": "adaptive-portrait-label",
+      "rect": [
+        39,
+        193,
+        501,
+        233
+      ]
+    },
+    {
+      "id": "adaptive-sky-disclosure",
+      "rect": [
+        8,
+        242,
+        37,
+        278
+      ]
+    },
+    {
+      "id": "adaptive-sky-label",
+      "rect": [
+        39,
+        241,
+        501,
+        281
+      ]
+    },
+    {
+      "id": "adaptive-subject-disclosure",
+      "rect": [
+        8,
+        290,
+        37,
+        326
+      ]
+    },
+    {
+      "id": "adaptive-subject-label",
+      "rect": [
+        39,
+        289,
+        501,
+        329
+      ]
+    },
+    {
+      "id": "adaptive-landscape-disclosure",
+      "rect": [
+        8,
+        338,
+        37,
+        374
+      ]
+    },
+    {
+      "id": "adaptive-landscape-label",
+      "rect": [
+        39,
+        337,
+        501,
+        377
+      ]
+    },
+    {
+      "id": "adaptive-blur-background-disclosure",
+      "rect": [
+        8,
+        386,
+        37,
+        422
+      ]
+    },
+    {
+      "id": "adaptive-blur-background-label",
+      "rect": [
+        39,
+        385,
+        501,
+        425
+      ]
+    },
+    {
+      "id": "portraits-deep-skin-disclosure",
+      "rect": [
+        8,
+        434,
+        37,
+        470
+      ]
+    },
+    {
+      "id": "portraits-deep-skin-label",
+      "rect": [
+        39,
+        433,
+        501,
+        473
+      ]
+    },
+    {
+      "id": "portraits-medium-skin-disclosure",
+      "rect": [
+        8,
+        482,
+        37,
+        518
+      ]
+    },
+    {
+      "id": "portraits-medium-skin-label",
+      "rect": [
+        39,
+        481,
+        501,
+        521
+      ]
+    },
+    {
+      "id": "portraits-light-skin-disclosure",
+      "rect": [
+        8,
+        530,
+        37,
+        566
+      ]
+    },
+    {
+      "id": "portraits-light-skin-label",
+      "rect": [
+        39,
+        529,
+        501,
+        569
+      ]
+    },
+    {
+      "id": "portraits-bw-disclosure",
+      "rect": [
+        8,
+        578,
+        37,
+        614
+      ]
+    },
+    {
+      "id": "portraits-bw-label",
+      "rect": [
+        39,
+        577,
+        501,
+        617
+      ]
+    },
+    {
+      "id": "portraits-edgy-disclosure",
+      "rect": [
+        8,
+        626,
+        37,
+        662
+      ]
+    },
+    {
+      "id": "portraits-edgy-label",
+      "rect": [
+        39,
+        625,
+        501,
+        665
+      ]
+    },
+    {
+      "id": "portraits-group-disclosure",
+      "rect": [
+        8,
+        674,
+        37,
+        710
+      ]
+    },
+    {
+      "id": "portraits-group-label",
+      "rect": [
+        39,
+        673,
+        501,
+        713
+      ]
+    },
+    {
+      "id": "auto-retro-disclosure",
+      "rect": [
+        8,
+        722,
+        37,
+        758
+      ]
+    },
+    {
+      "id": "auto-retro-label",
+      "rect": [
+        39,
+        721,
+        501,
+        761
+      ]
+    },
+    {
+      "id": "seasons-spring-disclosure",
+      "rect": [
+        8,
+        770,
+        37,
+        806
+      ]
+    },
+    {
+      "id": "seasons-spring-label",
+      "rect": [
+        39,
+        769,
+        501,
+        809
+      ]
+    },
+    {
+      "id": "seasons-summer-disclosure",
+      "rect": [
+        8,
+        818,
+        37,
+        854
+      ]
+    },
+    {
+      "id": "seasons-summer-label",
+      "rect": [
+        39,
+        817,
+        501,
+        857
+      ]
+    },
+    {
+      "id": "seasons-autumn-disclosure",
+      "rect": [
+        8,
+        866,
+        37,
+        902
+      ]
+    },
+    {
+      "id": "seasons-autumn-label",
+      "rect": [
+        39,
+        865,
+        501,
+        905
+      ]
+    },
+    {
+      "id": "seasons-winter-disclosure",
+      "rect": [
+        8,
+        914,
+        37,
+        950
+      ]
+    },
+    {
+      "id": "seasons-winter-label",
+      "rect": [
+        39,
+        913,
+        501,
+        953
+      ]
+    },
+    {
+      "id": "style-bw-disclosure",
+      "rect": [
+        8,
+        962,
+        37,
+        998
+      ]
+    },
+    {
+      "id": "style-bw-label",
+      "rect": [
+        39,
+        961,
+        501,
+        1001
+      ]
+    },
+    {
+      "id": "style-cinematic-disclosure",
+      "rect": [
+        8,
+        1010,
+        37,
+        1046
+      ]
+    },
+    {
+      "id": "style-cinematic-label",
+      "rect": [
+        39,
+        1009,
+        501,
+        1049
+      ]
+    },
+    {
+      "id": "style-cinematic-ii-disclosure",
+      "rect": [
+        8,
+        1058,
+        37,
+        1094
+      ]
+    },
+    {
+      "id": "style-cinematic-ii-label",
+      "rect": [
+        39,
+        1057,
+        501,
+        1097
+      ]
+    },
+    {
+      "id": "style-film-inspired-disclosure",
+      "rect": [
+        8,
+        1106,
+        37,
+        1142
+      ]
+    },
+    {
+      "id": "style-film-inspired-label",
+      "rect": [
+        39,
+        1105,
+        501,
+        1145
+      ]
+    },
+    {
+      "id": "style-futuristic-disclosure",
+      "rect": [
+        8,
+        1154,
+        37,
+        1190
+      ]
+    },
+    {
+      "id": "style-futuristic-label",
+      "rect": [
+        39,
+        1153,
+        501,
+        1193
+      ]
+    },
+    {
+      "id": "style-vintage-disclosure",
+      "rect": [
+        8,
+        1202,
+        37,
+        1238
+      ]
+    },
+    {
+      "id": "style-vintage-label",
+      "rect": [
+        39,
+        1201,
+        501,
+        1241
+      ]
+    },
+    {
+      "id": "subject-concerts-disclosure",
+      "rect": [
+        8,
+        1250,
+        37,
+        1286
+      ]
+    },
+    {
+      "id": "subject-concerts-label",
+      "rect": [
+        39,
+        1249,
+        501,
+        1289
+      ]
+    },
+    {
+      "id": "subject-food-disclosure",
+      "rect": [
+        8,
+        1298,
+        37,
+        1334
+      ]
+    },
+    {
+      "id": "subject-food-label",
+      "rect": [
+        39,
+        1297,
+        501,
+        1337
+      ]
+    },
+    {
+      "id": "subject-landscape-disclosure",
+      "rect": [
+        8,
+        1346,
+        37,
+        1382
+      ]
+    },
+    {
+      "id": "subject-landscape-label",
+      "rect": [
+        39,
+        1345,
+        501,
+        1385
+      ]
+    },
+    {
+      "id": "subject-lifestyle-disclosure",
+      "rect": [
+        8,
+        1394,
+        37,
+        1430
+      ]
+    },
+    {
+      "id": "subject-lifestyle-label",
+      "rect": [
+        39,
+        1393,
+        501,
+        1433
+      ]
+    },
+    {
+      "id": "subject-travel-disclosure",
+      "rect": [
+        8,
+        1442,
+        37,
+        1478
+      ]
+    },
+    {
+      "id": "subject-travel-label",
+      "rect": [
+        39,
+        1441,
+        501,
+        1481
+      ]
+    },
+    {
+      "id": "subject-travel-ii-disclosure",
+      "rect": [
+        8,
+        1490,
+        37,
+        1526
+      ]
+    },
+    {
+      "id": "subject-travel-ii-label",
+      "rect": [
+        39,
+        1489,
+        501,
+        1529
+      ]
+    },
+    {
+      "id": "subject-urban-architecture-disclosure",
+      "rect": [
+        8,
+        1538,
+        37,
+        1574
+      ]
+    },
+    {
+      "id": "subject-urban-architecture-label",
+      "rect": [
+        39,
+        1537,
+        501,
+        1577
+      ]
+    },
+    {
+      "id": "video-creative-disclosure",
+      "rect": [
+        8,
+        1586,
+        37,
+        1622
+      ]
+    },
+    {
+      "id": "video-creative-label",
+      "rect": [
+        39,
+        1585,
+        501,
+        1625
+      ]
+    },
+    {
+      "id": "adaptive-style-divider",
+      "rect": [
+        0,
+        1649,
+        511,
+        1656
+      ]
+    },
+    {
+      "id": "color-disclosure",
+      "rect": [
+        8,
+        1674,
+        37,
+        1710
+      ]
+    },
+    {
+      "id": "color-label",
+      "rect": [
+        39,
+        1673,
+        501,
+        1713
+      ]
+    },
+    {
+      "id": "creative-disclosure",
+      "rect": [
+        8,
+        1722,
+        37,
+        1758
+      ]
+    },
+    {
+      "id": "creative-label",
+      "rect": [
+        39,
+        1721,
+        501,
+        1761
+      ]
+    },
+    {
+      "id": "bw-disclosure",
+      "rect": [
+        8,
+        1770,
+        37,
+        1806
+      ]
+    },
+    {
+      "id": "bw-label",
+      "rect": [
+        39,
+        1769,
+        501,
+        1809
+      ]
+    },
+    {
+      "id": "portraits-disclosure",
+      "rect": [
+        8,
+        1818,
+        37,
+        1854
+      ]
+    },
+    {
+      "id": "portraits-label",
+      "rect": [
+        39,
+        1817,
+        501,
+        1857
+      ]
+    },
+    {
+      "id": "defaults-disclosure",
+      "rect": [
+        8,
+        1900,
+        37,
+        1936
+      ]
+    },
+    {
+      "id": "defaults-label",
+      "rect": [
+        39,
+        1899,
+        501,
+        1939
+      ]
+    },
+    {
+      "id": "curve-disclosure",
+      "rect": [
+        8,
+        1980,
+        37,
+        2016
+      ]
+    },
+    {
+      "id": "curve-label",
+      "rect": [
+        39,
+        1979,
+        501,
+        2019
+      ]
+    },
+    {
+      "id": "grain-disclosure",
+      "rect": [
+        8,
+        2028,
+        37,
+        2064
+      ]
+    },
+    {
+      "id": "grain-label",
+      "rect": [
+        39,
+        2027,
+        501,
+        2067
+      ]
+    },
+    {
+      "id": "optics-disclosure",
+      "rect": [
+        8,
+        2076,
+        37,
+        2100
+      ]
+    },
+    {
+      "id": "optics-label",
+      "rect": [
+        39,
+        2075,
+        501,
+        2100
+      ]
+    },
+    {
+      "id": "portraits-divider",
+      "rect": [
+        0,
+        1876,
+        511,
+        1882
+      ]
+    },
+    {
+      "id": "defaults-divider",
+      "rect": [
+        0,
+        1958,
+        511,
+        1965
+      ]
+    }
+  ]
+}

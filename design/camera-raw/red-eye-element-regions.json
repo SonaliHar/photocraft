@@ -1,0 +1,175 @@
+{
+  "scope": "Reference 12 Red Eye: header, Type dropdown, Auto, pupil/darken labels, values, tracks and handles, divider and Overlay checkbox. Processing unavailable in the Camera Raw transaction; no processing parity claim.",
+  "normalizedWidth": 540,
+  "sourceRect": [
+    28,
+    432,
+    568,
+    812
+  ],
+  "sourceSha256": "550d4cc3503e749be1153cc667cd7cb21d58e4a875fe5d3cc0e9f64e6411883c",
+  "elements": [
+    {
+      "id": "heading",
+      "rect": [
+        38,
+        26,
+        205,
+        66
+      ]
+    },
+    {
+      "id": "reset",
+      "rect": [
+        402,
+        26,
+        435,
+        66
+      ]
+    },
+    {
+      "id": "preview-eye",
+      "rect": [
+        468,
+        26,
+        504,
+        66
+      ]
+    },
+    {
+      "id": "type-label",
+      "rect": [
+        46,
+        87,
+        103,
+        118
+      ]
+    },
+    {
+      "id": "type-field",
+      "rect": [
+        106,
+        81,
+        331,
+        124
+      ]
+    },
+    {
+      "id": "type-arrow",
+      "rect": [
+        305,
+        92,
+        326,
+        112
+      ]
+    },
+    {
+      "id": "auto-button",
+      "rect": [
+        401,
+        81,
+        505,
+        124
+      ]
+    },
+    {
+      "id": "pupil-label",
+      "rect": [
+        45,
+        145,
+        201,
+        179
+      ]
+    },
+    {
+      "id": "pupil-value",
+      "rect": [
+        407,
+        142,
+        493,
+        180
+      ]
+    },
+    {
+      "id": "pupil-track",
+      "rect": [
+        42,
+        184,
+        495,
+        196
+      ]
+    },
+    {
+      "id": "pupil-handle",
+      "rect": [
+        251,
+        174,
+        285,
+        202
+      ]
+    },
+    {
+      "id": "darken-label",
+      "rect": [
+        45,
+        213,
+        171,
+        246
+      ]
+    },
+    {
+      "id": "darken-value",
+      "rect": [
+        407,
+        210,
+        493,
+        248
+      ]
+    },
+    {
+      "id": "darken-track",
+      "rect": [
+        42,
+        253,
+        495,
+        265
+      ]
+    },
+    {
+      "id": "darken-handle",
+      "rect": [
+        251,
+        243,
+        285,
+        270
+      ]
+    },
+    {
+      "id": "divider",
+      "rect": [
+        30,
+        291,
+        506,
+        296
+      ]
+    },
+    {
+      "id": "overlay-checkbox",
+      "rect": [
+        36,
+        319,
+        73,
+        353
+      ]
+    },
+    {
+      "id": "overlay-label",
+      "rect": [
+        75,
+        319,
+        185,
+        354
+      ]
+    }
+  ]
+}

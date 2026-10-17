@@ -1,0 +1,1040 @@
+{
+  "scope": "Reference 4: individual dock/header, Light, Color, Effects and partial Curve elements. Histogram/photo/metadata content differences remain; rail/footer and unavailable Glow processing are not parity-verified.",
+  "normalizedWidth": 540,
+  "sourceRect": [
+    38,
+    136,
+    578,
+    2542
+  ],
+  "sourceSha256": "3aeac1826ea3edc00d99a98b82c963ed6274aa4a24151632f65d647b9380dd29",
+  "sourceImage": 4,
+  "elements": [
+    {
+      "id": "histogram-border",
+      "rect": [
+        0,
+        0,
+        540,
+        247
+      ]
+    },
+    {
+      "id": "histogram-rgb-curves",
+      "rect": [
+        4,
+        12,
+        536,
+        244
+      ]
+    },
+    {
+      "id": "shadow-clipping",
+      "rect": [
+        0,
+        0,
+        40,
+        40
+      ]
+    },
+    {
+      "id": "highlight-clipping",
+      "rect": [
+        502,
+        0,
+        540,
+        40
+      ]
+    },
+    {
+      "id": "metadata-iso",
+      "rect": [
+        35,
+        249,
+        158,
+        294
+      ]
+    },
+    {
+      "id": "metadata-focal-length",
+      "rect": [
+        175,
+        249,
+        358,
+        294
+      ]
+    },
+    {
+      "id": "metadata-aperture",
+      "rect": [
+        360,
+        249,
+        427,
+        294
+      ]
+    },
+    {
+      "id": "metadata-exposure",
+      "rect": [
+        437,
+        249,
+        538,
+        294
+      ]
+    },
+    {
+      "id": "metadata-divider",
+      "rect": [
+        0,
+        295,
+        510,
+        301
+      ]
+    },
+    {
+      "id": "edit-heading",
+      "rect": [
+        38,
+        319,
+        170,
+        371
+      ]
+    },
+    {
+      "id": "auto-button",
+      "rect": [
+        252,
+        317,
+        326,
+        367
+      ]
+    },
+    {
+      "id": "bw-button",
+      "rect": [
+        330,
+        317,
+        412,
+        367
+      ]
+    },
+    {
+      "id": "hdr-button",
+      "rect": [
+        420,
+        317,
+        487,
+        367
+      ]
+    },
+    {
+      "id": "edit-divider",
+      "rect": [
+        0,
+        375,
+        510,
+        381
+      ]
+    },
+    {
+      "id": "profile-label",
+      "rect": [
+        39,
+        400,
+        125,
+        449
+      ]
+    },
+    {
+      "id": "profile-field",
+      "rect": [
+        126,
+        398,
+        407,
+        447
+      ]
+    },
+    {
+      "id": "profile-arrow",
+      "rect": [
+        377,
+        410,
+        403,
+        439
+      ]
+    },
+    {
+      "id": "profile-browser",
+      "rect": [
+        438,
+        407,
+        489,
+        452
+      ]
+    },
+    {
+      "id": "light-divider",
+      "rect": [
+        0,
+        456,
+        510,
+        461
+      ]
+    },
+    {
+      "id": "light-disclosure",
+      "rect": [
+        34,
+        478,
+        69,
+        514
+      ]
+    },
+    {
+      "id": "light-title",
+      "rect": [
+        80,
+        474,
+        330,
+        521
+      ]
+    },
+    {
+      "id": "light-eye",
+      "rect": [
+        455,
+        478,
+        495,
+        518
+      ]
+    },
+    {
+      "id": "exposure-label",
+      "rect": [
+        42,
+        538,
+        280,
+        580
+      ]
+    },
+    {
+      "id": "exposure-value",
+      "rect": [
+        382,
+        538,
+        472,
+        580
+      ]
+    },
+    {
+      "id": "exposure-track",
+      "rect": [
+        40,
+        582,
+        474,
+        593
+      ]
+    },
+    {
+      "id": "exposure-handle",
+      "rect": [
+        240,
+        572,
+        276,
+        606
+      ]
+    },
+    {
+      "id": "contrast-label",
+      "rect": [
+        42,
+        600,
+        280,
+        642
+      ]
+    },
+    {
+      "id": "contrast-value",
+      "rect": [
+        382,
+        600,
+        472,
+        642
+      ]
+    },
+    {
+      "id": "contrast-track",
+      "rect": [
+        40,
+        644,
+        474,
+        655
+      ]
+    },
+    {
+      "id": "contrast-handle",
+      "rect": [
+        240,
+        634,
+        276,
+        668
+      ]
+    },
+    {
+      "id": "highlights-label",
+      "rect": [
+        42,
+        662,
+        280,
+        704
+      ]
+    },
+    {
+      "id": "highlights-value",
+      "rect": [
+        382,
+        662,
+        472,
+        704
+      ]
+    },
+    {
+      "id": "highlights-track",
+      "rect": [
+        40,
+        706,
+        474,
+        717
+      ]
+    },
+    {
+      "id": "highlights-handle",
+      "rect": [
+        240,
+        696,
+        276,
+        730
+      ]
+    },
+    {
+      "id": "shadows-label",
+      "rect": [
+        42,
+        724,
+        280,
+        766
+      ]
+    },
+    {
+      "id": "shadows-value",
+      "rect": [
+        382,
+        724,
+        472,
+        766
+      ]
+    },
+    {
+      "id": "shadows-track",
+      "rect": [
+        40,
+        768,
+        474,
+        779
+      ]
+    },
+    {
+      "id": "shadows-handle",
+      "rect": [
+        240,
+        758,
+        276,
+        792
+      ]
+    },
+    {
+      "id": "whites-label",
+      "rect": [
+        42,
+        786,
+        280,
+        828
+      ]
+    },
+    {
+      "id": "whites-value",
+      "rect": [
+        382,
+        786,
+        472,
+        828
+      ]
+    },
+    {
+      "id": "whites-track",
+      "rect": [
+        40,
+        830,
+        474,
+        841
+      ]
+    },
+    {
+      "id": "whites-handle",
+      "rect": [
+        240,
+        820,
+        276,
+        854
+      ]
+    },
+    {
+      "id": "blacks-label",
+      "rect": [
+        42,
+        848,
+        280,
+        890
+      ]
+    },
+    {
+      "id": "blacks-value",
+      "rect": [
+        382,
+        848,
+        472,
+        890
+      ]
+    },
+    {
+      "id": "blacks-track",
+      "rect": [
+        40,
+        892,
+        474,
+        903
+      ]
+    },
+    {
+      "id": "blacks-handle",
+      "rect": [
+        240,
+        882,
+        276,
+        916
+      ]
+    },
+    {
+      "id": "color-divider",
+      "rect": [
+        0,
+        954,
+        510,
+        959
+      ]
+    },
+    {
+      "id": "color-disclosure",
+      "rect": [
+        34,
+        976,
+        69,
+        1012
+      ]
+    },
+    {
+      "id": "color-title",
+      "rect": [
+        80,
+        972,
+        330,
+        1019
+      ]
+    },
+    {
+      "id": "color-eye",
+      "rect": [
+        455,
+        976,
+        495,
+        1016
+      ]
+    },
+    {
+      "id": "white-balance-label",
+      "rect": [
+        40,
+        1050,
+        209,
+        1097
+      ]
+    },
+    {
+      "id": "white-balance-field",
+      "rect": [
+        205,
+        1036,
+        413,
+        1083
+      ]
+    },
+    {
+      "id": "white-balance-arrow",
+      "rect": [
+        380,
+        1046,
+        407,
+        1073
+      ]
+    },
+    {
+      "id": "white-balance-picker",
+      "rect": [
+        430,
+        1035,
+        479,
+        1086
+      ]
+    },
+    {
+      "id": "temperature-label",
+      "rect": [
+        42,
+        1105,
+        280,
+        1147
+      ]
+    },
+    {
+      "id": "temperature-value",
+      "rect": [
+        382,
+        1105,
+        472,
+        1147
+      ]
+    },
+    {
+      "id": "temperature-track",
+      "rect": [
+        40,
+        1149,
+        474,
+        1160
+      ]
+    },
+    {
+      "id": "temperature-handle",
+      "rect": [
+        198,
+        1139,
+        234,
+        1173
+      ]
+    },
+    {
+      "id": "tint-label",
+      "rect": [
+        42,
+        1165,
+        280,
+        1207
+      ]
+    },
+    {
+      "id": "tint-value",
+      "rect": [
+        382,
+        1165,
+        472,
+        1207
+      ]
+    },
+    {
+      "id": "tint-track",
+      "rect": [
+        40,
+        1209,
+        474,
+        1220
+      ]
+    },
+    {
+      "id": "tint-handle",
+      "rect": [
+        212,
+        1199,
+        248,
+        1233
+      ]
+    },
+    {
+      "id": "vibrance-label",
+      "rect": [
+        42,
+        1226,
+        280,
+        1268
+      ]
+    },
+    {
+      "id": "vibrance-value",
+      "rect": [
+        382,
+        1226,
+        472,
+        1268
+      ]
+    },
+    {
+      "id": "vibrance-track",
+      "rect": [
+        40,
+        1270,
+        474,
+        1281
+      ]
+    },
+    {
+      "id": "vibrance-handle",
+      "rect": [
+        240,
+        1260,
+        276,
+        1294
+      ]
+    },
+    {
+      "id": "saturation-label",
+      "rect": [
+        42,
+        1288,
+        280,
+        1330
+      ]
+    },
+    {
+      "id": "saturation-value",
+      "rect": [
+        382,
+        1288,
+        472,
+        1330
+      ]
+    },
+    {
+      "id": "saturation-track",
+      "rect": [
+        40,
+        1332,
+        474,
+        1343
+      ]
+    },
+    {
+      "id": "saturation-handle",
+      "rect": [
+        240,
+        1322,
+        276,
+        1356
+      ]
+    },
+    {
+      "id": "effects-divider",
+      "rect": [
+        0,
+        1374,
+        510,
+        1379
+      ]
+    },
+    {
+      "id": "effects-disclosure",
+      "rect": [
+        34,
+        1396,
+        69,
+        1432
+      ]
+    },
+    {
+      "id": "effects-title",
+      "rect": [
+        80,
+        1392,
+        330,
+        1439
+      ]
+    },
+    {
+      "id": "effects-eye",
+      "rect": [
+        455,
+        1396,
+        495,
+        1436
+      ]
+    },
+    {
+      "id": "texture-label",
+      "rect": [
+        42,
+        1452,
+        280,
+        1494
+      ]
+    },
+    {
+      "id": "texture-value",
+      "rect": [
+        382,
+        1452,
+        472,
+        1494
+      ]
+    },
+    {
+      "id": "texture-track",
+      "rect": [
+        40,
+        1496,
+        474,
+        1507
+      ]
+    },
+    {
+      "id": "texture-handle",
+      "rect": [
+        240,
+        1486,
+        276,
+        1520
+      ]
+    },
+    {
+      "id": "clarity-label",
+      "rect": [
+        42,
+        1514,
+        280,
+        1556
+      ]
+    },
+    {
+      "id": "clarity-value",
+      "rect": [
+        382,
+        1514,
+        472,
+        1556
+      ]
+    },
+    {
+      "id": "clarity-track",
+      "rect": [
+        40,
+        1558,
+        474,
+        1569
+      ]
+    },
+    {
+      "id": "clarity-handle",
+      "rect": [
+        240,
+        1548,
+        276,
+        1582
+      ]
+    },
+    {
+      "id": "dehaze-label",
+      "rect": [
+        42,
+        1576,
+        280,
+        1618
+      ]
+    },
+    {
+      "id": "dehaze-value",
+      "rect": [
+        382,
+        1576,
+        472,
+        1618
+      ]
+    },
+    {
+      "id": "dehaze-track",
+      "rect": [
+        40,
+        1620,
+        474,
+        1631
+      ]
+    },
+    {
+      "id": "dehaze-handle",
+      "rect": [
+        240,
+        1610,
+        276,
+        1644
+      ]
+    },
+    {
+      "id": "vignette-label",
+      "rect": [
+        42,
+        1646,
+        280,
+        1688
+      ]
+    },
+    {
+      "id": "vignette-value",
+      "rect": [
+        344,
+        1646,
+        433,
+        1688
+      ]
+    },
+    {
+      "id": "vignette-track",
+      "rect": [
+        40,
+        1690,
+        474,
+        1701
+      ]
+    },
+    {
+      "id": "vignette-handle",
+      "rect": [
+        240,
+        1680,
+        276,
+        1714
+      ]
+    },
+    {
+      "id": "vignette-disclosure",
+      "rect": [
+        448,
+        1655,
+        484,
+        1685
+      ]
+    },
+    {
+      "id": "grain-label",
+      "rect": [
+        42,
+        1716,
+        280,
+        1758
+      ]
+    },
+    {
+      "id": "grain-value",
+      "rect": [
+        344,
+        1716,
+        433,
+        1758
+      ]
+    },
+    {
+      "id": "grain-track",
+      "rect": [
+        40,
+        1760,
+        474,
+        1771
+      ]
+    },
+    {
+      "id": "grain-handle",
+      "rect": [
+        28,
+        1750,
+        64,
+        1784
+      ]
+    },
+    {
+      "id": "grain-disclosure",
+      "rect": [
+        448,
+        1725,
+        484,
+        1755
+      ]
+    },
+    {
+      "id": "glow-label",
+      "rect": [
+        42,
+        1786,
+        280,
+        1828
+      ]
+    },
+    {
+      "id": "glow-value",
+      "rect": [
+        344,
+        1786,
+        433,
+        1828
+      ]
+    },
+    {
+      "id": "glow-track",
+      "rect": [
+        40,
+        1830,
+        474,
+        1841
+      ]
+    },
+    {
+      "id": "glow-handle",
+      "rect": [
+        28,
+        1820,
+        64,
+        1854
+      ]
+    },
+    {
+      "id": "glow-disclosure",
+      "rect": [
+        448,
+        1795,
+        484,
+        1825
+      ]
+    },
+    {
+      "id": "curve-divider",
+      "rect": [
+        0,
+        1872,
+        510,
+        1877
+      ]
+    },
+    {
+      "id": "curve-disclosure",
+      "rect": [
+        34,
+        1894,
+        69,
+        1930
+      ]
+    },
+    {
+      "id": "curve-title",
+      "rect": [
+        80,
+        1890,
+        330,
+        1937
+      ]
+    },
+    {
+      "id": "curve-eye",
+      "rect": [
+        455,
+        1894,
+        495,
+        1934
+      ]
+    },
+    {
+      "id": "curve-adjust-label",
+      "rect": [
+        24,
+        1953,
+        106,
+        2001
+      ]
+    },
+    {
+      "id": "curve-parametric",
+      "rect": [
+        108,
+        1945,
+        155,
+        2003
+      ]
+    },
+    {
+      "id": "curve-master",
+      "rect": [
+        164,
+        1947,
+        211,
+        2003
+      ]
+    },
+    {
+      "id": "curve-red",
+      "rect": [
+        216,
+        1947,
+        263,
+        2003
+      ]
+    },
+    {
+      "id": "curve-green",
+      "rect": [
+        268,
+        1947,
+        315,
+        2003
+      ]
+    },
+    {
+      "id": "curve-blue",
+      "rect": [
+        320,
+        1947,
+        367,
+        2003
+      ]
+    },
+    {
+      "id": "curve-target",
+      "rect": [
+        437,
+        1943,
+        490,
+        2005
+      ]
+    },
+    {
+      "id": "curve-graph",
+      "rect": [
+        34,
+        2031,
+        481,
+        2406
+      ]
+    },
+    {
+      "id": "settings-scrollbar",
+      "rect": [
+        512,
+        305,
+        540,
+        1635
+      ]
+    }
+  ]
+}

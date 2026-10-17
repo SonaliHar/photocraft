@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default, deny_unknown_fields)]
 pub struct Design {
+    pub red_eye: crate::camera_raw_ui::tool_panels::RedEyeDesign,
     pub panel_width: f32,
     pub rail_width: f32,
     pub header_height: f32,
@@ -84,6 +85,7 @@ pub struct Design {
     pub grading_selector_start: f32,
     pub grading_selector_bottom_gap: f32,
     pub grading_footer_gap: f32,
+    pub grading_bottom_padding: f32,
     pub disclosure_button_size: f32,
     pub disclosure_button_gap: f32,
     pub navigation_control_height: f32,
@@ -106,7 +108,16 @@ pub struct Design {
     pub title_action_gap: f32,
     pub curve_selector_size: f32,
     pub curve_selector_gap: f32,
+    pub curve_left_padding: f32,
+    pub curve_right_padding: f32,
+    pub curve_bottom_padding: f32,
+    pub curve_selector_height: f32,
+    pub curve_graph_top_gap: f32,
+    pub curve_splits_top_gap: f32,
+    pub curve_splits_height: f32,
+    pub curve_splits_bottom_gap: f32,
     pub white_balance_label_width: f32,
+    pub white_balance_bottom_gap: f32,
     pub panel_order: Vec<String>,
     /// Optional view preset, applied only when this value changes in the JSON.
     pub preview: Option<crate::camera_raw_workspace_ui::WorkspaceState>,
@@ -115,6 +126,7 @@ pub struct Design {
 impl Default for Design {
     fn default() -> Self {
         Self {
+            red_eye: Default::default(),
             panel_width: 270.0,
             rail_width: 36.0,
             header_height: 32.0,
@@ -192,6 +204,7 @@ impl Default for Design {
             grading_selector_start: 68.0,
             grading_selector_bottom_gap: 14.0,
             grading_footer_gap: 7.0,
+            grading_bottom_padding: 23.0,
             disclosure_button_size: 16.0,
             disclosure_button_gap: 4.0,
             navigation_control_height: 28.0,
@@ -214,7 +227,16 @@ impl Default for Design {
             title_action_gap: 6.0,
             curve_selector_size: 20.0,
             curve_selector_gap: 6.0,
+            curve_left_padding: 18.0,
+            curve_right_padding: 15.0,
+            curve_bottom_padding: 13.0,
+            curve_selector_height: 24.0,
+            curve_graph_top_gap: 15.0,
+            curve_splits_top_gap: 4.0,
+            curve_splits_height: 12.0,
+            curve_splits_bottom_gap: 12.0,
             white_balance_label_width: 78.0,
+            white_balance_bottom_gap: 6.0,
             panel_order: crate::camera_raw_workspace_ui::SECTIONS.iter().map(|name| (*name).into()).collect(),
             preview: None,
         }
@@ -244,6 +266,7 @@ impl Design {
 
     pub fn parse(text: &str) -> Result<Self, String> {
         let value: Self = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        value.red_eye.validate()?;
         for (label, number, min, max) in [
             ("panelWidth", value.panel_width, 220.0, 600.0),
             ("railWidth", value.rail_width, 32.0, 64.0),
@@ -307,6 +330,7 @@ impl Design {
             ("gradingSelectorStart", value.grading_selector_start, 40.0, 90.0),
             ("gradingSelectorBottomGap", value.grading_selector_bottom_gap, 0.0, 40.0),
             ("gradingFooterGap", value.grading_footer_gap, 0.0, 40.0),
+            ("gradingBottomPadding", value.grading_bottom_padding, 0.0, 64.0),
             ("wheelBrightness", value.wheel_brightness, 0.1, 1.0),
             ("gradingWheelRowGap", value.grading_wheel_row_gap, 0.0, 40.0),
             ("gradingLowerWheelOutset", value.grading_lower_wheel_outset, 0.0, 30.0),
@@ -341,7 +365,16 @@ impl Design {
             ("titleActionGap", value.title_action_gap, 0.0, 12.0),
             ("curveSelectorSize", value.curve_selector_size, 16.0, 28.0),
             ("curveSelectorGap", value.curve_selector_gap, 0.0, 12.0),
+            ("curveLeftPadding", value.curve_left_padding, 0.0, 40.0),
+            ("curveRightPadding", value.curve_right_padding, 0.0, 40.0),
+            ("curveBottomPadding", value.curve_bottom_padding, 0.0, 64.0),
+            ("curveSelectorHeight", value.curve_selector_height, 20.0, 48.0),
+            ("curveGraphTopGap", value.curve_graph_top_gap, 0.0, 32.0),
+            ("curveSplitsTopGap", value.curve_splits_top_gap, 0.0, 24.0),
+            ("curveSplitsHeight", value.curve_splits_height, 8.0, 24.0),
+            ("curveSplitsBottomGap", value.curve_splits_bottom_gap, 0.0, 32.0),
             ("whiteBalanceLabelWidth", value.white_balance_label_width, 65.0, 110.0),
+            ("whiteBalanceBottomGap", value.white_balance_bottom_gap, 0.0, 24.0),
         ] {
             if !number.is_finite() || !(min..=max).contains(&number) {
                 return Err(format!("{label} must be finite and between {min} and {max}"));

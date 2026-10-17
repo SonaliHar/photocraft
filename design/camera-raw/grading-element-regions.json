@@ -1,5 +1,5 @@
 {
-  "scope": "Current reference 9 (legacy 12), Color Grading section only. Full dock registration defines coordinates; lower sections, shared chrome and interaction parity remain separate work.",
+  "scope": "Current reference 6 (legacy 12), Color Grading section only. Full dock registration defines coordinates; lower sections, shared chrome and interaction parity remain separate work.",
   "normalizedWidth": 540,
   "sourceRect": [
     10,
@@ -350,5 +350,7 @@
         972
       ]
     }
-  ]
+  ],
+  "sourceSha256": "2237262f3311ba0b11cc7106587d249a2d57d4fdcbfe45316898527dc3ee6253",
+  "sourceImage": 6
 }

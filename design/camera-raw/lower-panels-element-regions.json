@@ -1,5 +1,5 @@
 {
-  "scope": "Current reference 10: each observed control in the Optics, Lens Blur and Calibration crop. Native processing for these three sections is unavailable and remains disabled; appearance diagnostics do not imply processing parity.",
+  "scope": "Current reference 7: each observed control in the Optics, Lens Blur and Calibration crop. Native processing for these three sections is unavailable and remains disabled; appearance diagnostics do not imply processing parity.",
   "normalizedWidth": 540,
   "sourceRect": [
     34,
@@ -845,5 +845,7 @@
         2075
       ]
     }
-  ]
+  ],
+  "sourceSha256": "13bbea6bf5863cd9fefe0eb6a28e0f39b3abc869cf4d8c52ce87815792f2f4b8",
+  "sourceImage": 7
 }

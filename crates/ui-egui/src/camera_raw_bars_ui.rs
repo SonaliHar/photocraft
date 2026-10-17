@@ -1,7 +1,7 @@
 //! Native Camera Raw chrome observed in the supplied ACR references.
 //! Kept under camera_raw_ui so view controls reuse its existing edit/history path.
 use super::CameraRawDialog;
-use crate::{camera_raw_workspace_ui::CurveChannel, icons, theme::Tokens};
+use crate::{camera_raw_workspace_ui::CurveChannel, icons, theme::Tokens, widgets};
 use egui::{Align2, Color32, FontId, Rect, Response, Sense, Stroke, Ui, pos2, vec2};
 
 fn button(ui: &mut Ui, rect: Rect, label: &str, selected: bool, enabled: bool) -> Response {
@@ -95,6 +95,7 @@ pub(super) fn white_balance(ui: &mut Ui, p: &mut photocraft_algo::camera_raw::Ca
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.add_sized(vec2(design.white_balance_label_width, 20.0), egui::Label::new(tl!("White balance")));
         egui::ComboBox::from_id_salt("cr-white-balance")
+            .icon(widgets::chevron_icon)
             .width((ui.available_width() - 28.0).max(55.0))
             .selected_text(if custom { tl!("Custom") } else { tl!("As Shot") })
             .show_ui(ui, |ui| {
@@ -108,7 +109,7 @@ pub(super) fn white_balance(ui: &mut Ui, p: &mut photocraft_algo::camera_raw::Ca
             *picker = !*picker;
         }
     });
-    ui.add_space(6.0);
+    ui.add_space(design.white_balance_bottom_gap);
     before != (p.temperature, p.tint)
 }
 
@@ -204,7 +205,7 @@ pub(super) fn profile_bar(ui: &mut Ui) {
 pub(super) fn curve_selectors(ui: &mut Ui, current: &mut CurveChannel) {
     let design = crate::camera_raw_design::get(ui.ctx());
     let t = Tokens::get(ui.ctx());
-    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), design.curve_selector_size + 8.0), Sense::hover());
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), design.curve_selector_height), Sense::hover());
     ui.painter().text(pos2(row.left(), row.center().y), Align2::LEFT_CENTER, tl!("Adjust"), FontId::proportional(12.0), t.text);
     for (index, (channel, name, color)) in [
         (CurveChannel::Parametric, "Parametric", t.icon),

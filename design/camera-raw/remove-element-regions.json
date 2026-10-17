@@ -1,0 +1,455 @@
+{
+  "scope": "Reference10 Remove: all visible modes, settings, feedback and distraction rows. Native tab is missing; these planned regions are not comparison evidence.",
+  "normalizedWidth": 540,
+  "sourceRect": [
+    88,
+    432,
+    628,
+    1522
+  ],
+  "sourceSha256": "978b9690eaa5085b25f681b2bf5ec2a69e59f69fc572f5fb8b6c10b7cab838a9",
+  "sourceImage": 10,
+  "elements": [
+    {
+      "id": "heading",
+      "rect": [
+        35,
+        20,
+        245,
+        67
+      ]
+    },
+    {
+      "id": "reset",
+      "rect": [
+        373,
+        20,
+        410,
+        65
+      ]
+    },
+    {
+      "id": "preview-eye",
+      "rect": [
+        438,
+        24,
+        478,
+        61
+      ]
+    },
+    {
+      "id": "remove-selected-frame",
+      "rect": [
+        37,
+        92,
+        95,
+        152
+      ]
+    },
+    {
+      "id": "remove-mode",
+      "rect": [
+        45,
+        100,
+        87,
+        144
+      ]
+    },
+    {
+      "id": "heal-mode",
+      "rect": [
+        106,
+        96,
+        150,
+        148
+      ]
+    },
+    {
+      "id": "clone-mode",
+      "rect": [
+        162,
+        94,
+        210,
+        148
+      ]
+    },
+    {
+      "id": "generative-checkbox",
+      "rect": [
+        36,
+        192,
+        68,
+        225
+      ]
+    },
+    {
+      "id": "generative-label",
+      "rect": [
+        77,
+        189,
+        332,
+        229
+      ]
+    },
+    {
+      "id": "generative-info",
+      "rect": [
+        439,
+        188,
+        475,
+        224
+      ]
+    },
+    {
+      "id": "objects-checkbox",
+      "rect": [
+        36,
+        232,
+        68,
+        265
+      ]
+    },
+    {
+      "id": "objects-label",
+      "rect": [
+        77,
+        229,
+        326,
+        270
+      ]
+    },
+    {
+      "id": "size-label",
+      "rect": [
+        38,
+        271,
+        124,
+        310
+      ]
+    },
+    {
+      "id": "size-value",
+      "rect": [
+        382,
+        269,
+        470,
+        310
+      ]
+    },
+    {
+      "id": "size-track",
+      "rect": [
+        38,
+        312,
+        472,
+        325
+      ]
+    },
+    {
+      "id": "size-handle",
+      "rect": [
+        46,
+        304,
+        86,
+        341
+      ]
+    },
+    {
+      "id": "feedback-divider-top",
+      "rect": [
+        38,
+        369,
+        474,
+        376
+      ]
+    },
+    {
+      "id": "feedback-glyph",
+      "rect": [
+        36,
+        396,
+        81,
+        444
+      ]
+    },
+    {
+      "id": "feedback-label",
+      "rect": [
+        93,
+        397,
+        347,
+        443
+      ]
+    },
+    {
+      "id": "feedback-divider-bottom",
+      "rect": [
+        36,
+        466,
+        474,
+        473
+      ]
+    },
+    {
+      "id": "overlay-checkbox",
+      "rect": [
+        36,
+        504,
+        68,
+        540
+      ]
+    },
+    {
+      "id": "overlay-label",
+      "rect": [
+        76,
+        503,
+        381,
+        542
+      ]
+    },
+    {
+      "id": "spots-checkbox",
+      "rect": [
+        36,
+        557,
+        68,
+        592
+      ]
+    },
+    {
+      "id": "spots-label",
+      "rect": [
+        76,
+        555,
+        266,
+        596
+      ]
+    },
+    {
+      "id": "spots-threshold",
+      "rect": [
+        267,
+        569,
+        474,
+        583
+      ]
+    },
+    {
+      "id": "distractions-divider",
+      "rect": [
+        0,
+        627,
+        510,
+        635
+      ]
+    },
+    {
+      "id": "distractions-heading",
+      "rect": [
+        35,
+        650,
+        347,
+        692
+      ]
+    },
+    {
+      "id": "distractions-reset",
+      "rect": [
+        373,
+        651,
+        411,
+        695
+      ]
+    },
+    {
+      "id": "distractions-eye",
+      "rect": [
+        437,
+        654,
+        478,
+        693
+      ]
+    },
+    {
+      "id": "reflections-panel",
+      "rect": [
+        18,
+        718,
+        490,
+        784
+      ]
+    },
+    {
+      "id": "reflections-glyph",
+      "rect": [
+        37,
+        730,
+        82,
+        776
+      ]
+    },
+    {
+      "id": "reflections-title",
+      "rect": [
+        88,
+        730,
+        340,
+        776
+      ]
+    },
+    {
+      "id": "reflections-eye",
+      "rect": [
+        385,
+        736,
+        427,
+        772
+      ]
+    },
+    {
+      "id": "reflections-disclosure",
+      "rect": [
+        441,
+        733,
+        480,
+        777
+      ]
+    },
+    {
+      "id": "people-panel",
+      "rect": [
+        18,
+        802,
+        490,
+        868
+      ]
+    },
+    {
+      "id": "people-glyph",
+      "rect": [
+        37,
+        814,
+        82,
+        860
+      ]
+    },
+    {
+      "id": "people-title",
+      "rect": [
+        88,
+        814,
+        340,
+        860
+      ]
+    },
+    {
+      "id": "people-eye",
+      "rect": [
+        385,
+        820,
+        427,
+        856
+      ]
+    },
+    {
+      "id": "people-disclosure",
+      "rect": [
+        441,
+        817,
+        480,
+        861
+      ]
+    },
+    {
+      "id": "blemishes-panel",
+      "rect": [
+        18,
+        886,
+        490,
+        952
+      ]
+    },
+    {
+      "id": "blemishes-glyph",
+      "rect": [
+        37,
+        898,
+        82,
+        944
+      ]
+    },
+    {
+      "id": "blemishes-title",
+      "rect": [
+        88,
+        898,
+        340,
+        944
+      ]
+    },
+    {
+      "id": "blemishes-eye",
+      "rect": [
+        385,
+        904,
+        427,
+        940
+      ]
+    },
+    {
+      "id": "blemishes-disclosure",
+      "rect": [
+        441,
+        901,
+        480,
+        945
+      ]
+    },
+    {
+      "id": "dust-panel",
+      "rect": [
+        18,
+        970,
+        490,
+        1036
+      ]
+    },
+    {
+      "id": "dust-glyph",
+      "rect": [
+        37,
+        982,
+        82,
+        1028
+      ]
+    },
+    {
+      "id": "dust-title",
+      "rect": [
+        88,
+        982,
+        340,
+        1028
+      ]
+    },
+    {
+      "id": "dust-eye",
+      "rect": [
+        385,
+        988,
+        427,
+        1024
+      ]
+    },
+    {
+      "id": "dust-disclosure",
+      "rect": [
+        441,
+        985,
+        480,
+        1029
+      ]
+    }
+  ]
+}

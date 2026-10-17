@@ -1295,6 +1295,8 @@ mod tests {
             include_str!("../camera_raw_workspace_ui.rs"),
             include_str!("../camera_raw_info_ui.rs"),
             include_str!("../camera_raw_snapshots_ui.rs"),
+            include_str!("../camera_raw_tool_panels_ui.rs"),
+            include_str!("../camera_raw_curve_regions_ui.rs"),
         ];
         let mut labels = std::collections::BTreeSet::new();
         for source in sources {
@@ -1309,7 +1311,7 @@ mod tests {
         for band in bands.split('"').skip(1).step_by(2) {
             labels.insert(band);
         }
-        labels.extend(["Denoise", "Raw Details", "Super Resolution"]);
+        labels.extend(["Denoise", "Raw Details", "Super Resolution", "Pupil Size", "Darken", "Overlay"]);
         assert!(labels.len() >= 66, "missing Camera Raw source labels: {labels:?}");
         for lang in Lang::all().filter(|l| *l != Lang::EN) {
             let catalog = lang.catalog();

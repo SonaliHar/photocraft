@@ -1,6 +1,9 @@
 //! The screenshot-driven workspace edits real parameters, with view-only navigation and atomic automation.
 use egui::{Event, Modifiers, PointerButton, Pos2, pos2, vec2};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use photocraft_ui_egui::{PhotocraftApp, camera_raw_ui, control, theme::ThemeKind};
 use serde_json::{Value, json};
 
@@ -28,6 +31,59 @@ fn pointer(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, pressed: bool) {
     h.event(Event::PointerMoved(at));
     h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
     h.run_steps(2);
+}
+
+#[test]
+fn parametric_curve_split_drag_edits_only_the_boundary_and_cannot_cross_its_neighbor() {
+    let mut h = fixture();
+    h.set_size(vec2(1200.0, 1400.0));
+    invoke(&mut h, json!({"workspace":{"panels":{"open":["Curve"],"single":true},"curveChannel":"parametric"}})).unwrap();
+    h.run_steps(12);
+    let before = inspect(&h);
+    let history = h.state().session.active().unwrap().history.past_len();
+    let middle = h.get_by_label("Darks / Lights").rect().center();
+    let left = h.get_by_label("Shadows / Darks").rect().center();
+    let width = (middle.x - left.x) * 4.0;
+    pointer(&mut h, middle, true);
+    h.event(Event::PointerMoved(middle + vec2(width * 0.1, 0.0)));
+    h.run_steps(2);
+    pointer(&mut h, middle + vec2(width * 0.1, 0.0), false);
+    let edited = inspect(&h);
+    assert!((edited["params"]["curveSplits"][1].as_f64().unwrap() - 60.0).abs() < 1.0);
+    let mut expected = before["params"].clone();
+    expected["curveSplits"] = edited["params"]["curveSplits"].clone();
+    assert_eq!(edited["params"], expected);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+    let middle = h.get_by_label("Darks / Lights").rect().center();
+    pointer(&mut h, middle, true);
+    h.event(Event::PointerMoved(middle + vec2(width, 0.0)));
+    h.run_steps(2);
+    pointer(&mut h, middle + vec2(width, 0.0), false);
+    let bounded = inspect(&h);
+    assert_eq!(bounded["params"]["curveSplits"], json!([25.0, 74.0, 75.0]));
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+}
+
+#[test]
+fn red_eye_panel_is_reachable_and_unavailable_processing_preserves_the_photo() {
+    let mut h = fixture();
+    let before = inspect(&h);
+    let history = h.state().session.active().unwrap().history.past_len();
+    invoke(&mut h, json!({"workspace":{"tab":"redEye"}})).unwrap();
+    h.run_steps(4);
+    let after = inspect(&h);
+    assert_eq!(after["workspace"]["tab"], "redEye");
+    assert_eq!(after["params"], before["params"]);
+    assert_eq!(after["previewRevision"], before["previewRevision"]);
+    for label in ["Type", "Auto", "Pupil Size", "Darken", "Overlay"] {
+        let control =
+            h.query_all_by_label(label).find(|node| node.accesskit_node().is_disabled()).unwrap_or_else(|| panic!("missing unavailable control {label}"));
+        assert!(control.accesskit_node().is_disabled(), "{label} must not promise an unimplemented Camera Raw edit");
+    }
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+    invoke(&mut h, json!({"workspace":{"tab":"edit"}})).unwrap();
+    h.run_steps(3);
+    assert_eq!(inspect(&h)["params"], before["params"]);
 }
 
 #[test]

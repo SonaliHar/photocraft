@@ -26,12 +26,16 @@ use crate::widgets;
 
 #[path = "camera_raw_bars_ui.rs"]
 mod bars;
+#[path = "camera_raw_curve_regions_ui.rs"]
+mod curve_regions;
 #[path = "camera_raw_extra_panels_ui.rs"]
 mod extra_panels;
 #[path = "camera_raw_info_ui.rs"]
 mod info;
 #[path = "camera_raw_snapshots_ui.rs"]
 mod snapshots;
+#[path = "camera_raw_tool_panels_ui.rs"]
+pub(crate) mod tool_panels;
 
 const PROXY_SIDE: usize = 900;
 
@@ -1267,7 +1271,7 @@ fn curve_editor(
     let side = ui.available_width().min(260.0);
     let (rect, resp) = ui.allocate_exact_size(vec2(side, side), Sense::click_and_drag());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, t.radius_sm, t.field);
+    painter.rect_filled(rect, 0.0, t.dock);
     use super::camera_raw_workspace_ui::CurveChannel;
     let counts: Vec<u64> = (0..256)
         .map(|i| match channel {
@@ -1278,15 +1282,18 @@ fn curve_editor(
         })
         .collect();
     let peak = counts.iter().copied().max().unwrap_or(1).max(1) as f32;
+    let mut histogram_mesh = egui::Mesh::default();
     for (i, count) in counts.iter().enumerate() {
         let x0 = rect.left() + i as f32 / 256.0 * side;
         let x1 = rect.left() + (i + 1) as f32 / 256.0 * side;
-        painter.rect_filled(ERect::from_min_max(pos2(x0, rect.bottom() - *count as f32 / peak * side), pos2(x1, rect.bottom())), 0.0, t.canvas);
+        histogram_mesh.add_colored_rect(ERect::from_min_max(pos2(x0, rect.bottom() - *count as f32 / peak * side), pos2(x1, rect.bottom())), t.canvas);
     }
+    painter.add(egui::Shape::mesh(histogram_mesh));
+    painter.rect_stroke(rect, 0.0, Stroke::new(1.0, t.shadow.to_opaque()), egui::StrokeKind::Inside);
     for i in 1..4 {
         let f = i as f32 / 4.0;
-        painter.line_segment([pos2(rect.left() + f * side, rect.top()), pos2(rect.left() + f * side, rect.bottom())], Stroke::new(1.0, t.separator));
-        painter.line_segment([pos2(rect.left(), rect.top() + f * side), pos2(rect.right(), rect.top() + f * side)], Stroke::new(1.0, t.separator));
+        painter.line_segment([pos2(rect.left() + f * side, rect.top()), pos2(rect.left() + f * side, rect.bottom())], Stroke::new(1.0, t.canvas));
+        painter.line_segment([pos2(rect.left(), rect.top() + f * side), pos2(rect.right(), rect.top() + f * side)], Stroke::new(1.0, t.canvas));
     }
     let to_screen = |x: f32, y: f32| pos2(rect.left() + x / 255.0 * side, rect.bottom() - y / 255.0 * side);
     let selected = match channel {
@@ -1327,7 +1334,7 @@ fn curve_editor(
         CurveChannel::Red => Color32::from_rgb(220, 65, 65),
         CurveChannel::Green => Color32::from_rgb(70, 185, 90),
         CurveChannel::Blue => Color32::from_rgb(70, 130, 235),
-        _ => t.text,
+        _ => t.text_faint,
     };
     painter.add(egui::Shape::line(pts, Stroke::new(1.5, color)));
     for (i, c) in points.iter().enumerate() {
@@ -1639,7 +1646,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let show_snapshots = !workspace.info && workspace.tab == super::camera_raw_workspace_ui::WorkspaceTab::Snapshots;
         if show_snapshots {
             snapshots::header(&mut props, &mut d.snapshots, &d.params);
-        } else if !workspace.info {
+        } else if !workspace.info && workspace.tab == super::camera_raw_workspace_ui::WorkspaceTab::Edit {
             bars::edit_bar(&mut props, d, false);
             bars::profile_bar(&mut props);
         }
@@ -1658,6 +1665,11 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                     d.params = parameters;
                     dirty = true;
                 }
+                return;
+            }
+            if workspace.tab == super::camera_raw_workspace_ui::WorkspaceTab::RedEye {
+                ui.set_width(right.width());
+                tool_panels::red_eye(ui);
                 return;
             }
             // Reserve the same dock gutter with or without an active scrollbar. Otherwise
@@ -1740,8 +1752,10 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                             if previous != workspace.curve_channel {
                                 d.curve_state = Default::default();
                             }
+                            ui.add_space(design.curve_graph_top_gap);
                             d.curve_rect = Some(curve_editor(ui, p, &mut dirty, &mut d.curve_state, workspace.curve_channel, &d.after_histogram));
                             if workspace.curve_channel == CurveChannel::Parametric {
+                                dirty |= curve_regions::show(ui, &mut p.curve_splits);
                                 row(ui, &mut dirty, "Highlights", &mut p.curve_highlights, -100.0..=100.0, None);
                                 row(ui, &mut dirty, "Lights", &mut p.curve_lights, -100.0..=100.0, None);
                                 row(ui, &mut dirty, "Darks", &mut p.curve_darks, -100.0..=100.0, None);

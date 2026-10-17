@@ -4,6 +4,7 @@ Pillow is required. Keep reference screenshots and generated comparisons outside
 Only translate/crop and uniformly scale: never warp controls to make a match look better.
 """
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageStat
@@ -47,6 +48,12 @@ def main():
     args = parser.parse_args()
     if not 32 <= args.width <= 4096:
         parser.error("width must be between 32 and 4096")
+    specification = json.loads(args.regions.read_text(encoding="utf-8")) if args.regions else None
+    if specification and "sourceSha256" in specification:
+        with args.source.open("rb") as source_file:
+            actual_hash = hashlib.file_digest(source_file, "sha256").hexdigest()
+        if actual_hash != specification["sourceSha256"]:
+            parser.error("element specification belongs to a different reference image (SHA256 mismatch)")
     regions = []
     scales = []
     for path, rect in [(args.source, args.source_rect), (args.candidate, args.candidate_rect)]:
@@ -84,7 +91,6 @@ def main():
               "notes": "Top-left crop anchors aligned. Uniform scaling only. Purple marks absent coverage. Difference is diagnostic, not proof of parity; values, fonts and enabled state may differ."}
     (args.output / "alignment.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     if args.regions:
-        specification = json.loads(args.regions.read_text(encoding="utf-8"))
         if "sourceRect" in specification and specification["sourceRect"] != args.source_rect:
             parser.error("element specification uses a different reference registration rectangle")
         audit = audit_elements(regions[0], regions[1], specification)

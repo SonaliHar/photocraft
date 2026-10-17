@@ -43,6 +43,7 @@ pub enum WorkspaceTab {
     #[default]
     Edit,
     Snapshots,
+    RedEye,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -314,10 +315,15 @@ pub(crate) fn section(ui: &mut Ui, title: &str, state: &mut PanelState, body: im
                     *ui.visuals_mut() = original_visuals;
                     egui::Frame::new()
                         .inner_margin(egui::Margin {
-                            left: design.section_padding as i8,
-                            right: design.settings_body_right_padding as i8,
+                            left: if title == "Curve" { design.curve_left_padding as i8 } else { design.section_padding as i8 },
+                            right: if title == "Curve" { design.curve_right_padding as i8 } else { design.settings_body_right_padding as i8 },
                             top: design.section_vertical_padding as i8,
-                            bottom: if title == "Detail" { design.detail_bottom_padding as i8 } else { design.section_bottom_padding as i8 },
+                            bottom: match title {
+                                "Detail" => design.detail_bottom_padding as i8,
+                                "Color Grading" => design.grading_bottom_padding as i8,
+                                "Curve" => design.curve_bottom_padding as i8,
+                                _ => design.section_bottom_padding as i8,
+                            },
                         })
                         .show(ui, body);
                 })
@@ -690,7 +696,12 @@ pub(crate) fn rail(ui: &mut Ui, rect: Rect, state: &mut WorkspaceState, navigati
         state.info = false;
         state.tab = WorkspaceTab::Edit;
     }
-    // Keep the observed rail slot even while the intermediate tools are not implemented.
+    let red_eye_rect = Rect::from_center_size(pos2(rect.center().x, rect.top() + design.snapshots_rail_offset - 36.0), vec2(28.0, 28.0));
+    let mut red_eye_ui = ui.new_child(egui::UiBuilder::new().id_salt("camera-raw-red-eye-tab").max_rect(red_eye_rect));
+    if icons::button(&mut red_eye_ui, "eye", 28.0, !state.info && state.tab == WorkspaceTab::RedEye, tl!("Red Eye")).clicked() {
+        state.info = false;
+        state.tab = WorkspaceTab::RedEye;
+    }
     let snapshots_rect = Rect::from_center_size(pos2(rect.center().x, rect.top() + design.snapshots_rail_offset), vec2(28.0, 28.0));
     let mut snapshots_ui = ui.new_child(egui::UiBuilder::new().id_salt("camera-raw-snapshots-tab").max_rect(snapshots_rect));
     if icons::button(&mut snapshots_ui, "layers", 28.0, !state.info && state.tab == WorkspaceTab::Snapshots, tl!("Snapshots")).clicked() {

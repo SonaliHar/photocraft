@@ -13,6 +13,7 @@ from pathlib import Path
 
 
 STATES = {
+    "red-eye": (None, {"tab": "redEye"}),
     "edit": (None, {"panels": {"open": ["Light", "Color", "Effects", "Curve"], "single": False}}),
     "curve": ("Curve", {"curveChannel": "parametric"}),
     "curve-mixer": ("Curve", {"panels": {"open": ["Curve", "Color Mixer", "Optics"], "single": False}, "curveChannel": "parametric", "mixer": "color", "band": 5}),
