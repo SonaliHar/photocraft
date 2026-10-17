@@ -570,7 +570,9 @@ impl Writer<'_> {
         if layer.locks.pixels && !layer.locks.all {
             self.warnings.layer(&layer.name, "Lock Image Pixels was saved as OpenRaster's edit lock; it reopens as Lock All");
         }
-        if layer.locks.position && !layer.locks.all {
+        // The Background's position lock is part of being the Background, not one the user set:
+        // every new document has it, and OpenRaster has no Background to keep it on.
+        if layer.locks.position && !layer.locks.all && !self.doc.is_background(layer.id) {
             self.warnings.layer(&layer.name, "Lock Position is not saved to OpenRaster");
         }
         if layer.locks.transparency {
