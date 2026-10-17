@@ -350,15 +350,6 @@ fn transform_layer_with(
     apply_transform(doc_sel, group, l, h, affine, interp, ctl)
 }
 
-fn warp_unrendered_cache(sm: &mut photocraft_doc::SmartObject, h: &Homography, interp: Interp) -> Result<()> {
-    let rerenders = sm.cache.as_ref().is_some_and(|c| crate::smart_cmds::rerenders_from_source(sm, c.format()));
-    if let Some(c) = sm.cache.as_mut().filter(|_| !rerenders) {
-        let src = c.content_bounds();
-        *c = warp_surface(c, src, h, interp)?;
-    }
-    Ok(())
-}
-
 fn apply_transform(
     doc_sel: Option<&Surface>,
     group: Locks,
@@ -410,7 +401,10 @@ fn apply_transform(
                 None => crate::smart_cmds::set_placement(sm, h.mul(&crate::smart_cmds::placement(sm))),
             }
             // Fallback appearance for sources that can't be re-rendered.
-            warp_unrendered_cache(sm, h, interp)?;
+            if let Some(c) = &mut sm.cache {
+                let src = c.content_bounds();
+                *c = warp_surface(c, src, h, interp)?;
+            }
             if let Some(m) = &mut sm.filter_mask {
                 m.surface = warp_gray(&m.surface, h, interp)?;
             }
@@ -685,13 +679,17 @@ fn transform_doc(
     // Photoshop turns the Background into a normal layer before transforming it.
     crate::extra_cmds::background_to_layer(doc, id);
     let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-    transform_layer_with(if is_group { None } else { sel.as_ref() }, group, l, h, affine, interp, ctl)?;
+    let layer_sel = if is_group { None } else { sel.as_ref() };
+    check_layer_budget(layer_sel, l, h)?;
+    let taken = if h.is_identity() { Vec::new() } else { crate::smart_cmds::take_caches(std::slice::from_mut(l)) };
+    apply_transform(layer_sel, group, l, h, affine, interp, ctl)?;
     if !h.is_identity() {
         // Type layers re-render from their new transform.
         let snapshot = doc.clone();
         if let Some(l) = doc.layer_mut(id) {
             refresh_text(&snapshot, l);
         }
+        crate::smart_cmds::restore_unrendered(doc, taken, |c| warp_surface(c, c.content_bounds(), h, interp))?;
         // The selection outline moves with the pixels.
         if let Some(sel) = &doc.selection {
             doc.selection = Some(warp_gray(sel, h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());
