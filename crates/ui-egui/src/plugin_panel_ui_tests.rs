@@ -355,6 +355,44 @@ fn a_panel_window_is_as_wide_as_its_panel_and_no_wider() {
     assert!(widths[23] < 500.0, "the panel is as wide as the panel, not as wide as the widget: {}", widths[23]);
 }
 
+/// A script box, with a chapter in it, is painted inside its own 150 px and no further.
+///
+/// A `TextEdit` is as tall as its text. Before the box scrolled, a long script was laid out at 150
+/// px (so the styles below started there) but painted at its full height, over the styles and
+/// through them — the way the TypeR/TyperTools port first drew. The layout height being right was
+/// never the whole story; what is painted has to be clipped too.
+#[test]
+fn a_long_script_is_clipped_to_its_box() {
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    let mut text = "A line of dialogue, long enough to wrap.\n".repeat(80);
+    let mut box_bottom = 0.0;
+    let mut shapes = Vec::new();
+    // Twice: the galley of a field being edited is laid out on the frame after it is first drawn.
+    for _ in 0..2 {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |root| {
+            egui::Frame::NONE.show(root, |ui| {
+                ui.set_max_width(400.0);
+                let top = ui.min_rect().bottom();
+                let _ = multiline_field(ui, egui::Id::new("long-script"), &mut text, "", 150.0, None);
+                box_bottom = ui.min_rect().bottom();
+                assert!((box_bottom - top - 150.0).abs() < 1.0, "the script box takes its 150 px: {}", box_bottom - top);
+            });
+        });
+        out.textures_delta.clear();
+        shapes = out.shapes;
+    }
+    let painted: Vec<&egui::epaint::ClippedShape> = shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Text(_))).collect();
+    assert!(!painted.is_empty(), "the script is drawn");
+    for shape in painted {
+        assert!(
+            shape.clip_rect.bottom() <= box_bottom + 1.0,
+            "script painted past its box, over the styles below: clip {:?}, box bottom {box_bottom}",
+            shape.clip_rect
+        );
+    }
+}
+
 #[test]
 fn a_panels_widgets_are_drawn_inside_the_panel() {
     // The page switcher's dropdown, after its label, in the panel's 400 pixels: it is given the room

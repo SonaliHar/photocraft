@@ -512,7 +512,10 @@ fn multiline_field(ui: &mut egui::Ui, id: egui::Id, text: &mut String, hint: &st
     }
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)));
     child.style_mut().visuals.selection.bg_fill = t.field_selection();
-    child.add(edit)
+    // The box is a fixed height and the script scrolls inside it. A `TextEdit` is as tall as its
+    // text, so left alone a chapter-length script was painted past the box and through the widgets
+    // below it; the scroll area clips it to the box and gives it a scrollbar.
+    egui::ScrollArea::vertical().id_salt((id, "scroll")).max_height(inner.height()).auto_shrink([false, false]).show(&mut child, |ui| ui.add(edit)).inner
 }
 
 /// Sends one event to a panel, reporting a refusal in the status bar: the panel stopped, or the event
