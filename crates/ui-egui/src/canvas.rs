@@ -3818,7 +3818,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         // The transform preview is image content: it goes under the grid and guides, which
         // stay visible across a layer being transformed (#5086); the box is drawn later.
         crate::transform_tool::draw_content(app, &painter, &xf);
-        if app.ui.extras.grid && app.ui.view.extras {
+        // Grid stays visible across layer transforms and interactive rotate (#7137)
+        if app.ui.extras.grid && (app.ui.view.extras || app.ui.transform.is_some()) {
             crate::rulers::draw_grid(app, &painter, &xf, &doc);
         }
         if app.ui.view.shows(app.ui.view.show.canvas_guides) || crate::guide_layout_ui::preview(app, &doc).is_some() {
