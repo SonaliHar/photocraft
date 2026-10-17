@@ -33,7 +33,7 @@ fn help_prints_usage_and_exits_0() {
         let (status, stdout, stderr) = run_photocraft(&[flag]);
         assert_eq!(status.code(), Some(0), "{flag} must exit 0, stderr: {stderr}");
         assert!(stdout.starts_with("Usage: photocraft"), "{flag} stdout: {stdout}");
-        for option in ["--safe-gpu", "--new-instance", "--control <port>", "--version", "--"] {
+        for option in ["--safe-gpu", "--disable-plugins", "--new-instance", "--control <port>", "--version", "--"] {
             assert!(stdout.contains(option), "{flag} usage must list {option}: {stdout}");
         }
         assert!(!stderr.contains("Couldn't open"), "{flag} was taken as a file: {stderr}");
@@ -87,9 +87,11 @@ fn macos_process_serial_number_is_still_ignored() {
 }
 
 #[test]
-fn new_instance_is_a_known_option() {
-    let (status, _, stderr) = run_photocraft(&["--control", "nope", "--new-instance"]);
-    assert_eq!(status.code(), Some(2), "stderr: {stderr}");
-    assert!(stderr.contains("`nope` is not a valid port"), "stderr: {stderr}");
-    assert!(!stderr.contains("unknown option"), "stderr: {stderr}");
+fn launch_options_are_known() {
+    for option in ["--new-instance", "--disable-plugins"] {
+        let (status, _, stderr) = run_photocraft(&["--control", "nope", option]);
+        assert_eq!(status.code(), Some(2), "{option}: {stderr}");
+        assert!(stderr.contains("`nope` is not a valid port"), "{option}: {stderr}");
+        assert!(!stderr.contains("unknown option"), "{option}: {stderr}");
+    }
 }
