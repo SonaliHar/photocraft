@@ -37,8 +37,8 @@ impl NativePlaneStore for Store {
 fn fixture(q: &BackingQuota, width: u32, height: u32, mode: ColorMode, sample: SampleType, linear: bool) -> (Document, Arc<dyn Any + Send + Sync>) {
     // Prospectively pay source model/default/map/native fixture construction.
     assert!(width > 0 && width <= 257 && height > 0 && height <= 257);
-    let columns = (u64::from(width) + 255) / 256;
-    let rows = (u64::from(height) + 255) / 256;
+    let columns = u64::from(width).div_ceil(256);
+    let rows = u64::from(height).div_ceil(256);
     let payload = columns * rows * 65536 * sample.bytes() as u64;
     let guard: Arc<dyn Any + Send + Sync> = Arc::new(q.reserve(QuotaKind::Resident, payload + (2 << 20)).unwrap());
     let bounds = Rect::new(0, 0, width as i32, height as i32);
@@ -265,7 +265,7 @@ fn hostile_coordinates_extents_and_native_lengths_refuse_without_retained_fees()
         let q = quota();
         let (mut document, guard) = fixture(&q, 257, 3, ColorMode::Rgb, SampleType::F64, false);
         match alteration {
-            0 | 1 | 2 => {
+            0..=2 => {
                 let surface = &mut document.xcf_state.as_mut().unwrap().filter_masks[0].surface;
                 let tile = surface.tile(photocraft_geom::TileCoord::new(0, 0)).unwrap().clone();
                 let coordinate = match alteration {

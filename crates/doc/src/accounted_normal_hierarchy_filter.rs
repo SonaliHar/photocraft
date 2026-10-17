@@ -54,10 +54,8 @@ fn prepare(
     let mut target = None;
     for (index, stack) in state.filter_stacks.iter().enumerate() {
         c.check(1)?;
-        if stack.owner == ItemRef::Layer(patch.layer) {
-            if target.replace(index).is_some() {
-                return Err(BackingError::Integrity);
-            }
+        if stack.owner == ItemRef::Layer(patch.layer) && target.replace(index).is_some() {
+            return Err(BackingError::Integrity);
         }
     }
     let stack_index = target.ok_or(BackingError::Bounds)?;
@@ -68,10 +66,8 @@ fn prepare(
     let mut node_index = None;
     for (index, node) in stack.nodes.iter().enumerate() {
         c.check(1)?;
-        if node.id == patch.filter {
-            if node_index.replace(index).is_some() {
-                return Err(BackingError::Integrity);
-            }
+        if node.id == patch.filter && node_index.replace(index).is_some() {
+            return Err(BackingError::Integrity);
         }
     }
     let node_index = node_index.ok_or(BackingError::Bounds)?;

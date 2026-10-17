@@ -38,10 +38,8 @@ fn prepare<'a>(owner: &AccountedDocument, edit: AccountedEdit<'a>, c: &ReadContr
     let mut target = None;
     for (index, candidate) in owner.document().layers.iter().enumerate() {
         c.check(1)?;
-        if candidate.id == layer {
-            if target.replace(index).is_some() {
-                return Err(BackingError::Integrity);
-            }
+        if candidate.id == layer && target.replace(index).is_some() {
+            return Err(BackingError::Integrity);
         }
     }
     let layer_index = target.ok_or(BackingError::Bounds)?;

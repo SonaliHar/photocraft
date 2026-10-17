@@ -36,7 +36,9 @@ fn permit<'a>(doc: &'a Document, guard: Option<&'a AccountedSelection>, q: &Back
 }
 pub(super) fn owner_permit<'a>(owner: &'a AccountedDocument, c: &ReadControl<'_>) -> Result<SelectionPermit<'a>, BackingError> {
     programme_native::kind(owner)?;
-    if owner.document().selection.is_some() != owner.owner._selection_view.is_some() { return Err(BackingError::Integrity); }
+    if owner.document().selection.is_some() != owner.owner._selection_view.is_some() {
+        return Err(BackingError::Integrity);
+    }
     permit(owner.document(), owner.owner._selection.as_ref(), owner.quota(), c)
 }
 pub(super) fn measured(doc: &Document, q: &BackingQuota, kind: Kind, p: &SelectionPermit<'_>, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
@@ -94,13 +96,12 @@ impl<'a> SelectionCopy<'a> {
     pub(super) fn new(owner: &'a AccountedDocument, replacement: Option<Option<&'a AccountedSelection>>, c: &ReadControl<'_>) -> Result<Self, BackingError> {
         let _old = owner_permit(owner, c)?;
         let guard = replacement.unwrap_or(owner.owner._selection.as_ref());
-        if let Some(g) = guard {
-            if !owner.quota().shares_ledger(g.quota())
+        if let Some(g) = guard
+            && (!owner.quota().shares_ledger(g.quota())
                 || !selection_format_allowed(g.format(), owner.document().depth)
-                || !owner.document().bounds().contains_rect(&g.bounds())
-            {
-                return Err(BackingError::Unsupported);
-            }
+                || !owner.document().bounds().contains_rect(&g.bounds()))
+        {
+            return Err(BackingError::Unsupported);
         }
         let view = guard.map(|g| g.clone_view(c)).transpose()?;
         Ok(Self { view, guard })
@@ -155,13 +156,12 @@ impl AccountedDocument {
     }
     pub fn try_replace_programme_selection(&self, selection: Option<&AccountedSelection>, c: &ReadControl<'_>) -> Result<Self, BackingError> {
         let logical = measured_owner(self, c)?;
-        if let Some(g) = selection {
-            if !self.quota().shares_ledger(g.quota())
+        if let Some(g) = selection
+            && (!self.quota().shares_ledger(g.quota())
                 || !selection_format_allowed(g.format(), self.document().depth)
-                || !self.document().bounds().contains_rect(&g.bounds())
-            {
-                return Err(BackingError::Unsupported);
-            }
+                || !self.document().bounds().contains_rect(&g.bounds()))
+        {
+            return Err(BackingError::Unsupported);
         }
         let noop = match (selection, &self.document().selection) {
             (None, None) => true,

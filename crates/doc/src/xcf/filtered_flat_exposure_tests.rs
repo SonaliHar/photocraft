@@ -60,7 +60,7 @@ struct CaptureRetention {
     _guard: Arc<Guard>,
 }
 fn hex(s: &str) -> Vec<u8> {
-    s.as_bytes().chunks_exact(2).map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap()).collect()
+    s.as_bytes().as_chunks::<2>().0.iter().map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap()).collect()
 }
 fn properties(out: &mut Vec<OpaqueRecord>, row: &Value, owner: ItemRef) {
     for (index, p) in row.as_array().unwrap().iter().enumerate() {
@@ -97,7 +97,7 @@ fn argument(p: &Value) -> FilterArgument {
         cursor += len;
         assert_eq!(u32::from_be_bytes(raw[cursor..cursor + 4].try_into().unwrap()), 16);
         cursor += 4;
-        let components = raw[cursor..cursor + 16].chunks_exact(4).map(|p| ExactNumber::Float32Bits(u32::from_le_bytes(p.try_into().unwrap()))).collect();
+        let components = raw[cursor..cursor + 16].as_chunks::<4>().0.iter().map(|p| ExactNumber::Float32Bits(u32::from_le_bytes(*p))).collect();
         cursor += 16;
         assert_eq!(u32::from_be_bytes(raw[cursor..cursor + 4].try_into().unwrap()), 0);
         assert_eq!(raw.len(), cursor + 4);
@@ -182,8 +182,8 @@ fn fixture(case: &Case) -> (AccountedDocument, Arc<Vec<u8>>) {
             };
             node.enabled = property(8) != 0;
             node.opacity_f64_bits = f64::from(f32::from_bits(property(33))).to_bits();
-            node.source_clipping = Some(property(46) as i32);
-            node.source_region = Some(property(44) as i32);
+            node.source_clipping = Some(property(46));
+            node.source_region = Some(property(44));
             let composition = node.composition.as_mut().unwrap();
             composition.compatibility_epoch = epoch(name).into();
             composition.source_mode = property(7) as i32;

@@ -104,7 +104,7 @@ fn compound_opacity_words_and_atomic_custody() {
         drop(tmp);
         assert_eq!(owner.quota().usage().unwrap(), before);
         let left = AtomicU64::new(total.load(Ordering::Relaxed) - 1);
-        let work = |n| left.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+        let work = |n| left.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
         assert!(
             owner
                 .try_with_readonly_filtered_flat_point_filter_with_opacity(

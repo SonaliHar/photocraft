@@ -392,7 +392,7 @@ fn changed_copy_fences_and_shared_noop() {
     drop(changed);
     assert_eq!(q.usage().unwrap(), before);
     let left = AtomicU64::new(total.load(Ordering::Relaxed) - 1);
-    let work = |n| left.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+    let work = |n| left.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
     assert!(owner.try_with_document_name("changed", &ReadControl { interrupt: &Interrupt::NONE, work: &work }).is_err());
     assert_eq!(q.usage().unwrap(), before);
     let stop = || true;
@@ -402,20 +402,20 @@ fn changed_copy_fences_and_shared_noop() {
     assert_eq!(owner.document().name, "tree");
 }
 
-#[path="accounted_normal_hierarchy_mask_tests.rs"]
+#[path = "accounted_normal_hierarchy_mask_tests.rs"]
 mod masked_current_tests;
 
-#[path="accounted_normal_hierarchy_plain_tests.rs"]
+#[path = "accounted_normal_hierarchy_plain_tests.rs"]
 mod plain_quantized_tests;
 
-#[path="accounted_normal_hierarchy_u32_tests.rs"]
+#[path = "accounted_normal_hierarchy_u32_tests.rs"]
 mod u32_plain_tests;
 
-#[path="accounted_normal_hierarchy_native_tests.rs"]
+#[path = "accounted_normal_hierarchy_native_tests.rs"]
 mod native_edit_tests;
 
-#[path="accounted_programme_native_tests.rs"]
+#[path = "accounted_programme_native_tests.rs"]
 mod programme_native_tests;
 
-#[path="accounted_programme_selection_tests.rs"]
+#[path = "accounted_programme_selection_tests.rs"]
 mod programme_selection_tests;

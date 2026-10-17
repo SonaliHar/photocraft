@@ -52,10 +52,8 @@ fn prepare(
     let mut layer_index = None;
     for (index, layer) in doc.layers.iter().enumerate() {
         c.check(1)?;
-        if layer.id == patch.layer {
-            if layer_index.replace(index).is_some() {
-                return Err(BackingError::Integrity);
-            }
+        if layer.id == patch.layer && layer_index.replace(index).is_some() {
+            return Err(BackingError::Integrity);
         }
     }
     let layer_index = layer_index.ok_or(BackingError::Bounds)?;
@@ -63,10 +61,8 @@ fn prepare(
     let mut target = None;
     for (index, stack) in state.filter_stacks.iter().enumerate() {
         c.check(1)?;
-        if stack.owner == ItemRef::Layer(patch.layer) {
-            if target.replace(index).is_some() {
-                return Err(BackingError::Integrity);
-            }
+        if stack.owner == ItemRef::Layer(patch.layer) && target.replace(index).is_some() {
+            return Err(BackingError::Integrity);
         }
     }
     let stack_index = target.ok_or(BackingError::Bounds)?;
@@ -77,18 +73,21 @@ fn prepare(
     let mut node_index = None;
     for (index, node) in stack.nodes.iter().enumerate() {
         c.check(1)?;
-        if node.id == patch.filter {
-            if node_index.replace(index).is_some() {
-                return Err(BackingError::Integrity);
-            }
+        if node.id == patch.filter && node_index.replace(index).is_some() {
+            return Err(BackingError::Integrity);
         }
     }
     let node_index = node_index.ok_or(BackingError::Bounds)?;
     let node = stack.nodes.get(node_index).ok_or(BackingError::Integrity)?;
     let mut replacements = [None; 10];
-    if owner.is_readonly_masked_filtered_flat_point_storage() && opacity_f64_bits.is_some_and(|v|v!=1f64.to_bits()) {
-        let set=doc.checked_f32_filter_mask_coverages_with(crate::xcf_filter_masks::MaskCoverageSetLimits::STANDARD,owner.quota(),c)?;
-        for (i,mask) in state.filter_masks.iter().enumerate(){c.check(1)?;if mask.owner==node.id && set.classification_for_mask(i,mask)?==crate::xcf_filter_masks::FilterMaskCoverageClass::RawNonemptyCoverage{return Err(BackingError::Unsupported)}}
+    if owner.is_readonly_masked_filtered_flat_point_storage() && opacity_f64_bits.is_some_and(|v| v != 1f64.to_bits()) {
+        let set = doc.checked_f32_filter_mask_coverages_with(crate::xcf_filter_masks::MaskCoverageSetLimits::STANDARD, owner.quota(), c)?;
+        for (i, mask) in state.filter_masks.iter().enumerate() {
+            c.check(1)?;
+            if mask.owner == node.id && set.classification_for_mask(i, mask)? == crate::xcf_filter_masks::FilterMaskCoverageClass::RawNonemptyCoverage {
+                return Err(BackingError::Unsupported);
+            }
+        }
     }
     let opacity = opacity_f64_bits.map(|after| (node.opacity_f64_bits, after));
     let mut changed = patch.enabled.is_some_and(|v| v != node.enabled) || opacity.is_some_and(|(before, after)| before != after);
@@ -152,7 +151,9 @@ impl AccountedDocument {
         opacity_f64_bits: Option<u64>,
         c: &ReadControl<'_>,
     ) -> Result<(), BackingError> {
-        if self.is_readonly_masked_filtered_flat_point_storage(){return refused();}
+        if self.is_readonly_masked_filtered_flat_point_storage() {
+            return refused();
+        }
         prepare(self, patch, opacity_f64_bits, c)?;
         Ok(())
     }
@@ -171,7 +172,9 @@ impl AccountedDocument {
         opacity_f64_bits: Option<u64>,
         c: &ReadControl<'_>,
     ) -> Result<Self, BackingError> {
-        if self.is_readonly_masked_filtered_flat_point_storage(){return refused();}
+        if self.is_readonly_masked_filtered_flat_point_storage() {
+            return refused();
+        }
         let (logical, plan) = prepare(self, patch, opacity_f64_bits, c)?;
         let Some(plan) = plan else {
             c.check(1)?;
@@ -216,8 +219,38 @@ pub(super) fn apply(doc: &mut Document, plan: Plan, c: &ReadControl<'_>) -> Resu
 }
 
 impl AccountedDocument {
-    pub fn validate_readonly_masked_filtered_flat_point_filter(&self,patch:PointFilterPatch<'_>,c:&ReadControl<'_>)->Result<(),BackingError>{self.validate_readonly_masked_filtered_flat_point_filter_with_opacity(patch,None,c)}
-    pub fn validate_readonly_masked_filtered_flat_point_filter_with_opacity(&self,patch:PointFilterPatch<'_>,opacity:Option<u64>,c:&ReadControl<'_>)->Result<(),BackingError>{if !self.is_readonly_masked_filtered_flat_point_storage(){return refused()}prepare(self,patch,opacity,c)?;Ok(())}
-    pub fn try_with_readonly_masked_filtered_flat_point_filter(&self,patch:PointFilterPatch<'_>,c:&ReadControl<'_>)->Result<Self,BackingError>{self.try_with_readonly_masked_filtered_flat_point_filter_with_opacity(patch,None,c)}
-    pub fn try_with_readonly_masked_filtered_flat_point_filter_with_opacity(&self,patch:PointFilterPatch<'_>,opacity:Option<u64>,c:&ReadControl<'_>)->Result<Self,BackingError>{if !self.is_readonly_masked_filtered_flat_point_storage(){return refused()}let(logical,plan)=prepare(self,patch,opacity,c)?;let Some(plan)=plan else{c.check(1)?;return Ok(self.clone())};current_copy(self,logical,CopyKind::Filter(plan),c)}
+    pub fn validate_readonly_masked_filtered_flat_point_filter(&self, patch: PointFilterPatch<'_>, c: &ReadControl<'_>) -> Result<(), BackingError> {
+        self.validate_readonly_masked_filtered_flat_point_filter_with_opacity(patch, None, c)
+    }
+    pub fn validate_readonly_masked_filtered_flat_point_filter_with_opacity(
+        &self,
+        patch: PointFilterPatch<'_>,
+        opacity: Option<u64>,
+        c: &ReadControl<'_>,
+    ) -> Result<(), BackingError> {
+        if !self.is_readonly_masked_filtered_flat_point_storage() {
+            return refused();
+        }
+        prepare(self, patch, opacity, c)?;
+        Ok(())
+    }
+    pub fn try_with_readonly_masked_filtered_flat_point_filter(&self, patch: PointFilterPatch<'_>, c: &ReadControl<'_>) -> Result<Self, BackingError> {
+        self.try_with_readonly_masked_filtered_flat_point_filter_with_opacity(patch, None, c)
+    }
+    pub fn try_with_readonly_masked_filtered_flat_point_filter_with_opacity(
+        &self,
+        patch: PointFilterPatch<'_>,
+        opacity: Option<u64>,
+        c: &ReadControl<'_>,
+    ) -> Result<Self, BackingError> {
+        if !self.is_readonly_masked_filtered_flat_point_storage() {
+            return refused();
+        }
+        let (logical, plan) = prepare(self, patch, opacity, c)?;
+        let Some(plan) = plan else {
+            c.check(1)?;
+            return Ok(self.clone());
+        };
+        current_copy(self, logical, CopyKind::Filter(plan), c)
+    }
 }

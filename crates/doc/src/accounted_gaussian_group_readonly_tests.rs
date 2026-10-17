@@ -398,7 +398,7 @@ fn opaque_digest_validation_is_exact_chunk_metered_and_keeps_valid_inert_evidenc
     payload_digest(&bytes, &expected, &ReadControl { interrupt: &Interrupt::NONE, work: &work }).unwrap();
     assert!(charged.load(Ordering::Relaxed) >= bytes.len() as u64);
     let remaining = AtomicU64::new((32 << 10) + std::mem::size_of::<blake3::Hasher>() as u64 + 512);
-    let bounded = |n| remaining.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| left.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Quota);
+    let bounded = |n| remaining.try_update(Ordering::Relaxed, Ordering::Relaxed, |left| left.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Quota);
     assert!(payload_digest(&bytes, &expected, &ReadControl { interrupt: &Interrupt::NONE, work: &bounded }).is_err());
     let before = q.usage().unwrap();
     let cancel_on_chunk = |n| if n == (32 << 10) + 1 { Err(BackingError::Cancelled) } else { Ok(()) };

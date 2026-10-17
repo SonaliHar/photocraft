@@ -28,10 +28,8 @@ fn prepare<'a>(
     let mut item = None;
     for candidate in &state.items {
         control.check(1)?;
-        if candidate.item == ItemRef::Layer(layer) {
-            if item.replace(candidate).is_some() {
-                return Err(BackingError::Integrity);
-            }
+        if candidate.item == ItemRef::Layer(layer) && item.replace(candidate).is_some() {
+            return Err(BackingError::Integrity);
         }
     }
     let item = item.ok_or(BackingError::Integrity)?;

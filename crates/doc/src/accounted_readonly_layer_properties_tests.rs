@@ -249,10 +249,10 @@ fn combined_title_name_and_filter_copies_keep_flat_retention_and_old_name_api() 
             };
             // The first activation is already true. Later frames all have the
             // same-sized metadata and a real changed activation/revision.
-            if i > 1 {
-                if let Some(before) = last {
-                    assert_eq!(q.usage().unwrap(), before);
-                }
+            if i > 1
+                && let Some(before) = last
+            {
+                assert_eq!(q.usage().unwrap(), before);
             }
             last = Some(q.usage().unwrap());
         }

@@ -167,7 +167,7 @@ fn two_name_copy_and_cumulative_work_failures_keep_original_model_and_quota_atom
     drop(changed);
     assert_eq!(q.usage().unwrap(), before);
     let remaining = AtomicU64::new(total - 1);
-    let bounded = |n| remaining.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| left.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Quota);
+    let bounded = |n| remaining.try_update(Ordering::Relaxed, Ordering::Relaxed, |left| left.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Quota);
     assert!(original.try_edit(edit, &ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &bounded }).is_err());
     assert_eq!(q.usage().unwrap(), before);
     let cancel = |_: u64| if q.usage().unwrap().index > before.index { Err(BackingError::Cancelled) } else { Ok(()) };

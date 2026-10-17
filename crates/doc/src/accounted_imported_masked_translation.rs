@@ -64,10 +64,8 @@ fn plan(owner: &AccountedDocument, layer: LayerId, dx: i32, dy: i32, c: &ReadCon
     let mut mask_item = None;
     for (index, item) in owner.document().xcf_state.as_ref().ok_or(BackingError::Unsupported)?.items.iter().enumerate() {
         c.check(1)?;
-        if item.mask.as_ref().is_some_and(|m| m.owner == ItemRef::Layer(layer)) {
-            if mask_item.replace(index).is_some() {
-                return Err(BackingError::Integrity);
-            }
+        if item.mask.as_ref().is_some_and(|m| m.owner == ItemRef::Layer(layer)) && mask_item.replace(index).is_some() {
+            return Err(BackingError::Integrity);
         }
     }
     let (root_surface, offset, root_retention) = if let Some(previous) = owner.owner.retention.downcast_ref::<TranslationRetention>() {

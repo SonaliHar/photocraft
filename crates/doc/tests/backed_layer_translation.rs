@@ -44,7 +44,7 @@ impl NativePlaneStore for Native {
         let bpp = self.descriptor.format().bytes_per_pixel() as u64;
         for (i, byte) in output.iter_mut().enumerate() {
             let at = offset + i as u64;
-            let pixel = if (at / bpp) % 2 == 0 { &self.a } else { &self.b };
+            let pixel = if (at / bpp).is_multiple_of(2) { &self.a } else { &self.b };
             *byte = pixel[(at % bpp) as usize];
         }
         Ok(())

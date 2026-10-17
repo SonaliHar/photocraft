@@ -5,11 +5,7 @@ use super::*;
 // Selection construction owns a real temporary Scratch reservation. Keep this
 // child-local so the older hierarchy fixture policy remains unchanged.
 fn quota() -> BackingQuota {
-    BackingQuota::new(photocraft_raster::backing::quota::QuotaLimits {
-        resident: 128 << 20,
-        index: 64 << 20,
-        scratch: 16 << 20,
-    })
+    BackingQuota::new(photocraft_raster::backing::quota::QuotaLimits { resident: 128 << 20, index: 64 << 20, scratch: 16 << 20 })
 }
 
 use crate::accounted_document::ProgrammeNativeStorageKind;
@@ -210,7 +206,7 @@ fn guard_and_error_lifetimes_are_not_receipt_assertions() {
     drop(changed);
     assert_eq!(q.usage().unwrap(), baseline);
     let remaining = AtomicU64::new(total.load(Ordering::Relaxed) - 1);
-    let work = |n| remaining.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+    let work = |n| remaining.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
     assert!(selected.try_replace_programme_selection(Some(&replacement), &ReadControl { interrupt: &Interrupt::NONE, work: &work }).is_err());
     assert_eq!(q.usage().unwrap(), baseline);
     bound(&selected, &g);

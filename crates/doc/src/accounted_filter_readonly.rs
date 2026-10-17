@@ -20,9 +20,7 @@ const MAP_ENTRY_ENVELOPE: u64 = 256;
 // Existing XCF ResourceLimits Side ceiling; this storage class cannot raise it.
 const MAX_CANVAS_SIDE: u32 = 262_144;
 fn canvas_layout(bounds: Rect) -> Result<(u64, u64, u64), BackingError> {
-    if bounds.x0 != 0 || bounds.y0 != 0 || bounds.is_empty()
-        || bounds.width() > MAX_CANVAS_SIDE || bounds.height() > MAX_CANVAS_SIDE
-    {
+    if bounds.x0 != 0 || bounds.y0 != 0 || bounds.is_empty() || bounds.width() > MAX_CANVAS_SIDE || bounds.height() > MAX_CANVAS_SIDE {
         return Err(BackingError::Bounds);
     }
     let pixels = u64::from(bounds.width()).checked_mul(u64::from(bounds.height())).ok_or(BackingError::Length)?;
@@ -31,10 +29,8 @@ fn canvas_layout(bounds: Rect) -> Result<(u64, u64, u64), BackingError> {
         return Err(BackingError::Length);
     }
     let side = u64::try_from(photocraft_geom::TILE_SIZE).map_err(|_| BackingError::Length)?;
-    let columns = u64::from(bounds.width()).checked_add(side.checked_sub(1).ok_or(BackingError::Length)?)
-        .ok_or(BackingError::Length)? / side;
-    let rows = u64::from(bounds.height()).checked_add(side.checked_sub(1).ok_or(BackingError::Length)?)
-        .ok_or(BackingError::Length)? / side;
+    let columns = u64::from(bounds.width()).checked_add(side.checked_sub(1).ok_or(BackingError::Length)?).ok_or(BackingError::Length)? / side;
+    let rows = u64::from(bounds.height()).checked_add(side.checked_sub(1).ok_or(BackingError::Length)?).ok_or(BackingError::Length)? / side;
     Ok((columns, rows, columns.checked_mul(rows).ok_or(BackingError::Length)?))
 }
 const EPOCH: &str = "xcf-22-stock-threshold-alpha-precision-v1";
@@ -142,14 +138,20 @@ fn alpha_node(node: &crate::xcf_filters::FilterNode) -> Result<(), BackingError>
 // Physical storage only. Each distinct class supplies its own exact node gate;
 // Alpha still invokes its original gate at the same point before mask traversal.
 pub(super) fn physical_shape(
-    doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>,
+    doc: &Document,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
     validate_node: impl FnOnce(&crate::xcf_filters::FilterNode) -> Result<(), BackingError>,
 ) -> Result<(), BackingError> {
     physical_shape_selected(doc, quota, control, validate_node, None)
 }
 pub(super) fn physical_shape_selected(
-    doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>,
-    validate_node: impl FnOnce(&crate::xcf_filters::FilterNode) -> Result<(), BackingError>, selection: Option<&SelectionPermit<'_>>) -> Result<(), BackingError> {
+    doc: &Document,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+    validate_node: impl FnOnce(&crate::xcf_filters::FilterNode) -> Result<(), BackingError>,
+    selection: Option<&SelectionPermit<'_>>,
+) -> Result<(), BackingError> {
     control.check(1)?;
     if doc.layers.len() != 1
         || doc.size.width == 0
@@ -190,15 +192,15 @@ pub(super) fn physical_shape_selected(
     {
         return unsupported();
     }
-    let precision = match (source.source_precision, doc.depth, doc.sample_encoding) {
+    let precision = matches!(
+        (source.source_precision, doc.depth, doc.sample_encoding),
         (200, crate::SampleType::U16, Some(crate::SampleEncoding::Linear))
-        | (250, crate::SampleType::U16, Some(crate::SampleEncoding::NonlinearProfile))
-        | (600, crate::SampleType::F32, Some(crate::SampleEncoding::Linear))
-        | (650, crate::SampleType::F32, Some(crate::SampleEncoding::NonlinearProfile))
-        | (700, crate::SampleType::F64, Some(crate::SampleEncoding::Linear))
-        | (750, crate::SampleType::F64, Some(crate::SampleEncoding::NonlinearProfile)) => true,
-        _ => false,
-    };
+            | (250, crate::SampleType::U16, Some(crate::SampleEncoding::NonlinearProfile))
+            | (600, crate::SampleType::F32, Some(crate::SampleEncoding::Linear))
+            | (650, crate::SampleType::F32, Some(crate::SampleEncoding::NonlinearProfile))
+            | (700, crate::SampleType::F64, Some(crate::SampleEncoding::Linear))
+            | (750, crate::SampleType::F64, Some(crate::SampleEncoding::NonlinearProfile))
+    );
     if !precision {
         return unsupported();
     }
@@ -422,7 +424,11 @@ enum CopyKind<'n> {
     LayerProperties(readonly_layer_properties::Plan<'n>),
     ThresholdAlpha { value_f32_bits: Option<u32>, enabled: Option<bool>, revision: u64 },
 }
-pub(super) fn layer_properties(owner: &AccountedDocument, patch: ReadonlyLayerPropertiesPatch<'_>, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
+pub(super) fn layer_properties(
+    owner: &AccountedDocument,
+    patch: ReadonlyLayerPropertiesPatch<'_>,
+    control: &ReadControl<'_>,
+) -> Result<AccountedDocument, BackingError> {
     readonly_layer_properties::validate(patch, control)?;
     let logical = programme_measured(owner, control)?;
     let Some(plan) = readonly_layer_properties::plan(owner.document(), patch, control)? else {
@@ -455,8 +461,15 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, control: &ReadContr
 // Current metadata copies retain the original paid recipe. Document Rename
 // keeps its old slack; LayerName separately admits both replacement strings.
 fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, control: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
-    let replacement_selection=match kind{CopyKind::Selection(g)=>Some(g),_=>None};
-    let selection_copy=if owner.document().selection.is_some()||replacement_selection.is_some(){Some(programme_selection::SelectionCopy::new(owner,replacement_selection,control)?)}else{None};
+    let replacement_selection = match kind {
+        CopyKind::Selection(g) => Some(g),
+        _ => None,
+    };
+    let selection_copy = if owner.document().selection.is_some() || replacement_selection.is_some() {
+        Some(programme_selection::SelectionCopy::new(owner, replacement_selection, control)?)
+    } else {
+        None
+    };
     let replacement_name_bytes = match kind {
         CopyKind::ProgrammeNative(_) | CopyKind::Selection(_) => 0,
         CopyKind::Rename(name) => name.len() as u64,
@@ -476,9 +489,11 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     let mut index = owner.quota().reserve(QuotaKind::Index, envelope).map_err(|_| BackingError::Quota)?;
     let payload = owner.quota().reserve(QuotaKind::Resident, 0).map_err(|_| BackingError::Quota)?;
     control.check(logical.total()?)?;
-    if let CopyKind::ProgrammeNative(plan) = kind { control.check(plan.copy_work())?; }
-    let mut staged = ModelStaging {document:imported_selection::copy_document(owner.document(),control)?,selection_view:None};
-    let selection_guard=if let Some(copy)=selection_copy{copy.install(&mut staged)}else{None};
+    if let CopyKind::ProgrammeNative(plan) = kind {
+        control.check(plan.copy_work())?;
+    }
+    let mut staged = ModelStaging { document: imported_selection::copy_document(owner.document(), control)?, selection_view: None };
+    let selection_guard = if let Some(copy) = selection_copy { copy.install(&mut staged) } else { None };
     let source = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     let destination = staged.document.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
     destination.filter_stacks.try_reserve_exact(1).map_err(|_| BackingError::Allocation)?;
@@ -499,7 +514,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         destination.filter_masks.push(FilterMask { id: mask.id, owner: mask.owner, bounds: mask.bounds, surface: plan.copy(&mask.surface, control)? });
     }
     match kind {
-        CopyKind::Selection(_) => {},
+        CopyKind::Selection(_) => {}
         CopyKind::ProgrammeNative(plan) => programme_native::apply(&mut staged.document, plan, control)?,
         CopyKind::Rename(name) => staged.document.name = imported_edits::copy_name(name, control)?,
         CopyKind::LayerName(patch) => readonly_layer_name::apply(&mut staged.document, patch, control)?,
@@ -520,11 +535,18 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
             stack.revision = revision;
         }
     }
-    let actual = if selection_guard.is_some(){
-        let p=programme_selection::staged_permit(&staged.document,selection_guard,owner.quota(),control)?;
-        programme_selection::measured(&staged.document,owner.quota(),programme_native::kind(owner)?,&p,control)?.index
-            .checked_add(std::mem::size_of::<OriginalRetention>() as u64 + 128).ok_or(BackingError::Length)?
-    } else { measured(&staged.document, owner.quota(), control)?.index.checked_add(std::mem::size_of::<OriginalRetention>() as u64 + 128).ok_or(BackingError::Length)? };
+    let actual = if selection_guard.is_some() {
+        let p = programme_selection::staged_permit(&staged.document, selection_guard, owner.quota(), control)?;
+        programme_selection::measured(&staged.document, owner.quota(), programme_native::kind(owner)?, &p, control)?
+            .index
+            .checked_add(std::mem::size_of::<OriginalRetention>() as u64 + 128)
+            .ok_or(BackingError::Length)?
+    } else {
+        measured(&staged.document, owner.quota(), control)?
+            .index
+            .checked_add(std::mem::size_of::<OriginalRetention>() as u64 + 128)
+            .ok_or(BackingError::Length)?
+    };
     if actual > envelope {
         return Err(BackingError::Allocation);
     }
@@ -551,20 +573,32 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
 // Private additive programme-native bridge. Existing entrypoints and copier
 // schedules retain their own class-specific custody and final census.
 pub(super) fn programme_measured(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
-    if owner.document().selection.is_some(){return programme_selection::measured_owner(owner,c)}
+    if owner.document().selection.is_some() {
+        return programme_selection::measured_owner(owner, c);
+    }
     measured(owner.document(), owner.quota(), c)
 }
-pub(super) fn programme_copy(owner: &AccountedDocument, logical: ModelCensus, plan: programme_native::Plan<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
+pub(super) fn programme_copy(
+    owner: &AccountedDocument,
+    logical: ModelCensus,
+    plan: programme_native::Plan<'_>,
+    c: &ReadControl<'_>,
+) -> Result<AccountedDocument, BackingError> {
     current_copy(owner, logical, CopyKind::ProgrammeNative(plan), c)
 }
 
-pub(super) fn programme_selected_measured(doc:&Document,q:&BackingQuota,p:&SelectionPermit<'_>,c:&ReadControl<'_>)->Result<ModelCensus,BackingError>{
-    physical_shape_selected(doc,q,c,alpha_node,Some(p))?;
-    census_inner(doc,true,true,p.guard(),q,c,true)
+pub(super) fn programme_selected_measured(doc: &Document, q: &BackingQuota, p: &SelectionPermit<'_>, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+    physical_shape_selected(doc, q, c, alpha_node, Some(p))?;
+    census_inner(doc, true, true, p.guard(), q, c, true)
 }
 
-pub(super) fn programme_selection_copy(owner:&AccountedDocument,logical:ModelCensus,selection:Option<&AccountedSelection>,c:&ReadControl<'_>)->Result<AccountedDocument,BackingError>{
-    current_copy(owner,logical,CopyKind::Selection(selection),c)
+pub(super) fn programme_selection_copy(
+    owner: &AccountedDocument,
+    logical: ModelCensus,
+    selection: Option<&AccountedSelection>,
+    c: &ReadControl<'_>,
+) -> Result<AccountedDocument, BackingError> {
+    current_copy(owner, logical, CopyKind::Selection(selection), c)
 }
 
 #[cfg(test)]
@@ -577,4 +611,6 @@ mod patch_tests;
 
 #[cfg(test)]
 #[path = "accounted_filter_readonly_multitile_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unreachable)]
 mod multitile_tests;

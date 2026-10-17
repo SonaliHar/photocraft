@@ -118,8 +118,14 @@ fn common_target_and_native_payload_refusals_preserve_owner() {
     assert_eq!(native(&owner, LayerId(2), 0, 0), original);
     // A Legacy model, even backed, does not enroll via the new public enum.
     let held = Arc::new(Hold { _index: q.reserve(QuotaKind::Index, 4096).unwrap(), _resident: q.reserve(QuotaKind::Resident, 4096).unwrap() });
-    let legacy = AccountedDocument::from_owned(Document::new("unrelated", Size::new(8, 6), ColorMode::Rgb, SampleType::F64), held, q.clone(), &ctl()).unwrap();
-    assert!(legacy.checked_programme_native_target(LayerId(2), &ctl()).is_err());
+    let mut legacy_doc = Document::new("unrelated", Size::new(8, 6), ColorMode::Rgb, SampleType::F64);
+    let target = owner.checked_programme_native_target(LayerId(2), &ctl()).unwrap();
+    let legacy_layer = Layer::new("real paid native", LayerContent::BackedRaster(target.backed().clone()));
+    let legacy_id = legacy_layer.id;
+    legacy_doc.layers.push(legacy_layer);
+    drop(target);
+    let legacy = AccountedDocument::from_owned(legacy_doc, held, q.clone(), &ctl()).unwrap();
+    assert!(legacy.checked_programme_native_target(legacy_id, &ctl()).is_err());
 }
 #[test]
 #[ignore = "UNRUN/uncompiled: exact raw noop/signedzero distinction with MAX programme revisions and independently paid fixed target scratch"]
@@ -168,7 +174,7 @@ fn changed_programme_copy_obeys_original_control_and_error_lifetimes() {
     drop(changed);
     assert_eq!(q.usage().unwrap(), baseline);
     let left = AtomicU64::new(used.load(Ordering::Relaxed) - 1);
-    let work = |n| left.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+    let work = |n| left.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
     assert!(owner.try_edit_programme_preserving_native(edit, &ReadControl { interrupt: &Interrupt::NONE, work: &work }).is_err());
     assert_eq!(q.usage().unwrap(), baseline);
     // This class also prospectively holds twice the actual retained mask/profile

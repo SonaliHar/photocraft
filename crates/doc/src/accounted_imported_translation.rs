@@ -38,10 +38,8 @@ fn target_plan(owner: &AccountedDocument, layer: LayerId, dx: i32, dy: i32, cont
     let mut layer_index = None;
     for (index, candidate) in doc.layers.iter().enumerate() {
         control.check(1)?;
-        if candidate.id == layer {
-            if layer_index.replace(index).is_some() {
-                return Err(BackingError::Integrity);
-            }
+        if candidate.id == layer && layer_index.replace(index).is_some() {
+            return Err(BackingError::Integrity);
         }
     }
     let layer_index = layer_index.ok_or(BackingError::Bounds)?;

@@ -172,7 +172,7 @@ fn paid_archive_copy_failures_refund() {
     drop(changed);
     assert_eq!(q.usage().unwrap(), before);
     let left = AtomicU64::new(total.load(Ordering::Relaxed) - 1);
-    let work = |n| left.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+    let work = |n| left.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
     assert!(owner.try_remove_readonly_filtered_flat_point_filter(p, &ReadControl { interrupt: &Interrupt::NONE, work: &work }).is_err());
     assert_eq!(q.usage().unwrap(), before);
     let work = |_| if q.usage().map_err(|_| BackingError::Quota)?.index > before.index { Err(BackingError::Cancelled) } else { Ok(()) };

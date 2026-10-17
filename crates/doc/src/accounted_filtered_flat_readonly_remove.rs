@@ -84,20 +84,18 @@ fn prepare(owner: &AccountedDocument, patch: PointFilterRemovePatch, c: &ReadCon
     let mut mask_index = None;
     for (index, value) in state.filter_masks.iter().enumerate() {
         c.check(1)?;
-        if value.id == mask {
-            if value.owner != patch.filter || mask_index.replace(index).is_some() {
-                return Err(BackingError::Integrity);
-            }
+        if value.id == mask && (value.owner != patch.filter || mask_index.replace(index).is_some()) {
+            return Err(BackingError::Integrity);
         }
     }
     let mask_index = mask_index.ok_or(BackingError::Integrity)?;
     let mut item_index = None;
     for (index, item) in state.items.iter().enumerate() {
         c.check(1)?;
-        if item.item == ItemRef::Mask(mask) {
-            if item.mask.as_ref().is_none_or(|value| value.owner != ItemRef::Layer(patch.layer)) || item_index.replace(index).is_some() {
-                return Err(BackingError::Integrity);
-            }
+        if item.item == ItemRef::Mask(mask)
+            && (item.mask.as_ref().is_none_or(|value| value.owner != ItemRef::Layer(patch.layer)) || item_index.replace(index).is_some())
+        {
+            return Err(BackingError::Integrity);
         }
     }
     let item_index = item_index.ok_or(BackingError::Integrity)?;
@@ -134,7 +132,9 @@ impl AccountedDocument {
     /// Data-only removal preflight. Operation, lock, OLD/history/STAGED proofs
     /// and publication fences are mandatory externally; no source grant.
     pub fn validate_readonly_filtered_flat_point_filter_remove(&self, patch: PointFilterRemovePatch, c: &ReadControl<'_>) -> Result<(), BackingError> {
-        if self.is_readonly_masked_filtered_flat_point_storage(){return refused();}
+        if self.is_readonly_masked_filtered_flat_point_storage() {
+            return refused();
+        }
         prepare(self, patch, c)?;
         Ok(())
     }
@@ -142,7 +142,9 @@ impl AccountedDocument {
     /// Inert source-mask properties are archived with their exact payload Arcs.
     /// Last-node removal retains the empty stack owner and checked revision.
     pub fn try_remove_readonly_filtered_flat_point_filter(&self, patch: PointFilterRemovePatch, c: &ReadControl<'_>) -> Result<Self, BackingError> {
-        if self.is_readonly_masked_filtered_flat_point_storage(){return refused();}
+        if self.is_readonly_masked_filtered_flat_point_storage() {
+            return refused();
+        }
         let (logical, plan) = prepare(self, patch, c)?;
         current_copy(self, logical, CopyKind::Remove(plan), c)
     }
@@ -192,6 +194,18 @@ pub(super) fn apply(doc: &mut Document, plan: Plan, c: &ReadControl<'_>) -> Resu
 }
 
 impl AccountedDocument {
-    pub fn validate_readonly_masked_filtered_flat_point_filter_remove(&self,patch:PointFilterRemovePatch,c:&ReadControl<'_>)->Result<(),BackingError>{if !self.is_readonly_masked_filtered_flat_point_storage(){return refused()}prepare(self,patch,c)?;Ok(())}
-    pub fn try_remove_readonly_masked_filtered_flat_point_filter(&self,patch:PointFilterRemovePatch,c:&ReadControl<'_>)->Result<Self,BackingError>{if !self.is_readonly_masked_filtered_flat_point_storage(){return refused()}let(logical,plan)=prepare(self,patch,c)?;current_copy(self,logical,CopyKind::Remove(plan),c)}
+    pub fn validate_readonly_masked_filtered_flat_point_filter_remove(&self, patch: PointFilterRemovePatch, c: &ReadControl<'_>) -> Result<(), BackingError> {
+        if !self.is_readonly_masked_filtered_flat_point_storage() {
+            return refused();
+        }
+        prepare(self, patch, c)?;
+        Ok(())
+    }
+    pub fn try_remove_readonly_masked_filtered_flat_point_filter(&self, patch: PointFilterRemovePatch, c: &ReadControl<'_>) -> Result<Self, BackingError> {
+        if !self.is_readonly_masked_filtered_flat_point_storage() {
+            return refused();
+        }
+        let (logical, plan) = prepare(self, patch, c)?;
+        current_copy(self, logical, CopyKind::Remove(plan), c)
+    }
 }

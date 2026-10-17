@@ -15,10 +15,10 @@ use photocraft_raster::backing::{
 };
 use photocraft_raster::{MAX_CHECKED_RASTER_BYTES, Surface, Tile};
 use std::sync::Arc;
-#[path = "accounted_selection_owned.rs"]
-mod owned;
 #[path = "accounted_selection_bands.rs"]
 mod bands;
+#[path = "accounted_selection_owned.rs"]
+mod owned;
 pub use bands::AccountedSelectionBandBuilder;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CoverageDomain {
@@ -85,7 +85,7 @@ fn valid(format: PixelFormat) -> Result<(), BackingError> {
 }
 fn coverage(format: PixelFormat, raw: &[u8], control: &ReadControl<'_>) -> Result<(), BackingError> {
     let bpp = format.bytes_per_pixel();
-    if raw.len() % bpp != 0 {
+    if !raw.len().is_multiple_of(bpp) {
         return Err(BackingError::Length);
     }
     for block in raw.chunks(64 * 1024) {
@@ -190,7 +190,14 @@ impl AccountedSelection {
         drop(scratch_lease);
         // All physical tiles are fresh; borrowed caller input cannot mutate them.
         Ok(Self {
-            owner: Arc::new(SelectionOwner { surface, bounds: extent, quota: quota.clone(), _retention: None, _payload: Some(payload_lease), _index: Some(index_lease) }),
+            owner: Arc::new(SelectionOwner {
+                surface,
+                bounds: extent,
+                quota: quota.clone(),
+                _retention: None,
+                _payload: Some(payload_lease),
+                _index: Some(index_lease),
+            }),
             _allocation: Arc::new(allocation_lease),
         })
     }

@@ -329,7 +329,7 @@ fn noop_and_copy_failures_refund_without_publishing() {
     drop(blocker);
     assert_eq!(q.usage().unwrap(), before);
     let remaining = AtomicU64::new(256);
-    let work = |n| remaining.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+    let work = |n| remaining.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
     assert!(owner.try_with_document_name("changed", &ReadControl { interrupt: &Interrupt::NONE, work: &work }).is_err());
     assert_eq!(q.usage().unwrap(), before);
     // Calibrate against the same complete title operation, then deny the final
@@ -343,7 +343,7 @@ fn noop_and_copy_failures_refund_without_publishing() {
     drop(temporary);
     assert_eq!(q.usage().unwrap(), before);
     let remaining = AtomicU64::new(total.load(Ordering::Relaxed) - 1);
-    let work = |n| remaining.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+    let work = |n| remaining.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
     assert!(owner.try_with_document_name("changed", &ReadControl { interrupt: &Interrupt::NONE, work: &work }).is_err());
     assert_eq!(q.usage().unwrap(), before);
     // This control observes actual live copy leases, not an invented phase count.

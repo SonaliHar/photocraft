@@ -69,10 +69,8 @@ fn prepare<'a>(owner: &'a AccountedDocument, edit: AccountedEdit<'a>, c: &ReadCo
     let mut selected = None;
     for row in index.rows() {
         c.check(1)?;
-        if row.id == layer {
-            if selected.replace(row).is_some() {
-                return Err(BackingError::Integrity);
-            }
+        if row.id == layer && selected.replace(row).is_some() {
+            return Err(BackingError::Integrity);
         }
     }
     let row = selected.ok_or(BackingError::Bounds)?;
@@ -124,10 +122,10 @@ impl AccountedDocument {
 }
 pub(super) fn apply(doc: &mut Document, plan: Plan<'_>, c: &ReadControl<'_>) -> Result<(), BackingError> {
     plain_document(doc, c)?;
-    if let Some((ordinal, id)) = plan.parent {
-        if layer_at(doc, ordinal, c)?.id != id {
-            return Err(BackingError::Integrity);
-        }
+    if let Some((ordinal, id)) = plan.parent
+        && layer_at(doc, ordinal, c)?.id != id
+    {
+        return Err(BackingError::Integrity);
     }
     let state = doc.xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     let item = state.items.get(plan.canonical).ok_or(BackingError::Integrity)?;

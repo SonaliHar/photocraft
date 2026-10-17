@@ -11,7 +11,9 @@ const PROFILE_HEX: &str = "000002a06c636d73044000006d6e74725247422058595a2007ea0
 fn profile() -> Vec<u8> {
     PROFILE_HEX
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let digit = |v: u8| match v {
                 b'0'..=b'9' => v - b'0',

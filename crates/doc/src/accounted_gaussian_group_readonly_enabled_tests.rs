@@ -130,7 +130,7 @@ fn work_quota_and_private_copy_cancellation_leave_original_recipe_and_charges_at
     drop(completed);
     assert_eq!(q.usage().unwrap(), before);
     let remaining = AtomicU64::new(total - 1);
-    let bounded = |n| remaining.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| left.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Quota);
+    let bounded = |n| remaining.try_update(Ordering::Relaxed, Ordering::Relaxed, |left| left.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Quota);
     assert!(source.try_with_gaussian_group_enabled(patch, &ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &bounded }).is_err());
     assert_eq!(q.usage().unwrap(), before);
     assert!(source.document().xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].enabled);

@@ -9,7 +9,7 @@ fn three(sample: SampleType) -> (AccountedDocument, Arc<AtomicU64>) {
     let q = quota();
     let (mut doc, guard, reads) = fixture(&q, ColorMode::Rgb, sample);
     let mut third = Layer::new("unrelated", doc.layers[0].content.clone());
-    third.import_compositing = doc.layers[0].import_compositing.clone();
+    third.import_compositing = doc.layers[0].import_compositing;
     let mut row = doc.xcf_state.as_ref().unwrap().items.iter().find(|i| i.item == ItemRef::Layer(doc.layers[0].id)).unwrap().clone();
     row.item = ItemRef::Layer(third.id);
     row.name = third.name.clone();
@@ -136,7 +136,7 @@ fn work_and_cancel_failures_refund_atomically() {
     let c = ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &count };
     owner.validate_flat_composite_layers_translation(&ids, 2, -3, &c).unwrap();
     let remaining = AtomicU64::new(used.load(Ordering::Relaxed));
-    let limited = |n| remaining.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+    let limited = |n| remaining.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
     let c = ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &limited };
     assert!(matches!(owner.try_with_flat_composite_layers_translation(&ids, 2, -3, &c), Err(BackingError::Work)));
     assert_eq!(q.usage().unwrap(), before);

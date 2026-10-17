@@ -91,7 +91,7 @@ fn wide_raw_patch_atomic_fences_and_signedzero() {
         drop(edited);
         assert_eq!(q.usage().unwrap(), baseline);
         let left = AtomicU64::new(total.load(Ordering::Relaxed) - 1);
-        let work = |n| left.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+        let work = |n| left.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
         assert!(
             first.try_edit(AccountedEdit::NativePixels { layer: id, rect, bytes: &output }, &ReadControl { interrupt: &Interrupt::NONE, work: &work }).is_err()
         );

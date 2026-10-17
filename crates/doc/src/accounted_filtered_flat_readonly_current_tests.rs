@@ -166,7 +166,7 @@ fn current_intake_and_copy_failures_preserve_custody() {
     drop(copied);
     assert_eq!(q.usage().unwrap(), before);
     let left = AtomicU64::new(total.load(Ordering::Relaxed) - 1);
-    let work = |n| left.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+    let work = |n| left.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
     assert!(owner.try_with_document_name("new-empty-current", &ReadControl { interrupt: &Interrupt::NONE, work: &work }).is_err());
     assert_eq!(q.usage().unwrap(), before);
     let stop = || q.usage().unwrap().index > before.index;

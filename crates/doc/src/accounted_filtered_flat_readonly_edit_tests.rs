@@ -219,7 +219,7 @@ fn copy_failure_lifetimes_and_metadata_history_redo_are_preserved() {
     assert_eq!(owner.quota().usage().unwrap(), before);
     for limit in [0, total.load(Ordering::Relaxed) - 1] {
         let left = AtomicU64::new(limit);
-        let work = |n| left.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+        let work = |n| left.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
         assert!(
             owner
                 .try_with_readonly_filtered_flat_point_filter(patch(&owner, 1, &[], Some(true)), &ReadControl { interrupt: &Interrupt::NONE, work: &work })

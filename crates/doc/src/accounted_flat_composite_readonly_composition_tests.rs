@@ -3,6 +3,7 @@
 //! harness data. All fixture/model/source storage retains real same-q preholds.
 use super::super::tests::{ctl, fixture, leaf, owned, quota};
 use super::*;
+use photocraft_raster::Interrupt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 const MODES: [i32; 20] = [28, 23, 30, 31, 32, 33, 34, 35, 36, 41, 42, 43, 44, 45, 48, 49, 50, 51, 52, 53];
@@ -227,7 +228,7 @@ fn cumulative_work_and_cancellation_do_not_publish_partial_copy() {
     owner.validate_flat_composite_composition_patch(patch, &ReadControl { interrupt: &Interrupt::NONE, work: &count }).unwrap();
     let before = q.usage().unwrap();
     let remaining = AtomicU64::new(measured_work.load(Ordering::Relaxed));
-    let work = |n| remaining.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+    let work = |n| remaining.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
     assert!(matches!(
         owner.try_with_flat_composite_composition_patch(patch, &ReadControl { interrupt: &Interrupt::NONE, work: &work }),
         Err(BackingError::Work)

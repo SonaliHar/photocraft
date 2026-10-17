@@ -124,7 +124,8 @@ pub(crate) fn plain_quantized_header(d: &Document, check: &dyn Fn(u64) -> Result
     if d.mode != crate::ColorMode::Rgb
         || d.sample_encoding != Some(crate::SampleEncoding::NonlinearProfile)
         || d.source_color_context.as_ref().is_none_or(|source| {
-            source.original_icc.is_some() || !matches!((d.depth, source.source_precision), (crate::SampleType::U8, 150) | (crate::SampleType::U16, 250) | (crate::SampleType::U32, 350))
+            source.original_icc.is_some()
+                || !matches!((d.depth, source.source_precision), (crate::SampleType::U8, 150) | (crate::SampleType::U16, 250) | (crate::SampleType::U32, 350))
         })
     {
         return Err(E::Unsupported);
@@ -152,7 +153,10 @@ fn requirements<L: NormalHierarchyIndexLease>(
     requirements_selected::<L>(d, lim, check, None)
 }
 fn requirements_selected<L: NormalHierarchyIndexLease>(
-    d: &Document, lim: NormalHierarchyLimits, check: &dyn Fn(u64) -> Result<(), E>, selection: Option<&SelectionPermit<'_>>,
+    d: &Document,
+    lim: NormalHierarchyLimits,
+    check: &dyn Fn(u64) -> Result<(), E>,
+    selection: Option<&SelectionPermit<'_>>,
 ) -> Result<NormalHierarchyMaskIndexRequirements, E> {
     plain_quantized_header(d, check)?;
     // This complete header prepass admits 16/64MiB before any proof allocation.
@@ -196,14 +200,27 @@ fn requirements_selected<L: NormalHierarchyIndexLease>(
 }
 impl Document {
     pub(crate) fn checked_normal_hierarchy_mask_index_requirements_selected(
-        &self, l: NormalHierarchyLimits, c: &ReadControl<'_>, selection: &SelectionPermit<'_>,
+        &self,
+        l: NormalHierarchyLimits,
+        c: &ReadControl<'_>,
+        selection: &SelectionPermit<'_>,
     ) -> Result<NormalHierarchyMaskIndexRequirements, E> {
         requirements_selected::<QuotaLease>(self, l, &|n| c.check(n), Some(selection))
     }
     pub(crate) fn checked_normal_hierarchy_mask_index_selected(
-        &self, l: NormalHierarchyLimits, q: &BackingQuota, c: &ReadControl<'_>, selection: &SelectionPermit<'_>,
+        &self,
+        l: NormalHierarchyLimits,
+        q: &BackingQuota,
+        c: &ReadControl<'_>,
+        selection: &SelectionPermit<'_>,
     ) -> Result<CheckedNormalHierarchyMaskIndex<'_>, E> {
-        self.checked_normal_hierarchy_mask_index_with_reservation_selected(l,c.interrupt,&|n|c.check(n),|n|q.reserve(QuotaKind::Index,n).map_err(|_|E::Quota),Some(selection))
+        self.checked_normal_hierarchy_mask_index_with_reservation_selected(
+            l,
+            c.interrupt,
+            &|n| c.check(n),
+            |n| q.reserve(QuotaKind::Index, n).map_err(|_| E::Quota),
+            Some(selection),
+        )
     }
 
     pub fn checked_normal_hierarchy_mask_index_requirements(
@@ -244,8 +261,12 @@ impl Document {
         self.checked_normal_hierarchy_mask_index_with_reservation_selected(l, i, w, reserve, None)
     }
     pub(crate) fn checked_normal_hierarchy_mask_index_with_reservation_selected<L: NormalHierarchyIndexLease>(
-        &self, l: NormalHierarchyLimits, i: &Interrupt<'_>, w: &dyn Fn(u64) -> Result<(), E>,
-        mut reserve: impl FnMut(u64) -> Result<L, E>, selection: Option<&SelectionPermit<'_>>,
+        &self,
+        l: NormalHierarchyLimits,
+        i: &Interrupt<'_>,
+        w: &dyn Fn(u64) -> Result<(), E>,
+        mut reserve: impl FnMut(u64) -> Result<L, E>,
+        selection: Option<&SelectionPermit<'_>>,
     ) -> Result<CheckedNormalHierarchyMaskIndex<'_, L>, E> {
         let check = |n| {
             i.check().map_err(|_| E::Cancelled)?;
@@ -292,10 +313,8 @@ impl Document {
             let mut leaf = None;
             for row in &rows {
                 check(1)?;
-                if row.stack_index == Some(si) {
-                    if leaf.replace(row.ordinal).is_some() {
-                        return Err(E::Integrity);
-                    }
+                if row.stack_index == Some(si) && leaf.replace(row.ordinal).is_some() {
+                    return Err(E::Integrity);
                 }
             }
             let leaf = leaf.ok_or(E::Integrity)?;
@@ -304,10 +323,8 @@ impl Document {
                 let mut found = None;
                 for (mi, mask) in state.filter_masks.iter().enumerate() {
                     check(1)?;
-                    if node.mask == Some(crate::item_identity::ItemRef::Mask(mask.id)) && node.id == mask.owner {
-                        if found.replace(mi).is_some() {
-                            return Err(E::Integrity);
-                        }
+                    if node.mask == Some(crate::item_identity::ItemRef::Mask(mask.id)) && node.id == mask.owner && found.replace(mi).is_some() {
+                        return Err(E::Integrity);
                     }
                 }
                 let mi = found.ok_or(E::Integrity)?;

@@ -217,7 +217,13 @@ pub(super) fn shape(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Re
 pub(super) fn shape_with_purpose(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>, purpose: TopologyPurpose) -> Result<(), BackingError> {
     shape_with_purpose_selected(doc, q, c, purpose, None)
 }
-pub(super) fn shape_with_purpose_selected(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>, purpose: TopologyPurpose, selection: Option<&SelectionPermit<'_>>) -> Result<(), BackingError> {
+pub(super) fn shape_with_purpose_selected(
+    doc: &Document,
+    q: &BackingQuota,
+    c: &ReadControl<'_>,
+    purpose: TopologyPurpose,
+    selection: Option<&SelectionPermit<'_>>,
+) -> Result<(), BackingError> {
     c.check(1)?;
     if !(1..=4096).contains(&doc.layers.len())
         || doc.mode != crate::ColorMode::Rgb
@@ -607,12 +613,19 @@ pub(super) fn shape_with_purpose_selected(doc: &Document, q: &BackingQuota, c: &
     }
     Ok(())
 }
-fn measured_owner(owner: &AccountedDocument,c:&ReadControl<'_>)->Result<ModelCensus,BackingError>{
-    if owner.document().selection.is_some(){return programme_selection::measured_owner(owner,c)}
-    if owner.is_readonly_masked_filtered_flat_point_storage(){masked_filtered_flat_readonly::measured(owner.document(),owner.quota(),c,false)}
-    else{measured(owner.document(),owner.quota(),c)}
+fn measured_owner(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+    if owner.document().selection.is_some() {
+        return programme_selection::measured_owner(owner, c);
+    }
+    if owner.is_readonly_masked_filtered_flat_point_storage() {
+        masked_filtered_flat_readonly::measured(owner.document(), owner.quota(), c, false)
+    } else {
+        measured(owner.document(), owner.quota(), c)
+    }
 }
-fn accepts(owner:&AccountedDocument)->bool {owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage()}
+fn accepts(owner: &AccountedDocument) -> bool {
+    owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage()
+}
 fn measured(doc: &Document, q: &BackingQuota, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
     measured_with_purpose(doc, q, c, TopologyPurpose::Current)
 }
@@ -786,6 +799,8 @@ pub(super) fn renamed(owner: &AccountedDocument, name: &str, c: &ReadControl<'_>
     current_copy(owner, logical, CopyKind::Title(name), c)
 }
 #[derive(Clone, Copy)]
+// Keep prospectively priced copy plans inline; boxing changes allocation and quota semantics.
+#[allow(clippy::large_enum_variant)]
 enum CopyKind<'a> {
     Selection(Option<&'a AccountedSelection>),
     ProgrammeNative(programme_native::Plan<'a>),
@@ -796,9 +811,18 @@ enum CopyKind<'a> {
     Metadata(metadata::Plan<'a>),
 }
 fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
-    if owner.is_readonly_masked_filtered_flat_point_storage(){owner.document().checked_f32_filter_mask_coverage_set_requirements(crate::xcf_filter_masks::MaskCoverageSetLimits::STANDARD,c)?;}
-    let replacement_selection=match kind{CopyKind::Selection(g)=>Some(g),_=>None};
-    let selection_copy=if owner.document().selection.is_some()||replacement_selection.is_some(){Some(programme_selection::SelectionCopy::new(owner,replacement_selection,c)?)}else{None};
+    if owner.is_readonly_masked_filtered_flat_point_storage() {
+        owner.document().checked_f32_filter_mask_coverage_set_requirements(crate::xcf_filter_masks::MaskCoverageSetLimits::STANDARD, c)?;
+    }
+    let replacement_selection = match kind {
+        CopyKind::Selection(g) => Some(g),
+        _ => None,
+    };
+    let selection_copy = if owner.document().selection.is_some() || replacement_selection.is_some() {
+        Some(programme_selection::SelectionCopy::new(owner, replacement_selection, c)?)
+    } else {
+        None
+    };
     let name_bytes = match kind {
         CopyKind::Title(name) => (name.len() as u64).checked_mul(2).ok_or(BackingError::Length)?,
         CopyKind::Selection(_) | CopyKind::ProgrammeNative(_) | CopyKind::Filter(_) | CopyKind::Move(_) | CopyKind::Remove(_) => 0,
@@ -830,8 +854,16 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     if extra_work != 0 {
         c.check(extra_work)?;
     }
-    let mut staged = ModelStaging { document: if owner.document().selection.is_some(){let p=programme_selection::owner_permit(owner,c)?;imported_selection::copy_filtered_flat_selected(owner.document(),owner.quota(),&p,c)?}else{imported_selection::copy_filtered_flat(owner.document(), owner.quota(), c)?}, selection_view: None };
-    let selection_guard=if let Some(copy)=selection_copy{copy.install(&mut staged)}else{None};
+    let mut staged = ModelStaging {
+        document: if owner.document().selection.is_some() {
+            let p = programme_selection::owner_permit(owner, c)?;
+            imported_selection::copy_filtered_flat_selected(owner.document(), owner.quota(), &p, c)?
+        } else {
+            imported_selection::copy_filtered_flat(owner.document(), owner.quota(), c)?
+        },
+        selection_view: None,
+    };
+    let selection_guard = if let Some(copy) = selection_copy { copy.install(&mut staged) } else { None };
     let source = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     let destination = staged.document.xcf_state.as_mut().ok_or(BackingError::Integrity)?;
     destination.filter_stacks = vector(source.filter_stacks.len())?;
@@ -849,7 +881,7 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         destination.filter_masks.push(FilterMask { id: mask.id, owner: mask.owner, bounds: mask.bounds, surface: plan.copy(&mask.surface, c)? });
     }
     match kind {
-        CopyKind::Selection(_) => {},
+        CopyKind::Selection(_) => {}
         CopyKind::ProgrammeNative(plan) => programme_native::apply(&mut staged.document, plan, c)?,
         CopyKind::Title(name) => staged.document.name = imported_edits::copy_name(name, c)?,
         CopyKind::Filter(plan) => filter::apply(&mut staged.document, plan, c)?,
@@ -857,10 +889,16 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
         CopyKind::Remove(plan) => filter_remove::apply(&mut staged.document, plan, c)?,
         CopyKind::Metadata(plan) => metadata::apply(&mut staged.document, plan, c)?,
     }
-    let actual = if selection_guard.is_some(){
-        let p=programme_selection::staged_permit(&staged.document,selection_guard,owner.quota(),c)?;
-        programme_selection::measured(&staged.document,owner.quota(),programme_native::kind(owner)?,&p,c)?
-    } else { if owner.is_readonly_masked_filtered_flat_point_storage(){masked_filtered_flat_readonly::measured(&staged.document,owner.quota(),c,false)?}else{measured(&staged.document, owner.quota(), c)?} };
+    let actual = if selection_guard.is_some() {
+        let p = programme_selection::staged_permit(&staged.document, selection_guard, owner.quota(), c)?;
+        programme_selection::measured(&staged.document, owner.quota(), programme_native::kind(owner)?, &p, c)?
+    } else {
+        if owner.is_readonly_masked_filtered_flat_point_storage() {
+            masked_filtered_flat_readonly::measured(&staged.document, owner.quota(), c, false)?
+        } else {
+            measured(&staged.document, owner.quota(), c)?
+        }
+    };
     let actual_index = actual.index.checked_sub(header).ok_or(BackingError::Integrity)?;
     if actual_index > envelope || actual.payload > payload {
         return Err(BackingError::Allocation);
@@ -885,21 +923,41 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
 // Private additive programme-native bridge. Existing entrypoints and copier
 // schedules retain their own class-specific custody and final census.
 pub(super) fn programme_measured(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
-    if owner.document().selection.is_some(){return programme_selection::measured_owner(owner,c)}
+    if owner.document().selection.is_some() {
+        return programme_selection::measured_owner(owner, c);
+    }
     measured_owner(owner, c)
 }
-pub(super) fn programme_copy(owner: &AccountedDocument, logical: ModelCensus, plan: programme_native::Plan<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
+pub(super) fn programme_copy(
+    owner: &AccountedDocument,
+    logical: ModelCensus,
+    plan: programme_native::Plan<'_>,
+    c: &ReadControl<'_>,
+) -> Result<AccountedDocument, BackingError> {
     current_copy(owner, logical, CopyKind::ProgrammeNative(plan), c)
 }
 
-pub(super) fn programme_selected_measured(doc:&Document,q:&BackingQuota,masked:bool,p:&SelectionPermit<'_>,c:&ReadControl<'_>)->Result<ModelCensus,BackingError>{
-    if masked{return masked_filtered_flat_readonly::measured_policy(doc,q,c,false,Some(p))}
-    shape_with_purpose_selected(doc,q,c,TopologyPurpose::Current,Some(p))?;
-    census_with_mask_policy(doc,true,true,p.guard(),q,c,ReadonlyMaskPolicy::FilteredFlat)
+pub(super) fn programme_selected_measured(
+    doc: &Document,
+    q: &BackingQuota,
+    masked: bool,
+    p: &SelectionPermit<'_>,
+    c: &ReadControl<'_>,
+) -> Result<ModelCensus, BackingError> {
+    if masked {
+        return masked_filtered_flat_readonly::measured_policy(doc, q, c, false, Some(p));
+    }
+    shape_with_purpose_selected(doc, q, c, TopologyPurpose::Current, Some(p))?;
+    census_with_mask_policy(doc, true, true, p.guard(), q, c, ReadonlyMaskPolicy::FilteredFlat)
 }
 
-pub(super) fn programme_selection_copy(owner:&AccountedDocument,logical:ModelCensus,selection:Option<&AccountedSelection>,c:&ReadControl<'_>)->Result<AccountedDocument,BackingError>{
-    current_copy(owner,logical,CopyKind::Selection(selection),c)
+pub(super) fn programme_selection_copy(
+    owner: &AccountedDocument,
+    logical: ModelCensus,
+    selection: Option<&AccountedSelection>,
+    c: &ReadControl<'_>,
+) -> Result<AccountedDocument, BackingError> {
+    current_copy(owner, logical, CopyKind::Selection(selection), c)
 }
 
 #[cfg(test)]

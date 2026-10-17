@@ -252,18 +252,17 @@ fn requirements<L: MaskCoverageSetLease>(
     // effective_resolution() clones an optional custom unit in the unchanged
     // ordinary validator. Retain its actual prospective three-String overlap.
     let mut resolution_clone = 0u64;
-    if let Some(r) = &doc.physical_resolution {
-        if let crate::physical_resolution::PhysicalUnit::Custom(unit) = &r.unit {
-            for value in [&unit.name, &unit.symbol, &unit.abbreviation] {
-                if value.len() > 1 << 20 {
-                    return Err(E::Length);
-                }
-                add(value.len())?;
-                resolution_clone = resolution_clone.checked_add((value.len() as u64).checked_mul(2).ok_or(E::Length)?).ok_or(E::Length)?;
+    if let Some(r) = &doc.physical_resolution
+        && let crate::physical_resolution::PhysicalUnit::Custom(unit) = &r.unit
+    {
+        for value in [&unit.name, &unit.symbol, &unit.abbreviation] {
+            if value.len() > 1 << 20 {
+                return Err(E::Length);
             }
-            resolution_clone =
-                resolution_clone.checked_add(std::mem::size_of::<crate::physical_resolution::PhysicalResolution>() as u64 + 256).ok_or(E::Length)?;
+            add(value.len())?;
+            resolution_clone = resolution_clone.checked_add((value.len() as u64).checked_mul(2).ok_or(E::Length)?).ok_or(E::Length)?;
         }
+        resolution_clone = resolution_clone.checked_add(std::mem::size_of::<crate::physical_resolution::PhysicalResolution>() as u64 + 256).ok_or(E::Length)?;
     }
     let records = (doc.layers.len() as u64)
         .checked_add(s.items.len() as u64)
@@ -349,10 +348,8 @@ fn build<'a, L: MaskCoverageSetLease>(
             }
             for (ni, node) in stack.nodes.iter().enumerate() {
                 check(1)?;
-                if node.mask == Some(ItemRef::Mask(mask.id)) {
-                    if node.id != mask.owner || found.replace((si, ni)).is_some() {
-                        return Err(E::Integrity);
-                    }
+                if node.mask == Some(ItemRef::Mask(mask.id)) && (node.id != mask.owner || found.replace((si, ni)).is_some()) {
+                    return Err(E::Integrity);
                 }
             }
         }

@@ -77,20 +77,18 @@ fn prepare(owner: &AccountedDocument, patch: PointFilterRemovePatch, c: &ReadCon
     let mut mask_index = None;
     for (index, value) in state.filter_masks.iter().enumerate() {
         c.check(1)?;
-        if value.id == mask {
-            if value.owner != patch.filter || mask_index.replace(index).is_some() {
-                return Err(BackingError::Integrity);
-            }
+        if value.id == mask && (value.owner != patch.filter || mask_index.replace(index).is_some()) {
+            return Err(BackingError::Integrity);
         }
     }
     let mask_index = mask_index.ok_or(BackingError::Integrity)?;
     let mut item_index = None;
     for (index, item) in state.items.iter().enumerate() {
         c.check(1)?;
-        if item.item == ItemRef::Mask(mask) {
-            if item.mask.as_ref().is_none_or(|value| value.owner != ItemRef::Layer(patch.layer)) || item_index.replace(index).is_some() {
-                return Err(BackingError::Integrity);
-            }
+        if item.item == ItemRef::Mask(mask)
+            && (item.mask.as_ref().is_none_or(|value| value.owner != ItemRef::Layer(patch.layer)) || item_index.replace(index).is_some())
+        {
+            return Err(BackingError::Integrity);
         }
     }
     let item_index = item_index.ok_or(BackingError::Integrity)?;

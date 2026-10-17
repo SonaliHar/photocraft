@@ -183,7 +183,7 @@ fn cumulative_work_budget_cannot_reset_between_full_validation_and_copy() {
         )
         .unwrap();
     let left = AtomicU64::new(measured_work.load(Ordering::Relaxed));
-    let work = |n| left.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+    let work = |n| left.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
     assert!(
         owner.try_edit(edit(id, Some("new"), Some(false), Some(0.5)), &ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &work }).is_err()
     );

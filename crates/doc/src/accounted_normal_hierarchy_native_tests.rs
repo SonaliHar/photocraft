@@ -125,7 +125,7 @@ fn native_target_and_plain_domain_are_not_class_marker_authority() {
     let filtered = AccountedDocument::new_readonly_normal_hierarchy_current_storage(d, h, q.clone(), &ctl()).unwrap();
     let held = q.usage().unwrap();
     let all_index = q.reserve(QuotaKind::Index, (64u64 << 20) - held.index).unwrap();
-    let all_resident = q.reserve(QuotaKind::Resident, (128u64 << 20) - held.resident).unwrap();
+    let all_resident = q.reserve(QuotaKind::Resident, (128u64 << 20) - q.usage().unwrap().resident).unwrap();
     assert_eq!(
         filtered
             .validate_readonly_normal_hierarchy_native_edit(
@@ -180,7 +180,7 @@ fn native_noop_and_changed_copy_use_actual_original_quota_and_control() {
         drop(changed);
         assert_eq!(q.usage().unwrap(), baseline);
         let left = AtomicU64::new(total.load(Ordering::Relaxed) - 1);
-        let work = |n| left.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+        let work = |n| left.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
         assert!(owner.try_edit_readonly_normal_hierarchy_native(edit, &ReadControl { interrupt: &Interrupt::NONE, work: &work }).is_err());
         assert_eq!(q.usage().unwrap(), baseline);
         // Observe a real newly acquired COW tile, beyond the fixed plan scratch.

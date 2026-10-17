@@ -45,10 +45,8 @@ fn physical_index(doc: &Document, layer: LayerId, c: &ReadControl<'_>) -> Result
         if id == filter.id {
             continue;
         }
-        if item.mask.as_ref().is_some_and(|m| m.owner == ItemRef::Layer(layer)) {
-            if found.replace(index).is_some() {
-                return Err(BackingError::Integrity);
-            }
+        if item.mask.as_ref().is_some_and(|m| m.owner == ItemRef::Layer(layer)) && found.replace(index).is_some() {
+            return Err(BackingError::Integrity);
         }
     }
     found.ok_or(BackingError::Integrity)

@@ -403,7 +403,10 @@ fn layer_with_group(v: &crate::Layer, c: &ReadControl<'_>, isolated: bool) -> Re
         LayerContent::BackedRaster(backed) => LayerContent::BackedRaster(backed.clone()),
         LayerContent::Group(group) if isolated && group.children.len() == 2 && group.artboard.is_none() => {
             let mut children = vector(group.children.len())?;
-            for child in &group.children { c.check(1)?; children.push(layer(child, c)?); }
+            for child in &group.children {
+                c.check(1)?;
+                children.push(layer(child, c)?);
+            }
             LayerContent::Group(crate::Group { children, expanded: group.expanded, artboard: None })
         }
         _ => return Err(BackingError::Unsupported),
@@ -469,29 +472,44 @@ pub(super) fn copy_filtered_flat(doc: &Document, quota: &BackingQuota, c: &ReadC
 }
 // Current-only guarded copies repeat their actual class shape; no raw Source
 // validator or generic imported-selection rule is weakened.
-pub(super) fn copy_gaussian_group_selected(doc:&Document,quota:&BackingQuota,p:&SelectionPermit<'_>,c:&ReadControl<'_>)->Result<Document,BackingError>{
-    super::gaussian_group_readonly::shape_selected(doc,quota,c,Some(p))?;
-    copy_document_inner(doc,c,true)
+pub(super) fn copy_gaussian_group_selected(
+    doc: &Document,
+    quota: &BackingQuota,
+    p: &SelectionPermit<'_>,
+    c: &ReadControl<'_>,
+) -> Result<Document, BackingError> {
+    super::gaussian_group_readonly::shape_selected(doc, quota, c, Some(p))?;
+    copy_document_inner(doc, c, true)
 }
-pub(super) fn copy_filtered_flat_selected(doc:&Document,quota:&BackingQuota,p:&SelectionPermit<'_>,c:&ReadControl<'_>)->Result<Document,BackingError>{
-    super::filtered_flat_readonly::shape_with_purpose_selected(doc,quota,c,super::filtered_flat_readonly::TopologyPurpose::Current,Some(p))?;
-    copy_document_inner(doc,c,false)
+pub(super) fn copy_filtered_flat_selected(
+    doc: &Document,
+    quota: &BackingQuota,
+    p: &SelectionPermit<'_>,
+    c: &ReadControl<'_>,
+) -> Result<Document, BackingError> {
+    super::filtered_flat_readonly::shape_with_purpose_selected(doc, quota, c, super::filtered_flat_readonly::TopologyPurpose::Current, Some(p))?;
+    copy_document_inner(doc, c, false)
 }
 fn copy_document_inner(doc: &Document, c: &ReadControl<'_>, isolated: bool) -> Result<Document, BackingError> {
-    copy_document_inner_layers(doc,c,isolated,None)
+    copy_document_inner_layers(doc, c, isolated, None)
 }
-fn copy_document_inner_layers(doc:&Document,c:&ReadControl<'_>,isolated:bool,prepared:Option<Vec<crate::Layer>>)->Result<Document,BackingError>{
+fn copy_document_inner_layers(doc: &Document, c: &ReadControl<'_>, isolated: bool, prepared: Option<Vec<crate::Layer>>) -> Result<Document, BackingError> {
     // Called only after the complete selection-specific census and reservations.
     // Every owned string/vector copied below is fallible and polls per record or
     // <=32KiB text chunk. Immutable blobs/backings keep their original guard.
-    let new_layers=if let Some(layers)=prepared{layers}else{
-    let mut new_layers = vector(doc.layers.len())?;
-    for value in &doc.layers {
-        c.check(1)?;
-        let mut copied = if isolated { layer_with_group(value, c, true)? } else { layer(value, c)? };
-        if isolated { c.check(std::mem::size_of::<crate::LayerMask>() as u64)?; copied.mask = value.mask.clone(); }
-        new_layers.push(copied);
-    }
+    let new_layers = if let Some(layers) = prepared {
+        layers
+    } else {
+        let mut new_layers = vector(doc.layers.len())?;
+        for value in &doc.layers {
+            c.check(1)?;
+            let mut copied = if isolated { layer_with_group(value, c, true)? } else { layer(value, c)? };
+            if isolated {
+                c.check(std::mem::size_of::<crate::LayerMask>() as u64)?;
+                copied.mask = value.mask.clone();
+            }
+            new_layers.push(copied);
+        }
         new_layers
     };
     let mut text = vector(doc.metadata.text.len())?;
@@ -560,33 +578,33 @@ fn copy_document_inner_layers(doc:&Document,c:&ReadControl<'_>,isolated:bool,pre
     let result = Document {
         physical_resolution: doc.physical_resolution.as_ref().map(|v| physical(v, c)).transpose()?,
         xcf_state: doc.xcf_state.as_ref().map(|v| state(v, c)).transpose()?,
-        sample_encoding: sample_encoding.clone(),
+        sample_encoding: *sample_encoding,
         source_color_context: source_color_context.clone(),
         working_profile_interpretation: new_working_profile_interpretation,
-        id: id.clone(),
+        id: *id,
         name: string(name, c)?,
-        size: size.clone(),
-        resolution_dpi: resolution_dpi.clone(),
-        mode: mode.clone(),
-        depth: depth.clone(),
+        size: *size,
+        resolution_dpi: *resolution_dpi,
+        mode: *mode,
+        depth: *depth,
         icc_profile: icc_profile.clone(),
         layers: new_layers,
         channels: Vec::new(),
         guides: crate::Guides { horizontal: copied(&guides.horizontal, c)?, vertical: copied(&guides.vertical, c)?, colors: copied(&guides.colors, c)? },
         selection: None,
-        selection_channel_id: selection_channel_id.clone(),
+        selection_channel_id: *selection_channel_id,
         metadata: new_metadata,
-        global_light: global_light.clone(),
+        global_light: *global_light,
         paths: Vec::new(),
         work_path: None,
         clipping_path: None,
         quick_mask: None,
-        quick_mask_unselected: quick_mask_unselected.clone(),
+        quick_mask_unselected: *quick_mask_unselected,
         patterns: Vec::new(),
         color_table: None,
         duotone: None,
         layer_comps: Vec::new(),
-        last_applied_comp: last_applied_comp.clone(),
+        last_applied_comp: *last_applied_comp,
         last_document_state: None,
         measurement: crate::analysis::Measurement {
             scale: crate::analysis::MeasurementScale {
@@ -613,8 +631,8 @@ fn copy_document_inner_layers(doc:&Document,c:&ReadControl<'_>,isolated:bool,pre
         slices: crate::slices::Slices { group_name: string(&slices.group_name, c)?, list: Vec::new() },
         variables: crate::variables::Variables { defs: Vec::new(), data_sets: Vec::new(), active: variables.active },
         timeline: None,
-        file_encoding: file_encoding.clone(),
-        ruler_origin: ruler_origin.clone(),
+        file_encoding: *file_encoding,
+        ruler_origin: *ruler_origin,
     };
     c.check(1)?;
     Ok(result)
@@ -624,23 +642,29 @@ fn copy_document_inner_layers(doc:&Document,c:&ReadControl<'_>,isolated:bool,pre
 #[path = "accounted_imported_selection_tests.rs"]
 mod tests;
 
-pub(super) fn copy_normal_hierarchy(doc:&Document,c:&ReadControl<'_>)->Result<Document,BackingError>{
-    fn layers(values:&[crate::Layer],depth:usize,c:&ReadControl<'_>)->Result<Vec<crate::Layer>,BackingError>{
-        if depth>32{return Err(BackingError::Length)}
-        let mut output=vector(values.len())?;
-        for value in values{c.check(1)?;
-            let content=match &value.content{
-                LayerContent::BackedRaster(backed)=>LayerContent::BackedRaster(backed.clone()),
-                LayerContent::Group(group) if depth<32&&group.artboard.is_none()=>LayerContent::Group(crate::Group{children:layers(&group.children,depth+1,c)?,expanded:group.expanded,artboard:None}),
-                _=>return Err(BackingError::Unsupported),
+pub(super) fn copy_normal_hierarchy(doc: &Document, c: &ReadControl<'_>) -> Result<Document, BackingError> {
+    fn layers(values: &[crate::Layer], depth: usize, c: &ReadControl<'_>) -> Result<Vec<crate::Layer>, BackingError> {
+        if depth > 32 {
+            return Err(BackingError::Length);
+        }
+        let mut output = vector(values.len())?;
+        for value in values {
+            c.check(1)?;
+            let content = match &value.content {
+                LayerContent::BackedRaster(backed) => LayerContent::BackedRaster(backed.clone()),
+                LayerContent::Group(group) if depth < 32 && group.artboard.is_none() => {
+                    LayerContent::Group(crate::Group { children: layers(&group.children, depth + 1, c)?, expanded: group.expanded, artboard: None })
+                }
+                _ => return Err(BackingError::Unsupported),
             };
-            output.push(layer_with_known_content(value,content,c)?);
-        }Ok(output)
+            output.push(layer_with_known_content(value, content, c)?);
+        }
+        Ok(output)
     }
-    let copied=layers(&doc.layers,0,c)?;
-    copy_document_inner_layers(doc,c,false,Some(copied))
+    let copied = layers(&doc.layers, 0, c)?;
+    copy_document_inner_layers(doc, c, false, Some(copied))
 }
-fn layer_with_known_content(v:&crate::Layer,content:LayerContent,c:&ReadControl<'_>)->Result<crate::Layer,BackingError>{
+fn layer_with_known_content(v: &crate::Layer, content: LayerContent, c: &ReadControl<'_>) -> Result<crate::Layer, BackingError> {
     let crate::Layer {
         indexed_source: _,
         import_compositing,

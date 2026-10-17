@@ -58,6 +58,7 @@ struct Resolved<'a> {
 }
 // No allocation or retained path. Complete measured class proof precedes this
 // bounded actual-tree scan, including every fixed-group/root-only class.
+type ResolvedLayer<'a> = (&'a crate::Layer, usize, Option<(usize, LayerId)>);
 fn resolve<'a>(doc: &'a Document, id: LayerId, c: &ReadControl<'_>) -> Result<Resolved<'a>, BackingError> {
     fn walk<'a>(
         layers: &'a [crate::Layer],
@@ -65,7 +66,7 @@ fn resolve<'a>(doc: &'a Document, id: LayerId, c: &ReadControl<'_>) -> Result<Re
         parent: Option<(usize, LayerId)>,
         id: LayerId,
         next: &mut usize,
-        found: &mut Option<(&'a crate::Layer, usize, Option<(usize, LayerId)>)>,
+        found: &mut Option<ResolvedLayer<'a>>,
         c: &ReadControl<'_>,
     ) -> Result<(), BackingError> {
         if depth > 32 {
@@ -100,13 +101,12 @@ fn resolve<'a>(doc: &'a Document, id: LayerId, c: &ReadControl<'_>) -> Result<Re
     let mut canonical = None;
     for (index, item) in state.items.iter().enumerate() {
         c.check(1)?;
-        if item.item == ItemRef::Layer(id) {
-            if canonical.replace(index).is_some()
+        if item.item == ItemRef::Layer(id)
+            && (canonical.replace(index).is_some()
                 || item.parent != parent.map(|(_, p)| ItemRef::Layer(p))
-                || item.raster_bounds != Some(backed.operative_bounds())
-            {
-                return Err(BackingError::Integrity);
-            }
+                || item.raster_bounds != Some(backed.operative_bounds()))
+        {
+            return Err(BackingError::Integrity);
         }
     }
     Ok(Resolved { layer, ordinal, parent, canonical: canonical.ok_or(BackingError::Integrity)?, backed })
@@ -277,10 +277,10 @@ fn layer_mut<'a>(
         if ordinal == target {
             return Ok(Some(layer));
         }
-        if let LayerContent::Group(group) = &mut layer.content {
-            if let Some(found) = layer_mut(&mut group.children, target, next, depth + 1, c)? {
-                return Ok(Some(found));
-            }
+        if let LayerContent::Group(group) = &mut layer.content
+            && let Some(found) = layer_mut(&mut group.children, target, next, depth + 1, c)?
+        {
+            return Ok(Some(found));
         }
     }
     Ok(None)

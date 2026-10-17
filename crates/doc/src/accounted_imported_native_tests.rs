@@ -88,7 +88,12 @@ fn malformed_regions_target_length_and_unsupported_imported_families_refuse_befo
     for (filtered, selection) in [(true, false), (false, true)] {
         let owner = model(&q, "unsupported", filtered, selection);
         let id = owner.document().layers[0].id;
-        assert!(owner.try_edit(AccountedEdit::NativePixels { layer: id, rect: Rect::new(0, 0, 1, 1), bytes: &[0; 16] }, &control()).is_err());
+        let result = owner.try_edit(AccountedEdit::NativePixels { layer: id, rect: Rect::new(0, 0, 1, 1), bytes: &[0; 16] }, &control());
+        if filtered {
+            assert!(result.unwrap().shares_model(&owner));
+        } else {
+            assert!(result.is_err());
+        }
     }
 }
 
@@ -137,5 +142,5 @@ fn source_free_legacy_native_equality_does_not_gain_new_noop_behavior() {
     assert!(!changed.shares_model(&owner));
 }
 
-#[path="accounted_imported_native_wide_tests.rs"]
+#[path = "accounted_imported_native_wide_tests.rs"]
 mod wide_contracts;

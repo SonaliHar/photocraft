@@ -53,7 +53,7 @@ fn ordered_fixture(q: &BackingQuota, sample: SampleType, counts: &[usize]) -> (D
             node.id = FilterId(1000 + ordinal);
             let mid = MaskId(2000 + ordinal);
             node.mask = Some(ItemRef::Mask(mid));
-            node.enabled = ordinal % 2 == 0;
+            node.enabled = ordinal.is_multiple_of(2);
             node.arguments =
                 vec![FilterArgument { name: "scalar".into(), value: FilterValue::Number(ExactNumber::Float32Bits((ordinal as f32 / 16.).to_bits())) }];
             let fid = node.id;
@@ -239,7 +239,7 @@ fn ordered_target_failures_and_copy_rollback_keep_original() {
     drop(changed);
     assert_eq!(owner.quota().usage().unwrap(), before);
     let left = AtomicU64::new(count.load(Ordering::Relaxed) - 1);
-    let work = |n| left.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+    let work = |n| left.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
     assert!(owner.try_with_readonly_filtered_flat_point_filter(p, &ReadControl { interrupt: &Interrupt::NONE, work: &work }).is_err());
     assert_eq!(owner.quota().usage().unwrap(), before);
     let work = |_| if owner.quota().usage().map_err(|_| BackingError::Quota)?.index > before.index { Err(BackingError::Cancelled) } else { Ok(()) };

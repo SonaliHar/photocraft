@@ -180,7 +180,7 @@ fn integer_copy_control_and_no_new_filter_or_pixel_authority() {
         drop(changed);
         assert_eq!(q.usage().unwrap(), before);
         let left = AtomicU64::new(total.load(Ordering::Relaxed) - 1);
-        let work = |n| left.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+        let work = |n| left.try_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
         assert!(owner.try_with_document_name("changed", &ReadControl { interrupt: &Interrupt::NONE, work: &work }).is_err());
         assert_eq!(q.usage().unwrap(), before);
         let block = q.reserve(QuotaKind::Index, (64u64 << 20) - before.index).unwrap();

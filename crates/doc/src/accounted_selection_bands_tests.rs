@@ -72,7 +72,7 @@ fn empty_is_none_and_sparse_output_owns_only_real_native_tiles() {
     let mut pixel = [0];
     s.surface().try_read_pixel_bytes(256, 1, &mut pixel).unwrap();
     assert_eq!(pixel, [255]);
-    assert_eq!(s.owner._payload.bytes(), 65537);
+    assert_eq!(s.owner._payload.as_ref().unwrap().bytes(), 65537);
     drop(s);
     assert_eq!(q.usage().unwrap(), before);
 }

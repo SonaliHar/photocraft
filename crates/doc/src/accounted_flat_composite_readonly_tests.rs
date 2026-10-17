@@ -231,7 +231,7 @@ fn opaque_payload_is_exactly_checked_and_failed_work_is_transactional() {
     assert!(Arc::ptr_eq(&owner.document().xcf_state.as_ref().unwrap().opaque[0].bytes, &titled.document().xcf_state.as_ref().unwrap().opaque[0].bytes));
     let before = q.usage().unwrap();
     let remaining = AtomicU64::new(32768);
-    let work = |n| remaining.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| left.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+    let work = |n| remaining.try_update(Ordering::Relaxed, Ordering::Relaxed, |left| left.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
     let limited = ReadControl { interrupt: &Interrupt::NONE, work: &work };
     assert!(owner.try_with_document_name("denied.pcraft", &limited).is_err());
     assert_eq!(q.usage().unwrap(), before);

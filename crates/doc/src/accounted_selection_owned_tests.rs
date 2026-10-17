@@ -19,13 +19,15 @@ fn adopted_f64_default_padding_words_and_original_guard_survive_view() {
     let default = 0.25f64.to_ne_bytes();
     let mut surface = Surface::try_with_default_bytes(format, &default).unwrap();
     let coordinate = TileCoord::new(0, 0);
-    for pixel in surface.try_tile_mut(coordinate).unwrap().bytes_mut().chunks_exact_mut(8) {
+    for pixel in surface.try_tile_mut(coordinate).unwrap().bytes_mut().as_chunks_mut::<8>().0 {
         pixel.copy_from_slice(&0.5000000000000001f64.to_ne_bytes());
     }
     let tile = surface.tile(coordinate).unwrap().clone();
-    let native_before = q.usage().unwrap().resident;
+    let native_before = q.usage().unwrap();
     let selected = AccountedSelection::adopt_codec_surface(surface, Rect::new(1, 1, 3, 2), retained, &q, &ctl()).unwrap();
-    assert_eq!(q.usage().unwrap().resident, native_before); // Existing payload not charged again.
+    let after = q.usage().unwrap();
+    assert_eq!(after.resident - after.index, native_before.resident - native_before.index); // Existing payload not charged again.
+    assert_eq!(after.index - native_before.index, selected._allocation.bytes());
     let view = selected.clone_view(&ctl()).unwrap();
     assert_eq!(view.surface.default_bytes(), default);
     assert!(Arc::ptr_eq(view.surface.tile(coordinate).unwrap(), &tile));

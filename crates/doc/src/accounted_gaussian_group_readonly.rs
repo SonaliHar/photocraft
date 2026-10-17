@@ -317,10 +317,8 @@ pub(super) fn shape_selected(doc: &Document, q: &BackingQuota, c: &ReadControl<'
             {
                 return Err(fail());
             }
-            if !is_filter {
-                if physical_id.replace(id).is_some() {
-                    return Err(BackingError::Integrity);
-                }
+            if !is_filter && physical_id.replace(id).is_some() {
+                return Err(BackingError::Integrity);
             }
         }
     }
@@ -502,8 +500,15 @@ enum CopyKind<'a> {
     Metadata(metadata::Plan<'a>),
 }
 fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
-    let replacement_selection=match kind{CopyKind::Selection(g)=>Some(g),_=>None};
-    let selection_copy=if owner.document().selection.is_some()||replacement_selection.is_some(){Some(programme_selection::SelectionCopy::new(owner,replacement_selection,c)?)}else{None};
+    let replacement_selection = match kind {
+        CopyKind::Selection(g) => Some(g),
+        _ => None,
+    };
+    let selection_copy = if owner.document().selection.is_some() || replacement_selection.is_some() {
+        Some(programme_selection::SelectionCopy::new(owner, replacement_selection, c)?)
+    } else {
+        None
+    };
     let name_bytes = match kind {
         CopyKind::ProgrammeNative(_) | CopyKind::Selection(_) => 0,
         CopyKind::Title(name) => name.len() as u64,
@@ -522,10 +527,17 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     let payload_envelope = logical.payload.checked_mul(2).ok_or(BackingError::Length)?;
     let mut payload = owner.quota().reserve(QuotaKind::Resident, payload_envelope).map_err(|_| BackingError::Quota)?;
     c.check(logical.total()?)?;
-    if let CopyKind::ProgrammeNative(plan) = kind { c.check(plan.copy_work())?; }
-    let document = if owner.document().selection.is_some(){let p=programme_selection::owner_permit(owner,c)?;imported_selection::copy_gaussian_group_selected(owner.document(),owner.quota(),&p,c)?}else{imported_selection::copy_gaussian_group(owner.document(), owner.quota(), c)?};
+    if let CopyKind::ProgrammeNative(plan) = kind {
+        c.check(plan.copy_work())?;
+    }
+    let document = if owner.document().selection.is_some() {
+        let p = programme_selection::owner_permit(owner, c)?;
+        imported_selection::copy_gaussian_group_selected(owner.document(), owner.quota(), &p, c)?
+    } else {
+        imported_selection::copy_gaussian_group(owner.document(), owner.quota(), c)?
+    };
     let mut staged = ModelStaging { document, selection_view: None };
-    let selection_guard=if let Some(copy)=selection_copy{copy.install(&mut staged)}else{None};
+    let selection_guard = if let Some(copy) = selection_copy { copy.install(&mut staged) } else { None };
     let source = owner.document().xcf_state.as_ref().ok_or_else(fail)?;
     let target = staged.document.xcf_state.as_mut().ok_or_else(fail)?;
     let stack = source.filter_stacks.first().ok_or_else(fail)?;
@@ -542,16 +554,18 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
     let plan = filter_readonly::MaskCopyPlan::new(&mask.surface, mask.bounds, c)?;
     target.filter_masks.push(crate::FilterMask { id: mask.id, owner: mask.owner, bounds: mask.bounds, surface: plan.copy(&mask.surface, c)? });
     match kind {
-        CopyKind::Selection(_) => {},
+        CopyKind::Selection(_) => {}
         CopyKind::ProgrammeNative(plan) => programme_native::apply(&mut staged.document, plan, c)?,
         CopyKind::Title(name) => staged.document.name = imported_edits::copy_name(name, c)?,
         CopyKind::Filter(plan) => patch::apply(&mut staged.document, plan, c)?,
         CopyKind::Metadata(plan) => metadata::apply(&mut staged.document, plan, c)?,
     }
-    let actual = if selection_guard.is_some(){
-        let p=programme_selection::staged_permit(&staged.document,selection_guard,owner.quota(),c)?;
-        programme_selection::measured(&staged.document,owner.quota(),programme_native::kind(owner)?,&p,c)?
-    } else { measured(&staged.document, owner.quota(), c)? };
+    let actual = if selection_guard.is_some() {
+        let p = programme_selection::staged_permit(&staged.document, selection_guard, owner.quota(), c)?;
+        programme_selection::measured(&staged.document, owner.quota(), programme_native::kind(owner)?, &p, c)?
+    } else {
+        measured(&staged.document, owner.quota(), c)?
+    };
     let actual_index = actual.index.checked_add(wrapper).ok_or(BackingError::Length)?;
     if actual_index > envelope || actual.payload > payload_envelope {
         return Err(BackingError::Allocation);
@@ -578,19 +592,32 @@ fn current_copy(owner: &AccountedDocument, logical: ModelCensus, kind: CopyKind<
 // Private additive programme-native bridge. Existing entrypoints and copier
 // schedules retain their own class-specific custody and final census.
 pub(super) fn programme_measured(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
-    if owner.document().selection.is_some(){return programme_selection::measured_owner(owner,c)}
+    if owner.document().selection.is_some() {
+        return programme_selection::measured_owner(owner, c);
+    }
     measured(owner.document(), owner.quota(), c)
 }
-pub(super) fn programme_copy(owner: &AccountedDocument, logical: ModelCensus, plan: programme_native::Plan<'_>, c: &ReadControl<'_>) -> Result<AccountedDocument, BackingError> {
+pub(super) fn programme_copy(
+    owner: &AccountedDocument,
+    logical: ModelCensus,
+    plan: programme_native::Plan<'_>,
+    c: &ReadControl<'_>,
+) -> Result<AccountedDocument, BackingError> {
     current_copy(owner, logical, CopyKind::ProgrammeNative(plan), c)
 }
 
-pub(super) fn programme_selected_measured(doc:&Document,q:&BackingQuota,p:&SelectionPermit<'_>,c:&ReadControl<'_>)->Result<ModelCensus,BackingError>{
-    shape_selected(doc,q,c,Some(p))?;census_inner(doc,true,true,p.guard(),q,c,true)
+pub(super) fn programme_selected_measured(doc: &Document, q: &BackingQuota, p: &SelectionPermit<'_>, c: &ReadControl<'_>) -> Result<ModelCensus, BackingError> {
+    shape_selected(doc, q, c, Some(p))?;
+    census_inner(doc, true, true, p.guard(), q, c, true)
 }
 
-pub(super) fn programme_selection_copy(owner:&AccountedDocument,logical:ModelCensus,selection:Option<&AccountedSelection>,c:&ReadControl<'_>)->Result<AccountedDocument,BackingError>{
-    current_copy(owner,logical,CopyKind::Selection(selection),c)
+pub(super) fn programme_selection_copy(
+    owner: &AccountedDocument,
+    logical: ModelCensus,
+    selection: Option<&AccountedSelection>,
+    c: &ReadControl<'_>,
+) -> Result<AccountedDocument, BackingError> {
+    current_copy(owner, logical, CopyKind::Selection(selection), c)
 }
 
 #[cfg(test)]
