@@ -104,6 +104,7 @@ pub mod gpu_status;
 pub mod gradient_ui;
 pub mod guide_layout_ui;
 pub mod guide_select;
+pub mod history_options_ui;
 pub mod hold_keys;
 pub mod i18n;
 mod icon_data;
@@ -192,6 +193,7 @@ mod sizing;
 pub mod slice_ui;
 pub mod smart_ui;
 pub mod snap_ui;
+pub mod snapshot_dialog;
 pub(crate) mod solid_fill_ui;
 pub mod spring_tools;
 pub mod stack_dialog;
@@ -1659,6 +1661,8 @@ impl PhotocraftApp {
                     // The job locked the document, but record the revision that was written.
                     st.saved_revision = revision;
                     app.remember_stamp(doc, path);
+                    // History Options › Automatically Create New Snapshot When Saving (#2966).
+                    photocraft_engine::history_options_cmds::snapshot_on_save(&mut app.session);
                 }
                 // "Save Document" script events and File › Generate › Image Assets.
                 if hooks
