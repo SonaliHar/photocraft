@@ -4,7 +4,7 @@
 use super::*;
 use photocraft_doc::xcf_filters::{ExactNumber, FilterArgument};
 use photocraft_raster::Surface;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 pub(crate) struct Budget {
     pub(crate) quota: BackingQuota,
     pub(crate) used: u64,

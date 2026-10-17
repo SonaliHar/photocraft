@@ -99,7 +99,7 @@ fn current_uses_actual_profile_for_packed_row_and_zero_paths() {
     assert_eq!(context.bounds(), s);
     let got = context.render_wide_band(s, &ctl()).unwrap();
     let expected = resident(owned.document().pixel_format(), s).try_read_region_f64(s).unwrap();
-    for (actual, expected) in got.pixels().iter().zip(expected.chunks_exact(4)) {
+    for (actual, expected) in got.pixels().iter().zip(expected.as_chunks::<4>().0.iter()) {
         assert_eq!(actual.map(f64::to_bits), [expected[0], expected[1], expected[2], expected[3]].map(f64::to_bits));
     }
 }
@@ -168,9 +168,9 @@ fn inactive_source_and_current_do_not_skip_role_proofs() {
     assert!(PreparedBackedBoxContext::new(&owned, NormalBandLimits::default(), &ctl()).is_err());
     let (mut d, q, g, _) = observed_role(SampleType::F64, true, Rect::new(0, 0, 16, 12), 4);
     let node = &mut d.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
-    node.operation.schema_epoch = crate::gimp_box::EPOCH.into();
+    node.operation.schema_epoch = crate::gimp_neighborhood::box_blur::EPOCH.into();
     let policy = node.composition.as_mut().unwrap();
-    policy.compatibility_epoch = crate::gimp_box::EPOCH.into();
+    policy.compatibility_epoch = crate::gimp_neighborhood::box_blur::EPOCH.into();
     policy.stored_blend_space = -1474592175;
     policy.stored_composite_space = -1474592175;
     policy.stored_operator = -1474592175;

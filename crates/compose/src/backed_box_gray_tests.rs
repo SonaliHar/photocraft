@@ -87,6 +87,15 @@ fn gray_fixture(
     radius: i64,
     enabled: bool,
 ) -> (Document, BackingQuota, Arc<dyn std::any::Any + Send + Sync>, Profile, Arc<Counts>) {
+    let (doc, q, guard, basis, counts, _) = gray_fixture_with_raster(sample, s, radius, enabled);
+    (doc, q, guard, basis, counts)
+}
+fn gray_fixture_with_raster(
+    sample: SampleType,
+    s: Rect,
+    radius: i64,
+    enabled: bool,
+) -> (Document, BackingQuota, Arc<dyn std::any::Any + Send + Sync>, Profile, Arc<Counts>, BackedRaster) {
     let (mut doc, q, guard, _) = observed_depth(sample, s, radius);
     doc.mode = ColorMode::Grayscale;
     let basis = photocraft_cms::Builtin::SGray.profile().clone();
@@ -100,9 +109,9 @@ fn gray_fixture(
     let counts = Arc::new(Counts::default());
     let store = Arc::new(GrayPattern { descriptor, quota: q.clone(), counts: counts.clone(), _fee: fee });
     let raster = BackedRaster::new(store, q.clone(), 1, &ctl()).unwrap();
-    doc.layers[0].content = LayerContent::BackedRaster(BackedLayer::new(raster, descriptor, &ctl()).unwrap());
+    doc.layers[0].content = LayerContent::BackedRaster(BackedLayer::new(raster.clone(), descriptor, &ctl()).unwrap());
     doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].enabled = enabled;
-    (doc, q, guard, basis, counts)
+    (doc, q, guard, basis, counts, raster)
 }
 fn gray_surface(format: photocraft_color::PixelFormat, s: Rect) -> Surface {
     let mut bytes = Vec::new();
@@ -148,7 +157,7 @@ fn gray_reference(sample: SampleType, s: Rect, radius: u32, coordinate: photocra
     let curve = profile.gray_trc.as_ref().unwrap();
     let native = source.try_read_region_f64(s).unwrap();
     let mut rgba = Vec::new();
-    for pixel in native.chunks_exact(2) {
+    for pixel in native.as_chunks::<2>().0 {
         let gray = curve.eval64(pixel[0]);
         rgba.extend_from_slice(&[gray, gray, gray, pixel[1]]);
     }
@@ -159,7 +168,7 @@ fn gray_reference(sample: SampleType, s: Rect, radius: u32, coordinate: photocra
         n::try_box_blur(&linear, t, s, radius, n::GaussianLimits { resident_bytes: req.peak_resident_bytes, work_units: req.work_units }, &Interrupt::NONE)
             .unwrap();
     let mut pixels = filtered.try_read_region_f64(t).unwrap();
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         let gray = curve.eval_inverse64(pixel[0]);
         pixel[..3].copy_from_slice(&[gray; 3]);
     }
@@ -185,8 +194,8 @@ fn source_keeps_two_native_channels_and_pays_sgray_preparation() {
                 let mut pixel = [0.; 2];
                 surface.try_read_pixel_f64(x, y, &mut pixel).unwrap();
                 let raw = gray_encoded(format, x, y);
-                for channel in 0..2 {
-                    assert_eq!(pixel[channel].to_bits(), photocraft_color::try_read_sample_f64(&raw, sample, channel).unwrap().to_bits());
+                for (channel, value) in pixel.iter().enumerate().take(2) {
+                    assert_eq!(value.to_bits(), photocraft_color::try_read_sample_f64(&raw, sample, channel).unwrap().to_bits());
                 }
             }
             let original = input.document.clone(); // External expected metadata/native owner.
@@ -232,7 +241,7 @@ fn current_repeats_gray_only_inside_working_and_display_lanes() {
         assert_eq!(context.bounds(), s);
         let band = context.render_wide_band(s, &ctl()).unwrap();
         let native = gray_surface(owned.document().pixel_format(), s).try_read_region_f64(s).unwrap();
-        for (actual, expected) in band.pixels().iter().zip(native.chunks_exact(2)) {
+        for (actual, expected) in band.pixels().iter().zip(native.as_chunks::<2>().0.iter()) {
             assert_eq!(actual.map(f64::to_bits), [expected[0], expected[0], expected[0], expected[1]].map(f64::to_bits));
         }
     }
@@ -305,13 +314,14 @@ fn malformed_gray_inputs_refuse_even_when_inactive() {
             // A stored transfer edit alone cannot reinterpret old nonlinear
             // source precision. New transfer roles require their exact pair.
             assert!(!is_candidate(&doc, &ctl()).unwrap());
-            let owned = owner(doc, q, guard, false);
-            assert!(PreparedBackedBoxContext::new(&owned, Default::default(), &ctl()).is_err());
+            // This contradictory transfer/precision model is rejected by the
+            // structural owner before the streamed CURRENT constructor.
+            assert!(matches!(AccountedDocument::new_readonly_point_storage(doc, guard, q, &ctl()), Err(BackingError::Unsupported)));
         }
         let (mut doc, q, guard, _, _) = gray_fixture(sample, Rect::new(0, 0, 16, 12), 4, true);
         let node = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
-        node.operation.schema_epoch = crate::gimp_box::EPOCH.into();
-        node.composition.as_mut().unwrap().compatibility_epoch = crate::gimp_box::EPOCH.into();
+        node.operation.schema_epoch = crate::gimp_neighborhood::box_blur::EPOCH.into();
+        node.composition.as_mut().unwrap().compatibility_epoch = crate::gimp_neighborhood::box_blur::EPOCH.into();
         assert!(!is_candidate(&doc, &ctl()).unwrap());
         let owned = owner(doc, q, guard, false);
         assert!(PreparedBackedBoxContext::new(&owned, Default::default(), &ctl()).is_err());
@@ -354,11 +364,12 @@ fn gray_controls_preserve_source_custody_and_typed_errors() {
         assert_eq!(input.document, original);
     }
     let s = Rect::new(-7, 11, 250, 270);
-    let (doc, q, guard, _, counts) = gray_fixture(SampleType::F64, s, 127, true);
+    let (doc, q, guard, _, counts, raster) = gray_fixture_with_raster(SampleType::F64, s, 127, true);
     let owned = owner(doc, q, guard, false);
     let context = PreparedBackedBoxContext::new(&owned, Default::default(), &ctl()).unwrap();
     let roi = Rect::new(-2, 12, 2, 14);
     drop(context.render_wide_band(roi, &ctl()).unwrap());
+    raster.clear_cache().unwrap();
     let baseline = owned.quota().usage().unwrap();
     counts.fail.store(true, Ordering::Relaxed);
     assert!(matches!(context.render_wide_band(roi, &ctl()), Err(E::View(photocraft_raster::checked_view::RasterViewError::Backed(BackingError::Io)))));

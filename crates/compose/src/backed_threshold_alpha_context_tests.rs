@@ -49,16 +49,15 @@ impl NativePlaneStore for Store {
         Ok(())
     }
 }
-fn fixture(
-    mode: ColorMode,
-    sample: SampleType,
-    stored: SampleEncoding,
-) -> (Document, BackingQuota, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>, &'static Profile, Vec<u8>) {
+type Fixture = (Document, BackingQuota, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>, &'static Profile, Vec<u8>);
+fn fixture(mode: ColorMode, sample: SampleType, stored: SampleEncoding) -> Fixture {
     let quota = BackingQuota::new(QuotaLimits { resident: 64 << 20, scratch: 0, index: 16 << 20 });
     // Actual source/map/default/model fixture allocation is prospectively paid.
     let guard: Arc<dyn Any + Send + Sync> = Arc::new(quota.reserve(QuotaKind::Resident, 2 << 20).unwrap());
     let profile = if mode == ColorMode::Rgb { Builtin::Srgb.profile() } else { Builtin::SGray.profile() };
     let mut doc = Document::new("current recipe", Size::new(8, 6), mode, sample);
+    // This existing CURRENT recipe binds the exact Builtin ICC; stored encoding
+    // is independently operative data, not a grant for another current ICC.
     doc.icc_profile = Some(profile.to_bytes());
     doc.working_profile_interpretation = if mode == ColorMode::Rgb {
         WorkingProfileInterpretation::implicit_srgb(doc.icc_profile.as_ref().unwrap())

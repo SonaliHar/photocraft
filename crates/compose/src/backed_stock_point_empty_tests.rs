@@ -4,6 +4,7 @@ use super::*;
 use photocraft_doc::import_compositing::GimpSpace;
 fn empty() -> (Document, BackingQuota, std::sync::Arc<dyn std::any::Any + Send + Sync>, &'static Profile, Vec<u8>) {
     let (mut doc, q, guard, _, profile, raw) = fixture(2, ColorMode::Rgb, SampleType::U8, SampleEncoding::NonlinearProfile);
+    doc.layers[0].import_compositing.as_mut().unwrap().blend_encoding = SampleEncoding::NonlinearProfile;
     doc.layers[0].import_compositing.as_mut().unwrap().composite_encoding = SampleEncoding::NonlinearProfile;
     let layer = doc.layers[0].id;
     let state = doc.xcf_state.as_mut().unwrap();
@@ -14,6 +15,7 @@ fn empty() -> (Document, BackingQuota, std::sync::Arc<dyn std::any::Any + Send +
     let policy = state.items[0].composition.as_mut().unwrap();
     policy.stored_composite_space = 2;
     policy.stored_operator = 1;
+    policy.resolved.as_mut().unwrap().blend_space = GimpSpace::ProfileRgb;
     policy.resolved.as_mut().unwrap().composite_space = GimpSpace::ProfileRgb;
     (doc, q, guard, profile, raw)
 }
@@ -37,7 +39,7 @@ fn empty_current_band_is_exact_native_identity_and_matches_independent_legacy_em
     )
     .unwrap();
     let output = current.render_wide_band(doc.bounds(), &ctl()).unwrap();
-    for (actual, bytes) in output.pixels().iter().zip(raw.chunks_exact(4)) {
+    for (actual, bytes) in output.pixels().iter().zip(raw.as_chunks::<4>().0.iter()) {
         let input = std::array::from_fn(|c| try_read_sample_f64(bytes, SampleType::U8, c).unwrap());
         assert_eq!(actual.map(f64::to_bits), input.map(f64::to_bits));
         assert_eq!(actual.map(f64::to_bits), legacy.point_at(input, (0, 0), &mut |_| Ok(())).unwrap().map(f64::to_bits));

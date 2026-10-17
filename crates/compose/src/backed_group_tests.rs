@@ -64,6 +64,7 @@ fn fixture_with_backdrop(mode: ColorMode, sample: SampleType, case: u8, defect: 
     let mut upper = leaf(&q, mode, sample, Rect::new(4, 3, 13, 10), "Upper");
     upper.opacity = 0.3125;
     let mut group = Layer::group("Group", vec![lower, upper]);
+    group.blend = photocraft_doc::BlendMode::Normal;
     group.opacity = 0.625;
     group.visible = case != 2;
     let groupbounds = Rect::new(-3, -2, 13, 10);

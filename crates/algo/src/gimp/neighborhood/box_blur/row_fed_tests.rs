@@ -65,10 +65,12 @@ fn positive_radii_retain_old_canonical_arithmetic_including_maximum() {
 #[test]
 #[ignore = "UNRUN: maximum-radius logical planning retains only bounded rows and full tile"]
 fn maximum_radius_plan_prices_actual_capacity_without_full_support_allocation() {
-    for source in [Rect::new(0, 0, 6000, 6000), Rect::new(-3000, -2000, 3000, 2000)] {
+    for (source, row_pixels) in [(Rect::new(0, 0, 6000, 6000), 1256), (Rect::new(-3000, -2000, 3000, 2000), 2256)] {
         let plan = BoxBlurRowPlan::new(source, TileCoord::containing(0, 0), 1000, &Interrupt::NONE).unwrap();
         let r = plan.requirements(&Interrupt::NONE).unwrap();
-        assert_eq!(r.row_pixels, 2256);
+        // The edge case clips half the logical support to the source extent;
+        // the interior case reads the complete row.
+        assert_eq!(r.row_pixels, row_pixels);
         assert_eq!(r.row_requests, 2511);
         assert_eq!(r.output_bytes, 256 * 256 * 32);
         assert_eq!(r.peak_resident_bytes, 2 * (3 * 256 * 32 + 256 * 256 * 32) + 4096);

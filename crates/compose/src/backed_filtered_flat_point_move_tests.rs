@@ -51,6 +51,10 @@ fn typed_move_changes_only_canonical_order_and_declared_composition() {
         let (owner, _, _, _) = adopt(ordered(sample, &[&[0, 1, 2], &[]], true));
         let old = Context::new(&owner, Default::default(), &ctl()).unwrap();
         old.validate_operative(&ctl()).unwrap();
+        // Expected old pixels are external oracle values; the original model
+        // stays retained while its independent renderer is dropped before edit.
+        let old_pixels = [0, 2, 4, 7].map(|x| root_value(&old, 0, x, 0));
+        drop(old);
         let patch = request(&owner, 0, 2);
         owner.validate_readonly_filtered_flat_point_filter_move(patch, &ctl()).unwrap();
         let moved = owner.try_move_readonly_filtered_flat_point_filter(patch, &ctl()).unwrap();
@@ -60,13 +64,13 @@ fn typed_move_changes_only_canonical_order_and_declared_composition() {
         assert_eq!(after.nodes.iter().map(|n| n.id).collect::<Vec<_>>(), vec![before.nodes[1].id, before.nodes[2].id, before.nodes[0].id]);
         let new = Context::new(&moved, Default::default(), &ctl()).unwrap();
         new.validate_operative(&ctl()).unwrap();
-        for x in [0u32, 2, 4, 7] {
+        for (at, x) in [0u32, 2, 4, 7].into_iter().enumerate() {
             let p = input(0, x, 0, sample);
             // Canonical [Semi,Hue,Vib] -> [Hue,Vib,Semi]. Fixed named calls
             // deliberately do not traverse either implementation container.
             let pre = step(0, bridge(step(1, bridge(step(2, p, false, &nl, &linear)), true, &nl, &linear)), true, &nl, &linear);
             let post = step(1, bridge(step(2, bridge(step(0, p, false, &nl, &linear)), true, &nl, &linear)), true, &nl, &linear);
-            assert_eq!(root_value(&old, 0, x as i32, 0).map(f64::to_bits), pre.map(f64::to_bits));
+            assert_eq!(old_pixels[at].map(f64::to_bits), pre.map(f64::to_bits));
             assert_eq!(root_value(&new, 0, x as i32, 0).map(f64::to_bits), post.map(f64::to_bits));
             if x == 2 {
                 assert_ne!(pre.map(f64::to_bits), post.map(f64::to_bits));
@@ -75,13 +79,14 @@ fn typed_move_changes_only_canonical_order_and_declared_composition() {
                 working.normal(working.normal([0.; 4], post, 1., GimpOperator::Union).unwrap(), input(1, x, 0, sample), 0.375, GimpOperator::Union).unwrap();
             assert_eq!(new.render_band(Rect::new(x as i32, 0, x as i32 + 1, 1), &ctl()).unwrap().pixels()[0].map(f64::to_bits), expected.map(f64::to_bits));
         }
+        drop(new);
         let same = moved.try_move_readonly_filtered_flat_point_filter(request(&moved, 2, 2), &ctl()).unwrap();
         assert!(same.shares_model(&moved));
         assert!(moved.try_move_readonly_filtered_flat_point_filter(patch, &ctl()).is_err());
         let back = moved.try_move_readonly_filtered_flat_point_filter(request(&moved, 2, 0), &ctl()).unwrap();
         assert_eq!(back.document().xcf_state.as_ref().unwrap().filter_stacks[0].nodes, before.nodes);
         let restored = Context::new(&back, Default::default(), &ctl()).unwrap();
-        assert_eq!(root_value(&restored, 0, 2, 0).map(f64::to_bits), root_value(&old, 0, 2, 0).map(f64::to_bits));
+        assert_eq!(root_value(&restored, 0, 2, 0).map(f64::to_bits), old_pixels[1].map(f64::to_bits));
     }
 }
 #[test]

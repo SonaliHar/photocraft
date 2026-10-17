@@ -95,8 +95,8 @@ fn six_runtime_domains_cross_tiles_preserve_raw_colors_and_match_original_alpha_
             assert!(band.resident_bytes() >= band.bytes().len() as u64);
             for (raw, output) in store.bytes.chunks_exact(layer.format().bytes_per_pixel()).zip(band.bytes().chunks_exact(layer.format().bytes_per_pixel())) {
                 let mut input = [0.; 4];
-                for c in 0..layer.format().channels() {
-                    input[c] = try_read_sample_f64(raw, sample, c).unwrap();
+                for (c, value) in input.iter_mut().enumerate().take(layer.format().channels()) {
+                    *value = try_read_sample_f64(raw, sample, c).unwrap();
                 }
                 let mut expected = [0.; 4];
                 operation.try_eval_pixel(&input[..layer.format().channels()], mode.color_channels(), &mut expected[..layer.format().channels()]).unwrap();

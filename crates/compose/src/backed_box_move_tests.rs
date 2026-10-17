@@ -12,7 +12,7 @@ fn translated_reference(
     let source = resident(format, old);
     let mut pixels = source.try_read_region_f64(old).unwrap();
     let space = WorkingSpace::new_with_interrupt(profile, SampleEncoding::NonlinearProfile, GimpSpace::LinearRgb, &Interrupt::NONE).unwrap();
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         let rgb = space.convert([pixel[0], pixel[1], pixel[2]], true).unwrap();
         pixel[..3].copy_from_slice(&rgb);
     }
@@ -32,7 +32,7 @@ fn translated_reference(
     )
     .unwrap();
     let mut pixels = filtered.try_read_region_f64(t).unwrap();
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         let rgb = space.convert([pixel[0], pixel[1], pixel[2]], false).unwrap();
         pixel[..3].copy_from_slice(&rgb);
     }

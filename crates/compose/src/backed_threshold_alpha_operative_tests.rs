@@ -81,7 +81,7 @@ fn actual_context_uses_its_one_pixel_limits_and_releases_private_bands_without_m
     assert!(reads.load(Ordering::Relaxed) > 0);
     let full = PreparedBackedThresholdAlphaContext::new(&owner, p, Default::default(), &ctl()).unwrap();
     let band = full.render_band(owner.document().bounds(), &ctl()).unwrap();
-    for (got, source) in band.bytes().chunks_exact(32).zip(raw.chunks_exact(32)) {
+    for (got, source) in band.bytes().as_chunks::<32>().0.iter().zip(raw.as_chunks::<32>().0.iter()) {
         assert_eq!(&got[..24], &source[..24], "native F64 colors and signed zero unchanged");
     }
 }

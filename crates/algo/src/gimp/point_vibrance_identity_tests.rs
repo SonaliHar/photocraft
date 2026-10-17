@@ -1,6 +1,7 @@
 //! UNRUN stage-boundary regressions, not a physical CMS/GIMP numerical oracle.
 use super::*;
 use std::cell::Cell;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 fn context() -> Context {
     Context {
@@ -11,13 +12,13 @@ fn context() -> Context {
 // A fixed test-only stage witness; it supplies no real profile or source grant.
 struct Probe {
     context: Context,
-    phase: Cell<u8>,
+    phase: AtomicU8,
     seen: Cell<Option<[u32; 4]>>,
     expected_chroma: f32,
 }
 impl Probe {
     fn new(chroma: f32) -> Self {
-        Self { context: context(), phase: Cell::new(0), seen: Cell::new(None), expected_chroma: chroma }
+        Self { context: context(), phase: AtomicU8::new(0), seen: Cell::new(None), expected_chroma: chroma }
     }
 }
 impl FloatConversions for Probe {
@@ -28,12 +29,12 @@ impl FloatConversions for Probe {
         Ok(ConversionRequirements { retained_bytes: 0, scratch_bytes: 0, preparation_work_units: 0, work_units: 1 })
     }
     fn rgb_to_lch(&self, value: [f32; 4], _: &Interrupt<'_>) -> Result<[f32; 4], E> {
-        assert_eq!(self.phase.replace(1), 0);
+        assert_eq!(self.phase.swap(1, Ordering::Relaxed), 0);
         self.seen.set(Some(value.map(f32::to_bits)));
         Ok([50.0, 40.0, 30.0, value[3]])
     }
     fn lch_to_rgb(&self, value: [f32; 4], _: &Interrupt<'_>) -> Result<[f32; 4], E> {
-        assert_eq!(self.phase.replace(2), 1);
+        assert_eq!(self.phase.swap(2, Ordering::Relaxed), 1);
         assert_eq!(value[..3], [50.0, self.expected_chroma, 30.0]);
         Ok([0.875, 0.125, 0.5, value[3]])
     }
@@ -47,7 +48,7 @@ fn exact_scale_one_preserves_words_without_whole_operation_shortcut() {
         assert_eq!(saturation_linear_float(input, 1.0).unwrap().map(f32::to_bits), input.map(f32::to_bits));
         let probe = Probe::new(40.0);
         let output = evaluate(input, Parameters { vibrance: 0.0, saturation: 1.0 }, context(), &probe, &Interrupt::NONE).unwrap();
-        assert_eq!(probe.phase.get(), 2);
+        assert_eq!(probe.phase.load(Ordering::Relaxed), 2);
         assert_eq!(probe.seen.get(), Some(input.map(f32::to_bits)));
         assert_eq!(output[..3], [0.875, 0.125, 0.5]);
         assert_eq!(output[3].to_bits(), alpha.to_bits());
@@ -75,7 +76,7 @@ fn only_exact_one_is_identity_and_other_stage_arithmetic_stays_existing() {
         let probe = Probe::new(47.5);
         let output = evaluate(input, Parameters { vibrance: 7.5, saturation: scale }, context(), &probe, &Interrupt::NONE).unwrap();
         assert_eq!(probe.seen.get(), Some(expected.map(f32::to_bits)));
-        assert_eq!(probe.phase.get(), 2);
+        assert_eq!(probe.phase.load(Ordering::Relaxed), 2);
         assert_eq!(output[3].to_bits(), (-0.0f32).to_bits());
     }
 }
@@ -94,18 +95,18 @@ fn identity_does_not_skip_validation_or_cancellation() {
             assert!(saturation_linear_float(input, 1.0).is_err());
             let probe = Probe::new(40.0);
             assert!(evaluate(input, Parameters { vibrance: 0.0, saturation: 1.0 }, context(), &probe, &Interrupt::NONE).is_err());
-            assert_eq!(probe.phase.get(), 0);
+            assert_eq!(probe.phase.load(Ordering::Relaxed), 0);
         }
     }
     let probe = Probe::new(40.0);
     let mut wrong = context();
     wrong.lch.profile_identity = [8; 32];
     assert!(evaluate(valid, Parameters { vibrance: 0.0, saturation: 1.0 }, wrong, &probe, &Interrupt::NONE).is_err());
-    assert_eq!(probe.phase.get(), 0);
+    assert_eq!(probe.phase.load(Ordering::Relaxed), 0);
     assert_eq!(evaluate(valid, Parameters { vibrance: 0.0, saturation: 1.0 }, context(), &probe, &Interrupt::cancel_only(&|| true)), Err(E::Cancelled));
-    assert_eq!(probe.phase.get(), 0);
-    let between = || probe.phase.get() == 1;
+    assert_eq!(probe.phase.load(Ordering::Relaxed), 0);
+    let between = || probe.phase.load(Ordering::Relaxed) == 1;
     assert_eq!(evaluate(valid, Parameters { vibrance: 0.0, saturation: 1.0 }, context(), &probe, &Interrupt::cancel_only(&between)), Err(E::Cancelled));
-    assert_eq!(probe.phase.get(), 1);
+    assert_eq!(probe.phase.load(Ordering::Relaxed), 1);
     assert_eq!(probe.seen.get(), Some(valid.map(f32::to_bits)));
 }

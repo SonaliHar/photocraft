@@ -22,9 +22,9 @@ fn disabled_recipe_keeps_raw_native_words_and_existing_normal_display_policy() {
                     if alpha == 0.0 {
                         assert!(pixel.iter().all(|v| v.to_bits() == 0));
                     } else {
-                        for channel in 0..3 {
+                        for (channel, value) in pixel.iter().enumerate().take(3) {
                             let source = if mode == ColorMode::Grayscale { 0 } else { channel };
-                            assert_eq!(pixel[channel].to_bits(), photocraft_color::try_read_sample_f64(words, sample, source).unwrap().to_bits());
+                            assert_eq!(value.to_bits(), photocraft_color::try_read_sample_f64(words, sample, source).unwrap().to_bits());
                         }
                         assert_eq!(pixel[3].to_bits(), alpha.to_bits());
                     }

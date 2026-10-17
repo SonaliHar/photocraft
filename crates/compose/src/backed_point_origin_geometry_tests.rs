@@ -63,11 +63,8 @@ fn sample_pixel(x: u32, y: u32) -> [f64; 4] {
 fn number(name: &str, v: f32) -> FilterArgument {
     FilterArgument { name: name.into(), value: FilterValue::Number(ExactNumber::Float32Bits(v.to_bits())) }
 }
-fn fixture(
-    kind: usize,
-    sample: SampleType,
-    size: Size,
-) -> (Document, BackingQuota, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>, Arc<AtomicBool>, &'static Profile, BackedRaster) {
+type Fixture = (Document, BackingQuota, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>, Arc<AtomicBool>, &'static Profile, BackedRaster);
+fn fixture(kind: usize, sample: SampleType, size: Size) -> Fixture {
     let (mut d, q, guard, _, basis, _) = base_fixture(0, ColorMode::Rgb, sample, SampleEncoding::NonlinearProfile);
     // Actual mask payload/map and changed fixture model admission precedes all
     // replacements. The source Vec has its independent fee below.
@@ -282,10 +279,10 @@ fn inactive_and_removed_filters_keep_full_proof_and_separate_empty_authority() {
                 } else {
                     s.filter_masks[0].surface.try_write_region(Rect::new(511, 511, 512, 512), &[1.]).unwrap();
                 }
-                if let Ok(owner) = AccountedDocument::new_readonly_point_storage(d, guard, q, &ctl()) {
-                    if let Ok(context) = PreparedBackedStockPointContext::new(&owner, basis, Default::default(), &ctl()) {
-                        assert!(context.validate_operative(&ctl()).is_err());
-                    }
+                if let Ok(owner) = AccountedDocument::new_readonly_point_storage(d, guard, q, &ctl())
+                    && let Ok(context) = PreparedBackedStockPointContext::new(&owner, basis, Default::default(), &ctl())
+                {
+                    assert!(context.validate_operative(&ctl()).is_err());
                 }
             }
             let (mut d, q, guard, _, _, basis, _) = fixture(kind, sample, Size::new(257, 259));
@@ -343,7 +340,10 @@ fn larger_native_custody_and_repeated_preparation_use_real_one_ledger_fees() {
         raster.clear_cache().unwrap();
         let io_baseline = q.usage().unwrap();
         fail.store(true, Ordering::Relaxed);
-        assert!(matches!(context.render_wide_band(Rect::new(508, 262, 509, 263), &ctl()), Err(BackedNormalError::Backing(BackingError::Io))));
+        assert!(matches!(
+            context.render_wide_band(Rect::new(508, 262, 509, 263), &ctl()),
+            Err(BackedNormalError::View(photocraft_raster::checked_view::RasterViewError::Backed(BackingError::Io)))
+        ));
         assert_eq!(q.usage().unwrap(), io_baseline);
         fail.store(false, Ordering::Relaxed);
         let output = context.render_wide_band(Rect::new(0, 0, 8, 1), &ctl()).unwrap();

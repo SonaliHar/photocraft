@@ -51,7 +51,7 @@ fn generic_source_preparation_retains_source_and_fees() {
     // Three actual flat rows, reordered canonical metadata and negative bounds.
     let bounds = Rect::new(-3, 257, 7, 266);
     let mut third = Layer::new("third", LayerContent::Raster(Surface::try_from_interleaved(stores[1].descriptor.format(), bounds, &stores[1].bytes).unwrap()));
-    third.import_compositing = doc.layers[1].import_compositing.clone();
+    third.import_compositing = doc.layers[1].import_compositing;
     let mut item = doc.xcf_state.as_ref().unwrap().items[1].clone();
     item.item = ItemRef::Layer(third.id);
     item.name = third.name.clone();

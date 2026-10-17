@@ -76,11 +76,9 @@ fn actual_quantized_plain_trees_keep_codes_and_nested_order() {
                 let band = ctx.render_band(Rect::new(x, 0, x + 1, 1), &ctl()).unwrap();
                 assert_eq!(band.pixels()[0].map(f64::to_bits), expected(sample, x as u32, 0).map(f64::to_bits));
                 for (which, raster) in rasters.iter().enumerate() {
-                    let view = raster.checked_view();
-                    let pin = view.pin_tile(photocraft_geom::TileCoord::new(0, 0), &ctl()).unwrap();
                     let mut raw = [0u8; 8];
                     let bpp = 4 * sample.bytes();
-                    pin.read_pixel_native_into(x, 0, &mut raw[..bpp], &ctl()).unwrap();
+                    raster.read_pixel_into(x, 0, &mut raw[..bpp], &ctl()).unwrap();
                     for ch in 0..4 {
                         assert_eq!(
                             try_read_sample_f64(&raw[..bpp], sample, ch).unwrap().to_bits(),

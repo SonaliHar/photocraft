@@ -24,7 +24,11 @@ fn activity(doc: &mut Document, enabled: bool) {
     state.filter_stacks[0].nodes[0].enabled = enabled;
 }
 fn expected(sample: SampleType, s: Rect, radius: u32, coordinate: photocraft_geom::TileCoord) -> (Rect, Surface) {
-    let source = resident(photocraft_color::PixelFormat::new(ColorMode::Rgb, sample, true), s);
+    let native = resident(photocraft_color::PixelFormat::new(ColorMode::Rgb, sample, true), s);
+    // The checked packed/row renderer decodes native samples to F64 working
+    // cells and finish_tile writes F64, even when the transfer is identity.
+    let mut source = Surface::new(photocraft_color::PixelFormat::RGBA64F);
+    source.try_write_region_f64(s, &native.try_read_region_f64(s).unwrap()).unwrap();
     let t = coordinate.rect().intersect(&n::box_blur_extent(s, radius).unwrap());
     let req = n::box_blur_requirements(&source, t, s, radius, &Interrupt::NONE).unwrap();
     let out =
@@ -122,9 +126,9 @@ fn identity_and_inactivity_do_not_waive_full_proofs_or_old_boundaries() {
         }
         let (mut d, q, g) = linear(sample, Rect::new(0, 0, 16, 12), 4);
         let node = &mut d.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
-        node.operation.schema_epoch = crate::gimp_box::EPOCH.into();
+        node.operation.schema_epoch = crate::gimp_neighborhood::box_blur::EPOCH.into();
         let policy = node.composition.as_mut().unwrap();
-        policy.compatibility_epoch = crate::gimp_box::EPOCH.into();
+        policy.compatibility_epoch = crate::gimp_neighborhood::box_blur::EPOCH.into();
         policy.stored_blend_space = -1474592175;
         policy.stored_composite_space = -1474592175;
         policy.stored_operator = -1474592175;

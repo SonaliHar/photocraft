@@ -208,7 +208,7 @@ fn exact_models_inactive_proof_and_controls() {
     rasters[1].clear_cache().unwrap();
     let before = q.usage().unwrap();
     fails[1].store(true, Ordering::Relaxed);
-    assert!(matches!(c.render_band(r, &ctl()), Err(E::Backing(BackingError::Io))));
+    assert!(matches!(c.render_band(r, &ctl()), Err(E::View(photocraft_raster::checked_view::RasterViewError::Backed(BackingError::Io)))));
     assert_eq!(q.usage().unwrap(), before);
     fails[1].store(false, Ordering::Relaxed);
 }

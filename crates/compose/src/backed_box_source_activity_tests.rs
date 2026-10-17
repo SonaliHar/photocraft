@@ -46,13 +46,13 @@ fn source_activity_cross_product_keeps_profile_native_and_space_preparation() {
             // constructor. Exact old disabled source still refuses there.
             let mut old = input.document.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].clone();
             old.enabled = false;
-            old.operation.schema_epoch = crate::gimp_box::EPOCH.into();
+            old.operation.schema_epoch = crate::gimp_neighborhood::box_blur::EPOCH.into();
             let c = old.composition.as_mut().unwrap();
-            c.compatibility_epoch = crate::gimp_box::EPOCH.into();
+            c.compatibility_epoch = crate::gimp_neighborhood::box_blur::EPOCH.into();
             c.stored_blend_space = -1474592175;
             c.stored_composite_space = -1474592175;
             c.stored_operator = -1474592175;
-            assert!(crate::gimp_box::radius(&old, 22, Rect::new(0, 0, 16, 12)).is_err());
+            assert!(crate::gimp_neighborhood::box_blur::radius(&old, 22, Rect::new(0, 0, 16, 12)).is_err());
         }
     }
 }

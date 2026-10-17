@@ -101,7 +101,7 @@ fn owner(stored: SampleEncoding, word: i32, operator: GimpOperator, enabled: boo
     });
     state.items.push(mask);
     if defect == 3 {
-        doc.icc_profile.as_mut().unwrap() = Arc::new(vec![0; 132]);
+        *doc.icc_profile.as_mut().unwrap() = Arc::new(vec![0; 132]);
     }
     doc.layers = vec![base, top];
     AccountedDocument::from_owned(doc, Arc::new((guard, fee)), q, &ctl()).unwrap()

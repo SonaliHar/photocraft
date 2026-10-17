@@ -133,11 +133,11 @@ fn raw_alpha_alpha_only_coupled_and_disabled_paths_preserve_their_distinct_contr
     let (layer, store) = fixture(ColorMode::Rgb, SampleType::F64, bounds, false);
     let alpha = 24;
     let color = prepared(&layer, PointOperation::Invert, true).render_band(bounds, &ctl()).unwrap();
-    for (a, b) in store.bytes.chunks_exact(32).zip(color.bytes().chunks_exact(32)) {
+    for (a, b) in store.bytes.as_chunks::<32>().0.iter().zip(color.bytes().as_chunks::<32>().0.iter()) {
         assert_eq!(&a[alpha..], &b[alpha..]);
     }
     let threshold = prepared(&layer, PointOperation::ThresholdAlpha { value: 0.5 }, true).render_band(bounds, &ctl()).unwrap();
-    for (a, b) in store.bytes.chunks_exact(32).zip(threshold.bytes().chunks_exact(32)) {
+    for (a, b) in store.bytes.as_chunks::<32>().0.iter().zip(threshold.bytes().as_chunks::<32>().0.iter()) {
         assert_eq!(&a[..alpha], &b[..alpha]);
     }
     let disabled = prepared(&layer, PointOperation::Invert, false).render_band(bounds, &ctl()).unwrap();

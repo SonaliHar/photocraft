@@ -41,7 +41,7 @@ fn adopt_plain(f: Fixture) -> (AccountedDocument, Vec<BackedRaster>, Vec<Arc<Ato
     let o = AccountedDocument::new_readonly_masked_normal_hierarchy_current_storage(f.doc, f.retention, f.q, &ctl()).unwrap();
     (o, f.rasters, f.fails)
 }
-fn leaf<'a>(o: &'a AccountedDocument, n: usize) -> (LayerId, &'a BackedLayer) {
+fn leaf(o: &AccountedDocument, n: usize) -> (LayerId, &BackedLayer) {
     let index = o.checked_readonly_normal_hierarchy_current_index(&ctl()).unwrap();
     let layer = index.rows().iter().filter(|r| matches!(r.layer.content, LayerContent::BackedRaster(_))).nth(n).unwrap().layer;
     let LayerContent::BackedRaster(native) = &layer.content else { unreachable!() };
@@ -176,7 +176,7 @@ fn finite_hdr_and_hidden_noop_fail_complete_current_validation() {
     .unwrap();
     let p = plan.render(&ctl()).unwrap();
     assert!(p.changed());
-    assert!(p.bytes().chunks_exact(32).any(|raw| (0..3).any(|ch| photocraft_color::try_read_sample_f64(raw, SampleType::F64, ch).unwrap() > 1.)));
+    assert!(p.bytes().as_chunks::<32>().0.iter().any(|raw| (0..3).any(|ch| photocraft_color::try_read_sample_f64(raw, SampleType::F64, ch).unwrap() > 1.)));
     let staged = o.try_edit_readonly_normal_hierarchy_native(AccountedEdit::NativePixels { layer: id, rect: p.bounds(), bytes: p.bytes() }, &ctl()).unwrap();
     let current = Context::new_current(&staged, Default::default(), &ctl()).unwrap();
     assert!(current.validate_operative(&ctl()).is_err());

@@ -100,7 +100,8 @@ fn empty_anchors_and_full_inactive_proof() {
             let before = q.usage().unwrap();
             let mut budget = Budget { q: q.clone(), used: 0, limit: u64::MAX };
             assert!(
-                crate::backed_filtered_flat_point_context::compile(&f.document, Purpose::Current, 0, &Interrupt::NONE, &mut SharedBudget(&mut budget)).is_err()
+                crate::backed_filtered_flat_point_context::compile(&f.document, Purpose::Current, None, 0, &Interrupt::NONE, &mut SharedBudget(&mut budget))
+                    .is_err()
             );
             assert_eq!(q.usage().unwrap(), before);
         }

@@ -63,12 +63,8 @@ pub(crate) fn configure(doc: &mut Document, member: usize) {
     node.arguments = arguments;
     node.composition.as_mut().unwrap().compatibility_epoch = gimp_filters::POINT_REPLACE_COMPATIBILITY_EPOCH.into();
 }
-pub(crate) fn fixture(
-    member: usize,
-    mode: ColorMode,
-    sample: SampleType,
-    stored: SampleEncoding,
-) -> (Document, BackingQuota, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>, &'static Profile, Vec<u8>) {
+pub(crate) type Fixture = (Document, BackingQuota, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>, &'static Profile, Vec<u8>);
+pub(crate) fn fixture(member: usize, mode: ColorMode, sample: SampleType, stored: SampleEncoding) -> Fixture {
     let (mut doc, q, guard, reads, profile, raw) = crate::backed_threshold_context::tests::fixture(mode, sample, stored);
     doc.source_color_context.as_mut().unwrap().source_precision = match (sample, stored) {
         (SampleType::U8, SampleEncoding::Linear) => 100,

@@ -92,6 +92,9 @@ fn survivor_order_and_custody() {
             let (owner, _, _, _) = adopt(fixture_records(sample));
             let old = Context::new(&owner, Default::default(), &ctl()).unwrap();
             old.validate_operative(&ctl()).unwrap();
+            // The edit retains the original owner, not an unrelated prepared
+            // renderer's construction-peak allocations.
+            drop(old);
             let request = patch(&owner, index);
             owner.validate_readonly_filtered_flat_point_filter_remove(request, &ctl()).unwrap();
             let next = owner.try_remove_readonly_filtered_flat_point_filter(request, &ctl()).unwrap();

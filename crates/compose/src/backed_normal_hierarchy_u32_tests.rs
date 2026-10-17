@@ -91,10 +91,8 @@ fn u32_native_codes_remain_distinct_in_nested_wide_normal() {
         let mut adjacent = false;
         for x in 0..7 {
             for (which, raster) in rasters.iter().enumerate() {
-                let view = raster.checked_view();
-                let pin = view.pin_tile(photocraft_geom::TileCoord::new(0, 0), &ctl()).unwrap();
                 let mut raw = [0; 16];
-                pin.read_pixel_native_into(x, 0, &mut raw, &ctl()).unwrap();
+                raster.read_pixel_into(x, 0, &mut raw, &ctl()).unwrap();
                 for (ch, code) in codes(which, x as u32, 0).iter().enumerate() {
                     assert_eq!(u32::from_ne_bytes(raw[ch * 4..ch * 4 + 4].try_into().unwrap()), *code);
                     let got = try_read_sample_f64(&raw, SampleType::U32, ch).unwrap();

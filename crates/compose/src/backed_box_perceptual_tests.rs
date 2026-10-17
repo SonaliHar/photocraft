@@ -28,7 +28,7 @@ fn expected(sample: SampleType, s: Rect, radius: u32, coordinate: photocraft_geo
     let t = coordinate.rect().intersect(&n::box_blur_extent(s, radius).unwrap());
     let curve = photocraft_cms::curve::srgb_trc();
     let mut samples = source.try_read_region_f64(s).unwrap();
-    for pixel in samples.chunks_exact_mut(4) {
+    for pixel in samples.as_chunks_mut::<4>().0 {
         for value in &mut pixel[..3] {
             *value = curve.eval64(*value);
         }
@@ -40,7 +40,7 @@ fn expected(sample: SampleType, s: Rect, radius: u32, coordinate: photocraft_geo
         n::try_box_blur(&working, t, s, radius, n::GaussianLimits { resident_bytes: req.peak_resident_bytes, work_units: req.work_units }, &Interrupt::NONE)
             .unwrap();
     let mut pixels = filtered.try_read_region_f64(t).unwrap();
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         for value in &mut pixel[..3] {
             *value = curve.eval_inverse64(*value);
         }
@@ -148,9 +148,9 @@ fn identity_and_inactivity_do_not_waive_full_proofs_or_old_boundaries() {
         }
         let (mut d, q, g) = perceptual(sample, Rect::new(0, 0, 16, 12), 4);
         let node = &mut d.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
-        node.operation.schema_epoch = crate::gimp_box::EPOCH.into();
+        node.operation.schema_epoch = crate::gimp_neighborhood::box_blur::EPOCH.into();
         let policy = node.composition.as_mut().unwrap();
-        policy.compatibility_epoch = crate::gimp_box::EPOCH.into();
+        policy.compatibility_epoch = crate::gimp_neighborhood::box_blur::EPOCH.into();
         policy.stored_blend_space = -1474592175;
         policy.stored_composite_space = -1474592175;
         policy.stored_operator = -1474592175;

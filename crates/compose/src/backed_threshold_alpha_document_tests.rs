@@ -56,11 +56,8 @@ impl NativePlaneStore for Store {
         Ok(())
     }
 }
-fn fixture(
-    mode: ColorMode,
-    sample: SampleType,
-    stored: SampleEncoding,
-) -> (Document, BackingQuota, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>, &'static Profile, Vec<u8>) {
+type Fixture = (Document, BackingQuota, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>, &'static Profile, Vec<u8>);
+fn fixture(mode: ColorMode, sample: SampleType, stored: SampleEncoding) -> Fixture {
     let quota = BackingQuota::new(QuotaLimits { resident: 64 << 20, scratch: 0, index: 16 << 20 });
     // Actual source/map/default/model fixture allocation is prospectively paid.
     let guard: Arc<dyn Any + Send + Sync> = Arc::new(quota.reserve(QuotaKind::Resident, 2 << 20).unwrap());
@@ -213,9 +210,9 @@ fn current_document_display_native_depths_gray_repeat_and_alpha_zero_policy() {
                         assert!(got.iter().all(|v| v.to_bits() == 0));
                     } else {
                         assert_eq!(got[3], 1.0);
-                        for c in 0..3 {
+                        for (c, value) in got.iter().enumerate().take(3) {
                             let expected = photocraft_color::try_read_sample_f64(input, sample, if mode == ColorMode::Grayscale { 0 } else { c }).unwrap();
-                            assert_eq!(got[c].to_bits(), expected.to_bits());
+                            assert_eq!(value.to_bits(), expected.to_bits());
                         }
                     }
                 }
@@ -232,6 +229,10 @@ fn current_document_display_native_depths_gray_repeat_and_alpha_zero_policy() {
 fn contained_roi_uses_actual_row_coordinates_and_output_outlives_preparation() {
     let (doc, q, guard, _, profile, raw) = fixture(ColorMode::Rgb, SampleType::F64, SampleEncoding::NonlinearProfile);
     let owner = adopt(doc, guard, q.clone());
+    // Native backing cache belongs to the retained owner, not the output lease.
+    let warm = PreparedBackedThresholdAlphaDocument::new(&owner, profile, NormalBandLimits::default(), &ctl()).unwrap();
+    drop(warm.render_band(owner.document().bounds(), &ctl()).unwrap());
+    drop(warm);
     let before = q.usage().unwrap();
     let output = {
         let prepared = PreparedBackedThresholdAlphaDocument::new(&owner, profile, NormalBandLimits::default(), &ctl()).unwrap();
@@ -309,7 +310,7 @@ fn zero_backdrop_factoring_matches_original_branch_for_signedzero_and_opacity() 
 fn current_layer_coverage_preserves_native_words_and_uses_original_zero_backdrop_math() {
     for sample in [SampleType::U16, SampleType::F32, SampleType::F64] {
         for (visible, opacity) in [(true, 0.0f32), (true, -0.0), (true, 0.5), (true, 1.0), (false, 0.5)] {
-            let (mut doc, q, guard, reads, profile, raw) = fixture(ColorMode::Rgb, sample, SampleEncoding::NonlinearProfile);
+            let (mut doc, q, guard, _reads, profile, raw) = fixture(ColorMode::Rgb, sample, SampleEncoding::NonlinearProfile);
             doc.layers[0].visible = visible;
             doc.layers[0].opacity = opacity;
             let id = doc.layers[0].id;
@@ -342,18 +343,23 @@ fn current_layer_coverage_preserves_native_words_and_uses_original_zero_backdrop
             assert_eq!(native.bytes(), raw);
             drop(native);
             let display = PreparedBackedThresholdAlphaDocument::new(&owner, profile, NormalBandLimits::default(), &ctl()).unwrap();
-            let reads_before = reads.load(Ordering::Relaxed);
+            let work_units = std::sync::atomic::AtomicU64::new(0);
+            let charge = |units| {
+                work_units.fetch_add(units, Ordering::Relaxed);
+                Ok(())
+            };
+            let render_control = ReadControl { interrupt: &Interrupt::NONE, work: &charge };
             let before = q.usage().unwrap();
-            let band = display.render_band(owner.document().bounds(), &ctl()).unwrap();
-            assert!(reads.load(Ordering::Relaxed) > reads_before, "hidden bands still validate operative native data");
+            let band = display.render_band(owner.document().bounds(), &render_control).unwrap();
+            assert!(work_units.load(Ordering::Relaxed) > 0, "cached hidden bands still pay operative validation work");
             for (pixel, raw) in band.pixels().iter().zip(raw.chunks_exact(4 * sample.bytes())) {
                 let alpha = photocraft_color::try_read_sample_f64(raw, sample, 3).unwrap() * if visible { f64::from(opacity) } else { 0.0 };
                 if alpha == 0.0 {
                     assert!(pixel.iter().all(|v| v.to_bits() == 0));
                 } else {
                     assert_eq!(pixel[3].to_bits(), alpha.to_bits());
-                    for channel in 0..3 {
-                        assert_eq!(pixel[channel].to_bits(), photocraft_color::try_read_sample_f64(raw, sample, channel).unwrap().to_bits());
+                    for (channel, value) in pixel.iter().enumerate().take(3) {
+                        assert_eq!(value.to_bits(), photocraft_color::try_read_sample_f64(raw, sample, channel).unwrap().to_bits());
                     }
                 }
             }

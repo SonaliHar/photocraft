@@ -49,7 +49,7 @@ fn explicit_current_profile_and_actual_storage_class_remain_mandatory() {
 fn current_layer_coverage_preserves_native_words_and_uses_original_zero_backdrop_math() {
     for sample in [SampleType::U16, SampleType::F32, SampleType::F64] {
         for (visible, opacity) in [(true, 0.0f32), (true, -0.0), (true, 0.5), (true, 1.0), (false, 0.5)] {
-            let (mut doc, q, guard, reads, profile, raw) = fixture(ColorMode::Rgb, sample, SampleEncoding::NonlinearProfile);
+            let (mut doc, q, guard, _reads, profile, raw) = fixture(ColorMode::Rgb, sample, SampleEncoding::NonlinearProfile);
             doc.layers[0].visible = visible;
             doc.layers[0].opacity = opacity;
             let id = doc.layers[0].id;
@@ -81,18 +81,23 @@ fn current_layer_coverage_preserves_native_words_and_uses_original_zero_backdrop
             assert_eq!(native.bytes(), raw);
             drop(native);
             let display = PreparedBackedThresholdDocument::new(&owner, profile, NormalBandLimits::default(), &ctl()).unwrap();
-            let reads_before = reads.load(Ordering::Relaxed);
+            let work_units = std::sync::atomic::AtomicU64::new(0);
+            let charge = |units| {
+                work_units.fetch_add(units, Ordering::Relaxed);
+                Ok(())
+            };
+            let render_control = ReadControl { interrupt: &Interrupt::NONE, work: &charge };
             let before = q.usage().unwrap();
-            let band = display.render_band(owner.document().bounds(), &ctl()).unwrap();
-            assert!(reads.load(Ordering::Relaxed) > reads_before, "hidden bands still validate operative native data");
+            let band = display.render_band(owner.document().bounds(), &render_control).unwrap();
+            assert!(work_units.load(Ordering::Relaxed) > 0, "cached hidden bands still pay operative validation work");
             for (pixel, raw) in band.pixels().iter().zip(raw.chunks_exact(4 * sample.bytes())) {
                 let alpha = photocraft_color::try_read_sample_f64(raw, sample, 3).unwrap() * if visible { f64::from(opacity) } else { 0.0 };
                 if alpha == 0.0 {
                     assert!(pixel.iter().all(|v| v.to_bits() == 0));
                 } else {
                     assert_eq!(pixel[3].to_bits(), alpha.to_bits());
-                    for channel in 0..3 {
-                        assert_eq!(pixel[channel].to_bits(), photocraft_color::try_read_sample_f64(raw, sample, channel).unwrap().to_bits());
+                    for (channel, value) in pixel.iter().enumerate().take(3) {
+                        assert_eq!(value.to_bits(), photocraft_color::try_read_sample_f64(raw, sample, channel).unwrap().to_bits());
                     }
                 }
             }

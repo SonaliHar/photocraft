@@ -218,8 +218,18 @@ fn inactive_source_proof_and_control_are_unconditional() {
         let q = f.quota.clone();
         let before = q.usage().unwrap();
         let mut b = Budget { q: q.clone(), used: 0, limit: u64::MAX };
-        assert!(LeasedFilteredFlatPointPipeline::new_opacity_source_budgeted(&f.document, &Interrupt::NONE, &mut b, f.retention.clone()).is_err());
-        assert_eq!(q.usage().unwrap(), before);
+        if fault == 3 {
+            // Source preparation defers backed provider reads to mandatory
+            // operative promotion; exercise that actual phase for native NaN.
+            drop(LeasedFilteredFlatPointPipeline::new_opacity_source_budgeted(&f.document, &Interrupt::NONE, &mut b, f.retention.clone()).unwrap());
+            assert_eq!(q.usage().unwrap(), before);
+            let (owner, _, _, _) = current(f);
+            let c = Context::new(&owner, Default::default(), &ctl()).unwrap();
+            assert!(c.validate_operative(&ctl()).is_err());
+        } else {
+            assert!(LeasedFilteredFlatPointPipeline::new_opacity_source_budgeted(&f.document, &Interrupt::NONE, &mut b, f.retention.clone()).is_err());
+            assert_eq!(q.usage().unwrap(), before);
+        }
     }
     let mut f = fixture_opacity(SampleType::F64, 2, 0.375, true);
     groups(&mut f);
@@ -250,12 +260,31 @@ fn inactive_source_proof_and_control_are_unconditional() {
     let before = q.usage().unwrap();
     f.fails[1].store(true, Ordering::Relaxed);
     let mut b = Budget { q: q.clone(), used: 0, limit: u64::MAX };
-    assert!(LeasedFilteredFlatPointPipeline::new_opacity_source_budgeted(&f.document, &Interrupt::NONE, &mut b, f.retention.clone()).is_err());
+    // The sealed prepared-source object has no renderer/publication API. Real
+    // source IO already visited native bytes; a preexisting BackedRaster is
+    // revisited by mandatory CURRENT operative proof before Session handoff.
+    drop(LeasedFilteredFlatPointPipeline::new_opacity_source_budgeted(&f.document, &Interrupt::NONE, &mut b, f.retention.clone()).unwrap());
     assert_eq!(q.usage().unwrap(), before);
     f.fails[1].store(false, Ordering::Relaxed);
+    let (owner, rasters, fails, _) = current(f);
+    // Warm the same real owner before the cold OTHER-provider failure baseline.
+    let warm = Context::new(&owner, Default::default(), &ctl()).unwrap();
+    warm.validate_operative(&ctl()).unwrap();
+    drop(warm);
+    rasters[1].clear_cache().unwrap();
+    let before = q.usage().unwrap();
+    fails[1].store(true, Ordering::Relaxed);
+    let context = Context::new(&owner, Default::default(), &ctl()).unwrap();
+    assert!(matches!(
+        context.validate_operative(&ctl()),
+        Err(E::Backing(BackingError::Io)) | Err(E::View(photocraft_raster::checked_view::RasterViewError::Backed(BackingError::Io)))
+    ));
+    drop(context);
+    assert_eq!(q.usage().unwrap(), before);
+    fails[1].store(false, Ordering::Relaxed);
 }
 
-#[path="backed_filtered_flat_point_affine_tests.rs"]
+#[path = "backed_filtered_flat_point_affine_tests.rs"]
 mod affine;
 
 #[path = "backed_filtered_flat_point_stock_rgb_tests.rs"]

@@ -17,7 +17,8 @@ use std::{
     },
 };
 
-fn hue_fixture(sample: SampleType, values: [f32; 3]) -> (Document, BackingQuota, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>, &'static Profile, Vec<u8>) {
+type Fixture = (Document, BackingQuota, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>, &'static Profile, Vec<u8>);
+fn hue_fixture(sample: SampleType, values: [f32; 3]) -> Fixture {
     let (mut doc, q, guard, reads, basis, raw) = fixture(0, ColorMode::Rgb, sample, SampleEncoding::NonlinearProfile);
     let node = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
     node.operation = OperationIdentity { name: "gegl:hue-chroma".into(), stored_version: "0:0".into(), schema_epoch: crate::HUE_CHROMA_EPOCH.into() };
@@ -228,7 +229,7 @@ fn inactive_flags_do_not_hide_malformed_inputs_or_foreign_roles() {
         state.items.iter_mut().find(|item| item.item == ItemRef::Layer(id)).unwrap().visible = false;
         state.filter_stacks[0].nodes[0].enabled = false;
         match defect {
-            0 | 1 | 2 => {
+            0..=2 => {
                 let bytes = native(
                     [
                         if defect == 0 {
@@ -269,15 +270,11 @@ fn inactive_flags_do_not_hide_malformed_inputs_or_foreign_roles() {
         }
         // Some structural defects are rejected even before adoption; neither
         // route is allowed to publish a usable unchecked CURRENT renderer.
-        match AccountedDocument::new_readonly_point_storage(doc, guard, q, &ctl()) {
-            Ok(owner) => {
-                let result = PreparedBackedStockPointContext::new(&owner, basis, Default::default(), &ctl());
-                match result {
-                    Ok(context) => assert!(context.validate_operative(&ctl()).is_err()),
-                    Err(_) => {}
-                }
+        if let Ok(owner) = AccountedDocument::new_readonly_point_storage(doc, guard, q, &ctl()) {
+            let result = PreparedBackedStockPointContext::new(&owner, basis, Default::default(), &ctl());
+            if let Ok(context) = result {
+                assert!(context.validate_operative(&ctl()).is_err());
             }
-            Err(_) => {}
         }
     }
 }
@@ -337,18 +334,20 @@ fn preparation_and_execution_share_cumulative_control_and_real_owner_fees() {
     assert!(matches!(
         context.render_wide_band(Rect::new(0, 0, 8, 6), &ReadControl { interrupt: &interrupt, work: &|_| Ok(()) }),
         Err(BackedNormalError::Backing(BackingError::Cancelled))
+            | Err(BackedNormalError::View(photocraft_raster::checked_view::RasterViewError::Backed(BackingError::Cancelled)))
     ));
+    assert!(polls.load(Ordering::Relaxed) >= 8, "the armed cancellation boundary was reached");
     assert_eq!(q.usage().unwrap(), baseline);
     let pipeline = PreparedStockPointPipeline::prepare(owner.document(), basis, &q, &ctl()).unwrap();
     let input = &raw[..32];
     let mut exact = 0u64;
     pipeline.evaluate_native(input, owner.document().pixel_format(), &ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }).unwrap();
-    let total = std::cell::Cell::new(0u64);
+    let total = std::sync::atomic::AtomicU64::new(0);
     let charge = |n| {
-        total.set(total.get() + n);
+        total.fetch_add(n, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     };
     pipeline.evaluate_native(input, owner.document().pixel_format(), &ReadControl { interrupt: &Interrupt::NONE, work: &charge }).unwrap();
-    exact += total.get();
+    exact += total.load(std::sync::atomic::Ordering::Relaxed);
     assert!(exact > 2 * (3 * 128 + 137 + 128)); // actual physical directions plus polar/stage/Float work
 }

@@ -97,9 +97,9 @@ fn all_histogram_channels_match_existing_math_and_preserve_native_alpha_across_t
                 let values = std::array::from_fn::<_, 4, _>(|c| try_read_sample_f64(input, sample, c).unwrap());
                 let mut expected = [0.; 4];
                 operation.try_eval_pixel(&values, 3, &mut expected).unwrap();
-                for c in 0..3 {
+                for (c, expected_value) in expected.iter().enumerate().take(3) {
                     let actual = try_read_sample_f64(output, sample, c).unwrap();
-                    assert_eq!(actual, expected[c]);
+                    assert_eq!(actual, *expected_value);
                     assert!(actual == 0. || actual == 1.);
                 }
                 assert_eq!(&output[alpha..], &input[alpha..], "F64 alpha lowbits and signed zero stay raw");
@@ -115,7 +115,7 @@ fn inclusive_float_histogram_boundaries_reversed_ranges_and_disabled_identity() 
     for (channel, low, high) in [(1, 0.5, 0.5), (4, 0.5, 0.5), (0, 0.75, 0.25)] {
         let p = prepare(&layer, Threshold { channel, low, high });
         let band = p.render_band(layer.operative_bounds(), &ctl()).unwrap();
-        for (input, output) in store.bytes.chunks_exact(32).zip(band.bytes().chunks_exact(32)) {
+        for (input, output) in store.bytes.as_chunks::<32>().0.iter().zip(band.bytes().as_chunks::<32>().0.iter()) {
             let values = std::array::from_fn::<_, 4, _>(|c| try_read_sample_f64(input, SampleType::F64, c).unwrap());
             let mut expected = [0.; 4];
             Threshold { channel, low, high }.try_eval_pixel(&values, 3, &mut expected).unwrap();

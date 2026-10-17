@@ -314,8 +314,8 @@ fn mixed_roots_use_raw_wide_leaf_then_bottom_to_top_normal() {
                 let r = Rect::new(x as i32, y as i32, x as i32 + 1, y as i32 + 1);
                 let band = context.render_band(r, &ctl()).unwrap();
                 let mut expected = [0.; 4];
-                for root in 0..4 {
-                    let p = leaf(kinds[root], input(root, x, y, sample), &nl, &linear);
+                for (root, kind) in kinds.iter().copied().enumerate() {
+                    let p = leaf(kind, input(root, x, y, sample), &nl, &linear);
                     expected = working.normal(expected, p, f64::from(owner.document().layers[root].opacity), GimpOperator::Union).unwrap();
                 }
                 assert_eq!(band.pixels()[0].map(f64::to_bits), expected.map(f64::to_bits));
@@ -453,5 +453,5 @@ mod source_activity;
 #[path = "backed_filtered_flat_point_ordered_tests.rs"]
 mod ordered;
 
-#[path="backed_programme_selection_flat_tests.rs"]
+#[path = "backed_programme_selection_flat_tests.rs"]
 mod programme_selection;

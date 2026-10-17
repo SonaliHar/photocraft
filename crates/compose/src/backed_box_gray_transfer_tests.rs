@@ -32,7 +32,7 @@ fn transfer_reference(sample: SampleType, stored: SampleEncoding, s: Rect, radiu
     let curve = photocraft_cms::curve::srgb_trc();
     let native = source.try_read_region_f64(s).unwrap();
     let mut rgba = Vec::new();
-    for pixel in native.chunks_exact(2) {
+    for pixel in native.as_chunks::<2>().0 {
         let gray = if stored == SampleEncoding::Linear { pixel[0] } else { curve.eval64(pixel[0]) };
         rgba.extend_from_slice(&[gray, gray, gray, pixel[1]]);
     }
@@ -43,7 +43,7 @@ fn transfer_reference(sample: SampleType, stored: SampleEncoding, s: Rect, radiu
         n::try_box_blur(&linear, t, s, radius, n::GaussianLimits { resident_bytes: req.peak_resident_bytes, work_units: req.work_units }, &Interrupt::NONE)
             .unwrap();
     let mut pixels = filtered.try_read_region_f64(t).unwrap();
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         let gray = if stored == SampleEncoding::Linear { pixel[0] } else { curve.eval_inverse64(pixel[0]) };
         pixel[..3].copy_from_slice(&[gray; 3]);
     }
@@ -111,7 +111,7 @@ fn current_uses_role_transfer_and_keeps_native_identity_separate() {
         assert_eq!(context.bounds(), s);
         let band = context.render_wide_band(s, &ctl()).unwrap();
         let native = gray_surface(owned.document().pixel_format(), s).try_read_region_f64(s).unwrap();
-        for (actual, expected) in band.pixels().iter().zip(native.chunks_exact(2)) {
+        for (actual, expected) in band.pixels().iter().zip(native.as_chunks::<2>().0.iter()) {
             assert_eq!(actual.map(f64::to_bits), [expected[0], expected[0], expected[0], expected[1]].map(f64::to_bits));
         }
     }

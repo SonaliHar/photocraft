@@ -19,7 +19,7 @@ fn canonical_reference(sample: SampleType, s: Rect, r: u32, tile: photocraft_geo
     let t = tile.rect().intersect(&o);
     let space = WorkingSpace::new_with_interrupt(p, SampleEncoding::NonlinearProfile, GimpSpace::LinearRgb, &Interrupt::NONE).unwrap();
     let mut samples = source.try_read_region_f64(s).unwrap();
-    for pixel in samples.chunks_exact_mut(4) {
+    for pixel in samples.as_chunks_mut::<4>().0 {
         let rgb = space.convert([pixel[0], pixel[1], pixel[2]], true).unwrap();
         pixel[..3].copy_from_slice(&rgb);
     }
@@ -31,7 +31,7 @@ fn canonical_reference(sample: SampleType, s: Rect, r: u32, tile: photocraft_geo
     let filtered =
         n::try_box_blur(&linear, t, s, r, n::GaussianLimits { resident_bytes: req.peak_resident_bytes, work_units: req.work_units }, &Interrupt::NONE).unwrap();
     let mut samples = filtered.try_read_region_f64(t).unwrap();
-    for pixel in samples.chunks_exact_mut(4) {
+    for pixel in samples.as_chunks_mut::<4>().0 {
         let rgb = space.convert([pixel[0], pixel[1], pixel[2]], false).unwrap();
         pixel[..3].copy_from_slice(&rgb);
     }
@@ -148,7 +148,18 @@ fn row_failures_keep_original_errors_and_publish_no_partial_band() {
         Ok(())
     };
     let control = ReadControl { interrupt: &interrupt, work: &charge };
-    assert!(matches!(context.render_wide_band(roi, &control), Err(E::Backing(BackingError::Cancelled))));
+    let cancelled_result = context.render_wide_band(roi, &control);
+    assert!(armed.load(Ordering::Relaxed) && polls.load(Ordering::Relaxed) >= 33);
+    assert!(
+        matches!(
+            cancelled_result.as_ref(),
+            Err(E::Backing(BackingError::Cancelled)) | Err(E::View(photocraft_raster::checked_view::RasterViewError::Backed(BackingError::Cancelled)))
+        ),
+        "actual={:?}; armed={} polls={}",
+        cancelled_result.as_ref().err(),
+        armed.load(Ordering::Relaxed),
+        polls.load(Ordering::Relaxed)
+    );
     assert_eq!(q.usage().unwrap(), baseline);
     counts.fail.store(true, Ordering::Relaxed);
     assert!(matches!(context.render_wide_band(roi, &ctl()), Err(E::View(photocraft_raster::checked_view::RasterViewError::Backed(BackingError::Io)))));

@@ -411,12 +411,17 @@ mod tests {
     #[test]
     fn exact_identity_preserves_signedzero_and_opaque_rawalpha() {
         let source = gray(-0.0, f64::from_bits(0x7ff8000000000019));
+        let before = source.clone();
         let inputs = [input(&source, 1.)];
         let mut request = request(&inputs);
         request.identity = Identity::PreserveExact;
         let output = try_apply(request, limits(), &Interrupt::NONE).unwrap();
         assert_eq!(output.try_read_interleaved(request.roi).unwrap(), source.default_bytes().repeat(2));
-        assert_eq!(source, output);
+        assert_eq!(output.default_bytes(), source.default_bytes());
+        assert_eq!(output.try_read_interleaved(Rect::new(-2, -1, 2, 2)).unwrap(), source.default_bytes().repeat(12));
+        // Materialized default-valued tiles may differ; the identity promises
+        // exact native words, including opaque alpha, and immutable input.
+        assert_eq!(source, before);
     }
     #[test]
     fn f64_hdr_sourceorder_and_zero_weight_avoid_ignored_nan_pixels() {

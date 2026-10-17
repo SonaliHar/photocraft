@@ -87,7 +87,7 @@ fn opaque_raw_provenance_and_real_preparation_are_preserved() {
             let mut budget = Budget { q: q.clone(), work: u64::MAX, deny: false };
             let baseline = q.usage().unwrap();
             let prepared =
-                LeasedStreamedBoxPipeline::new_geometry_budgeted(&d, &Interrupt::NONE, &mut budget, (&input._original_guard, &input._resident_lease)).unwrap();
+                LeasedStreamedBoxPipeline::new_geometry_budgeted(d, &Interrupt::NONE, &mut budget, (&input._original_guard, &input._resident_lease)).unwrap();
             assert_eq!(*d, raw);
             assert!(budget.work < u64::MAX);
             assert!(q.usage().unwrap().resident > baseline.resident);
@@ -98,7 +98,7 @@ fn opaque_raw_provenance_and_real_preparation_are_preserved() {
             c.stored_blend_space = i32::MIN;
             c.stored_composite_space = 17;
             c.stored_operator = i32::MAX;
-            LeasedStreamedBoxPipeline::new_geometry_budgeted(&d, &Interrupt::NONE, &mut budget, (&input._original_guard, &input._resident_lease)).unwrap();
+            LeasedStreamedBoxPipeline::new_geometry_budgeted(d, &Interrupt::NONE, &mut budget, (&input._original_guard, &input._resident_lease)).unwrap();
         }
     }
 }
@@ -155,7 +155,18 @@ fn hidden_padding_mask_and_profile_failures_are_not_waived() {
             }
         }
         let mut budget = Budget { q: q.clone(), work: u64::MAX, deny: false };
-        assert!(LeasedStreamedBoxPipeline::new_geometry_budgeted(&d, &Interrupt::NONE, &mut budget, (&input._original_guard, &input._resident_lease)).is_err());
+        let before = d.clone(); // external expected model; no renderer authority.
+        let baseline = q.usage().unwrap();
+        let prepared = LeasedStreamedBoxPipeline::new_geometry_budgeted(d, &Interrupt::NONE, &mut budget, (&input._original_guard, &input._resident_lease));
+        if defect == 0 {
+            // Coherent inactivity is admitted, without skipping any native,
+            // mask or profile validation exercised by the remaining defects.
+            drop(prepared.unwrap());
+            assert_eq!(*d, before);
+            assert_eq!(q.usage().unwrap(), baseline);
+        } else {
+            assert!(prepared.is_err());
+        }
     }
 }
 #[test]
@@ -167,20 +178,20 @@ fn source_preparation_refuses_budget_and_caller_cancellation() {
     let d = &mut input.document;
     let baseline = q.usage().unwrap();
     let mut measured = Budget { q: q.clone(), work: u64::MAX, deny: false };
-    drop(LeasedStreamedBoxPipeline::new_geometry_budgeted(&d, &Interrupt::NONE, &mut measured, (&input._original_guard, &input._resident_lease)).unwrap());
+    drop(LeasedStreamedBoxPipeline::new_geometry_budgeted(d, &Interrupt::NONE, &mut measured, (&input._original_guard, &input._resident_lease)).unwrap());
     let consumed = u64::MAX - measured.work;
     let mut late = Budget { q: q.clone(), work: consumed - 1, deny: false };
-    assert!(LeasedStreamedBoxPipeline::new_geometry_budgeted(&d, &Interrupt::NONE, &mut late, (&input._original_guard, &input._resident_lease)).is_err());
+    assert!(LeasedStreamedBoxPipeline::new_geometry_budgeted(d, &Interrupt::NONE, &mut late, (&input._original_guard, &input._resident_lease)).is_err());
     assert_eq!(q.usage().unwrap(), baseline);
     for (work, deny) in [(0, false), (u64::MAX, true)] {
         let mut budget = Budget { q: q.clone(), work, deny };
-        assert!(LeasedStreamedBoxPipeline::new_geometry_budgeted(&d, &Interrupt::NONE, &mut budget, (&input._original_guard, &input._resident_lease)).is_err());
+        assert!(LeasedStreamedBoxPipeline::new_geometry_budgeted(d, &Interrupt::NONE, &mut budget, (&input._original_guard, &input._resident_lease)).is_err());
     }
     let cancelled = || true;
     let interrupt = Interrupt::cancel_only(&cancelled);
     let mut budget = Budget { q, work: u64::MAX, deny: false };
     assert!(matches!(
-        LeasedStreamedBoxPipeline::new_geometry_budgeted(&d, &interrupt, &mut budget, (&input._original_guard, &input._resident_lease)),
+        LeasedStreamedBoxPipeline::new_geometry_budgeted(d, &interrupt, &mut budget, (&input._original_guard, &input._resident_lease)),
         Err(CompositionError::Raster(RasterInputError::Cancelled))
     ));
 }
@@ -228,7 +239,11 @@ fn f64_current_preserves_wide_full_tile_schedule() {
         let context = PreparedBackedBoxContext::new(&owned, NormalBandLimits::default(), &ctl()).unwrap();
         let (o, expected) = reference(owned.document().pixel_format(), s, radius as u32, &p);
         assert_eq!(context.bounds(), o);
-        for roi in [Rect::new(255, 255, 273, 257), Rect::new(8, 10, 17, 13), Rect::new(257, 250, 261, 254)] {
+        for requested in [Rect::new(255, 255, 273, 257), Rect::new(8, 10, 17, 13), Rect::new(257, 250, 261, 254)] {
+            let roi = requested.intersect(&o);
+            if roi != requested {
+                assert!(context.render_wide_band(requested, &ctl()).is_err());
+            }
             let got = context.render_wide_band(roi, &ctl()).unwrap();
             for (index, actual) in got.pixels().iter().enumerate() {
                 let x = roi.x0 + (index % roi.width() as usize) as i32;
@@ -315,7 +330,11 @@ fn assigned_current_uses_actual_profile_and_preserves_specific_api_boundaries() 
         let context = PreparedBackedBoxContext::new(&owned, NormalBandLimits::default(), &ctl()).unwrap();
         let (o, expected) = reference(owned.document().pixel_format(), s, radius as u32, &p);
         assert_eq!(context.bounds(), o);
-        for roi in [Rect::new(255, 255, 273, 257), Rect::new(8, 10, 17, 13)] {
+        for requested in [Rect::new(255, 255, 273, 257), Rect::new(8, 10, 17, 13)] {
+            let roi = requested.intersect(&o);
+            if roi != requested {
+                assert!(context.render_wide_band(requested, &ctl()).is_err());
+            }
             compare(&context, roi, &expected);
         }
         // Existing shared factory's placeholder supplies no assigned authority.

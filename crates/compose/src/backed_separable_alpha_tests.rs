@@ -9,7 +9,7 @@ fn alpha(mode: ColorMode, code: i32) -> (AccountedDocument, [Arc<Store>; 2]) {
     let mut doc = old.document().clone();
     doc.mode = mode;
     let profile = if mode == ColorMode::Rgb { Builtin::Srgb.profile() } else { Builtin::SGray.profile() };
-    doc.icc_profile = Some(Arc::new(profile.to_bytes()));
+    doc.icc_profile = Some(profile.to_bytes());
     doc.working_profile_interpretation = if mode == ColorMode::Rgb {
         WorkingProfileInterpretation::implicit_srgb(doc.icc_profile.as_ref().unwrap())
     } else {
@@ -126,7 +126,7 @@ fn source_basis_and_route_separation() {
             assert!(LeasedSeparableBlendPipeline::new_general_budgeted(&doc, &Interrupt::NONE, &mut budget(q), owner.clone()).is_err());
             assert!(LeasedSeparableBlendPipeline::new_component_budgeted(&doc, &Interrupt::NONE, &mut budget(q), owner.clone()).is_err());
             let mut wrong = doc.clone();
-            wrong.icc_profile = Some(Arc::new(Builtin::GrayGamma22.profile().to_bytes()));
+            wrong.icc_profile = Some(Builtin::GrayGamma22.profile().to_bytes());
             wrong.working_profile_interpretation = WorkingProfileInterpretation::implicit_sgray(wrong.icc_profile.as_ref().unwrap());
             assert!(LeasedSeparableBlendPipeline::new_alpha_budgeted(&wrong, &Interrupt::NONE, &mut budget(q), owner.clone()).is_err());
             assert_eq!(q.usage().unwrap(), before);

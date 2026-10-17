@@ -109,7 +109,7 @@ fn all_operators_offset_extents_mask_zero_and_transparent_backdrops_reuse_existi
                 // all-zero backdrop optimization or erase inert colors on retained paths.
                 let backdrop: Vec<_> = (0..20).map(|i| [0.25, 0.25, 0.25, if i % 3 == 0 { 0.0 } else { 0.5 }]).collect();
                 let band = p.render_band_over_with_resident_coverage(rect, &backdrop, 0.375, mask, &ctl()).unwrap();
-                for (y, row) in band.pixels().chunks_exact(5).enumerate() {
+                for (y, row) in band.pixels().as_chunks::<5>().0.iter().enumerate() {
                     for (x, actual) in row.iter().enumerate() {
                         let (x, y) = (rect.x0 + x as i32, rect.y0 + y as i32);
                         let index = ((y - rect.y0) * 5 + x - rect.x0) as usize;
