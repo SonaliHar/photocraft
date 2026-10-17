@@ -557,3 +557,48 @@ fn the_body_stays_painted_while_it_is_scrolled() {
     let last = painted_y(&shapes, "Row 59").expect("the end of the page is painted after the scroll");
     assert!(last > window.top() + 40.0 && last < window.bottom(), "and it is inside the window: {last} in {window:?}");
 }
+
+#[test]
+fn a_row_wraps_its_buttons_in_a_narrow_panel() {
+    // A style row at the 250 px a lettering panel asks for: a label, the size step and the four
+    // arrow buttons. Each button used to be drawn inside `add_enabled_ui`, whose child `Ui` is put
+    // at the cursor and then advanced past without the wrapping row ever being asked whether it
+    // fits — so the arrows ran off the panel's right edge one after another, and the row's grown
+    // rect widened the column, which stopped the font line under it wrapping too.
+    let mut panel = test_panel("test.wrap", json!({"type":"column","children":[
+        {"type":"row","children":[
+            {"type":"label","text":"Line"},
+            {"type":"number","id":"lineNo","value":1.0,"min":1.0,"max":1.0,"step":1.0,"slider":false},
+            {"type":"button","id":"prev","label":"◀"},{"type":"button","id":"next","label":"▶"},
+            {"type":"button","id":"first","label":"⏮"},{"type":"button","id":"last","label":"⏭"}]},
+        {"type":"label","level":"muted","text":"Font: 000 10 Cents Comic [TeddyBear] Regular · 14 pt"}]}));
+    panel.min_width = 250;
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    let mut shapes = Vec::new();
+    for _ in 0..6 {
+        let input = egui::RawInput { screen_rect: Some(canvas()), ..Default::default() };
+        shapes = draw_panel(&ctx, &panel, input, true);
+    }
+    let window = panel_window_rect(&ctx, "test.wrap").expect("the panel's window is drawn");
+    assert!(window.width() < 320.0, "the row widened the panel: {window:?}");
+    let mut arrows = Vec::new();
+    let mut font_line = None;
+    for shape in &shapes {
+        let egui::Shape::Text(text) = &shape.shape else { continue };
+        if ["◀", "▶", "⏮", "⏭"].iter().any(|a| text.galley.job.text == *a) {
+            let right = text.pos.x + text.galley.size().x;
+            assert!(text.pos.x >= window.left() && right <= window.right(), "{:?} is drawn past the panel: x {}..{right} in {window:?}", text.galley.job.text, text.pos.x);
+            arrows.push(text.pos.y);
+        }
+        if text.galley.job.text.starts_with("Font:") {
+            font_line = Some(text);
+        }
+    }
+    assert_eq!(arrows.len(), 4, "all four arrows are drawn: {arrows:?}");
+    let first = arrows[0];
+    assert!(arrows.iter().any(|y| (*y - first).abs() > 4.0), "the arrows sat on one line, off the panel: {arrows:?}");
+    // The font line below the row wraps at the panel, not at the width the overflowing row forced.
+    let line = font_line.expect("the font line is drawn");
+    assert!(line.galley.job.wrap.max_width <= window.width(), "the font line is given {} px in a {}-px window", line.galley.job.wrap.max_width, window.width());
+}

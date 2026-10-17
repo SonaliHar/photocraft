@@ -394,6 +394,26 @@ fn progress_row(ui: &mut egui::Ui, t: &Tokens, progress: &Progress, asked: &mut 
     }
 }
 
+/// A plug-in's button, drawn in the application's own style.
+///
+/// It is a `Widget` rather than a free function so that [`Ui::add_enabled`] can draw it disabled
+/// without opening a child `Ui` — inside a `row` that would put the button at the cursor without the
+/// wrapping layout getting a say in whether it fits (see the `Button` arm of [`body`]).
+struct PanelButton<'a> {
+    label: &'a str,
+    primary: bool,
+}
+
+impl egui::Widget for PanelButton<'_> {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        if self.primary {
+            crate::widgets::primary_button(ui, self.label, 0.0)
+        } else {
+            crate::widgets::secondary_button(ui, self.label, 0.0)
+        }
+    }
+}
+
 /// Draws one widget tree, collecting every interaction into `pending` — `(panel, widget, value)`,
 /// where a `null` value is a click and anything else is a committed value.
 fn body(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, widget: &Widget, pending: &mut Pending) {
@@ -507,18 +527,20 @@ fn body(ui: &mut egui::Ui, t: &Tokens, panel: &PanelDraw, widget: &Widget, pendi
         }
         Widget::Button { id, label, primary, enabled } => {
             let on = enabled.unwrap_or(true);
-            let resp =
-                ui.add_enabled_ui(
-                    on,
-                    |ui| {
-                        if *primary { crate::widgets::primary_button(ui, label, 0.0) } else { crate::widgets::secondary_button(ui, label, 0.0) }
-                    },
-                );
-            if resp.inner.clicked() {
+            // A widget rather than `add_enabled_ui`: that builds a child `Ui`, and a child is placed
+            // at the cursor and then advanced past by `advance_cursor_after_rect` without the
+            // wrapping layout ever being asked whether the button fits. A `row` of buttons (a style
+            // row's size step and its four arrows on a 250 px panel) therefore never wrapped, and
+            // every button after the first stuck out of the window — and, because the row's rect
+            // then grew, widened the column's `max_rect`, so the labels below it stopped wrapping
+            // too. `Ui::add_enabled` disables the same `Ui` and draws the widget through the row's
+            // own allocation, so a disabled button wraps like an enabled one.
+            let resp = ui.add_enabled(on, PanelButton { label, primary: *primary });
+            if resp.clicked() {
                 pending.events.push((panel.id.clone(), id.clone(), Value::Null));
             }
             if !on {
-                resp.response.on_hover_text(tl!("The plug-in has disabled this."));
+                resp.on_hover_text(tl!("The plug-in has disabled this."));
             }
         }
         Widget::Progress { fraction } => {
