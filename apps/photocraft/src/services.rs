@@ -178,7 +178,7 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
                 dialog = dialog.set_directory(dir);
             }
             let picked = dialog.pick_folder();
-            Box::pin(async move { picked.await.map(|folder| answer([folder.path()], true, |mut p| FileDialogAnswer::FolderTo(p.remove(0)))) })
+            Box::pin(async move { picked.await.map(|folder| answer_one(folder.path(), true, FileDialogAnswer::FolderTo)) })
         }
         FileDialogRequest::Save { suggested } => {
             let filters = save_filters(&suggested);
@@ -213,10 +213,10 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
                         .map_err(|e| e.to_string())
                         .and_then(|conn| crate::portal_save::save_as(&conn, req));
                     match portal {
-                        Ok(path) => path.map(|p| answer([p.as_path()], true, |mut p| FileDialogAnswer::SaveTo(p.remove(0)))),
+                        Ok(path) => path.map(|p| answer_one(&p, true, FileDialogAnswer::SaveTo)),
                         Err(e) => {
                             log::info!("portal save dialog unavailable ({e}), using rfd");
-                            dialog.save_file().await.map(|file| answer([file.path()], true, |mut p| FileDialogAnswer::SaveTo(p.remove(0))))
+                            dialog.save_file().await.map(|file| answer_one(file.path(), true, FileDialogAnswer::SaveTo))
                         }
                     }
                 })
@@ -225,7 +225,7 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             {
                 let _ = filters;
                 let picked = dialog.save_file();
-                Box::pin(async move { picked.await.map(|file| answer([file.path()], true, |mut p| FileDialogAnswer::SaveTo(p.remove(0)))) })
+                Box::pin(async move { picked.await.map(|file| answer_one(file.path(), true, FileDialogAnswer::SaveTo)) })
             }
         }
     };
@@ -245,6 +245,14 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
 fn answer<'a>(paths: impl IntoIterator<Item = &'a Path>, saving: bool, make: impl FnOnce(Vec<String>) -> FileDialogAnswer) -> FileDialogAnswer {
     match paths.into_iter().map(|p| photocraft_ui_egui::file_open::path_text(p, saving)).collect() {
         Ok(paths) => make(paths),
+        Err(e) => FileDialogAnswer::Unavailable(e),
+    }
+}
+
+/// [`answer`] for a dialog that picks one path.
+fn answer_one(path: &Path, saving: bool, make: impl FnOnce(String) -> FileDialogAnswer) -> FileDialogAnswer {
+    match photocraft_ui_egui::file_open::path_text(path, saving) {
+        Ok(path) => make(path),
         Err(e) => FileDialogAnswer::Unavailable(e),
     }
 }
@@ -677,9 +685,9 @@ mod tests {
             std::env::temp_dir().join(std::ffi::OsString::from_wide(&wide))
         };
         let good = std::env::temp_dir().join("ok.png");
-        let save = |paths: Vec<&Path>| answer(paths, true, |mut p| FileDialogAnswer::SaveTo(p.remove(0)));
-        assert!(matches!(save(vec![&bad]), FileDialogAnswer::Unavailable(e) if e.contains("not valid Unicode") && e.contains("another name")));
-        assert!(matches!(save(vec![&good]), FileDialogAnswer::SaveTo(p) if p == good.to_str().unwrap()));
+        let save = |path: &Path| answer_one(path, true, FileDialogAnswer::SaveTo);
+        assert!(matches!(save(&bad), FileDialogAnswer::Unavailable(e) if e.contains("not valid Unicode") && e.contains("another name")));
+        assert!(matches!(save(&good), FileDialogAnswer::SaveTo(p) if p == good.to_str().unwrap()));
         let open = answer([good.as_path(), bad.as_path()], false, FileDialogAnswer::Paths);
         assert!(matches!(open, FileDialogAnswer::Unavailable(e) if e.contains("open it again")));
     }
