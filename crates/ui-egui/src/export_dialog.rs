@@ -434,6 +434,18 @@ fn preview_pixels(proxy: &Document, estimate: Option<u64>) -> PreviewPixels {
     PreviewPixels { estimate, width: img.width as usize, height: img.height as usize, rgba: img.pixels }
 }
 
+/// Where the preview draws the exported image inside the preview panel: the export's aspect ratio,
+/// fitted inside the panel with an inset so its edges show against the canvas around it.
+fn preview_image_rect(panel: egui::Rect, image: egui::Vec2) -> egui::Rect {
+    let inset = 8.0;
+    if !(image.x.is_finite() && image.y.is_finite() && image.x > 0.0 && image.y > 0.0) {
+        return egui::Rect::from_center_size(panel.center(), egui::Vec2::ZERO);
+    }
+    let room = (panel.size() - egui::Vec2::splat(2.0 * inset)).max(egui::Vec2::ZERO);
+    let k = (room.x / image.x).min(room.y / image.y).min(1.0e3);
+    egui::Rect::from_center_size(panel.center(), image * k)
+}
+
 fn preview_sync(app: &PhotocraftApp, doc: &Document, f: &Map<String, Value>) -> Result<PreviewPixels, String> {
     let proxy = preview_proxy(doc, f)?;
     Ok(preview_pixels(&proxy, estimate(app, doc, &proxy, f)))
@@ -819,12 +831,14 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             };
             let side = 300.0;
             let (r, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
-            crate::widgets::checker(ui.painter(), r, 8.0);
+            // The panel around the image is canvas, not transparency: the checkerboard and the
+            // outline cover only the exported image, so its proportions read at a glance.
+            ui.painter().rect_filled(r, 0.0, t.canvas);
             if let Some(tex) = preview.as_ref().and_then(|preview| preview.texture.as_ref()) {
-                let ts = tex.size_vec2();
-                let k = (side / ts.x.max(ts.y)).min(1.0e3);
-                let ir = egui::Rect::from_center_size(r.center(), ts * k);
+                let ir = preview_image_rect(r, tex.size_vec2());
+                crate::widgets::checker(ui.painter(), ir, 8.0);
                 ui.painter().image(tex.id(), ir, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                ui.painter().rect_stroke(ir, 0.0, egui::Stroke::new(1.0, t.card_border), egui::StrokeKind::Outside);
             } else if preview.is_none() {
                 ui.put(egui::Rect::from_center_size(r.center(), egui::vec2(24.0, 24.0)), egui::Spinner::new());
             } else {
@@ -832,7 +846,9 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             }
             ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Outside);
             let est = preview.as_ref().and_then(|preview| preview.estimate).map_or("—".to_string(), |b| crate::sizing::human_bytes(b as f64));
-            ui.label(egui::RichText::new(format!("{}  ≈ {est}", s_fmt(f).to_uppercase())).color(t.text_dim).size(11.5));
+            let (bw, bh) = (n(f, "__w", f64::from(doc.size.width)), n(f, "__h", f64::from(doc.size.height)));
+            let (w, h) = (n(f, "width", bw), n(f, "height", bh));
+            ui.label(egui::RichText::new(format!("{w} × {h} px  ·  {}  ≈ {est}", s_fmt(f).to_uppercase())).color(t.text_dim).size(11.5));
         });
     });
 }
@@ -938,6 +954,25 @@ fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn preview_shows_the_exported_aspect_ratio_inside_the_panel() {
+        let panel = egui::Rect::from_min_size(egui::pos2(10.0, 20.0), egui::vec2(300.0, 300.0));
+        for (w, h) in [(1600.0, 500.0), (500.0, 1600.0), (64.0, 64.0), (1.0, 4000.0)] {
+            let ir = preview_image_rect(panel, egui::vec2(w, h));
+            assert!(panel.contains_rect(ir), "{w}×{h}: {ir:?} leaves the panel");
+            assert!(ir.width() < panel.width() && ir.height() < panel.height(), "{w}×{h}: the edges stay visible");
+            assert!((ir.width() / ir.height() - w / h).abs() / (w / h) < 1e-3, "{w}×{h}: aspect ratio {ir:?}");
+            assert_eq!(ir.center(), panel.center());
+        }
+        // A wide export no longer fills the square panel with transparency.
+        let wide = preview_image_rect(panel, egui::vec2(1600.0, 500.0));
+        assert!(wide.height() < panel.height() / 2.0);
+        // Degenerate sizes draw nothing rather than panicking or covering the panel.
+        for size in [egui::Vec2::ZERO, egui::vec2(f32::NAN, 10.0)] {
+            assert_eq!(preview_image_rect(panel, size).area(), 0.0);
+        }
+    }
+
     #[test]
     fn ico_export_is_available_and_rejects_oversize_output() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
