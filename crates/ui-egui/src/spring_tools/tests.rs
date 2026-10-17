@@ -137,7 +137,7 @@ fn hold_z_click_zooms_then_a_quick_release_restores() {
 #[test]
 fn shift_letter_cycles_and_never_springs() {
     let mut h = harness(Tool::Brush);
-    h.state_mut().session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = true);
+    assert!(h.state_mut().session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = true).is_ok());
     key_event(&mut h, Key::B, true, false, Modifiers::SHIFT);
     assert_eq!(h.state().ui.tool, Tool::Pencil);
     assert_eq!(h.state().ui.spring, None);
@@ -209,6 +209,7 @@ fn letters_type_while_editing_text() {
     let mut h = harness(Tool::Type);
     let id = h.state_mut().run("type.create", json!({"x": 20, "y": 80, "text": "a", "size": 40})).unwrap()["layer"].as_u64().unwrap();
     h.state_mut().ui.text_edit = Some(crate::state::TextEdit {
+        document: h.state().session.active().map(|state| state.doc.id),
         layer: id,
         caret: 1,
         anchor: 1,

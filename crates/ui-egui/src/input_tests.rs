@@ -470,9 +470,12 @@ fn type_tool_alt_arrows_kern_the_pair() {
         let r = t.char_runs();
         (r[0].style.kerning, r[0].style.kern, r.len())
     };
-    let steps = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len();
+    let steps = |h: &Harness<'static, PhotocraftApp>| {
+        h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len()
+    };
     let metric = photocraft_text::shared().lock().unwrap().pair_kerning(&text(&h), 72.0, 0).unwrap().round();
     h.state_mut().ui.text_edit = Some(crate::state::TextEdit {
+        document: h.state().session.active().map(|state| state.doc.id),
         layer: id,
         caret: 1,
         anchor: 1,
@@ -523,6 +526,7 @@ fn type_tool_alt_arrows_kern_the_pair() {
 /// Starts a type editing session on `layer` with `anchor..caret` selected.
 fn edit_type(h: &mut Harness<'static, PhotocraftApp>, layer: u64, anchor: usize, caret: usize) {
     h.state_mut().ui.text_edit = Some(crate::state::TextEdit {
+        document: h.state().session.active().map(|state| state.doc.id),
         layer,
         caret,
         anchor,
@@ -574,7 +578,7 @@ fn para_style(h: &Harness<'static, PhotocraftApp>, id: u64, c: usize) -> photocr
 }
 
 fn history(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
-    h.state().session.active().unwrap().history.entries()
+    h.state().session.active().unwrap().history.entry_labels().map(str::to_owned).collect()
 }
 
 /// Photoshop's ⇧⌘K/U/B/I/: toggle All Caps, Underline, Faux Bold, Faux Italic and Strikethrough
@@ -741,6 +745,7 @@ fn type_tool_format_keys_survive_hostile_state() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     for ed in [None, Some(1)] {
         app.ui.text_edit = ed.map(|layer| crate::state::TextEdit {
+            document: None,
             layer,
             caret: 4,
             anchor: 0,
@@ -951,10 +956,10 @@ fn escape_deselects_when_nothing_else_needs_cancelling() {
     assert!(h.state().session.active().unwrap().doc.selection.is_none(), "Esc deselects");
     assert!(!h.state().ui.status_error, "no error: {}", h.state().ui.status);
     // With nothing selected, Esc stays untouched (no history step, no error).
-    let steps = h.state().session.active().unwrap().history.entries().len();
+    let steps = h.state().session.active().unwrap().history.entry_labels().count();
     h.key_press(Key::Escape);
     h.run_steps(2);
-    assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps, "no Deselect step");
+    assert_eq!(h.state().session.active().unwrap().history.entry_labels().count(), steps, "no Deselect step");
 }
 
 /// The dialog owns Esc: it cancels the dialog and the selection stays.
@@ -1008,7 +1013,7 @@ fn wheel_zoom_over_the_pasteboard_keeps_the_image_in_view() {
     // notches pushed the image out of the window. The anchor is now the nearest point of the image.
     for (zoom_with_wheel, m) in [(true, Modifiers::NONE), (false, Modifiers::ALT)] {
         let mut h = harness();
-        h.state_mut().session.edit_prefs(|p| p.general.zoom_with_scroll_wheel = zoom_with_wheel);
+        assert!(h.state_mut().session.edit_prefs(|p| p.general.zoom_with_scroll_wheel = zoom_with_wheel).is_ok());
         let r = h.state().last_canvas_rect;
         let p = pos2(r.left() + 20.0, r.top() + 20.0);
         let d = doc_at(&h, p);

@@ -19,6 +19,7 @@ fn focused_font_search_does_not_type_into_the_canvas_layer() {
     let mut app = new_app();
     let id = app.run("type.create", json!({"text": "Sample", "size": 24})).unwrap()["layer"].as_u64().unwrap();
     app.ui.text_edit = Some(crate::state::TextEdit {
+        document: app.session.active().map(|state| state.doc.id),
         layer: id,
         caret: 6,
         anchor: 6,
@@ -389,6 +390,7 @@ fn size_applies_at_layer_and_selection_scope() {
         assert!(w1 as f32 > w0 as f32 * 1.4, "psd {psd}: the pixels grow ({w0} → {w1})");
         // Selection scope: "world" only.
         app.ui.text_edit = Some(crate::state::TextEdit {
+            document: app.session.active().map(|state| state.doc.id),
             layer: id.0,
             caret: 11,
             anchor: 6,
@@ -539,7 +541,9 @@ fn foreground_colour_recolours_only_selected_type() {
     app.run("tools.setColors", json!({"foreground": "#ff0000"})).unwrap();
     super::foreground_changed(&mut app);
     assert_eq!(rgb_at(&app, id, 0), [0, 0, 0, 255], "not editing: unchanged");
+    let document = app.session.active().map(|state| state.doc.id);
     let edit = |caret, anchor| crate::state::TextEdit {
+        document,
         layer: id.0,
         caret,
         anchor,
@@ -633,6 +637,7 @@ fn text_color_dialog_edits_only_the_selected_range_and_cancel_is_inert() {
     let peer = LayerId(app.run("type.create", json!({"text":"Selected peer","color":"#000000"})).unwrap()["layer"].as_u64().unwrap());
     app.run("layer.select", json!({"layer": id.0, "mode": "add"})).unwrap();
     app.ui.text_edit = Some(crate::state::TextEdit {
+        document: app.session.active().map(|state| state.doc.id),
         layer: id.0,
         caret: 11,
         anchor: 6,
@@ -694,6 +699,7 @@ fn empty_ime_events_never_delete_the_selection() {
     let mut app = new_app();
     let id = LayerId(app.run("type.create", json!({"text": "Hello", "size": 40, "x": 300, "y": 420})).unwrap()["layer"].as_u64().unwrap());
     app.ui.text_edit = Some(crate::state::TextEdit {
+        document: app.session.active().map(|state| state.doc.id),
         layer: id.0,
         caret: 5,
         anchor: 0,
@@ -1479,6 +1485,7 @@ mod multi_layer_formatting {
 
     fn editing(app: &mut PhotocraftApp, id: LayerId) {
         app.ui.text_edit = Some(crate::state::TextEdit {
+            document: app.session.active().map(|state| state.doc.id),
             layer: id.0,
             caret: 3,
             anchor: 1,
@@ -1613,11 +1620,11 @@ mod multi_layer_formatting {
                 app.run("type.edit", json!({"layer": id.0, "transform": [scale, 0.0, 0.0, scale, 0.0, 0.0]})).unwrap();
                 selected(&mut app, &[id]);
                 let before = text(&app, id).char_runs();
-                let steps = app.session.active().unwrap().history.entries().len();
+                let steps = app.session.active().unwrap().history.entry_labels().count();
                 let mut h = controls(app, properties);
                 h.run_steps(3);
                 assert_eq!(text(h.state(), id).char_runs(), before, "scale {scale}, properties {properties}");
-                assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps, "no history step");
+                assert_eq!(h.state().session.active().unwrap().history.entry_labels().count(), steps, "no history step");
             }
         }
     }
@@ -1726,7 +1733,7 @@ mod multi_layer_formatting {
                 editing(&mut app, ids[0]);
             }
             let styles = ids.map(|id| text(&app, id).char_runs());
-            let steps = app.session.active().unwrap().history.entries().len();
+            let steps = app.session.active().unwrap().history.entry_labels().count();
             crate::menus::invoke(&mut app, &egui::Context::default(), "type.warpText", json!({})).unwrap();
             let dialog = app.ui.dialogs.last().unwrap().id;
             let fields = &app.ui.dialogs.last().unwrap().fields;
@@ -1763,7 +1770,7 @@ mod multi_layer_formatting {
                 assert_eq!(t.warp.as_ref().map(|w| w.value), (i == 0 || (!inline && i == 1)).then_some(25.0), "inline={inline}, layer={i}");
                 assert_eq!(t.char_runs(), styles[i], "Warp leaves character formatting intact");
             }
-            assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + 1);
+            assert_eq!(h.state().session.active().unwrap().history.entry_labels().count(), steps + 1);
             if inline {
                 assert_eq!(h.state().session.active().unwrap().coalesce.as_deref(), Some("batch-type-edit"));
             }
@@ -1775,7 +1782,7 @@ mod multi_layer_formatting {
         let (app, ids) = fixture();
         let originals = ids.map(|id| style(&app, id, 0));
         let mut h = controls(app, false);
-        let steps = h.state().session.active().unwrap().history.entries().len();
+        let steps = h.state().session.active().unwrap().history.entry_labels().count();
         for confirm in [false, true] {
             selected(h.state_mut(), &ids[..2]);
             h.run();
@@ -1796,7 +1803,7 @@ mod multi_layer_formatting {
                 }
                 assert_eq!(style(h.state(), ids[i], 0), expected);
             }
-            assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + usize::from(confirm));
+            assert_eq!(h.state().session.active().unwrap().history.entry_labels().count(), steps + usize::from(confirm));
         }
         assert!(h.state_mut().session.undo());
         for (id, expected) in ids.into_iter().zip(originals) {
@@ -1816,13 +1823,13 @@ fn move_tool_double_click_on_type_edits_it() {
     app.ui.tool = crate::state::Tool::Move;
     let mut h = fast_harness(app);
     let p = glyph(&mut h, id, 2, 0.2);
-    let steps = h.state().session.active().unwrap().history.entries().len();
+    let steps = h.state().session.active().unwrap().history.entry_labels().count();
     double_click(&mut h, p);
     assert_eq!(h.state().ui.tool, crate::state::Tool::Type, "the Type tool takes over");
     assert_eq!(h.state().ui.text_edit.as_ref().map(|e| e.layer), Some(id.0));
     assert_eq!(selection(&h), (2, 2), "the caret sits on the double-clicked glyph");
     assert_eq!(h.state().session.active().unwrap().active_layer, Some(id));
-    assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps, "nothing moved");
+    assert_eq!(h.state().session.active().unwrap().history.entry_labels().count(), steps, "nothing moved");
     super::insert(h.state_mut(), "x");
     assert_eq!(text(h.state(), id).text, "HOxHOHO");
     // Off the text, a double-click stays with the Move tool.
@@ -1860,14 +1867,14 @@ fn type_mask_commits_the_glyphs_as_the_selection_in_one_step() {
 
     let mut app = new_app();
     let layers = app.session.active().unwrap().doc.layers.len();
-    let steps = app.session.active().unwrap().history.entries().len();
+    let steps = app.session.active().unwrap().history.entry_labels().count();
     type_with(&mut app, Tool::HorizontalTypeMask, "I");
     assert!(app.ui.text_edit.is_none());
     assert_eq!(selection_bounds(&app), Some(glyphs));
     let st = app.session.active().unwrap();
     assert_eq!(st.doc.layers.len(), layers, "no layer is left behind");
-    assert_eq!(st.history.entries().len(), steps + 1);
-    assert_eq!(st.history.entries().last().map(String::as_str), Some("Type Mask"));
+    assert_eq!(st.history.entry_labels().count(), steps + 1);
+    assert_eq!(st.history.entry_labels().last(), Some("Type Mask"));
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(selection_bounds(&app), None, "one undo restores the selection");
     assert_eq!(app.session.active().unwrap().doc.layers.len(), layers);
@@ -2066,6 +2073,7 @@ fn multi_click_without_a_session_does_nothing() {
     super::multi_click(&mut app, 3, 10.0, 10.0);
     assert!(app.ui.text_edit.is_none() && app.type_clicks.is_none());
     app.ui.text_edit = Some(crate::state::TextEdit {
+        document: app.session.active().map(|state| state.doc.id),
         layer: 999_999,
         caret: 5,
         anchor: 5,

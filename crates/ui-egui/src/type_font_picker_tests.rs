@@ -237,7 +237,7 @@ fn hovering_a_font_does_not_pollute_history_and_clears_on_close() {
     app.run("type.create", json!({"text": "Sample", "font": "Inter", "size": 18})).unwrap();
 
     let layer_id = app.session.active().unwrap().active_layer.unwrap();
-    let history_before = app.session.active().unwrap().history.entries().len();
+    let history_before = app.session.active().unwrap().history.entry_labels().count();
 
     // Simulate hovering a font directly via the preview module
     let ctx = egui::Context::default();
@@ -248,7 +248,7 @@ fn hovering_a_font_does_not_pollute_history_and_clears_on_close() {
     let (_, preview_key) = crate::type_font_preview::display_doc(&mut app, 0).expect("preview document");
 
     // Verify the original document's history is NOT polluted
-    let history_after = app.session.active().unwrap().history.entries().len();
+    let history_after = app.session.active().unwrap().history.entry_labels().count();
     assert_eq!(history_before, history_after, "Hovering a font does not create an undo step");
     let doc = app.session.active().unwrap().doc.id;
     let revision = app.session.active().unwrap().revision;
@@ -315,7 +315,7 @@ fn options_bar_hover_previews_on_canvas_without_committing() {
         panic!("type layer");
     };
     assert_eq!(original_text.char_runs()[0].style.font_family, "Inter");
-    assert_eq!(h.state().app.session.active().unwrap().history.entries().len(), 2, "hover adds no history entry");
+    assert_eq!(h.state().app.session.active().unwrap().history.entry_labels().count(), 2, "hover adds no history entry");
 
     h.get_by_role(Role::TextInput).hover();
     h.run();
@@ -336,7 +336,7 @@ fn options_bar_hover_previews_on_canvas_without_committing() {
     };
     assert_eq!(committed_text.char_runs()[0].style.font_family, "JetBrains Mono");
     assert_eq!(key, 0, "selection replaces the preview with committed content");
-    assert_eq!(h.state().app.session.active().unwrap().history.entries().len(), 3, "selection adds one history step");
+    assert_eq!(h.state().app.session.active().unwrap().history.entry_labels().count(), 3, "selection adds one history step");
     let committed_font = |app: &PhotocraftApp| {
         let LayerContent::Text(text) = &app.session.active().unwrap().doc.layer(layer).unwrap().content else {
             panic!("type layer");
@@ -360,6 +360,7 @@ fn hovering_a_font_previews_only_the_selected_characters() {
     let layer = app.session.active().unwrap().active_layer.unwrap();
     app.run("type.setStyle", json!({"layer": layer.0, "range": [0, 2], "font": "JetBrains Mono"})).unwrap();
     app.ui.text_edit = Some(crate::state::TextEdit {
+        document: app.session.active().map(|state| state.doc.id),
         layer: layer.0,
         caret: 5,
         anchor: 3,

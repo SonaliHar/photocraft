@@ -326,6 +326,7 @@ mod tests {
         let id = app.run("type.create", json!({"text": "Hello world", "size": 40, "x": 20, "y": 100, "color": "#ffffff"})).unwrap()["layer"].as_u64().unwrap();
         app.ui.tool = Tool::Type;
         app.ui.text_edit = Some(crate::state::TextEdit {
+            document: app.session.active().map(|state| state.doc.id),
             layer: id,
             caret: 0,
             anchor: 5,

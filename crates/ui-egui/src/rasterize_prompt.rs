@@ -209,18 +209,20 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let tool = f.get("tool").and_then(Value::as_str).and_then(Tool::from_name);
     let at: Vec<f64> = f.get("at").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
     let (Some(tool), Some(&x), Some(&y)) = (tool, at.first(), at.get(1)) else {
-        return Ok(json!({ "rasterized": r, "painted": false }));
+        return Ok(json!({ "rasterized": r, "painted": false, "pending": false }));
     };
     let pressure = at.get(2).copied().unwrap_or(1.0) as f32;
     // The same tool, layer and point as when the prompt opened.
     app.ui.tool = tool;
     let before = app.session.active().map(|st| st.history.past_len());
-    if app.session.active().and_then(|st| st.active_layer) == Some(photocraft_doc::LayerId(layer)) && x.is_finite() && y.is_finite() {
+    let replay = app.session.active().and_then(|st| st.active_layer) == Some(photocraft_doc::LayerId(layer)) && x.is_finite() && y.is_finite();
+    if replay {
         crate::canvas::tool_event(app, ToolEvent::Down { x, y, pressure: pressure.clamp(0.0, 1.0) }, egui::Modifiers::NONE);
         crate::canvas::tool_event(app, ToolEvent::Up { x, y }, egui::Modifiers::NONE);
     }
     let painted = app.session.active().map(|st| st.history.past_len()) != before;
-    Ok(json!({ "rasterized": r, "painted": painted }))
+    let pending = replay && app.live_begin_worker.active();
+    Ok(json!({ "rasterized": r, "painted": painted, "pending": pending }))
 }
 
 /// The filter prompt's answer: convert or rasterize the layer, then queue the filter for

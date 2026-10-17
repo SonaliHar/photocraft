@@ -139,13 +139,24 @@ fn begin_edit(app: &mut PhotocraftApp, id: LayerId, key: &str) -> Result<(), Str
 pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
     let st = app.session.active().ok_or("no document open")?;
     let id = st.active_layer.ok_or("no active layer")?;
+    let document = st.doc.id;
     let n = text_layer(&st.doc, id).ok_or("active layer is not a type layer")?.text.chars().count();
     if app.ui.text_edit.as_ref().is_none_or(|ed| ed.layer != id.0) {
         commit(app);
         let key = session_key(app);
         begin_edit(app, id, &key)?;
-        app.ui.text_edit =
-            Some(TextEdit { layer: id.0, caret: n, anchor: 0, session: key, created: false, mask: false, dragging: false, resize: None, preedit: None });
+        app.ui.text_edit = Some(TextEdit {
+            document: Some(document),
+            layer: id.0,
+            caret: n,
+            anchor: 0,
+            session: key,
+            created: false,
+            mask: false,
+            dragging: false,
+            resize: None,
+            preedit: None,
+        });
     } else if let Some(ed) = app.ui.text_edit.as_mut() {
         ed.anchor = 0;
         ed.caret = n;
@@ -164,6 +175,7 @@ pub fn edit_active(app: &mut PhotocraftApp) -> Result<(), String> {
 pub fn edit_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     let Some(id) = hit_layer(app, x, y) else { return false };
     let previous_tool = app.ui.tool;
+    let document = app.session.active().map(|state| state.doc.id);
     commit(app);
     if app.session.select_layer(id).is_err() {
         return false;
@@ -173,8 +185,18 @@ pub fn edit_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
         return false;
     }
     let off = hit_offset(app, id, x, y);
-    app.ui.text_edit =
-        Some(TextEdit { layer: id.0, caret: off, anchor: off, session: key, created: false, mask: false, dragging: false, resize: None, preedit: None });
+    app.ui.text_edit = Some(TextEdit {
+        document,
+        layer: id.0,
+        caret: off,
+        anchor: off,
+        session: key,
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
     let vertical = app.session.active().and_then(|st| text_layer(&st.doc, id)).is_some_and(|t| t.orientation == photocraft_doc::text::Orientation::Vertical);
     if !previous_tool.is_type() {
         app.ui.text_edit_return_tool = Some(previous_tool);
@@ -298,14 +320,25 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
         return false;
     }
     if let Some(id) = hit_layer(app, x, y) {
+        let document = app.session.active().map(|state| state.doc.id);
         let _ = app.session.select_layer(id);
         let key = session_key(app);
         if begin_edit(app, id, &key).is_err() {
             return true;
         }
         let off = hit_offset(app, id, x, y);
-        app.ui.text_edit =
-            Some(TextEdit { layer: id.0, caret: off, anchor: off, session: key, created: false, mask: false, dragging: true, resize: None, preedit: None });
+        app.ui.text_edit = Some(TextEdit {
+            document,
+            layer: id.0,
+            caret: off,
+            anchor: off,
+            session: key,
+            created: false,
+            mask: false,
+            dragging: true,
+            resize: None,
+            preedit: None,
+        });
         app.ui.text_edit_return_tool = None;
         return true;
     }
@@ -356,6 +389,7 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         p["x"] = json!(start[0].round());
         p["y"] = json!(start[1].round());
     }
+    let document = app.session.active().map(|state| state.doc.id);
     let key = session_key(app);
     p["coalesce"] = json!(key);
     if let Ok(v) = app.run("type.create", p)
@@ -372,7 +406,8 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         // Like Photoshop: the placeholder is selected, so typing replaces it.
         let n = text.chars().count();
         app.ui.caret_blink_time = app.last_frame_time;
-        app.ui.text_edit = Some(TextEdit { layer: id, caret: n, anchor: 0, session: key, created: true, mask, dragging: false, resize: None, preedit: None });
+        app.ui.text_edit =
+            Some(TextEdit { document, layer: id, caret: n, anchor: 0, session: key, created: true, mask, dragging: false, resize: None, preedit: None });
         app.ui.text_edit_return_tool = None;
     }
 }
@@ -991,6 +1026,34 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     app.ui.text_edit.is_some()
 }
 
+/// A restored editor or a tab switch cannot transfer the old history key.
+fn editor_document(app: &PhotocraftApp) -> Result<Option<photocraft_doc::DocId>, String> {
+    let Some(editor) = app.ui.text_edit.as_ref() else { return Ok(None) };
+    let document = editor.document.ok_or("type.ui.stale-editor")?;
+    let state = app.session.active().ok_or("type.ui.stale-editor")?;
+    if state.doc.id != document
+        || state.doc.accounted().is_some()
+        || state.floating.is_some()
+        || state.doc.xcf_state.as_ref().is_some_and(|state| state.floating.is_some())
+        || app.session.has_jobs()
+        || state.coalesce.as_deref().is_some_and(|key| key != editor.session)
+    {
+        return Err("type.ui.stale-editor".into());
+    }
+    Ok(Some(document))
+}
+fn finish_editor_group(app: &mut PhotocraftApp, document: photocraft_doc::DocId, key: &str) {
+    // Undo/cancel and non-coalesced deletion already ended the group. Never
+    // clear a second key after those operations.
+    if app.session.active().is_none_or(|state| state.coalesce.is_none()) {
+        return;
+    }
+    if let Err(error) = app.session.finish_history_group(document, key) {
+        app.ui.status = error.to_string();
+        app.ui.status_error = true;
+    }
+}
+
 /// End the editing session. A new layer left empty is deleted; a new layer is named after its text.
 pub fn commit(app: &mut PhotocraftApp) {
     commit_with(app, egui::Modifiers::NONE);
@@ -1000,6 +1063,14 @@ pub fn commit(app: &mut PhotocraftApp) {
 /// selection with ⇧, subtracts them with ⌥ and intersects with ⇧⌥ (Photoshop); with none it
 /// replaces the selection.
 pub fn commit_with(app: &mut PhotocraftApp, mods: egui::Modifiers) {
+    let document = match editor_document(app) {
+        Ok(document) => document,
+        Err(error) => {
+            app.ui.status = error;
+            app.ui.status_error = true;
+            return;
+        }
+    };
     if app.ui.tool.is_type() {
         crate::type_transform::finish(app);
     }
@@ -1010,7 +1081,11 @@ pub fn commit_with(app: &mut PhotocraftApp, mods: egui::Modifiers) {
     {
         app.ui.tool = tool;
     }
-    let Some(text) = current_text(app, LayerId(ed.layer)) else { return };
+    let Some(document) = document else { return };
+    let Some(text) = current_text(app, LayerId(ed.layer)) else {
+        finish_editor_group(app, document, &ed.session);
+        return;
+    };
     if ed.mask {
         // Type Mask: the text's glyphs become (or combine with) the selection and the working
         // layer goes, all in the session's one history step. No text: nothing changes.
@@ -1024,6 +1099,7 @@ pub fn commit_with(app: &mut PhotocraftApp, mods: egui::Modifiers) {
         if current_text(app, LayerId(ed.layer)).is_some() {
             undo_session(app, &ed);
         }
+        finish_editor_group(app, document, &ed.session);
         return;
     }
     if text.trim().is_empty() && ed.created {
@@ -1032,6 +1108,7 @@ pub fn commit_with(app: &mut PhotocraftApp, mods: egui::Modifiers) {
         let name = photocraft_engine::type_cmds::layer_name(&text);
         let _ = app.run("type.edit", json!({"layer": ed.layer, "name": name, "coalesce": ed.session}));
     }
+    finish_editor_group(app, document, &ed.session);
 }
 
 /// Selection highlight, caret and text frame over the canvas.
@@ -2470,6 +2547,11 @@ fn type_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// Cancel the editing session: undo it back to where it started (removes a new layer).
 pub fn cancel(app: &mut PhotocraftApp) {
+    if let Err(error) = editor_document(app) {
+        app.ui.status = error;
+        app.ui.status_error = true;
+        return;
+    }
     crate::type_transform::reset(app);
     let Some(ed) = app.ui.text_edit.take() else { return };
     if let Some(tool) = app.ui.text_edit_return_tool.take()
@@ -2491,6 +2573,10 @@ fn undo_session(app: &mut PhotocraftApp, ed: &TextEdit) {
 #[cfg(test)]
 #[path = "type_tool_tests.rs"]
 mod canvas_tests;
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, reason = "Synthetic UI lifecycle assertions are test-only")]
+#[path = "type_history_lifecycle_tests.rs"]
+mod history_lifecycle_tests;
 
 #[cfg(test)]
 #[path = "type_font_picker_tests.rs"]

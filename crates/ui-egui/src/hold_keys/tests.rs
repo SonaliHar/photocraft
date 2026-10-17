@@ -185,6 +185,7 @@ fn space_while_editing_type_is_not_the_hand_tool() {
     let mut h = harness(Tool::Type);
     let id = h.state_mut().run("type.create", json!({"text": "ئا", "size": 20, "x": 100, "y": 100})).unwrap()["layer"].as_u64().unwrap();
     h.state_mut().ui.text_edit = Some(crate::state::TextEdit {
+        document: h.state().session.active().map(|state| state.doc.id),
         layer: id,
         caret: 2,
         anchor: 2,
@@ -672,6 +673,7 @@ fn tilde_held_with_the_brush_or_pencil_erases_with_its_brush() {
         key(&mut h, Key::Backtick, true, Modifiers::NONE);
         drag_with(&mut h, Modifiers::NONE, 110.0, 130.0, 150.0, 130.0);
         key(&mut h, Key::Backtick, false, Modifiers::NONE);
+        assert!(!h.state().ui.status_error, "{tool:?} stroke failed: {}", h.state().ui.status);
         assert_eq!(last_stroke_erases(&h), Some(true), "{tool:?}");
         assert_eq!(rgba(&h, 130, 130)[3], 0.0, "{tool:?}: erased to transparency");
         assert_eq!(last_stroke(h.state())["mode"], json!("clear"), "{tool:?}");
@@ -747,6 +749,7 @@ fn clear_in_the_mode_dropdown_erases_until_another_mode_is_chosen() {
         tool_event(app, ToolEvent::Up { x: 100.0, y: 40.0 }, m);
     };
     stroke(&mut h);
+    assert!(!h.state().ui.status_error, "Clear Pencil stroke failed: {}", h.state().ui.status);
     assert_eq!(last_stroke(h.state())["mode"], json!("clear"));
     assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Pencil"));
     combo(&h, "Clear");

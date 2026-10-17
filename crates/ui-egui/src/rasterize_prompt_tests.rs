@@ -49,7 +49,7 @@ fn prompt(app: &PhotocraftApp) -> Option<&crate::state::Dialog> {
 #[test]
 fn ok_rasterizes_then_paints_as_two_history_states() {
     for kind in Kind::ALL {
-        for tool in [Tool::Brush, Tool::Pencil] {
+        for tool in [Tool::Brush, Tool::Pencil, Tool::PaintBucket] {
             let mut app = app_with(kind);
             app.ui.tool = tool;
             let before = past(&app);
@@ -59,7 +59,23 @@ fn ok_rasterizes_then_paints_as_two_history_states() {
             assert_eq!(past(&app), before, "nothing happens until the answer");
             let id = d.id;
             let r = crate::dialogs::confirm(&mut app, id).unwrap();
-            assert_eq!(r["painted"], json!(true), "{kind:?}/{tool:?}");
+            let pending = app.live_begin_worker.active();
+            eprintln!("rasterize replay {kind:?}/{tool:?}: {r}");
+            assert_ne!(r["painted"], r["pending"], "successful replay is completed or pending: {r}");
+            assert_eq!(r["painted"], json!(past(&app) == before + 2), "{kind:?}/{tool:?}: completed paint only");
+            assert_eq!(r["pending"], json!(pending), "{kind:?}/{tool:?}");
+            if tool == Tool::PaintBucket {
+                assert!(!pending, "the synchronous bucket completed");
+            }
+            let ctx = egui::Context::default();
+            assert_eq!(crate::control::inspect(&app, &ctx).unwrap()["paintingPending"], json!(pending));
+            if pending {
+                assert_eq!(past(&app), before + 1, "only rasterization is published before preparation completes");
+                crate::canvas::wait_for_test_live_stroke(&mut app);
+            }
+            let inspected = crate::control::inspect(&app, &ctx).unwrap();
+            assert_eq!(inspected["paintingPending"], json!(false));
+            assert_eq!(inspected["statusError"], json!(false), "{inspected}");
             assert_eq!(active_content(&app), "Pixel");
             assert_eq!(past(&app), before + 2, "{kind:?}/{tool:?}: rasterize, then paint");
             let st = app.session.active().unwrap();
@@ -106,7 +122,7 @@ fn only_pixel_painting_asks() {
         app.ui.tool = tool;
         click(&mut app, 30.0, 20.0);
         assert!(prompt(&app).is_none(), "{tool:?} must not ask");
-        app.ui.text_edit = None;
+        crate::type_tool::commit(&mut app);
     }
     for tool in [Tool::Eraser, Tool::CloneStamp, Tool::PaintBucket, Tool::Smudge] {
         app.ui.tool = tool;
@@ -117,7 +133,10 @@ fn only_pixel_painting_asks() {
     // ⌥-click with the Clone Stamp sets the source.
     app.ui.tool = Tool::CloneStamp;
     tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 20.0, pressure: 1.0 }, Modifiers::ALT);
+    tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 20.0 }, Modifiers::ALT);
     assert!(prompt(&app).is_none());
+    assert!(app.ui.text_edit.is_none());
+    assert!(app.session.active().unwrap().coalesce.is_none(), "the actual Type editor commit finished its group");
     // Painting the layer's mask needs no rasterizing.
     app.run("layer.layerMask.revealAll", json!({})).unwrap();
     app.ui.mask_target = true;
@@ -148,6 +167,7 @@ fn a_stale_or_bad_prompt_fails_gracefully() {
     app.ui.dialog_mut(id).unwrap().fields.insert("tool".into(), json!("no such tool"));
     let r = crate::dialogs::confirm(&mut app, id).unwrap();
     assert_eq!(r["painted"], json!(false));
+    assert_eq!(r["pending"], json!(false));
     assert_eq!(active_content(&app), "Pixel");
 }
 
