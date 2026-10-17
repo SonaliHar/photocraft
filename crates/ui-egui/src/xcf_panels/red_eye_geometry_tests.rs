@@ -8,6 +8,12 @@ use egui_kittest::{
 mod evidence;
 use evidence::hash;
 
+fn activation_checkbox<'a>(h: &'a Harness<'_, PhotocraftApp>, caption: &'a str) -> egui_kittest::Node<'a> {
+    let mut matches = h.query_all_by_label(caption).filter(|node| node.accesskit_node().role() == egui::accesskit::Role::CheckBox);
+    let node = matches.next().expect("the actual filter activation checkbox");
+    assert!(matches.next().is_none(), "activation checkbox must be unique");
+    node
+}
 fn packet() -> std::path::PathBuf {
     evidence::selected(env!("CARGO_MANIFEST_DIR")).unwrap().packet
 }
@@ -107,7 +113,7 @@ fn fresh_red_eye_geometry_properties_typed_edit_native_history_and_canvas() {
                 h.key_press(egui::Key::Enter);
                 h.run_steps(2);
             } else {
-                h.get_by_label(&caption).click();
+                activation_checkbox(&h, &caption).click();
                 h.run_steps(2);
             }
             let current = h.state().session.active().unwrap().doc.clone();

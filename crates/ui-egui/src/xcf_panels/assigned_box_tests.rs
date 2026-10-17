@@ -1,8 +1,13 @@
 //! UNRUN widget/captured-target drafts; no numerical or visual acceptance claim.
 use super::*;
 #[path = "../canvas_assigned_box_fixture.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use photocraft_raster::backing::quota::{BackingQuota, QuotaLimits};
 use serde_json::json;
 use std::io::Cursor;

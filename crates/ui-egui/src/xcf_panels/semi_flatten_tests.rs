@@ -12,8 +12,7 @@ use serde_json::Value;
 fn preview(app: &PhotocraftApp, doc: &DocumentSnapshot) -> egui::ColorImage {
     let display = app.session.color.canvas_display_for(doc, None).unwrap();
     assert!(!display.encode_srgb);
-    let (image, fee) =
-        crate::canvas_backed_preview::backed_snapshot_display_image(doc, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+    let (image, fee) = crate::canvas::test_backed_snapshot_display_image(doc, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
     assert_eq!(image.pixels.len(), 48);
     let captured = image.clone(); // External display capture, not quota evidence.
     drop((image, fee));
@@ -70,12 +69,16 @@ fn authored_semi_flatten_controls_and_native_continue_without_literal_aliases() 
         harness.run_steps(2);
         assert!(harness.state().session.active().unwrap().doc.shares_state(&before));
         let past = harness.state().session.active().unwrap().history.past_len();
-        harness.get_by_label("Red").click();
+        harness.get_by_label("Red").focus();
         harness.run_steps(2);
+        assert!(harness.get_by_label("Red").is_focused(), "the actual numeric editor owns keyboard input");
         harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness.run_steps(1);
         harness.get_by_label("Red").type_text("0.125");
+        harness.run_steps(1);
         harness.key_press(egui::Key::Enter);
         harness.run_steps(2);
+        assert!(!harness.state().ui.status_error, "{}", harness.state().ui.status);
         let actual_widget = harness.state().session.active().unwrap().doc.clone();
         let (mut expected, encoding) = fixture::color_bits(&original_color);
         expected[0] = 0.125f32.to_bits();

@@ -7,7 +7,10 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn cancelled_and_failed_open_preserve_dirty_ui_document() {
-    let services = Services { import: Some(Box::new(|name, bytes| photocraft_io::import(name, bytes).map_err(|e| e.to_string()))), ..Default::default() };
+    let services = Services {
+        import: Some(Box::new(|name, bytes, depth| photocraft_io::import_with_svg_group_depth(name, bytes, depth).map_err(|e| e.to_string()))),
+        ..Default::default()
+    };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
     let bytes = xcf::image(13, 150, 0, 1, 1, &[31, 61, 91, 255]);
     app.open_file("original.xcf", &bytes).unwrap();

@@ -12,8 +12,7 @@ use serde_json::Value;
 fn preview(app: &PhotocraftApp, doc: &DocumentSnapshot) -> egui::ColorImage {
     let display = app.session.color.canvas_display_for(doc, None).unwrap();
     assert!(!display.encode_srgb);
-    let (image, fee) =
-        crate::canvas_backed_preview::backed_snapshot_display_image(doc, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+    let (image, fee) = crate::canvas::test_backed_snapshot_display_image(doc, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
     assert_eq!(image.pixels.len(), 48);
     let capture = image.clone(); // External adapter capture, never a producer oracle.
     drop((image, fee));
@@ -52,12 +51,16 @@ fn authored_vibrance_controls_preserve_transport_and_current_native_roles() {
         let mut harness =
             Harness::builder().with_size(egui::vec2(900., 700.)).build_ui_state(move |ui, app| super::super::filter_properties(app, ui, layer), app);
         harness.run_steps(2);
-        harness.get_by_label("Vibrance").click();
+        harness.get_by_label("Vibrance").focus();
         harness.run_steps(2);
+        assert!(harness.get_by_label("Vibrance").is_focused(), "the actual numeric editor owns keyboard input");
         harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        harness.run_steps(1);
         harness.get_by_label("Vibrance").type_text("17.25");
+        harness.run_steps(1);
         harness.key_press(egui::Key::Enter);
         harness.run_steps(2);
+        assert!(!harness.state().ui.status_error, "{}", harness.state().ui.status);
         let widget = harness.state().session.active().unwrap().doc.clone();
         assert_eq!(fixture::args(&widget), [17.25f32.to_bits(), case.args[1]]);
         fixture::storage(&before, &widget);

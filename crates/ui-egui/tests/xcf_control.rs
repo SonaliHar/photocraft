@@ -19,7 +19,7 @@ fn authorized_control_opens_xcf_and_migrates_without_ambient_access() {
     let written = Rc::new(RefCell::new(Vec::<(String, Vec<u8>)>::new()));
     let writer = written.clone();
     let services = Services {
-        import: Some(Box::new(|name, bytes| photocraft_io::import(name, bytes).map_err(|e| e.to_string()))),
+        import: Some(Box::new(|name, bytes, depth| photocraft_io::import_with_svg_group_depth(name, bytes, depth).map_err(|e| e.to_string()))),
         export: Some(Box::new(|doc, name, _| {
             let result = photocraft_io::export(doc, name, &Default::default()).map_err(|e| e.to_string())?;
             Ok((result.bytes, result.warnings))

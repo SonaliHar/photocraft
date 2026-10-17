@@ -3,7 +3,10 @@ use super::*;
 #[path = "../gray_transfer_box_fixture.rs"]
 #[allow(dead_code)]
 mod fixture;
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use serde_json::Value;
 #[test]
 #[ignore = "UNRUN: eight authored implicit Gray transfer F32/F64 observed Box sources, actual checkbox/Signed32 controls, HDR/signedzero native/source/profile custody, radius/activation/history/metadata/Move/native continuation and refusals; visual/numerical acceptance deferred"]
@@ -24,7 +27,7 @@ fn implicit_gray_transfer_box_controls_use_actual_display_and_native_continuatio
         let display = app.session.color.canvas_display_for(&before, None).unwrap();
         assert_eq!(display.encode_srgb, before.sample_encoding == Some(photocraft_doc::SampleEncoding::Linear));
         let expected = crate::canvas::display_image(Some(display.as_ref()), &fixture::reference(&before));
-        let (actual, fee) = crate::canvas_backed_preview::backed_snapshot_display_image(
+        let (actual, fee) = crate::canvas::test_backed_snapshot_display_image(
             &before,
             before.size.width,
             before.size.height,
@@ -87,7 +90,7 @@ fn implicit_gray_transfer_box_controls_use_actual_display_and_native_continuatio
         let display = app.session.color.canvas_display_for(&moved, None).unwrap();
         assert_eq!(display.encode_srgb, moved.sample_encoding == Some(photocraft_doc::SampleEncoding::Linear));
         let expected = crate::canvas::display_image(Some(display.as_ref()), &fixture::reference(&moved));
-        let (actual, fee) = crate::canvas_backed_preview::backed_snapshot_display_image(
+        let (actual, fee) = crate::canvas::test_backed_snapshot_display_image(
             &moved,
             moved.size.width,
             moved.size.height,

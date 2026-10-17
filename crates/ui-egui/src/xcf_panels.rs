@@ -6,55 +6,61 @@ use photocraft_doc::{
     xcf_filters::{ExactNumber, FilterArgument, FilterValue},
 };
 use serde_json::json;
-mod exposure_loaded;
-mod exposure_masked;
-mod masked_stock_point;
-mod alpha_clip;
-mod alpha_clip_finite;
-mod assigned_box;
-mod observed_box;
-mod semi_flatten;
-mod filtered_flat_point;
-mod hue_chroma;
-mod vibrance;
-mod channel_mixer;
-mod color_overlay;
-mod color_rotate;
-mod component_extract;
-mod current_items;
-pub(crate) mod composition;
-mod editing;
-mod filter_stack;
-mod filter_insert;
-mod filter_mask;
-mod graph_inspect;
-mod gaussian_group;
-pub(crate) mod source_inspect;
-mod item_sets;
-mod indexed_palette;
-mod linked_image;
-mod layer_mask;
-mod mask_geometry;
-mod literal_color;
-mod mono_mixer_signed;
-pub(crate) mod path_name;
-mod red_eye;
-mod semantic_selection;
-mod text_name;
-mod text_view_cache;
-mod vector_style;
-mod vector_width;
-mod underline;
 #[cfg(test)]
 mod accounted_threshold_alpha_tests;
 #[cfg(test)]
 mod accounted_threshold_tests;
+mod alpha_clip;
+mod alpha_clip_finite;
+mod assigned_box;
+mod channel_mixer;
+mod color_overlay;
+mod color_rotate;
+mod component_extract;
+pub(crate) mod composition;
+mod current_items;
+mod editing;
+mod exposure_loaded;
+mod exposure_masked;
+mod filter_insert;
+mod filter_mask;
+mod filter_stack;
+mod filtered_flat_point;
+mod gaussian_group;
+mod graph_inspect;
+mod hue_chroma;
+mod indexed_palette;
+mod item_sets;
+mod layer_mask;
+mod linked_image;
+mod literal_color;
+mod mask_geometry;
+mod masked_stock_point;
+mod mono_mixer_signed;
+mod observed_box;
+pub(crate) mod path_name;
+mod red_eye;
+mod semantic_selection;
+mod semi_flatten;
+pub(crate) mod source_inspect;
+mod text_name;
+mod text_view_cache;
+mod underline;
+mod vector_style;
+mod vector_width;
+mod vibrance;
 
-pub(crate) fn mask_storage_params(app:&PhotocraftApp,layer:LayerId,on_set:bool,command:&str)->Result<serde_json::Value,String> {
-    layer_mask::queued_params(app,layer,on_set,command)
+pub(crate) fn mask_storage_params(app: &PhotocraftApp, layer: LayerId, on_set: bool, command: &str) -> Result<serde_json::Value, String> {
+    layer_mask::queued_params(app, layer, on_set, command)
 }
 
-fn run_checked(app: &mut PhotocraftApp, captured: &photocraft_engine::document_snapshot::DocumentSnapshot, revision: u64, command: &str, params: serde_json::Value) {
+fn run_checked(
+    app: &mut PhotocraftApp,
+    captured: &photocraft_engine::document_snapshot::DocumentSnapshot,
+    revision: u64,
+    command: &str,
+    params: serde_json::Value,
+) {
     if !app.session.active().is_some_and(|current| current.doc.id == captured.id && current.revision == revision && current.doc.shares_state(captured)) {
         app.ui.status = "xcf.properties.stale-target".into();
         app.ui.status_error = true;
@@ -84,7 +90,7 @@ pub(crate) fn editing_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, lay
 }
 
 pub(crate) fn has_item_set_properties(document: &photocraft_doc::Document, layer: LayerId) -> bool {
-    item_sets::has_matching(&document, layer) || item_sets::has_creation(&document, layer)
+    item_sets::has_matching(document, layer) || item_sets::has_creation(document, layer)
 }
 
 pub(crate) fn item_set_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: LayerId) {
@@ -97,12 +103,18 @@ pub(crate) fn text_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer:
     let Some(state) = &document.xcf_state else { return };
     let hints = match text_view_cache::get(ui.ctx(), &document, revision, layer) {
         Ok(hints) => hints,
-        Err(error) => { ui.label(error.to_string()); return; }
+        Err(error) => {
+            ui.label(error.to_string());
+            return;
+        }
     };
-    let Some(source) = hints.source_index.and_then(|index| state.source_items.get(index)).filter(|source| source.owner == ItemRef::Layer(layer)) else { return };
+    let Some(source) = hints.source_index.and_then(|index| state.source_items.get(index)).filter(|source| source.owner == ItemRef::Layer(layer)) else {
+        return;
+    };
     let photocraft_doc::xcf_items::EditableSource::Text { content, .. } = &source.source else { return };
-    let live = app.ui.transform.is_none() && !app.session.has_jobs() && app.session.active().is_some_and(|active|
-        active.floating.is_none() && active.doc.xcf_state.as_ref().is_none_or(|state| state.floating.is_none()));
+    let live = app.ui.transform.is_none()
+        && !app.session.has_jobs()
+        && app.session.active().is_some_and(|active| active.floating.is_none() && active.doc.xcf_state.as_ref().is_none_or(|state| state.floating.is_none()));
     let same_target =
         app.ui.xcf_text_draft.as_ref().is_some_and(|draft| draft.document == document.id.0 && draft.layer == layer.0 && draft.revision == revision);
     if !same_target {
@@ -308,7 +320,9 @@ fn text_color_patch(document: &photocraft_doc::Document, layer: LayerId, color: 
 }
 
 pub(crate) fn filter_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: LayerId) {
-    if app.session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage()||o.is_readonly_masked_filtered_flat_point_storage()||o.is_readonly_normal_hierarchy_storage()) {
+    if app.session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| {
+        o.is_readonly_filtered_flat_point_storage() || o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()
+    }) {
         filtered_flat_point::properties(app, ui, layer);
         return;
     }
@@ -719,7 +733,12 @@ mod tests {
 
     #[test]
     fn rejected_property_action_surfaces_error_without_document_or_history_change() {
-        let document = photocraft_doc::Document::new("Own rejected action", photocraft_doc::Size::new(2, 2), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        let document = photocraft_doc::Document::new(
+            "Own rejected action",
+            photocraft_doc::Size::new(2, 2),
+            photocraft_doc::ColorMode::Rgb,
+            photocraft_doc::SampleType::U8,
+        );
         let mut session = photocraft_engine::Session::new();
         session.open_document(document, None).unwrap();
         let mut app = PhotocraftApp::new(session, crate::Services::default());
@@ -736,10 +755,20 @@ mod tests {
     #[test]
     fn property_target_guard_refuses_replaced_snapshot_even_with_equal_revision() {
         let mut session = photocraft_engine::Session::new();
-        session.open_document(photocraft_doc::Document::new("Original", photocraft_doc::Size::new(2, 2), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8), None).unwrap();
+        session
+            .open_document(
+                photocraft_doc::Document::new("Original", photocraft_doc::Size::new(2, 2), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8),
+                None,
+            )
+            .unwrap();
         let mut app = PhotocraftApp::new(session, crate::Services::default());
         let before = app.session.active().unwrap().doc.clone();
-        app.session.edit("Own intermediate edit", |document, _| { document.name = "Replaced".into(); Ok(()) }).unwrap();
+        app.session
+            .edit("Own intermediate edit", |document, _| {
+                document.name = "Replaced".into();
+                Ok(())
+            })
+            .unwrap();
         let installed = app.session.active().unwrap().doc.clone();
         let revision = app.session.active().unwrap().revision;
         let count = app.session.active().unwrap().history.entry_labels().count();
@@ -1021,6 +1050,12 @@ mod tests {
         assert!(harness.query_all_by_role(egui::accesskit::Role::SpinButton).next().unwrap().accesskit_node().is_disabled());
         assert_eq!(std::fs::read(path).unwrap(), bytes);
     }
+    fn content_editor<'a>(harness: &'a Harness<'_, PhotocraftApp>) -> egui_kittest::Node<'a> {
+        let mut matches = harness.query_all_by_label("Text content").filter(|node| node.accesskit_node().role() == egui::accesskit::Role::TextInput);
+        let node = matches.next().expect("the labelled imported text content editor");
+        assert!(matches.next().is_none(), "text content editor must be unique");
+        node
+    }
     fn text_content_case(packet: &str, source_file: &str, reference_file: &str) {
         let root = std::path::PathBuf::from(std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS").unwrap()).join(packet);
         let bytes = std::fs::read(root.join(source_file)).unwrap();
@@ -1036,10 +1071,13 @@ mod tests {
         let mut harness = Harness::builder().with_size(egui::vec2(420.0, 500.0)).build_ui_state(move |ui, app| text_properties(app, ui, layer), app);
         PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::Studio);
         harness.run_steps(2);
-        assert!(!harness.get_by_role(egui::accesskit::Role::TextInput).accesskit_node().is_disabled(), "checked current text candidate must be enabled");
-        harness.get_by_role(egui::accesskit::Role::TextInput).click();
+        assert!(!content_editor(&harness).accesskit_node().is_disabled(), "checked current text candidate must be enabled");
+        content_editor(&harness).focus();
+        harness.run_steps(1);
+        assert!(content_editor(&harness).is_focused());
         harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-        harness.get_by_role(egui::accesskit::Role::TextInput).type_text(proposed);
+        harness.run_steps(1);
+        content_editor(&harness).type_text(proposed);
         harness.run_steps(2);
         assert_eq!(*harness.state().session.active().unwrap().doc, original);
         assert_eq!(harness.state().session.active().unwrap().history.past_len(), 0);
@@ -1060,9 +1098,12 @@ mod tests {
         harness.state_mut().run("edit.undo", json!({})).unwrap();
         harness.run_steps(2);
         assert_eq!(*harness.state().session.active().unwrap().doc, original);
-        harness.get_by_role(egui::accesskit::Role::TextInput).click();
+        content_editor(&harness).focus();
+        harness.run_steps(1);
+        assert!(content_editor(&harness).is_focused());
         harness.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-        harness.get_by_role(egui::accesskit::Role::TextInput).type_text("A");
+        harness.run_steps(1);
+        content_editor(&harness).type_text("A");
         harness.run_steps(2);
         harness.get_by_label("Apply Text").click();
         harness.run_steps(2);
@@ -1083,7 +1124,7 @@ mod tests {
             .locks
             .content = true;
         harness.run_steps(2);
-        assert!(harness.get_by_role(egui::accesskit::Role::TextInput).accesskit_node().is_disabled());
+        assert!(content_editor(&harness).accesskit_node().is_disabled());
         assert!(harness.get_by_label("Apply Text").accesskit_node().is_disabled());
         assert_eq!(std::fs::read(root.join(source_file)).unwrap(), bytes);
     }
@@ -1510,20 +1551,30 @@ mod red_eye_geometry_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "xcf_panels/gaussian_group_activation_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod gaussian_group_activation_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "xcf_panels/pure_point_geometry_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod pure_point_geometry_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "xcf_panels/nine_point_geometry_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod nine_point_geometry_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "xcf_panels/residual_point_geometry_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod residual_point_geometry_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "xcf_panels/filtered_flat_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod filtered_flat_tests;

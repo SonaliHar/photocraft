@@ -81,14 +81,22 @@ fn composite(doc: &Document, r: Rect, factor: u32) -> Result<Vec<[f32; 4]>, Stri
             }
         }
         Ok(())
-    }).map_err(|error|format!("{error:?}"))?;
+    })
+    .map_err(|error| format!("{error:?}"))?;
     Ok(out)
 }
 
 /// The channel view of `r` (document pixels, sampled every `factor` px) as premultiplied pixels,
 /// or `None` when the plain composite is all there is to show. `in_color` shows single colour
 /// channels tinted instead of grayscale (Photoshop's "Show Channels in Color").
-pub fn render(doc: &Document, v: &ChannelView, r: Rect, factor: u32, in_color: bool, active: Option<photocraft_doc::LayerId>) -> Result<Option<Vec<Color32>>, String> {
+pub fn render(
+    doc: &Document,
+    v: &ChannelView,
+    r: Rect,
+    factor: u32,
+    in_color: bool,
+    active: Option<photocraft_doc::LayerId>,
+) -> Result<Option<Vec<Color32>>, String> {
     let mut unused = None;
     render_with_source(doc, v, r, factor, in_color, active, CompositeSource { cached: None, fresh: &mut unused })
 }
@@ -102,11 +110,26 @@ fn render_with_source(
     active: Option<photocraft_doc::LayerId>,
     source: CompositeSource<'_>,
 ) -> Result<Option<Vec<Color32>>, String> {
-    if factor==0 || factor>i32::MAX as u32{return Err("Channel preview sampling stride must be positive and representable".into());}
-    if doc.has_backed_rasters().map_err(|e|e.to_string())?{return Err("Channel preview requires a resident document".into());}
-    for(_,_,layer)in doc.walk(){if let Some(surface)=layer.surface(){surface.try_validate_tile_origins().map_err(|e|e.to_string())?;}if let Some(mask)=&layer.mask{mask.surface.try_validate_tile_origins().map_err(|e|e.to_string())?;}}
-    for channel in &doc.channels{channel.surface.try_validate_tile_origins().map_err(|e|e.to_string())?;}
-    if let Some(mask)=&doc.quick_mask{mask.surface.try_validate_tile_origins().map_err(|e|e.to_string())?;}
+    if factor == 0 || factor > i32::MAX as u32 {
+        return Err("Channel preview sampling stride must be positive and representable".into());
+    }
+    if doc.has_backed_rasters().map_err(|e| e.to_string())? {
+        return Err("Channel preview requires a resident document".into());
+    }
+    for (_, _, layer) in doc.walk() {
+        if let Some(surface) = layer.surface() {
+            surface.try_validate_tile_origins().map_err(|e| e.to_string())?;
+        }
+        if let Some(mask) = &layer.mask {
+            mask.surface.try_validate_tile_origins().map_err(|e| e.to_string())?;
+        }
+    }
+    for channel in &doc.channels {
+        channel.surface.try_validate_tile_origins().map_err(|e| e.to_string())?;
+    }
+    if let Some(mask) = &doc.quick_mask {
+        mask.surface.try_validate_tile_origins().map_err(|e| e.to_string())?;
+    }
 
     if v.is_plain(doc) || r.is_empty() {
         return Ok(None);
@@ -127,10 +150,10 @@ fn render_with_source(
     let shown_mask = layer_mask.map(|(m, mode)| (feathered_mask.as_ref().unwrap_or(&m.surface), mode));
     let only_mask = ChannelView { layer_mask: None, ..v.clone() }.is_plain(doc);
     match shown_mask {
-        Some((m, MaskViewMode::Gray)) => return Some(mask_px(m, r, factor, |g| Color32::from_gray(q(g)))),
+        Some((m, MaskViewMode::Gray)) => return Ok(Some(mask_px(m, r, factor, |g| Color32::from_gray(q(g))))),
         Some((m, MaskViewMode::Overlay)) if only_mask => {
             let c = AlphaChannel::DEFAULT_COLOR.to_rgb();
-            return Some(mask_px(m, r, factor, |g| {
+            return Ok(Some(mask_px(m, r, factor, |g| {
                 let a = 0.5 * (1.0 - g.clamp(0.0, 1.0));
                 Color32::from_rgba_premultiplied(q(c[0] * a), q(c[1] * a), q(c[2] * a), q(a))
             })));
@@ -158,7 +181,9 @@ fn render_with_source(
             solo_mask = true;
             gray(m)
         } else {
-            let Some(m)=active.and_then(|id|doc.layer(id)).and_then(|l|l.mask.as_ref()) else {return Ok(None);};
+            let Some(m) = active.and_then(|id| doc.layer(id)).and_then(|l| l.mask.as_ref()) else {
+                return Ok(None);
+            };
             solo_mask = true;
             gray(&m.surface)
         }
@@ -167,7 +192,7 @@ fn render_with_source(
         let mode = fmt.mode;
         let shown: Vec<usize> = (0..colors).filter(|k| v.color_visible(*k)).collect();
         let computed = if source.cached.is_some_and(|px| px.len() == n) { None } else { Some(composite(doc, r, factor)?) };
-        let pixels = source.cached.filter(|px| px.len() == n).or(computed.as_deref()).ok_or_else(||"Missing channel composite".to_string())?;
+        let pixels = source.cached.filter(|px| px.len() == n).or(computed.as_deref()).ok_or_else(|| "Missing channel composite".to_string())?;
         let converted = pixels
             .iter()
             .copied()
@@ -321,10 +346,18 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
         let d = d.intersect(&doc.bounds());
         let r = Rect::new(d.x0.div_euclid(f) * f, d.y0.div_euclid(f) * f, d.x1, d.y1).intersect(&doc.bounds());
         if !r.is_empty() {
-            let px=match render(&doc,&view,r,factor,in_color,active){Ok(Some(px))=>Some(px),Ok(None)=>None,Err(error)=>{app.ui.status=format!("Channel preview: {error}");app.ui.status_error=true;return Some(c.tex.id());}};
-            if let Some(px)=px {
-            let img = egui::ColorImage::new([r.width().div_ceil(factor) as usize, r.height().div_ceil(factor) as usize], px);
-            c.tex.set_partial([(r.x0 / f) as usize, (r.y0 / f) as usize], img, TextureOptions::LINEAR);
+            let px = match render(&doc, &view, r, factor, in_color, active) {
+                Ok(Some(px)) => Some(px),
+                Ok(None) => None,
+                Err(error) => {
+                    app.ui.status = format!("Channel preview: {error}");
+                    app.ui.status_error = true;
+                    return Some(c.tex.id());
+                }
+            };
+            if let Some(px) = px {
+                let img = egui::ColorImage::new([r.width().div_ceil(factor) as usize, r.height().div_ceil(factor) as usize], px);
+                c.tex.set_partial([(r.x0 / f) as usize, (r.y0 / f) as usize], img, TextureOptions::LINEAR);
             }
         }
         c.revision = revision;
@@ -334,7 +367,15 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize) -> Optio
     let b = doc.bounds();
     let cached = app.channel_views.get(&id).and_then(|c| c.source.as_ref()).map(|s| s.pixels.as_slice());
     let mut fresh = None;
-    let px = match render_with_source(&doc,&view,b,factor,in_color,active,CompositeSource{cached,fresh:&mut fresh}){Ok(Some(px))=>px,Ok(None)=>return None,Err(error)=>{app.ui.status=format!("Channel preview: {error}");app.ui.status_error=true;return app.channel_views.get(&id).map(|cache|cache.tex.id());}};
+    let px = match render_with_source(&doc, &view, b, factor, in_color, active, CompositeSource { cached, fresh: &mut fresh }) {
+        Ok(Some(px)) => px,
+        Ok(None) => return None,
+        Err(error) => {
+            app.ui.status = format!("Channel preview: {error}");
+            app.ui.status_error = true;
+            return app.channel_views.get(&id).map(|cache| cache.tex.id());
+        }
+    };
     let new_source = fresh.is_some();
     let size = [b.width().div_ceil(factor) as usize, b.height().div_ceil(factor) as usize];
     let img = egui::ColorImage::new(size, px);
@@ -448,7 +489,7 @@ mod tests {
             CompositeSource { cached: Some(&refreshed.pixels), fresh: &mut unused },
         )
         .unwrap();
-        assert_eq!(actual, expected, "reused pixels must preserve channel colours");
+        assert_eq!(actual, Some(expected), "reused pixels must preserve channel colours");
         assert!(unused.is_none(), "reuse must not create a second composite");
     }
 
@@ -548,12 +589,12 @@ mod tests {
         let softened = effective.sample_channel(0, 0, 0);
         assert!((softened - raw).abs() > 0.01, "the fixture has a visible feather at its edge");
 
-        let gray = render(&st.doc, &st.channel_view, bounds, 1, false, st.active_layer).unwrap();
+        let gray = render(&st.doc, &st.channel_view, bounds, 1, false, st.active_layer).unwrap().unwrap();
         assert_eq!(gray[0], Color32::from_gray(q(softened)), "gray view uses the compositor's feathered mask");
 
         s.execute("view.layerMask", json!({"mode": "overlay"})).unwrap();
         let st = s.active().unwrap();
-        let overlay = render(&st.doc, &st.channel_view, bounds, 1, false, st.active_layer).unwrap();
+        let overlay = render(&st.doc, &st.channel_view, bounds, 1, false, st.active_layer).unwrap().unwrap();
         let alpha = 0.5 * (1.0 - softened);
         let red = AlphaChannel::DEFAULT_COLOR.to_rgb();
         assert_eq!(overlay[0], Color32::from_rgba_premultiplied(q(red[0] * alpha), q(red[1] * alpha), q(red[2] * alpha), q(alpha)));

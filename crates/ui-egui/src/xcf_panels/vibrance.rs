@@ -11,6 +11,8 @@ pub(super) fn scope(document: &DocumentSnapshot, node: &FilterNode) -> bool {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "vibrance_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
 fn valid(index: usize, value: f32) -> bool {
     value.is_finite() && if index == 0 { (-100.0..=100.0).contains(&value) } else { (0.0..=10.0).contains(&value) }
@@ -90,6 +92,8 @@ pub(super) fn request(node: &FilterNode, values: [f32; 2], enabled: bool) -> Opt
         None
     }
 }
+// Keep the captured document/revision, target, lock state and UI inputs explicit.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn controls(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
@@ -118,9 +122,7 @@ pub(super) fn controls(
             });
         }
     });
-    if changed {
-        if let Some((command, params)) = request(node, values, enabled) {
-            run_checked(app, document, revision, command, params);
-        }
+    if changed && let Some((command, params)) = request(node, values, enabled) {
+        run_checked(app, document, revision, command, params);
     }
 }

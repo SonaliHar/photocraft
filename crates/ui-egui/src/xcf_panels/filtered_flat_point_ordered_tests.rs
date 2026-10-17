@@ -1,6 +1,8 @@
 //! Deferred ordered controls; no visual/runtime or producer numeric acceptance.
 use super::*;
 #[path = "../../../engine/src/accounted_filtered_flat_ordered_test_support.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod fixture;
 use egui_kittest::{Harness, kittest::Queryable};
 fn app(case: &fixture::data::Case) -> PhotocraftApp {
@@ -74,8 +76,7 @@ fn ordered_ui_nodes_keep_indices_and_one_frame_capture() {
         assert_ne!(first.node_index, last.node_index);
         let display = one.session.color.canvas_display_for(&single_snapshot, None).unwrap();
         let (image, fee) =
-            crate::canvas_backed_preview::backed_snapshot_display_image(&single_snapshot, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE)
-                .unwrap();
+            crate::canvas::test_backed_snapshot_display_image(&single_snapshot, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
         let expected = image.clone();
         drop((image, fee));
         let mut next = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -84,7 +85,7 @@ fn ordered_ui_nodes_keep_indices_and_one_frame_capture() {
         fixture::same(&single_snapshot, &continued);
         let display = next.session.color.canvas_display_for(&continued, None).unwrap();
         let (image, fee) =
-            crate::canvas_backed_preview::backed_snapshot_display_image(&continued, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+            crate::canvas::test_backed_snapshot_display_image(&continued, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
         assert_eq!(image.pixels, expected.pixels);
         drop((image, fee));
         let bad = fixture::malformed(&single);

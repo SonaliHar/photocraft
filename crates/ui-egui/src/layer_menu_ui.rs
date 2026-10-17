@@ -51,19 +51,19 @@ pub fn single_layer_only(id: &str) -> bool {
 
 /// The context menu entries for a layer (Photoshop 2026 order, trimmed to the layer kind).
 pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
-    let mut v: Vec<Entry> = vec![Some((tl!("Blending OptionsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"), "layer.layerStyle.blendingOptions"))];
+    let mut v: Vec<Entry> = vec![Some((tl!("Blending Options…"), "layer.layerStyle.blendingOptions"))];
     v.push(None);
-    v.push(Some((if multi { tl!("Duplicate LayersÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦") } else { tl!("Duplicate LayerÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦") }, "layer.duplicate")));
+    v.push(Some((if multi { tl!("Duplicate Layers…") } else { tl!("Duplicate Layer…") }, "layer.duplicate")));
     v.push(Some((if multi { tl!("Delete Layers") } else { tl!("Delete Layer") }, "layer.delete")));
     if !multi {
-        v.push(Some((tl!("Group from LayersÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"), "layer.groupLayers")));
+        v.push(Some((tl!("Group from Layers…"), "layer.groupLayers")));
     }
     v.push(None);
     v.push(Some((tl!("Quick Export As PNG"), "layer.quickExportAsPng")));
-    v.push(Some((tl!("Export AsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"), "layer.exportAs")));
+    v.push(Some((tl!("Export As…"), "layer.exportAs")));
     v.push(None);
-    v.push(Some((tl!("Artboard from LayersÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"), "layer.new.artboardFromLayers")));
-    v.push(Some((tl!("Frame from LayersÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"), "layer.new.frameFromLayers")));
+    v.push(Some((tl!("Artboard from Layers…"), "layer.new.artboardFromLayers")));
+    v.push(Some((tl!("Frame from Layers…"), "layer.new.frameFromLayers")));
     v.push(None);
     v.push(Some((tl!("Convert to Smart Object"), "layer.smartObjects.convertToSmartObject")));
     if multi {
@@ -126,16 +126,16 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
 /// Photoshop's order. It acts on that layer, like Layer ÃƒÂ¢Ã¢â‚¬â€œÃ‚Â¸ Layer Style.
 pub fn effects_entries() -> Vec<Entry> {
     vec![
-        Some((tl!("Blending OptionsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"), "layer.layerStyle.blendingOptions")),
+        Some((tl!("Blending Options…"), "layer.layerStyle.blendingOptions")),
         None,
         Some((tl!("Copy Layer Style"), "layer.layerStyle.copyLayerStyle")),
         Some((tl!("Paste Layer Style"), "layer.layerStyle.pasteLayerStyle")),
         Some((tl!("Clear Layer Style"), "layer.layerStyle.clear")),
         None,
-        Some((tl!("Global LightÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"), "layer.layerStyle.globalLight")),
+        Some((tl!("Global Light…"), "layer.layerStyle.globalLight")),
         Some((tl!("Create Layer"), "layer.layerStyle.createLayer")),
         Some((tl!("Hide All Effects"), "layer.layerStyle.hideAllEffects")),
-        Some((tl!("Scale EffectsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"), "layer.layerStyle.scaleEffects")),
+        Some((tl!("Scale Effects…"), "layer.layerStyle.scaleEffects")),
     ]
 }
 
@@ -148,7 +148,7 @@ pub fn show(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bo
         let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
         items(app, ui, l, on_set, entries(l, on_set, has_selection), actions);
         ui.separator();
-        if ui.button(tl!("Rename LayerÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦")).clicked() {
+        if ui.button(tl!("Rename Layer…")).clicked() {
             rename = true;
             ui.close();
         }
@@ -182,7 +182,7 @@ pub fn show_mask(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, actio
             }
         }
         ui.separator();
-        if ui.add_enabled(crate::menus::is_enabled(app, "select.selectAndMask"), egui::Button::new(tl!("Select and MaskÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"))).clicked() {
+        if ui.add_enabled(crate::menus::is_enabled(app, "select.selectAndMask"), egui::Button::new(tl!("Select and Mask…"))).clicked() {
             // Like double-clicking the thumbnail with that preference on: it refines the mask.
             actions.push(("layer.select".into(), json!({"layer": l.id.0})));
             actions.push(("ui.maskTarget".into(), json!(true)));
@@ -222,9 +222,18 @@ fn items(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool,
                 // selected first when clicked, so its items stay available.
                 let is_active = app.session.active().is_some_and(|s| s.active_layer == Some(l.id));
                 let enabled = !(on_set && single_layer_only(id)) && if on_set || is_active { crate::menus::is_enabled(app, id) } else { true };
-                let storage = matches!(id,"layer.layerMask.revealAll"|"layer.layerMask.hideAll"|"layer.layerMask.delete"|"layer.layerMask.apply"|"layer.layerMask.hideSelection"|"layer.layerMask.fromTransparency"|"layer.layerMask.revealSelection");
-                let prepared = storage.then(||crate::xcf_panels::mask_storage_params(app,l.id,on_set,id));
-                let ready = prepared.as_ref().is_none_or(|params|params.is_ok());
+                let storage = matches!(
+                    id,
+                    "layer.layerMask.revealAll"
+                        | "layer.layerMask.hideAll"
+                        | "layer.layerMask.delete"
+                        | "layer.layerMask.apply"
+                        | "layer.layerMask.hideSelection"
+                        | "layer.layerMask.fromTransparency"
+                        | "layer.layerMask.revealSelection"
+                );
+                let prepared = storage.then(|| crate::xcf_panels::mask_storage_params(app, l.id, on_set, id));
+                let ready = prepared.as_ref().is_none_or(|params| params.is_ok());
                 let response = ui.add_enabled(enabled && ready, egui::Button::new(tl!(&label)));
                 if let Some(Err(error)) = &prepared {
                     response.clone().on_disabled_hover_text(error);
@@ -232,7 +241,11 @@ fn items(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool,
                 if response.clicked() {
                     // Capture parameters before the queued row focus change. Engine rechecks the
                     // captured document/revision immediately before its one metadata transaction.
-                    let params = match prepared {Some(Ok(params))=>params,Some(Err(_))=>continue,None=>Value::Null};
+                    let params = match prepared {
+                        Some(Ok(params)) => params,
+                        Some(Err(_)) => continue,
+                        None => Value::Null,
+                    };
                     if !on_set {
                         actions.push(("layer.select".into(), json!({"layer": l.id.0})));
                     }
@@ -517,9 +530,9 @@ mod tests {
         let (thumbs, _) = crate::mask_thumbs_ui::recorded(&h.ctx, masked.0).expect("mask thumbnail drawn");
         let at = thumbs.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).unwrap().1.center();
         click(&mut h, at, PointerButton::Secondary);
-        assert!(h.query_by_label("Blending OptionsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦").is_none(), "the mask menu, not the layer menu");
+        assert!(h.query_by_label("Blending Options…").is_none(), "the mask menu, not the layer menu");
         for item in
-            ["Disable Layer Mask", "Delete Layer Mask", "Apply Layer Mask", "Subtract Mask from Selection", "Intersect Mask with Selection", "Select and MaskÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦"]
+            ["Disable Layer Mask", "Delete Layer Mask", "Apply Layer Mask", "Subtract Mask from Selection", "Intersect Mask with Selection", "Select and Mask…"]
         {
             h.get_by_label(item);
         }
@@ -663,7 +676,7 @@ mod tests {
         let raster = |id: u64| matches!(doc.layer(photocraft_doc::LayerId(id)).unwrap().content, photocraft_doc::LayerContent::Raster(_));
         assert!(raster(text) && raster(shape), "both selected layers are rasterized");
         assert!(!raster(other), "an unselected layer is left alone");
-        assert_eq!(h.state().session.active().unwrap().selected_layers().len(), 2, "the selection survives");
+        assert_eq!(h.state().session.active().unwrap().selected_layers().unwrap().len(), 2, "the selection survives");
     }
 
     /// Items with no single target are greyed for a multi-layer selection (they used to run on
@@ -673,14 +686,14 @@ mod tests {
     fn multi_selection_menu_greys_what_acts_on_one_layer() {
         use egui_kittest::kittest::{NodeT, Queryable};
         let (h, _) = open_multi_selection_menu();
-        for label in ["Blending OptionsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦", "Copy Layer Style"] {
+        for label in ["Blending Options…", "Copy Layer Style"] {
             assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label} works on one layer only");
         }
         for label in [
             "Quick Export As PNG",
-            "Export AsÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦",
+            "Export As…",
             "Add Layer Mask",
-            "Duplicate LayersÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦",
+            "Duplicate Layers…",
             "Delete Layers",
             "Convert to Smart Object",
             "Rasterize Layers",
@@ -817,7 +830,7 @@ mod tests {
             s.edit("paint mask", |doc, active| {
                 let id = (*active).ok_or(photocraft_engine::EngineError::NoDocument)?;
                 let m = doc.layer_mut(id).and_then(|l| l.mask.as_mut()).ok_or(photocraft_engine::EngineError::NoDocument)?;
-                m.surface.fill_rect(photocraft_geom::Rect::new(2, 2, 5, 5), &[0.5]);
+                std::sync::Arc::make_mut(&mut m.surface).fill_rect(photocraft_geom::Rect::new(2, 2, 5, 5), &[0.5]);
                 Ok(())
             })
             .unwrap();

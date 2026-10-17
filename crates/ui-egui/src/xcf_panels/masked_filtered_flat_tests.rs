@@ -46,7 +46,7 @@ fn masked_mixed_ui_captures_one_frame_and_preserves_native() {
         assert!(app.session.active().unwrap().doc.shares_state(&after));
         let display = app.session.color.canvas_display_for(&after, None).unwrap();
         let (image, fee) =
-            crate::canvas_backed_preview::backed_snapshot_display_image(&after, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+            crate::canvas::test_backed_snapshot_display_image(&after, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
         let expected = image.pixels.clone();
         drop((image, fee));
         let mut reopened = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -54,8 +54,7 @@ fn masked_mixed_ui_captures_one_frame_and_preserves_native() {
         let now = reopened.session.active().unwrap().doc.clone();
         fixture::storage(&after, &now);
         let display = reopened.session.color.canvas_display_for(&now, None).unwrap();
-        let (image, fee) =
-            crate::canvas_backed_preview::backed_snapshot_display_image(&now, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+        let (image, fee) = crate::canvas::test_backed_snapshot_display_image(&now, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
         assert_eq!(image.pixels, expected);
         drop((image, fee));
         app.run("edit.undo", serde_json::Value::Null).unwrap();

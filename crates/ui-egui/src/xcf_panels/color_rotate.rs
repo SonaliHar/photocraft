@@ -54,40 +54,70 @@ fn angle(ui: &mut egui::Ui, label: &str, value: &mut f32, editable: bool, parse:
         .labelled_by(label.id);
     });
 }
-fn context(app:&PhotocraftApp)->Result<(),String> {
-    let active=app.session.active().ok_or_else(||tl!("Open a document before editing a filter.").to_owned())?;
-    if app.ui.transform.is_some() || app.session.has_jobs() || active.floating.is_some() || active.coalesce.is_some()
-        || active.doc.xcf_state.as_ref().is_some_and(|state|state.floating.is_some()) {
+fn context(app: &PhotocraftApp) -> Result<(), String> {
+    let active = app.session.active().ok_or_else(|| tl!("Open a document before editing a filter.").to_owned())?;
+    if app.ui.transform.is_some()
+        || app.session.has_jobs()
+        || active.floating.is_some()
+        || active.coalesce.is_some()
+        || active.doc.xcf_state.as_ref().is_some_and(|state| state.floating.is_some())
+    {
         return Err(tl!("Finish pending edits before editing a filter.").into());
     }
     Ok(())
 }
-fn apply_captured(app:&mut PhotocraftApp,document:&photocraft_engine::document_snapshot::DocumentSnapshot,revision:u64,node:&FilterNode,from:u32,to:u32)->Result<serde_json::Value,String> {
-    let stale=||tl!("The filter changed. Select it again before editing.").to_owned();
+fn apply_captured(
+    app: &mut PhotocraftApp,
+    document: &photocraft_engine::document_snapshot::DocumentSnapshot,
+    revision: u64,
+    node: &FilterNode,
+    from: u32,
+    to: u32,
+) -> Result<serde_json::Value, String> {
+    let stale = || tl!("The filter changed. Select it again before editing.").to_owned();
     context(app)?;
-    let active=app.session.active().ok_or_else(stale)?;
-    if active.doc.id!=document.id || active.revision!=revision || !active.doc.shares_state(document) {return Err(stale());}
-    let state=document.xcf_state.as_ref().ok_or_else(stale)?;
-    if node.id.0==0 || state.filter_stacks.len()>10_000 {return Err(stale());}
-    let mut owner=None;let mut visits=0usize;
+    let active = app.session.active().ok_or_else(stale)?;
+    if active.doc.id != document.id || active.revision != revision || !active.doc.shares_state(document) {
+        return Err(stale());
+    }
+    let state = document.xcf_state.as_ref().ok_or_else(stale)?;
+    if node.id.0 == 0 || state.filter_stacks.len() > 10_000 {
+        return Err(stale());
+    }
+    let mut owner = None;
+    let mut visits = 0usize;
     for stack in &state.filter_stacks {
-        visits=visits.checked_add(stack.nodes.len()).filter(|count|*count<=10_000).ok_or_else(stale)?;
+        visits = visits.checked_add(stack.nodes.len()).filter(|count| *count <= 10_000).ok_or_else(stale)?;
         for current in &stack.nodes {
-            if current.id==node.id {
-                if owner.is_some() || !std::ptr::eq(current,node) {return Err(stale());}
-                owner=Some(stack.owner);
+            if current.id == node.id {
+                if owner.is_some() || !std::ptr::eq(current, node) {
+                    return Err(stale());
+                }
+                owner = Some(stack.owner);
             }
         }
     }
-    let ItemRef::Layer(layer)=owner.ok_or_else(stale)? else {return Err(stale());};
-    photocraft_engine::xcf_item_locks::effective_layer_locks(document,layer)
-        .and_then(|locks|locks.require(photocraft_engine::xcf_item_locks::EditKind::Content)).map_err(|error|error.to_string())?;
-    if !valid_node(node) {return Err(tl!("Filter editing is unavailable").into());}
+    let ItemRef::Layer(layer) = owner.ok_or_else(stale)? else {
+        return Err(stale());
+    };
+    photocraft_engine::xcf_item_locks::effective_layer_locks(document, layer)
+        .and_then(|locks| locks.require(photocraft_engine::xcf_item_locks::EditKind::Content))
+        .map_err(|error| error.to_string())?;
+    if !valid_node(node) {
+        return Err(tl!("Filter editing is unavailable").into());
+    }
     app.run("xcf.filter.set",json!({"filterId":node.id.0.to_string(),"arguments":[{"name":"dest-from","value":{"Number":{"Float32Bits":from}}},{"name":"dest-to","value":{"Number":{"Float32Bits":to}}}]}))
 }
-pub(super) fn controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, captured: &photocraft_engine::document_snapshot::DocumentSnapshot, revision: u64, node: &FilterNode, editable: bool) {
-    let document=captured.id.0;
-    let editable=editable && context(app).is_ok();
+pub(super) fn controls(
+    app: &mut PhotocraftApp,
+    ui: &mut egui::Ui,
+    captured: &photocraft_engine::document_snapshot::DocumentSnapshot,
+    revision: u64,
+    node: &FilterNode,
+    editable: bool,
+) {
+    let document = captured.id.0;
+    let editable = editable && context(app).is_ok();
     let Ok(op) = photocraft_compose::gimp_color_rotate::typed_arguments(&node.arguments) else { return };
     let Some(raw) = photocraft_compose::gimp_color_rotate::witnessed_source_triplet(op) else { return };
     let identity = |d: &crate::state::XcfColorRotateDraft| d.document == document && d.revision == revision && d.filter == node.id.0;
@@ -112,10 +142,11 @@ pub(super) fn controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, captured: &ph
         draft.to = op.destination.to_degrees;
     }
     let values = apply.then_some((draft.from.to_bits(), draft.to.to_bits()));
-    if let Some((from, to)) = values {
-        if let Err(error)=apply_captured(app,captured,revision,node,from,to) {
-            app.ui.status=error;app.ui.status_error=true;
-        }
+    if let Some((from, to)) = values
+        && let Err(error) = apply_captured(app, captured, revision, node, from, to)
+    {
+        app.ui.status = error;
+        app.ui.status_error = true;
     }
 }
 
@@ -124,20 +155,37 @@ mod tests {
     use super::*;
     #[test]
     fn captured_apply_refuses_stale_or_coalescing_before_filter_lookup_and_publication() {
-        let mut app=PhotocraftApp::new(photocraft_engine::Session::new(),Default::default());
-        app.session.execute("file.new",json!({"width":2,"height":2})).unwrap();
-        let captured=app.session.active().unwrap().doc.clone();
-        let revision=app.session.active().unwrap().revision;
-        let node=FilterNode {id:photocraft_doc::item_identity::FilterId(1),operation:photocraft_doc::xcf_filters::OperationIdentity {name:"gegl:color-rotate".into(),stored_version:"0:0".into(),schema_epoch:EPOCH.into()},source_display_name:None,source_icon:None,arguments:Vec::new(),enabled:true,opacity_f64_bits:1.0f64.to_bits(),source_clipping:None,source_region:None,mask:None,auxiliary:Vec::new(),composition:None};
-        app.session.active_mut().unwrap().revision+=1;
-        let journal=app.session.journal.clone();
-        assert!(apply_captured(&mut app,&captured,revision,&node,30f32.to_bits(),210f32.to_bits()).is_err());
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width":2,"height":2})).unwrap();
+        let captured = app.session.active().unwrap().doc.clone();
+        let revision = app.session.active().unwrap().revision;
+        let node = FilterNode {
+            id: photocraft_doc::item_identity::FilterId(1),
+            operation: photocraft_doc::xcf_filters::OperationIdentity {
+                name: "gegl:color-rotate".into(),
+                stored_version: "0:0".into(),
+                schema_epoch: EPOCH.into(),
+            },
+            source_display_name: None,
+            source_icon: None,
+            arguments: Vec::new(),
+            enabled: true,
+            opacity_f64_bits: 1.0f64.to_bits(),
+            source_clipping: None,
+            source_region: None,
+            mask: None,
+            auxiliary: Vec::new(),
+            composition: None,
+        };
+        app.session.active_mut().unwrap().revision += 1;
+        let journal = app.session.journal.clone();
+        assert!(apply_captured(&mut app, &captured, revision, &node, 30f32.to_bits(), 210f32.to_bits()).is_err());
         assert!(app.session.active().unwrap().doc.shares_state(&captured));
-        assert_eq!(app.session.journal,journal);
-        app.session.active_mut().unwrap().revision=revision;
-        app.session.active_mut().unwrap().coalesce=Some("Own retained filter interaction".into());
-        assert!(apply_captured(&mut app,&captured,revision,&node,30f32.to_bits(),210f32.to_bits()).is_err());
-        assert_eq!(app.session.journal,journal);
+        assert_eq!(app.session.journal, journal);
+        app.session.active_mut().unwrap().revision = revision;
+        app.session.active_mut().unwrap().coalesce = Some("Own retained filter interaction".into());
+        assert!(apply_captured(&mut app, &captured, revision, &node, 30f32.to_bits(), 210f32.to_bits()).is_err());
+        assert_eq!(app.session.journal, journal);
         assert!(app.session.active().unwrap().doc.shares_state(&captured));
     }
     #[test]

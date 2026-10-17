@@ -21,7 +21,10 @@ impl egui::DroppedFile for Drop {
 
 #[test]
 fn open_and_drop_detect_content_and_preserve_work_on_failure() {
-    let services = Services { import: Some(Box::new(|name, bytes| photocraft_io::import(name, bytes).map_err(|e| e.to_string()))), ..Default::default() };
+    let services = Services {
+        import: Some(Box::new(|name, bytes, depth| photocraft_io::import_with_svg_group_depth(name, bytes, depth).map_err(|e| e.to_string()))),
+        ..Default::default()
+    };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
     let bytes = xcf::image(13, 150, 0, 1, 1, &[31, 61, 91, 255]);
     for name in ["project.xcf", "project.XCF", "renamed.psd", "renamed.pcraft", "no-extension"] {

@@ -35,6 +35,7 @@ pub(crate) fn source_blend_label(doc: &Document, layer: &Layer) -> Option<&'stat
     let item = state.items.iter().find(|item| item.item == ItemRef::Layer(layer.id))?;
     mode_label(item.composition.as_ref()?.source_mode)
 }
+#[cfg(test)]
 pub(crate) fn readonly_blend(ui: &mut egui::Ui, label: &str, width: f32) {
     ui.add_enabled_ui(false, |ui| {
         egui::ComboBox::from_id_salt("xcf-source-blend").selected_text(tl!(label)).width(width).show_ui(ui, |_| {});

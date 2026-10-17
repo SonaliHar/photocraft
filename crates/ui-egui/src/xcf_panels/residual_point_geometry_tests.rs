@@ -1,6 +1,7 @@
 //! Larger synthetic CURRENT compatibility. Original pinned8x6 native inputs are
 //! repeated literally, with no producer geometry or numerical oracle claim.
 use super::*;
+use serde_json::Value;
 #[path = "../residual_point_geometry_fixture.rs"]
 #[allow(dead_code)]
 mod fixture;
@@ -10,14 +11,9 @@ use egui_kittest::{
 };
 fn preview(app: &PhotocraftApp, doc: &photocraft_engine::DocumentSnapshot) -> egui::ColorImage {
     let display = app.session.color.canvas_display_for(doc, None).unwrap();
-    let (image, fee) = crate::canvas_backed_preview::backed_snapshot_display_image(
-        doc,
-        doc.size.width,
-        doc.size.height,
-        Some(display.as_ref()),
-        &photocraft_raster::Interrupt::NONE,
-    )
-    .unwrap();
+    let (image, fee) =
+        crate::canvas::test_backed_snapshot_display_image(doc, doc.size.width, doc.size.height, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE)
+            .unwrap();
     assert_eq!(image.pixels.len(), doc.size.area() as usize);
     let external = image.clone();
     drop((image, fee));

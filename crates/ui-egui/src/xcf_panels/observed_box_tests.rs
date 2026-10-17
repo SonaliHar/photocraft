@@ -2,11 +2,16 @@
 use super::*;
 #[path = "../canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod fixture;
 #[path = "../canvas_observed_box_fixture.rs"]
 #[allow(dead_code)]
 mod observed;
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use serde_json::Value;
 #[test]
 #[ignore = "UNRUN: actual owned Box checkbox consumer and bounded Signed32 request/run_checked for three CURRENT roles, background setting, stale/auth/history/native/raw/profile custody; visual checks deferred"]

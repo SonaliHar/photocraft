@@ -3,7 +3,10 @@ use super::*;
 #[path = "../assigned_f64_box_fixture.rs"]
 #[allow(dead_code)]
 mod fixture;
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use serde_json::Value;
 #[test]
 #[ignore = "UNRUN: two authored assigned-F64 observed Box sources, actual checkbox/Signed32 controls, HDR/signedzero native/source/profile custody, radius/activation/history/metadata/Move/native continuation and refusals; visual/numerical acceptance deferred"]
@@ -21,14 +24,9 @@ fn assigned_f64_observed_controls_preserve_authored_storage_and_continue() {
         let node = &before.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0];
         assert_eq!(radius(&before, layer, node), Some(old_radius));
         let expected = crate::canvas::display_image(None, &fixture::reference(&before));
-        let (actual, fee) = crate::canvas_backed_preview::backed_snapshot_display_image(
-            &before,
-            before.size.width,
-            before.size.height,
-            None,
-            &photocraft_raster::Interrupt::NONE,
-        )
-        .unwrap();
+        let (actual, fee) =
+            crate::canvas::test_backed_snapshot_display_image(&before, before.size.width, before.size.height, None, &photocraft_raster::Interrupt::NONE)
+                .unwrap();
         assert_eq!(actual.pixels.len(), expected.pixels.len());
         for (a, b) in actual.pixels.iter().zip(&expected.pixels) {
             for (a, b) in a.to_array().into_iter().zip(b.to_array()) {

@@ -3,19 +3,16 @@
 use super::*;
 #[path = "../filtered_flat_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod fixture;
 use egui_kittest::{Harness, kittest::Queryable};
 use std::sync::Arc;
 fn preview(app: &PhotocraftApp, doc: &photocraft_engine::DocumentSnapshot) -> egui::ColorImage {
     let display = app.session.color.canvas_display_for(doc, None).unwrap();
-    let (image, fee) = crate::canvas_backed_preview::backed_snapshot_display_image(
-        doc,
-        doc.size.width,
-        doc.size.height,
-        Some(display.as_ref()),
-        &photocraft_raster::Interrupt::NONE,
-    )
-    .unwrap();
+    let (image, fee) =
+        crate::canvas::test_backed_snapshot_display_image(doc, doc.size.width, doc.size.height, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE)
+            .unwrap();
     let external = image.clone();
     drop((image, fee));
     external

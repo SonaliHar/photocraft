@@ -86,6 +86,8 @@ pub(super) fn request(node: &FilterNode, values: [f32; 3], enabled: bool) -> Opt
         None
     }
 }
+// Keep the captured document/revision, target, lock state and UI inputs explicit.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn controls(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
@@ -114,13 +116,13 @@ pub(super) fn controls(
             });
         }
     });
-    if changed {
-        if let Some((command, params)) = request(node, values, enabled) {
-            run_checked(app, document, revision, command, params);
-        }
+    if changed && let Some((command, params)) = request(node, values, enabled) {
+        run_checked(app, document, revision, command, params);
     }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "hue_chroma_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;

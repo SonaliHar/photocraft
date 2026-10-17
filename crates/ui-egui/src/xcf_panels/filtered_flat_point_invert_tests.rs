@@ -1,6 +1,8 @@
 //! Deferred actual zero-argument UI controls; no visual/numerical acceptance.
 use super::*;
 #[path = "../../../engine/src/accounted_filtered_flat_invert_test_support.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 use egui_kittest::{Harness, kittest::Queryable};
 #[test]
@@ -42,7 +44,7 @@ fn mixed_invert_checkbox_and_frame_are_exact() {
         assert!(app.session.active().unwrap().doc.shares_state(&once));
         let display = app.session.color.canvas_display_for(&once, None).unwrap();
         let (image, fee) =
-            crate::canvas_backed_preview::backed_snapshot_display_image(&once, 64, 64, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+            crate::canvas::test_backed_snapshot_display_image(&once, 64, 64, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
         let expected = image.clone();
         drop((image, fee));
         let mut reopened = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -51,7 +53,7 @@ fn mixed_invert_checkbox_and_frame_are_exact() {
         let current = reopened.session.active().unwrap().doc.clone();
         let display = reopened.session.color.canvas_display_for(&current, None).unwrap();
         let (image, fee) =
-            crate::canvas_backed_preview::backed_snapshot_display_image(&current, 64, 64, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+            crate::canvas::test_backed_snapshot_display_image(&current, 64, 64, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
         assert_eq!(image.pixels, expected.pixels);
         drop((image, fee));
         assert_eq!(id, before.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].id);

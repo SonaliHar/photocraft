@@ -2,6 +2,8 @@
 use super::*;
 #[path = "../filtered_flat_fixture.rs"]
 #[allow(dead_code)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 use egui_kittest::{Harness, kittest::Queryable};
 use serde_json::Value;
@@ -31,8 +33,7 @@ fn native_unchanged(a: &DocumentSnapshot, b: &DocumentSnapshot) {
 }
 fn preview(app: &PhotocraftApp, doc: &DocumentSnapshot) -> egui::ColorImage {
     let display = app.session.color.canvas_display_for(doc, None).unwrap();
-    let (image, fee) =
-        crate::canvas_backed_preview::backed_snapshot_display_image(doc, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+    let (image, fee) = crate::canvas::test_backed_snapshot_display_image(doc, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
     let copy = image.clone();
     drop((image, fee));
     copy // external display capture only
@@ -143,9 +144,11 @@ fn captured_targets_and_literal_words_are_not_retargeted() {
     let (next, next_encoding) = semi_flatten::bits(&patched).unwrap();
     assert_eq!(next[3], words[3]);
     assert_eq!(encoding, next_encoding);
-    for (id, params) in
-        [("xcf.filter.remove", json!({"filterId":changed.id.0.to_string(),"index":0})), ("layer.translate", json!({"dx":0})), ("layer.select", json!({"index":0}))]
-    {
+    for (id, params) in [
+        ("xcf.filter.remove", json!({"filterId":changed.id.0.to_string(),"index":0})),
+        ("layer.translate", json!({"dx":0})),
+        ("layer.select", json!({"index":0})),
+    ] {
         assert!(app.run(id, params).is_err());
         assert!(app.session.active().unwrap().doc.shares_state(&after));
     }

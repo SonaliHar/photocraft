@@ -1,6 +1,9 @@
 use super::*;
 use crate::{FileDialogAnswer, FileDialogReply, FileDialogRequest, Services};
-use egui_kittest::{Harness, kittest::{NodeT, Queryable}};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use photocraft_doc::{
     Color, ColorMode, Document, SampleType, Size, XcfState, item_identity::ResourceId, xcf_items::SourceItem, xcf_resources::ResourceReference,
 };
@@ -286,7 +289,6 @@ fn qualified_picker_substitution(background_jobs: bool) {
     assert_eq!(std::fs::read(root.join("own-linked-resource.png")).unwrap(), original_png);
 }
 
-
 #[test]
 fn linked_frame_fence_refuses_replacement_at_same_revision() {
     let (doc, owner) = document();
@@ -328,13 +330,12 @@ fn linked_actual_ancestor_content_lock_disables_picker_without_mutation() {
     let before = doc.clone();
     let (app, replies) = app(doc);
     assert!(live_context(&app, owner).is_err());
-    let mut h = Harness::builder().with_size(egui::vec2(440.,260.)).build_ui_state(move |ui, app| properties(app,ui,owner), app);
+    let mut h = Harness::builder().with_size(egui::vec2(440., 260.)).build_ui_state(move |ui, app| properties(app, ui, owner), app);
     h.run();
-    assert!(h.get_by_label(BUTTON).is_disabled());
+    assert!(h.get_by_label(BUTTON).accesskit_node().is_disabled());
     assert!(replies.borrow().is_empty());
     assert_eq!(*h.state().session.active().unwrap().doc, before);
 }
-
 
 #[test]
 fn refresh_uses_registered_command_and_reports_missing_owned_material_without_edits() {
@@ -344,37 +345,41 @@ fn refresh_uses_registered_command_and_reports_missing_owned_material_without_ed
     let revision = app.session.active().unwrap().revision;
     let result = run_frame(&mut app, &captured, revision, owner, "xcf.link.refresh", serde_json::json!({"layerId":owner.0.to_string()}));
     assert!(result.is_err());
-    show_error(&mut app,result);
+    show_error(&mut app, result);
     assert!(app.ui.status_error);
     assert!(!app.ui.status.is_empty());
     assert!(app.session.active().unwrap().doc.shares_state(&captured));
-    assert_eq!(app.session.active().unwrap().history.past_len(),0);
+    assert_eq!(app.session.active().unwrap().history.past_len(), 0);
     assert!(replies.borrow().is_empty());
 }
 
 #[test]
 fn linked_geometry_hints_preserve_current_override_and_exact_matrix_bits() {
     let (mut doc, owner) = document();
-    let matrix = [1f64.to_bits(),0f64.to_bits(),0f64.to_bits(),(-0f64).to_bits(),1f64.to_bits(),0f64.to_bits(),0f64.to_bits(),0f64.to_bits(),1f64.to_bits()];
-    let transform = photocraft_doc::xcf_items::TransformState {matrix_f64_bits:matrix,interpolation:2,pre_offset:[7,-3]};
+    let matrix =
+        [1f64.to_bits(), 0f64.to_bits(), 0f64.to_bits(), (-0f64).to_bits(), 1f64.to_bits(), 0f64.to_bits(), 0f64.to_bits(), 0f64.to_bits(), 1f64.to_bits()];
+    let transform = photocraft_doc::xcf_items::TransformState { matrix_f64_bits: matrix, interpolation: 2, pre_offset: [7, -3] };
     let source = &mut doc.xcf_state.as_mut().unwrap().source_items[0];
     source.transform = Some(transform.clone());
-    let EditableSource::Linked {current,..} = &mut source.source else {panic!("linked fixture")};
-    *current = Some(photocraft_doc::xcf_items::LinkedCurrentState {bounds:photocraft_doc::Rect::new(-5,9,-3,11),transform:Some(transform.clone())});
-    let hints = geometry_hints(&doc,owner).unwrap();
-    assert_eq!(hints.origin,[-5,9]);
-    assert_eq!(hints.transform,Some(transform));
-    assert_eq!(hints.transform.unwrap().matrix_f64_bits[3],(-0f64).to_bits());
+    let EditableSource::Linked { current, .. } = &mut source.source else { panic!("linked fixture") };
+    *current = Some(photocraft_doc::xcf_items::LinkedCurrentState { bounds: photocraft_doc::Rect::new(-5, 9, -3, 11), transform: Some(transform.clone()) });
+    let hints = geometry_hints(&doc, owner).unwrap();
+    assert_eq!(hints.origin, [-5, 9]);
+    assert_eq!(hints.transform, Some(transform));
+    assert_eq!(hints.transform.unwrap().matrix_f64_bits[3], (-0f64).to_bits());
 }
 
 #[test]
 fn linked_geometry_draft_is_view_only_serializable_and_invalid_metadata_is_not_normalized() {
-    let draft = crate::state::XcfLinkedGeometryDraft {document:3,layer:u64::MAX,revision:0,origin:[-5,9],interpolation:3};
+    let draft = crate::state::XcfLinkedGeometryDraft { document: 3, layer: u64::MAX, revision: 0, origin: [-5, 9], interpolation: 3 };
     let value = serde_json::to_value(&draft).unwrap();
-    let restored:crate::state::XcfLinkedGeometryDraft = serde_json::from_value(value).unwrap();
-    assert_eq!(draft,restored);
-    let (mut doc,owner) = document();
-    doc.xcf_state.as_mut().unwrap().source_items[0].transform = Some(photocraft_doc::xcf_items::TransformState {matrix_f64_bits:[f64::NAN.to_bits();9],interpolation:3,pre_offset:[0,0]});
-    assert!(geometry_hints(&doc,owner).is_none());
-    for (id,name) in [(0,"none"),(1,"linear"),(2,"cubic"),(3,"nohalo")] {assert_eq!(interpolation_name(id),name);}
+    let restored: crate::state::XcfLinkedGeometryDraft = serde_json::from_value(value).unwrap();
+    assert_eq!(draft, restored);
+    let (mut doc, owner) = document();
+    doc.xcf_state.as_mut().unwrap().source_items[0].transform =
+        Some(photocraft_doc::xcf_items::TransformState { matrix_f64_bits: [f64::NAN.to_bits(); 9], interpolation: 3, pre_offset: [0, 0] });
+    assert!(geometry_hints(&doc, owner).is_none());
+    for (id, name) in [(0, "none"), (1, "linear"), (2, "cubic"), (3, "nohalo")] {
+        assert_eq!(interpolation_name(id), name);
+    }
 }

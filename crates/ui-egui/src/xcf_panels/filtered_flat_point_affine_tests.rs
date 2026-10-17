@@ -55,8 +55,7 @@ fn affine_widgets_preserve_actual_target_and_native() {
         assert!(app.session.active().unwrap().doc.shares_state(&once));
         let display = app.session.color.canvas_display_for(&once, None).unwrap();
         let (image, fee) =
-            crate::canvas_backed_preview::backed_snapshot_display_image(&once, c.width, c.height, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE)
-                .unwrap();
+            crate::canvas::test_backed_snapshot_display_image(&once, c.width, c.height, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
         let expected = image.pixels.clone();
         drop((image, fee));
         let mut reopened = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -64,14 +63,9 @@ fn affine_widgets_preserve_actual_target_and_native() {
         let current = reopened.session.active().unwrap().doc.clone();
         fixture::same(&once, &current);
         let display = reopened.session.color.canvas_display_for(&current, None).unwrap();
-        let (image, fee) = crate::canvas_backed_preview::backed_snapshot_display_image(
-            &current,
-            c.width,
-            c.height,
-            Some(display.as_ref()),
-            &photocraft_raster::Interrupt::NONE,
-        )
-        .unwrap();
+        let (image, fee) =
+            crate::canvas::test_backed_snapshot_display_image(&current, c.width, c.height, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE)
+                .unwrap();
         assert_eq!(image.pixels, expected);
         drop((image, fee));
         assert_eq!(fixture::bytes(c), std::fs::read(fixture::path(c)).unwrap());

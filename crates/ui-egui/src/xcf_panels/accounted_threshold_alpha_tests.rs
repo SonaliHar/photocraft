@@ -107,12 +107,13 @@ fn set(app: &PhotocraftApp, bits: u32) -> Value {
 }
 // Full storage observation is deliberately separate from current canvas output.
 // The pinned closed class has one layer tile and at most one resident mask tile.
+type NativeMasks = Vec<(photocraft_raster::backing::NativePlaneDescriptor, Option<(photocraft_geom::TileCoord, Vec<u8>)>)>;
 #[derive(Debug, PartialEq, Eq)]
 struct RawStorage {
     layer: photocraft_raster::backing::NativePlaneDescriptor,
     layer_full_tile: bool,
     layer_bytes: Vec<u8>,
-    masks: Vec<(photocraft_raster::backing::NativePlaneDescriptor, Option<(photocraft_geom::TileCoord, Vec<u8>)>)>,
+    masks: NativeMasks,
 }
 #[derive(Debug)]
 struct NativeSnapshot {

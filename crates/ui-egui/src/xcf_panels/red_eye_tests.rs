@@ -5,6 +5,12 @@ use egui_kittest::{
 };
 use sha2::{Digest, Sha256};
 
+fn activation_checkbox<'a>(h: &'a Harness<'_, PhotocraftApp>, caption: &'a str) -> egui_kittest::Node<'a> {
+    let mut matches = h.query_all_by_label(caption).filter(|node| node.accesskit_node().role() == egui::accesskit::Role::CheckBox);
+    let node = matches.next().expect("the actual filter activation checkbox");
+    assert!(matches.next().is_none(), "activation checkbox must be unique");
+    node
+}
 fn packet() -> std::path::PathBuf {
     let root = std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS")
         .map(std::path::PathBuf::from)
@@ -159,7 +165,7 @@ fn original_red_eye_representative_edits_activation_native_history_and_boundarie
                 harness.key_press(egui::Key::Enter);
                 harness.run_steps(2);
             } else {
-                harness.get_by_label(&caption).click();
+                activation_checkbox(&harness, &caption).click();
                 harness.run_steps(2);
             }
             let current = harness.state().session.active().unwrap().doc.clone();
@@ -181,7 +187,11 @@ fn original_red_eye_representative_edits_activation_native_history_and_boundarie
             harness.state_mut().session.active_mut().unwrap().doc.try_resident_mut().unwrap().layers[0].locks.pixels = true;
             harness.run_steps(2);
             for label in ["Threshold", &caption] {
-                assert!(harness.get_by_label(label).accesskit_node().is_disabled());
+                if label == caption {
+                    assert!(activation_checkbox(&harness, label).accesskit_node().is_disabled());
+                } else {
+                    assert!(harness.get_by_label(label).accesskit_node().is_disabled());
+                }
             }
         }
     }

@@ -2,6 +2,8 @@
 use super::*;
 #[path = "../pure_point_geometry_fixture.rs"]
 #[allow(dead_code)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 use egui_kittest::{
     Harness,
@@ -22,14 +24,9 @@ fn candidate(family: Family, doc: &DocumentSnapshot) -> bool {
 fn preview(app: &PhotocraftApp, doc: &DocumentSnapshot) -> egui::ColorImage {
     let display = app.session.color.canvas_display_for(doc, None).unwrap();
     assert!(!display.encode_srgb);
-    let (image, fee) = crate::canvas_backed_preview::backed_snapshot_display_image(
-        doc,
-        doc.size.width,
-        doc.size.height,
-        Some(display.as_ref()),
-        &photocraft_raster::Interrupt::NONE,
-    )
-    .unwrap();
+    let (image, fee) =
+        crate::canvas::test_backed_snapshot_display_image(doc, doc.size.width, doc.size.height, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE)
+            .unwrap();
     assert_eq!(image.pixels.len(), doc.size.area() as usize);
     let capture = image.clone(); // External CURRENT adapter continuity capture only.
     drop((image, fee));

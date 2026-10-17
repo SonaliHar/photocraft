@@ -59,8 +59,7 @@ fn mixed_exposure_widgets_keep_target_and_words() {
         assert_eq!(app.ui.status, "xcf.properties.stale-target");
         assert!(app.session.active().unwrap().doc.shares_state(&once));
         let display = app.session.color.canvas_display_for(&once, None).unwrap();
-        let (image, fee) =
-            crate::canvas_backed_preview::backed_snapshot_display_image(&once, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+        let (image, fee) = crate::canvas::test_backed_snapshot_display_image(&once, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
         let expected = image.clone();
         drop((image, fee));
         let mut reopened = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -69,7 +68,7 @@ fn mixed_exposure_widgets_keep_target_and_words() {
         let current = reopened.session.active().unwrap().doc.clone();
         let display = reopened.session.color.canvas_display_for(&current, None).unwrap();
         let (image, fee) =
-            crate::canvas_backed_preview::backed_snapshot_display_image(&current, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+            crate::canvas::test_backed_snapshot_display_image(&current, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
         assert_eq!(image.pixels, expected.pixels);
         drop((image, fee));
     }

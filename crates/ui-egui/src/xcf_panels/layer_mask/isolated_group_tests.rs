@@ -5,7 +5,6 @@ use super::*;
 use crate::canvas::isolated_group_test_support::{cases, ctl, display};
 use photocraft_doc::{Document, Layer, LayerContent};
 use photocraft_raster::{
-    Interrupt,
     backing::quota::{BackingQuota, QuotaLimits},
     checked_view::NativeTileBytes,
 };

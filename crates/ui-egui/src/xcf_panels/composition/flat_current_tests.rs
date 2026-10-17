@@ -3,12 +3,16 @@
 use super::*;
 #[path = "../../canvas_separable_blend_fixture.rs"]
 #[allow(dead_code)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod authored;
 #[path = "../../canvas_flat_composition_fixture.rs"]
 #[allow(dead_code)]
 mod common;
 #[path = "../../canvas_flat_current_fixture.rs"]
 #[allow(dead_code)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 use fixture::{archive, ctl};
 fn preview(doc: &photocraft_engine::DocumentSnapshot, literals: &[fixture::Literal]) {
@@ -17,8 +21,8 @@ fn preview(doc: &photocraft_engine::DocumentSnapshot, literals: &[fixture::Liter
     for (actual, p) in image.pixels.iter().zip(expected) {
         let p = p.map(|v| (v.clamp(0., 1.) * 255.).round() as u8);
         let p = egui::Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]).to_array();
-        for c in 0..4 {
-            assert!((i16::from(actual.to_array()[c]) - i16::from(p[c])).abs() <= 1);
+        for (c, expected) in p.iter().enumerate() {
+            assert!((i16::from(actual.to_array()[c]) - i16::from(*expected)).abs() <= 1);
         }
     }
     drop((image, fee));

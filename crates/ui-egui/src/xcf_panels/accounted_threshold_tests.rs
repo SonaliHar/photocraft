@@ -131,12 +131,13 @@ fn stack_revision(app: &PhotocraftApp) -> u64 {
 }
 // Full storage observation is deliberately separate from current canvas output.
 // The pinned closed class has one layer tile and at most one resident mask tile.
+type NativeMasks = Vec<(photocraft_raster::backing::NativePlaneDescriptor, Option<(photocraft_geom::TileCoord, Vec<u8>)>)>;
 #[derive(Debug, PartialEq, Eq)]
 struct RawStorage {
     layer: photocraft_raster::backing::NativePlaneDescriptor,
     layer_full_tile: bool,
     layer_bytes: Vec<u8>,
-    masks: Vec<(photocraft_raster::backing::NativePlaneDescriptor, Option<(photocraft_geom::TileCoord, Vec<u8>)>)>,
+    masks: NativeMasks,
 }
 #[derive(Debug)]
 struct NativeSnapshot {
@@ -460,7 +461,12 @@ fn native_current_lock_controls_disable_content_and_visibility_only_blocks_activ
         let evidence = evidence(Sample::F64);
         let owner = evidence.imported.document();
         let q = evidence.quota.clone();
-        let model = photocraft_io::retained_native_input_bytes(owner.document(), 64 << 20, &Interrupt::NONE).unwrap();
+        let model = photocraft_io::retained_native_input_bytes(
+            owner.document(),
+            photocraft_format::PreparationLimits { resident_bytes: 64 << 20, ..Default::default() },
+            &Interrupt::NONE,
+        )
+        .unwrap();
         let metadata = q.reserve(QuotaKind::Index, (2 * model + (1 << 20)) as u64).unwrap();
         let mut doc = owner.document().clone();
         let layer = doc.layers[0].id;

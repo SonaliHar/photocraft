@@ -1,6 +1,8 @@
 //! Deferred final Remove widget/dedicated empty class/native preview continuity.
 use super::*;
 #[path = "../../../engine/src/accounted_filtered_flat_current_test_support.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod fixture;
 use egui_kittest::{Harness, kittest::Queryable};
 #[test]
@@ -43,7 +45,7 @@ fn empty_mixed_ui_never_falls_through() {
         assert!(empty.accounted().unwrap().is_readonly_filtered_flat_point_storage());
         let display = app.session.color.canvas_display_for(&empty, None).unwrap();
         let (image, fee) =
-            crate::canvas_backed_preview::backed_snapshot_display_image(&empty, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+            crate::canvas::test_backed_snapshot_display_image(&empty, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
         let expected = image.clone();
         drop((image, fee));
         let archive = fixture::archive(empty.accounted().unwrap());
@@ -54,7 +56,7 @@ fn empty_mixed_ui_never_falls_through() {
         let snapshot = reopened.session.active().unwrap().doc.clone();
         let display = reopened.session.color.canvas_display_for(&snapshot, None).unwrap();
         let (image, fee) =
-            crate::canvas_backed_preview::backed_snapshot_display_image(&snapshot, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+            crate::canvas::test_backed_snapshot_display_image(&snapshot, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
         assert_eq!(image.pixels, expected.pixels);
         drop((image, fee));
         let mut panel =

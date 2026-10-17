@@ -2,8 +2,13 @@
 use super::*;
 #[path = "../linear_box_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod fixture;
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use serde_json::Value;
 #[test]
 #[ignore = "UNRUN: four authored implicit Linear F32/F64 observed Box sources, actual checkbox/Signed32 controls, HDR/signedzero native/source/profile custody, radius/activation/history/metadata/Move/native continuation and refusals; visual/numerical acceptance deferred"]
@@ -24,7 +29,7 @@ fn implicit_linear_box_controls_use_actual_display_and_native_continuation() {
         let display = app.session.color.canvas_display_for(&before, None).unwrap();
         assert!(display.encode_srgb);
         let expected = crate::canvas::display_image(Some(display.as_ref()), &fixture::reference(&before));
-        let (actual, fee) = crate::canvas_backed_preview::backed_snapshot_display_image(
+        let (actual, fee) = crate::canvas::test_backed_snapshot_display_image(
             &before,
             before.size.width,
             before.size.height,
@@ -87,7 +92,7 @@ fn implicit_linear_box_controls_use_actual_display_and_native_continuation() {
         let display = app.session.color.canvas_display_for(&moved, None).unwrap();
         assert!(display.encode_srgb);
         let expected = crate::canvas::display_image(Some(display.as_ref()), &fixture::reference(&moved));
-        let (actual, fee) = crate::canvas_backed_preview::backed_snapshot_display_image(
+        let (actual, fee) = crate::canvas::test_backed_snapshot_display_image(
             &moved,
             moved.size.width,
             moved.size.height,

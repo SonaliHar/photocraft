@@ -97,6 +97,8 @@ fn edit(ui: &mut egui::Ui, original: &FilterValue) -> Option<FilterValue> {
     });
     if changed { patch(original, rgb) } else { None }
 }
+// Keep the captured document/revision, target, lock state and UI inputs explicit.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn controls(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
@@ -123,10 +125,10 @@ pub(super) fn controls(
     });
     if let Some(value) = color.filter(|value| value != &argument.value) {
         let mut params = json!({"filterId":node.id.0.to_string(),"arguments":[{"name":"color","value":value}]});
-        if enabled != node.enabled {
-            if let Some(object) = params.as_object_mut() {
-                object.insert("enabled".into(), json!(enabled));
-            }
+        if enabled != node.enabled
+            && let Some(object) = params.as_object_mut()
+        {
+            object.insert("enabled".into(), json!(enabled));
         }
         run_checked(app, document, revision, "xcf.filter.set", params);
     } else if enabled != node.enabled {
@@ -136,4 +138,6 @@ pub(super) fn controls(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "semi_flatten_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;

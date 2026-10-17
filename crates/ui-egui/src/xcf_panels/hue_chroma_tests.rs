@@ -12,8 +12,7 @@ use serde_json::Value;
 fn preview(app: &PhotocraftApp, doc: &DocumentSnapshot) -> egui::ColorImage {
     let display = app.session.color.canvas_display_for(doc, None).unwrap();
     assert!(!display.encode_srgb);
-    let (image, fee) =
-        crate::canvas_backed_preview::backed_snapshot_display_image(doc, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+    let (image, fee) = crate::canvas::test_backed_snapshot_display_image(doc, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
     assert_eq!(image.pixels.len(), 48);
     let capture = image.clone(); // External adapter capture, never a producer oracle.
     drop((image, fee));

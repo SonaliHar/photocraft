@@ -54,8 +54,7 @@ fn hierarchy_ui_targets_real_nested_leaf_and_group() {
     assert_eq!(app.session.active().unwrap().active_layer, Some(f::EMPTY));
     let after = app.session.active().unwrap().doc.clone();
     let display = app.session.color.canvas_display_for(&after, None).unwrap();
-    let (image, fee) =
-        crate::canvas_backed_preview::backed_snapshot_display_image(&after, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+    let (image, fee) = crate::canvas::test_backed_snapshot_display_image(&after, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
     let expected = image.pixels.clone();
     drop((image, fee));
     let mut reopened = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -63,8 +62,7 @@ fn hierarchy_ui_targets_real_nested_leaf_and_group() {
     let now = reopened.session.active().unwrap().doc.clone();
     f::same(&after, &now);
     let display = reopened.session.color.canvas_display_for(&now, None).unwrap();
-    let (image, fee) =
-        crate::canvas_backed_preview::backed_snapshot_display_image(&now, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
+    let (image, fee) = crate::canvas::test_backed_snapshot_display_image(&now, 8, 6, Some(display.as_ref()), &photocraft_raster::Interrupt::NONE).unwrap();
     assert_eq!(image.pixels, expected);
     drop((image, fee));
 }

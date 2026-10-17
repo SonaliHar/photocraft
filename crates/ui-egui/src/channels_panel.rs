@@ -13,12 +13,12 @@ use serde_json::{Value, json};
 use crate::theme::{self, Tokens};
 use crate::{PhotocraftApp, icons, widgets};
 
-#[path = "xcf_panels/channel_overlay.rs"]
-mod channel_overlay;
-#[path = "xcf_panels/channel_name.rs"]
-mod channel_name;
 #[path = "xcf_panels/channel_locks.rs"]
 mod channel_locks;
+#[path = "xcf_panels/channel_name.rs"]
+mod channel_name;
+#[path = "xcf_panels/channel_overlay.rs"]
+mod channel_overlay;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Row {
@@ -94,7 +94,8 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let shown_colors = if colors > 1 { colors } else { 0 };
     let mut actions: Vec<(String, Value)> = Vec::new();
     if let ChannelTarget::Alpha(index) = view.target
-        && let Some(channel) = doc.channels.get(index) {
+        && let Some(channel) = doc.channels.get(index)
+    {
         channel_overlay::show(app, ui, channel.id);
         channel_name::show(app, ui, channel.id);
         channel_locks::show(app, ui, channel.id);
@@ -320,6 +321,8 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let action = drop_action(*row, name, mask_layer, on)?;
         crate::panels::dropped_on(ui, button).then_some(action)
     };
+    // A completed footer drop duplicates immediately; menu Duplicate still asks for options.
+    let mut footer_duplicate_index = None;
     // Photoshop's order from the left: Load as selection, Save selection, New, Delete.
     widgets::panel_footer(ui, |ui| {
         let target_ref = match view.target {
@@ -338,7 +341,10 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if new.clicked() {
             actions.push(("channel.new".into(), json!({})));
         }
-        actions.extend(drop(ui, &new, Footer::New));
+        if let Some(action) = drop(ui, &new, Footer::New) {
+            footer_duplicate_index = Some(actions.len());
+            actions.push(action);
+        }
         if icons::button(ui, "square-dashed", 26.0, false, tl!("Save selection as channel")).clicked() {
             actions.push(("select.saveSelection".into(), json!({})));
         }
@@ -357,12 +363,12 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ctx.data_mut(|d| d.remove::<(Row, String)>(drag_id()));
     }
     ctx.data_mut(|d| d.insert_temp(thumbs_id(), drawn));
-    for (id, p) in actions {
+    for (index, (id, p)) in actions.into_iter().enumerate() {
         if matches!(id.as_str(), "channel.new" | "channel.newSpot") {
             crate::channel_create_dialog::open(app, &id);
             continue;
         }
-        if id == "channel.duplicate" {
+        if id == "channel.duplicate" && footer_duplicate_index != Some(index) {
             crate::channel_action_dialog::open(app, &id, &p);
             continue;
         }
@@ -623,6 +629,7 @@ mod tests {
 
         drag_to(&mut h, "Alpha 1", "Create new channel");
         assert_eq!(alphas(&h), ["Alpha 1", "Alpha 1 copy"]);
+        assert!(h.state().ui.dialogs.is_empty(), "a completed footer drop must not ask for menu duplicate options");
         assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "one history step");
         drag_to(&mut h, "Red", "Create new channel");
         assert_eq!(alphas(&h), ["Alpha 1", "Alpha 1 copy", "Red copy"]);
