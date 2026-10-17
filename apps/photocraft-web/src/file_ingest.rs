@@ -48,6 +48,30 @@ pub(crate) struct Delivery {
     pub lease: Lease,
 }
 
+pub(crate) struct RoutedDelivery {
+    pub open: Vec<(String, Vec<u8>)>,
+    pub place: Vec<(String, Vec<u8>)>,
+    pub lease: Lease,
+}
+
+impl Delivery {
+    /// Keep the admission lease across both queues until the UI consumes them.
+    pub fn route(self, places: &[bool]) -> Result<RoutedDelivery, String> {
+        if places.len() != self.files.len() {
+            return Err("Dropped file destinations do not match the admitted files.".into());
+        }
+        let mut routed = RoutedDelivery { open: Vec::new(), place: Vec::new(), lease: self.lease };
+        for (file, &place) in self.files.into_iter().zip(places) {
+            if place {
+                routed.place.push(file);
+            } else {
+                routed.open.push(file);
+            }
+        }
+        Ok(routed)
+    }
+}
+
 impl Admission {
     /// Synchronous: reject the entire batch before spawning a reader or allocating contents.
     pub fn admit<S: Source>(&self, files: Vec<S>) -> Result<Batch<S>, String> {
@@ -128,6 +152,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn drop_routing_preserves_destinations_and_holds_admission_until_consumed() {
+        let budget = budget();
+        let reads = Arc::default();
+        let delivery = ready(budget.admit(vec![source(2.0, &reads), source(2.0, &reads)]).unwrap().read()).unwrap();
+        let routed = delivery.route(&[true, false]).unwrap();
+        assert_eq!(routed.place.len(), 1);
+        assert_eq!(routed.open.len(), 1);
+        assert_eq!(routed.place[0].1, vec![7; 2]);
+        assert!(budget.admit(vec![source(2.0, &reads)]).is_err());
+        let RoutedDelivery { open, place, lease } = routed;
+        drop(open);
+        drop(place);
+        assert!(budget.admit(vec![source(2.0, &reads)]).is_err());
+        drop(lease);
+        let delivery = ready(budget.admit(vec![source(2.0, &reads)]).unwrap().read()).unwrap();
+        assert!(delivery.route(&[]).is_err());
+        assert!(budget.admit(vec![source(2.0, &reads)]).is_ok());
+    }
     #[test]
     fn rejects_count_single_size_and_total_before_any_reads() {
         let reads = Arc::default();
