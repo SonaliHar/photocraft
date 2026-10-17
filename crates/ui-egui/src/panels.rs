@@ -4,7 +4,6 @@ use egui::{Align2, Color32, CornerRadius, Pos2, Rect, RichText, Sense, Stroke, S
 use photocraft_color::BlendMode;
 use photocraft_doc::{Layer, LayerContent, LayerId};
 use serde_json::{Value, json};
-
 use crate::mask_thumbs_ui::MaskKind;
 use crate::state::Tool;
 use crate::theme::{self, Tokens};
@@ -3818,7 +3817,11 @@ fn color_wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui, bg_active: bool) {
             let mut brightness = hsva.v * 100.0;
 
             ui.horizontal(|ui| {
-                ui.label(tl!("H"));
+                ui.label(crate::i18n::tr_ctx(
+                    crate::i18n::current(),
+                    "color-wheel",
+                    "H",
+                ));
                 ui.add(egui::Slider::new(&mut hue, 0.0..=360.0).show_value(false));
                 if widgets::value_field(ui, &mut hue, 0.0..=360.0, "", 48.0).changed() {
                     changed = true;
@@ -3826,7 +3829,11 @@ fn color_wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui, bg_active: bool) {
             });
 
             ui.horizontal(|ui| {
-                ui.label(tl!("S"));
+                ui.label(crate::i18n::tr_ctx(
+                    crate::i18n::current(),
+                    "color-wheel",
+                    "S",
+                ));
                 ui.add(egui::Slider::new(&mut saturation, 0.0..=100.0).show_value(false));
                 if widgets::value_field(ui, &mut saturation, 0.0..=100.0, "", 48.0).changed() {
                     changed = true;
@@ -3834,7 +3841,11 @@ fn color_wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui, bg_active: bool) {
             });
 
             ui.horizontal(|ui| {
-                ui.label(tl!("B"));
+                ui.label(crate::i18n::tr_ctx(
+                    crate::i18n::current(),
+                    "color-wheel",
+                    "B",
+                ));
                 ui.add(egui::Slider::new(&mut brightness, 0.0..=100.0).show_value(false));
                 if widgets::value_field(ui, &mut brightness, 0.0..=100.0, "", 48.0).changed() {
                     changed = true;

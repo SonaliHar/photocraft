@@ -3218,3 +3218,6 @@ curves	Smooth	Lisser
 	# Color Wheel labels
 	Color Wheel	Roue chromatique
 	Hue Cube	Cube de teinte
+color-wheel	H	T
+color-wheel	S	S
+color-wheel	B	L
