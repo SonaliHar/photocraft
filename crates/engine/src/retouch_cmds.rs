@@ -205,13 +205,25 @@ fn source_document(pre: &Document, id: Option<LayerId>, which: SampleLayers) -> 
     doc
 }
 
+/// The most a reduced clone source ([`clone_source_reduced`]) may hold, in pixels and on a side:
+/// callers choose a reduction that fits, whatever the document's size.
+#[cfg(not(test))]
+pub const REDUCED_SOURCE_MAX_PIXELS: u64 = 4 * 1024 * 1024;
+#[cfg(not(test))]
+pub const REDUCED_SOURCE_MAX_SIDE: u32 = 4096;
+/// Tests reach the reduction with small documents.
+#[cfg(test)]
+pub const REDUCED_SOURCE_MAX_PIXELS: u64 = 128 * 128;
+#[cfg(test)]
+pub const REDUCED_SOURCE_MAX_SIDE: u32 = 128;
+
 /// The clone source reduced to `w × h` pixels over the document's bounds: what `sampleLayer` reads
 /// (the active layer's own pixels, the composite up to it, or the whole composite), rendered by
 /// the compositor's reduction (`render_reduced`, in bands) so memory is bounded by `w × h` whatever
 /// the document's size. The Clone Source overlay samples it when the full-resolution overlay would
 /// pass its budget (a zoomed-out view, a very large tip).
 pub fn clone_source_reduced(s: &Session, sample_layer: &str, w: u32, h: u32) -> Result<photocraft_compose::Buffer> {
-    if w == 0 || h == 0 || w > 4096 || h > 4096 || u64::from(w) * u64::from(h) > 4 * 1024 * 1024 {
+    if w == 0 || h == 0 || w > REDUCED_SOURCE_MAX_SIDE || h > REDUCED_SOURCE_MAX_SIDE || u64::from(w) * u64::from(h) > REDUCED_SOURCE_MAX_PIXELS {
         return Err(bad("clone.preview", "reduced source exceeds its budget"));
     }
     let d = s.active().ok_or(EngineError::NoDocument)?;

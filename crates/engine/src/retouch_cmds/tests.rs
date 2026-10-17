@@ -2080,6 +2080,7 @@ fn clone_source_reduced_renders_the_sample_mode_within_its_budget() {
     let mixed = px(&all, 10, 10);
     assert!((mixed[0] - 1.0).abs() < 0.01 && (mixed[1] - 0.5).abs() < 0.02, "the composite: the layer at 50 % over the white Background: {mixed:?}");
     assert!(px(&all, 30, 10)[1] > 0.99, "the Background shows through");
-    assert!(super::clone_source_reduced(&s, "all", 4096, 4096).is_err(), "past the budget: refused");
+    assert!(super::clone_source_reduced(&s, "all", super::REDUCED_SOURCE_MAX_SIDE + 1, 1).is_err(), "past the budget: refused");
+    assert!(super::clone_source_reduced(&s, "all", 128, 128).is_ok() == (128 * 128 <= super::REDUCED_SOURCE_MAX_PIXELS));
     assert!(super::clone_source_reduced(&s, "all", 0, 20).is_err());
 }

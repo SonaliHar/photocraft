@@ -78,10 +78,11 @@ impl ReducedSource {
         }
     }
 
-    /// The reduced destination rectangle `dst` (reduced px, `k` document px per texel) sampled
-    /// through `map` at its texels' centres.
-    fn sample(&self, dst: DRect, map: &photocraft_engine::presets::clone_source::Mapping) -> photocraft_compose::Buffer {
-        let k = f64::from(self.k);
+    /// The reduced destination rectangle `dst` (reduced px, `k_dst` document px per texel) sampled
+    /// through `map` at its texels' centres. The destination's stride is its own: the source's
+    /// reduction (`self.k`) follows the document's size.
+    fn sample(&self, dst: DRect, k_dst: u32, map: &photocraft_engine::presets::clone_source::Mapping) -> photocraft_compose::Buffer {
+        let k = f64::from(k_dst);
         let w = dst.width() as usize;
         let px = (0..w * dst.height() as usize)
             .map(|i| {
@@ -160,12 +161,16 @@ impl ClonePreviewCache {
         }
     }
 
-    /// The source reduced by `k` over `bounds` for what `sample` reads, built once per `key`.
+    /// The source over `bounds` for what `sample` reads, reduced by at least `k` and by whatever
+    /// more the document's size needs to fit the engine's reduced-source budget (its own factor,
+    /// apart from the overlay's stride), built once per `key`.
     fn reduced_source(&mut self, session: &photocraft_engine::Session, sample: &str, key: String, k: u32, bounds: DRect) -> Option<&ReducedSource> {
+        let k = reduced_source_factor(k, bounds);
+        let key = format!("{key}:{k}");
         if let Some(i) = self.reduced.iter().position(|r| r.key == key) {
             return self.reduced.get(i);
         }
-        let (w, h) = (bounds.width().div_ceil(k.max(1)), bounds.height().div_ceil(k.max(1)));
+        let (w, h) = (bounds.width().div_ceil(k), bounds.height().div_ceil(k));
         let buf = photocraft_engine::retouch_cmds::clone_source_reduced(session, sample, w, h).ok()?;
         if self.reduced.len() >= 2 {
             self.reduced.remove(0);
@@ -173,6 +178,16 @@ impl ClonePreviewCache {
         self.reduced.push(ReducedSource { key, k, origin: [bounds.x0, bounds.y0], buf });
         self.reduced.last()
     }
+}
+
+/// The reduction a source over `bounds` needs to fit the engine's reduced-source budget
+/// (`retouch_cmds::REDUCED_SOURCE_MAX_PIXELS`, `REDUCED_SOURCE_MAX_SIDE`), at least `k`.
+fn reduced_source_factor(k: u32, bounds: DRect) -> u32 {
+    use photocraft_engine::retouch_cmds::{REDUCED_SOURCE_MAX_PIXELS, REDUCED_SOURCE_MAX_SIDE};
+    let area = u64::from(bounds.width()) * u64::from(bounds.height());
+    let by_area = (area as f64 / REDUCED_SOURCE_MAX_PIXELS as f64).sqrt().ceil().clamp(1.0, 1e6) as u32;
+    let by_side = bounds.width().max(bounds.height()).div_ceil(REDUCED_SOURCE_MAX_SIDE).max(1);
+    k.max(1).max(by_area).max(by_side)
 }
 
 /// Box-average a straight-alpha buffer by `k` (premultiplied, so transparent pixels don't tint
@@ -315,10 +330,10 @@ fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &Vie
                 }
                 let rkey = |what: &str| format!("{doc_id:?}:{revision}:{active_layer:?}:{what}:{k}");
                 let Some(src) = cache.reduced_source(&app.session, &sample, rkey(&sample), k, doc_bounds) else { return };
-                let mut buf = src.sample(reduced, &map);
+                let mut buf = src.sample(reduced, k, &map);
                 if overlay.blend != "normal" {
                     let Some(under) = cache.reduced_source(&app.session, "all", rkey("all"), k, doc_bounds) else { return };
-                    let under = under.sample(reduced, &under_map);
+                    let under = under.sample(reduced, k, &under_map);
                     for (px, d) in buf.px.iter_mut().zip(&under.px) {
                         *px = overlay_blend(&overlay.blend, *px, *d);
                     }
@@ -7498,6 +7513,42 @@ mod tests {
         assert_eq!(app.clone_preview.as_ref().unwrap().footprint_builds, 1, "nothing changed: the tip is not rasterized again");
         clone_overlay_draw(&mut app, &ctx, &xf, [40.0, 32.0]);
         assert_eq!(app.clone_preview.as_ref().unwrap().footprint_builds, 2, "a new position rasterizes the tip once more");
+    }
+
+    /// A document much larger than the tip (tests: 600 × 600 against a 128² reduced-source
+    /// budget): the full-resolution overlay is over its budget and the source needs more reduction
+    /// than the overlay's stride. The source takes its own factor, the overlay is drawn, and both
+    /// the source and the texture stay within their budgets.
+    #[test]
+    fn clone_overlay_reduces_a_large_document_source_on_its_own() {
+        use photocraft_engine::retouch_cmds::{REDUCED_SOURCE_MAX_PIXELS, REDUCED_SOURCE_MAX_SIDE};
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 600, "height": 600})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.session
+            .edit("paint", |doc, a| {
+                doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(DRect::new(0, 0, 600, 600), &[0.0, 1.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.run("cloneSource.set", json!({"source": [300, 300]})).unwrap();
+        app.ui.tool = Tool::CloneStamp;
+        app.session.tools.brush.size = 400.0;
+        app.session.tools.brush.hardness = 0.0;
+        let xf =
+            ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0)), zoom: 1.0, center: [300.0, 300.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        let (image, shapes) = clone_overlay_draw(&mut app, &ctx, &xf, [300.0, 300.0]);
+        assert!(shapes.iter().any(|s| matches!(s, egui::Shape::Mesh(_))), "the overlay is drawn");
+        let cache = app.clone_preview.as_ref().unwrap();
+        let (image, _) = image.expect("the overlay uploads a texture");
+        assert!((image.width() * image.height()) as u64 <= CLONE_OVERLAY_BUDGET, "{:?} within the overlay's budget", image.size);
+        let src = cache.reduced.last().expect("built from the reduced source");
+        let (sw, sh) = (src.buf.rect.width(), src.buf.rect.height());
+        assert!(u64::from(sw) * u64::from(sh) <= REDUCED_SOURCE_MAX_PIXELS && sw <= REDUCED_SOURCE_MAX_SIDE, "{sw}x{sh} within the source's budget");
+        assert!(src.k > 1 && src.k * sw >= 600, "its own reduction covers the document: k {}", src.k);
+        let centre = image.pixels[(image.height() / 2) * image.width() + image.width() / 2];
+        assert!(centre.g() > 250 && centre.a() > 200, "the source's green under the tip's centre: {centre:?}");
     }
 
     #[test]
