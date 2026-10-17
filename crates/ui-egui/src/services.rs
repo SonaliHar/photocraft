@@ -48,12 +48,18 @@ pub type OwnedCurrentXcfOpenFn = Box<
 /// Explicit accounted native output. Preparation, source protection and the
 /// atomic writer use the caller's same control and the snapshot's actual quota.
 /// This capability does not complete Session save bookkeeping itself.
-pub type AccountedNativeSaveFn = Box<
-    dyn FnMut(&DocumentSnapshot, &str, &WriteProtection, &photocraft_raster::backing::ReadControl<'_>) -> Result<(), String>,
->;
+pub type AccountedNativeSaveFn = Box<dyn FnMut(&DocumentSnapshot, &str, &WriteProtection, &photocraft_raster::backing::ReadControl<'_>) -> Result<(), String>>;
+
+/// Explicit browser selected-byte capability; no filesystem locator authority.
+pub type OwnedXcfBytesPickerFn = crate::owned_xcf_bytes::PickerFn;
+
+/// Explicit browser native archive selection; never a filesystem grant.
+pub type OwnedNativeBytesPickerFn = crate::owned_xcf_bytes::PickerFn;
 
 #[cfg(test)]
 #[path = "services_accounted_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod accounted_tests;
 
 /// Shared paid all-open exclusions; the engine owns the one implementation.
@@ -78,11 +84,11 @@ mod tests {
         let mut app = app(Services {
             native_save: Some(Box::new(move |snapshot, path, _| {
                 assert_eq!(path, "own.pcraft");
-                assert_eq!(snapshot.size, photocraft_doc::Size::new(2,2));
+                assert_eq!(snapshot.size, photocraft_doc::Size::new(2, 2));
                 *observed.borrow_mut() += 1;
                 Ok(NativeSaveResult { warnings: vec!["Own retained warning".into()] })
             })),
-            export: Some(Box::new(|_,_,_| Err("whole-output exporter must not run".into()))),
+            export: Some(Box::new(|_, _, _| Err("whole-output exporter must not run".into()))),
             ..Default::default()
         });
         let before = app.session.active().unwrap().doc.clone();
@@ -99,22 +105,26 @@ mod tests {
 
     #[test]
     fn native_failure_keeps_document_path_and_saved_revision() {
-        let mut app = app(Services { native_save: Some(Box::new(|_,_,_| Err("own destination refused".into()))), ..Default::default() });
+        let mut app = app(Services { native_save: Some(Box::new(|_, _, _| Err("own destination refused".into()))), ..Default::default() });
         let active = app.session.active().unwrap();
         let (snapshot, path, saved) = (active.doc.clone(), active.path.clone(), active.saved_revision);
         assert_eq!(app.save_to("failed.pcraft".into(), None).unwrap_err(), "own destination refused");
         let active = app.session.active().unwrap();
         assert!(active.doc.shares_state(&snapshot));
-        assert_eq!((active.path.clone(),active.saved_revision), (path,saved));
+        assert_eq!((active.path.clone(), active.saved_revision), (path, saved));
     }
 
     #[test]
     fn native_service_receives_exclusions_from_other_open_documents() {
-        let mut app = app(Services { native_save: Some(Box::new(|_,_,protection| {
-            assert!(protection.sources.iter().any(|path| path == "other-source.xcf"));
-            Err("own alias refusal".into())
-        })), ..Default::default() });
-        app.session.active_mut().unwrap().source = Some(photocraft_engine::SourceIdentity::new("Other", Some("other-source.xcf".into()), photocraft_io::ImportOrigin::xcf()));
+        let mut app = app(Services {
+            native_save: Some(Box::new(|_, _, protection| {
+                assert!(protection.sources.iter().any(|path| path == "other-source.xcf"));
+                Err("own alias refusal".into())
+            })),
+            ..Default::default()
+        });
+        app.session.active_mut().unwrap().source =
+            Some(photocraft_engine::SourceIdentity::new("Other", Some("other-source.xcf".into()), photocraft_io::ImportOrigin::xcf()));
         app.session.execute("file.new", serde_json::json!({"width":2,"height":2})).unwrap();
         assert_eq!(app.save_to("own-alias.pcraft".into(), None).unwrap_err(), "own alias refusal");
         assert!(app.session.active().unwrap().path.is_none());
@@ -157,15 +167,10 @@ mod tests {
             })),
             ..Default::default()
         });
-        app.session.active_mut().unwrap().source = Some(photocraft_engine::SourceIdentity::new("Other", Some("other-source.xcf".into()), photocraft_io::ImportOrigin::xcf()));
+        app.session.active_mut().unwrap().source =
+            Some(photocraft_engine::SourceIdentity::new("Other", Some("other-source.xcf".into()), photocraft_io::ImportOrigin::xcf()));
         app.session.execute("file.new", serde_json::json!({"width":2,"height":2})).unwrap();
         assert_eq!(app.write_document("own.png".into(), &crate::ExportSettings::default(), false).unwrap_err(), "final alias refusal");
         assert!(app.session.active().unwrap().path.is_none());
     }
 }
-
-/// Explicit browser selected-byte capability; no filesystem locator authority.
-pub type OwnedXcfBytesPickerFn = crate::owned_xcf_bytes::PickerFn;
-
-/// Explicit browser native archive selection; never a filesystem grant.
-pub type OwnedNativeBytesPickerFn = crate::owned_xcf_bytes::PickerFn;

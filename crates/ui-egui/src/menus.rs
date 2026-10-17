@@ -219,11 +219,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             if params.get("nativeProfilePolicy").is_some() {
                 return crate::owned_native_open::invoke(app, &params);
             }
-            if let Some(path) = params.get("path").and_then(Value::as_str) {
-                open_path(app, path)
-            } else {
-                app.open_dialog_file()
-            }
+            if let Some(path) = params.get("path").and_then(Value::as_str) { open_path(app, path) } else { app.open_dialog_file() }
         }
         "file.import.videoFramesToLayers" if params.get("path").and_then(Value::as_str).is_none() => {
             app.ask_folder(|app, path| app.run("file.import.videoFramesToLayers", json!({"path": path})).map_err(|e| e.to_string()))
@@ -289,15 +285,20 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         }
         "file.saveAs" => {
             if let Some(format) = params.get("format") {
-                if format.as_str() != Some("pcraft") { return Err("unsupported Save As format".into()); }
+                if format.as_str() != Some("pcraft") {
+                    return Err("unsupported Save As format".into());
+                }
                 if params.as_object().is_none_or(|fields| fields.len() > 2 || fields.keys().any(|key| !matches!(key.as_str(), "path" | "format")))
-                    || params.get("path").is_some_and(|path| !path.is_string()) { return Err("invalid native Save As parameters".into()); }
+                    || params.get("path").is_some_and(|path| !path.is_string())
+                {
+                    return Err("invalid native Save As parameters".into());
+                }
                 app.save_native_as(params.get("path").and_then(Value::as_str).map(str::to_string))
             } else {
                 let tga_bits = crate::targa_options_ui::bits_param(&params, id)?;
                 app.save_as_with(params.get("path").and_then(Value::as_str).map(str::to_string), tga_bits)
             }
-        },
+        }
         "view.zoomIn" | "view.zoomOut" | "view.fitOnScreen" | "view.actualPixels" => app.run(id, params),
         "window.newWindowForDocument" => {
             let doc = app.session.active_index().ok_or("no document")?;
@@ -381,7 +382,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             let layer = app.session.active().and_then(|d| d.active_layer).ok_or("no active layer")?;
             if l == "layer.exportAs" {
                 // Several layers (artboards, say) selected: one file each (#3629).
-                let layers = app.session.active().map(|d| d.selected_layers()).transpose().map_err(|error|error.to_string())?.unwrap_or_default();
+                let layers = app.session.active().map(|d| d.selected_layers()).transpose().map_err(|error| error.to_string())?.unwrap_or_default();
                 if layers.len() > 1 {
                     return Ok(json!({"dialog": crate::export_dialog::open_layers(app, &layers)?}));
                 }
@@ -587,7 +588,9 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         sz if crate::sizing::is_sizing(sz) && params.as_object().is_none_or(|o| o.is_empty()) => {
             Ok(json!({"dialog": crate::sizing::open(app, sz).ok_or("no document")?}))
         }
-        "view.newGuide" if params.as_object().is_none_or(|o| o.is_empty()) => Ok(json!({"dialog": crate::guide_dialog::open(app).ok_or("Finish pending edits before adding a guide")?})),
+        "view.newGuide" if params.as_object().is_none_or(|o| o.is_empty()) => {
+            Ok(json!({"dialog": crate::guide_dialog::open(app).ok_or("Finish pending edits before adding a guide")?}))
+        }
         fl if crate::filter_dialog::has_dialog(fl) && params.as_object().is_none_or(|o| o.is_empty()) => {
             Ok(json!({"dialog": crate::filter_dialog::open(app, fl)}))
         }
@@ -661,9 +664,11 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         _ => {
             let params = if let Some(target) = crate::gray_clipboard::capture(app, id, &params)? {
                 crate::gray_clipboard::request(app, &target, params)?
-            } else { params };
+            } else {
+                params
+            };
             app.run(id, params)
-        },
+        }
     }
 }
 
@@ -2113,7 +2118,10 @@ mod open_recent_tests {
         };
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
         let path = std::env::temp_dir().join("photocraft_recent_test.pcraft");
-        std::fs::write(&path, b"x").unwrap();
+        let document =
+            photocraft_doc::Document::with_background("Recent native", Size::new(4, 4), ColorMode::Rgb, SampleType::U8, photocraft_doc::Color::WHITE);
+        let native = photocraft_format::save_to_bytes(&document, &Default::default()).unwrap();
+        std::fs::write(&path, &native).unwrap();
         let p = path.to_string_lossy().to_string();
         let ctx = egui::Context::default();
         invoke(&mut app, &ctx, "file.open", json!({ "path": p })).unwrap();
@@ -2121,7 +2129,8 @@ mod open_recent_tests {
         // Re-open via the recent entry.
         invoke(&mut app, &ctx, "file.openRecent.0", json!({})).unwrap();
         assert_eq!(app.session.documents().len(), 2);
-        let _ = std::fs::remove_file(&path);
+        drop(app); // Release native archive readers before mandatory Windows cleanup.
+        std::fs::remove_file(&path).unwrap();
     }
 }
 
@@ -2250,7 +2259,7 @@ mod window_documents_tests {
         let mut app = app(1);
         let before = crate::native_menu::state_hash(&app, None);
         if let Some(d) = app.session.active_mut() {
-            d.saved_to("/tmp/Layers".into());
+            assert!(d.saved_to("/tmp/Layers".into()).is_ok());
         }
         assert_ne!(crate::native_menu::state_hash(&app, None), before, "a rename updates the native menu");
         let de = crate::i18n::Lang::from_code("de").unwrap();

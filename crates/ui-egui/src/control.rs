@@ -97,7 +97,8 @@ impl ControlRequest {
         params: Value,
         id: Value,
         limit: usize,
-    ) -> (Self, std::sync::mpsc::Receiver<ControlResponse>, std::sync::mpsc::Receiver<photocraft_engine::accounted_filter_inspect::OwnedFilterInspectWire>) {
+    ) -> (Self, std::sync::mpsc::Receiver<ControlResponse>, std::sync::mpsc::Receiver<photocraft_engine::accounted_filter_inspect::OwnedFilterInspectWire>)
+    {
         let (mut request, response) = Self::new(method, params);
         let (reply, wire) = std::sync::mpsc::channel();
         request.retained_query = Some(crate::owned_filter_inspect::RetainedQuery { id, limit, reply });
@@ -155,7 +156,7 @@ pub enum Outcome {
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 38] = [
+pub const UI_SET_FIELDS: [&str; 46] = [
     "tool",
     "strokeTrace",
     "panels",
@@ -302,33 +303,50 @@ fn color_rotate_draft_field(p: &Value) -> std::result::Result<Option<Option<crat
 
 /// Whole-value view replacement, bounded before cloning/deserializing payloads.
 fn filter_stack_page_field(p: &Value) -> std::result::Result<Option<Option<crate::state::XcfFilterStackPage>>, String> {
-    layer_page_field(p,"xcfFilterStackPage",960)
+    layer_page_field(p, "xcfFilterStackPage", 960)
 }
-fn layer_page_field(p: &Value,key: &str,max_offset: u64) -> std::result::Result<Option<Option<crate::state::XcfFilterStackPage>>, String> {
+fn layer_page_field(p: &Value, key: &str, max_offset: u64) -> std::result::Result<Option<Option<crate::state::XcfFilterStackPage>>, String> {
     let Some(value) = p.get(key) else { return Ok(None) };
-    if value.is_null() { return Ok(Some(None)); }
-    let object = value.as_object().ok_or_else(||format!("{key} must be an object or null"))?;
+    if value.is_null() {
+        return Ok(Some(None));
+    }
+    let object = value.as_object().ok_or_else(|| format!("{key} must be an object or null"))?;
     if object.len() != 4 || object.keys().any(|key| !matches!(key.as_str(), "document" | "layer" | "revision" | "offset")) {
         return Err(format!("{key} requires exactly document, layer, revision and offset"));
     }
     let identity = |key: &str| -> Result<u64, String> {
         let value = object.get(key).ok_or_else(|| format!("missing {key}"))?;
         let number = if let Some(text) = value.as_str() {
-            if text.is_empty() || text.len()>20 || (text.len()>1 && text.starts_with('0')) || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+            if text.is_empty() || text.len() > 20 || (text.len() > 1 && text.starts_with('0')) || !text.bytes().all(|byte| byte.is_ascii_digit()) {
                 return Err(format!("{key} must be a canonical decimal U64"));
             }
             text.parse::<u64>().map_err(|_| format!("{key} exceeds U64"))?
-        } else { value.as_u64().ok_or_else(|| format!("{key} must be an exact U64 or decimal string"))? };
-        if number==0 && key!="revision" { return Err(format!("{key} must be nonzero")); }
+        } else {
+            value.as_u64().ok_or_else(|| format!("{key} must be an exact U64 or decimal string"))?
+        };
+        if number == 0 && key != "revision" {
+            return Err(format!("{key} must be nonzero"));
+        }
         Ok(number)
     };
-    let offset=object.get("offset").and_then(Value::as_u64).filter(|value| *value<=max_offset && *value%64==0).ok_or_else(||format!("{key} offset must be a multiple of 64 from 0 through {max_offset}"))?;
-    Ok(Some(Some(crate::state::XcfFilterStackPage {document:identity("document")?,layer:identity("layer")?,revision:identity("revision")?,offset:offset as usize})))
+    let offset = object
+        .get("offset")
+        .and_then(Value::as_u64)
+        .filter(|value| *value <= max_offset && *value % 64 == 0)
+        .ok_or_else(|| format!("{key} offset must be a multiple of 64 from 0 through {max_offset}"))?;
+    Ok(Some(Some(crate::state::XcfFilterStackPage {
+        document: identity("document")?,
+        layer: identity("layer")?,
+        revision: identity("revision")?,
+        offset: offset as usize,
+    })))
 }
 
 fn item_set_draft_field(p: &Value) -> std::result::Result<Option<Option<crate::state::XcfItemSetDraft>>, String> {
     let Some(value) = p.get("xcfItemSetDraft") else { return Ok(None) };
-    if value.is_null() { return Ok(Some(None)); }
+    if value.is_null() {
+        return Ok(Some(None));
+    }
     let object = value.as_object().ok_or("xcfItemSetDraft must be an object or null")?;
     if object.len() != 5 || object.keys().any(|key| !matches!(key.as_str(), "document" | "layer" | "revision" | "setId" | "name")) {
         return Err("xcfItemSetDraft requires document, layer, revision, setId and name".into());
@@ -343,7 +361,9 @@ fn item_set_draft_field(p: &Value) -> std::result::Result<Option<Option<crate::s
         } else {
             value.as_u64().ok_or_else(|| format!("{key} must be an exact U64 or canonical decimal string"))?
         };
-        if number == 0 && key != "revision" { return Err(format!("{key} must be nonzero")); }
+        if number == 0 && key != "revision" {
+            return Err(format!("{key} must be nonzero"));
+        }
         Ok(number)
     };
     let name = object.get("name").and_then(Value::as_str).ok_or("name must be a string")?;
@@ -354,7 +374,11 @@ fn item_set_draft_field(p: &Value) -> std::result::Result<Option<Option<crate::s
     owned.try_reserve_exact(name.len()).map_err(|_| "saved-set draft allocation failed")?;
     owned.push_str(name);
     Ok(Some(Some(crate::state::XcfItemSetDraft {
-        document: identity("document")?, layer: identity("layer")?, revision: identity("revision")?, set_id: identity("setId")?, name: owned,
+        document: identity("document")?,
+        layer: identity("layer")?,
+        revision: identity("revision")?,
+        set_id: identity("setId")?,
+        name: owned,
     })))
 }
 
@@ -660,7 +684,8 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
         }
         "engine.execute" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
-            if req.method == "engine.execute" && matches!(id, "xcf.inspect" | "xcf.filter.inspect")
+            if req.method == "engine.execute"
+                && matches!(id, "xcf.inspect" | "xcf.filter.inspect")
                 && let Some(outcome) = crate::owned_filter_inspect::handle(app, req, id)
             {
                 return outcome;
@@ -670,17 +695,19 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
             }
             // Programmatic host form: borrow the exact small request BEFORE
             // app.run, script hooks, job normalization or arbitrary JSON clones.
-            if req.method == "engine.execute" && id == "select.loadSelection"
-                && p.get("params").and_then(|value| value.get("originalPath")).is_some() {
+            if req.method == "engine.execute" && id == "select.loadSelection" && p.get("params").and_then(|value| value.get("originalPath")).is_some() {
                 let wait = match p.get("wait") {
                     None => true,
                     Some(Value::Bool(value)) => *value,
                     _ => return err("select.loadSelection.originalPath: wait must be a boolean"),
                 };
-                if !wait { return err("select.loadSelection.originalPath: stored original Load requires wait=true"); }
+                if !wait {
+                    return err("select.loadSelection.originalPath: stored original Load requires wait=true");
+                }
                 let Some(request) = p.get("params") else { return err("stored original Load params required") };
                 if let Some(authorize) = app.services.automation_command.as_ref()
-                    && let Err(error) = authorize(id, request) {
+                    && let Err(error) = authorize(id, request)
+                {
                     return err(error);
                 }
                 let Some(service) = app.services.automation_stored_selection.as_mut() else {
@@ -691,7 +718,10 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 // this live Session. The platform facade preflights it and the
                 // sole registered final execute checks it again normally.
                 let result = service(&mut app.session, request, wait, &context);
-                if result.is_ok() { app.sync_views(); ctx.request_repaint(); }
+                if result.is_ok() {
+                    app.sync_views();
+                    ctx.request_repaint();
+                }
                 // No preference restore or other fallible work after commit.
                 return wrap(result);
             }
@@ -792,6 +822,14 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     },
                     Some(_) => return Err("strokeTrace must be true, false, \"stderr\" or \"off\"".into()),
                 };
+                let underline_draft = underline_draft_field(p)?;
+                let color_rotate_draft = color_rotate_draft_field(p)?;
+                let filter_stack_page = filter_stack_page_field(p)?;
+                let item_set_page = layer_page_field(p, "xcfItemSetPage", 9984)?;
+                let source_page = crate::control_xcf_pages::source(p)?;
+                let resource_page = crate::control_xcf_pages::resource(p)?;
+                let composition_draft = crate::control_xcf_pages::composition(p)?;
+                let item_set_draft = item_set_draft_field(p)?;
                 // The Eyedropper's options bar (#1649): Sample Size, Sample, Show Sampling Ring.
                 let eyedropper_size = match p.get("eyedropperSampleSize") {
                     Some(v) => Some(
@@ -954,8 +992,12 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if let Some(page) = item_set_page {
                     app.ui.xcf_item_set_page = page;
                 }
-                if let Some(page) = source_page { app.ui.xcf_source_page_draft = page; }
-                if let Some(page) = resource_page { app.ui.xcf_resource_page_draft = page; }
+                if let Some(page) = source_page {
+                    app.ui.xcf_source_page_draft = page;
+                }
+                if let Some(page) = resource_page {
+                    app.ui.xcf_resource_page_draft = page;
+                }
                 if let Some(draft) = composition_draft {
                     app.ui.xcf_composition_draft = draft;
                     app.ui.xcf_composition_origin = None;
@@ -965,7 +1007,7 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 }
                 if let Some(draft) = underline_draft {
                     app.ui.xcf_underline_draft = draft;
-}
+                }
 
                 if let Some(stroke) = shape_stroke {
                     if let Some(stroke) = stroke {
@@ -1363,10 +1405,8 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 if app.ui.dialogs.last().is_some_and(|d| crate::color_range_ui::owns(&d.fields)) {
                     let down = matches!(ev, ToolEvent::Down { .. });
                     let up = matches!(ev, ToolEvent::Up { .. });
-                    let held = app.ui.dialogs.last().and_then(|d| d.fields.get("__pointerDown")).and_then(Value::as_bool).unwrap_or(false);
-                    if let Some(d) = app.ui.dialogs.last_mut() {
-                        d.fields.insert("__pointerDown".into(), json!(!up && (down || held)));
-                    }
+                    // Pointer-held state is runtime-only and never enters the closed query fields.
+                    let held = crate::color_range_origin::pointer_event(app, down, up);
                     if !up && (down || held) && !space && !secondary && button != "middle" {
                         crate::color_range_ui::pick_top(app, [x, y], mods);
                     }
@@ -1551,7 +1591,9 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                 {
                     match open(path) {
                         Ok(Some((name, doc))) => {
-                            if let Err(error)=app.session.add_document(doc,None) {return err(error.to_string());}
+                            if let Err(error) = app.session.add_document(doc, None) {
+                                return err(error.to_string());
+                            }
                             // Recent files, but no save-back target: the capability writer
                             // replaces files, never directories.
                             app.push_recent(path);
@@ -1605,7 +1647,9 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Result<Value, String
         dialogs.push(json!({"id": SHELL_DIALOG, "kind": kind, "title": crate::workspace_ui::title(kind), "fields": fields}));
     }
     dialogs.extend(crate::discard_ui::inspect(app));
-    let mut result=json!({
+    let session = photocraft_engine::inspect::session(&app.session).map_err(|error| error.to_string())?;
+    let document = app.session.active().map(photocraft_engine::inspect::document).transpose().map_err(|error| error.to_string())?;
+    let mut result = json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
         "toolOptions": app.ui.tool_options,
@@ -1661,26 +1705,32 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Result<Value, String
         "theme": app.ui.theme,
         "status": app.ui.status,
         "statusError": app.ui.status_error,
+        "paintingPending": app.live_begin_worker.active(),
         "notices": app.ui.notices,
         "gpuFallbackNotice": app.ui.gpu_fallback_notice,
         "kysOffer": app.ui.kys_offer,
         "frame": app.frame,
-        "session": photocraft_engine::inspect::session(&app.session),
-        "document": app.session.active().map(photocraft_engine::inspect::document),
+        "session": session,
+        "document": document,
         "perf": {"fps": app.fps, "timings": app.perf, "strokeTrace": app.stroke_trace.last},
         "brush": {"size": app.session.tools.brush.size, "hardness": app.session.tools.brush.hardness, "opacity": app.session.tools.brush.opacity},
         "distort": app.distort.describe(),
         "jobs": crate::jobs_ui::inspect(app),
         "cameraRaw": app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)),
     });
-    let fields=result.as_object_mut().ok_or_else(||"UI inspection object could not be prepared".to_owned())?;
-    fields.insert("xcfSourcePageDraft".into(),crate::control_xcf_pages::source_wire(app.ui.xcf_source_page_draft.as_ref()));
-    fields.insert("xcfResourcePageDraft".into(),crate::control_xcf_pages::resource_wire(app.ui.xcf_resource_page_draft.as_ref()));
-    fields.insert("xcfCompositionDraft".into(),crate::control_xcf_pages::composition_wire(app.ui.xcf_composition_draft.as_ref()));
-    for (key,page) in [("xcfFilterStackPage",app.ui.xcf_filter_stack_page.as_ref()),("xcfItemSetPage",app.ui.xcf_item_set_page.as_ref())] {
-        fields.insert(key.into(),page.map_or(Value::Null,|page|json!({
-            "document":page.document.to_string(),"layer":page.layer.to_string(),"revision":page.revision.to_string(),"offset":page.offset,
-        })));
+    let fields = result.as_object_mut().ok_or_else(|| "UI inspection object could not be prepared".to_owned())?;
+    fields.insert("xcfSourcePageDraft".into(), crate::control_xcf_pages::source_wire(app.ui.xcf_source_page_draft.as_ref()));
+    fields.insert("xcfResourcePageDraft".into(), crate::control_xcf_pages::resource_wire(app.ui.xcf_resource_page_draft.as_ref()));
+    fields.insert("xcfCompositionDraft".into(), crate::control_xcf_pages::composition_wire(app.ui.xcf_composition_draft.as_ref()));
+    for (key, page) in [("xcfFilterStackPage", app.ui.xcf_filter_stack_page.as_ref()), ("xcfItemSetPage", app.ui.xcf_item_set_page.as_ref())] {
+        fields.insert(
+            key.into(),
+            page.map_or(Value::Null, |page| {
+                json!({
+                    "document":page.document.to_string(),"layer":page.layer.to_string(),"revision":page.revision.to_string(),"offset":page.offset,
+                })
+            }),
+        );
     }
     Ok(result)
 }
@@ -1740,16 +1790,19 @@ mod tests {
     fn explicit_native_open_control_uses_only_the_scoped_service() {
         let scoped = std::rc::Rc::new(std::cell::Cell::new(0));
         let seen = scoped.clone();
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services {
-            automation_owned_native_open: Some(Box::new(move |_, _, _| {
-                seen.set(seen.get() + 1);
-                Err("scoped native denial".into())
-            })),
-            owned_native_open: Some(Box::new(|_, _, _| panic!("ambient open must not run"))),
-            automation_read: Some(Box::new(|_| panic!("legacy read must not run"))),
-            automation_open_pcraft: Some(Box::new(|_| panic!("legacy directory open must not run"))),
-            ..Default::default()
-        });
+        let mut app = PhotocraftApp::new(
+            photocraft_engine::Session::new(),
+            crate::Services {
+                automation_owned_native_open: Some(Box::new(move |_, _, _| {
+                    seen.set(seen.get() + 1);
+                    Err("scoped native denial".into())
+                })),
+                owned_native_open: Some(Box::new(|_, _, _| panic!("ambient open must not run"))),
+                automation_read: Some(Box::new(|_| panic!("legacy read must not run"))),
+                automation_open_pcraft: Some(Box::new(|_| panic!("legacy directory open must not run"))),
+                ..Default::default()
+            },
+        );
         let ctx = egui::Context::default();
         let reply = call(&mut app, &ctx, "app.open", json!({"path":"safe/current.pcraft","nativeProfilePolicy":"keepCurrent"}));
         assert_eq!(reply["ok"], false);
@@ -1763,11 +1816,14 @@ mod tests {
     // silently use the ordinary loader or a trusted interactive capability.
     #[test]
     fn explicit_native_open_control_refuses_missing_authority_and_bad_policy() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services {
-            owned_native_open: Some(Box::new(|_, _, _| panic!("ambient open must not run"))),
-            automation_read: Some(Box::new(|_| panic!("legacy read must not run"))),
-            ..Default::default()
-        });
+        let mut app = PhotocraftApp::new(
+            photocraft_engine::Session::new(),
+            crate::Services {
+                owned_native_open: Some(Box::new(|_, _, _| panic!("ambient open must not run"))),
+                automation_read: Some(Box::new(|_| panic!("legacy read must not run"))),
+                ..Default::default()
+            },
+        );
         let ctx = egui::Context::default();
         for policy in [json!("keepCurrent"), json!("convert"), Value::Null, json!(5)] {
             let reply = call(&mut app, &ctx, "app.open", json!({"path":"safe/current.pcraft","nativeProfilePolicy":policy}));
@@ -1782,17 +1838,24 @@ mod tests {
     fn explicit_owned_xcf_control_refusal_never_falls_back() {
         let attempts = std::rc::Rc::new(std::cell::Cell::new(0));
         let seen = attempts.clone();
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services {
-            automation_owned_xcf_open: Some(Box::new(move |_, _, _| {
-                seen.set(seen.get() + 1);
-                Err("closed XCF class refused".into())
-            })),
-            owned_xcf_open: Some(Box::new(|_, _, _| panic!("interactive XCF authority must not run"))),
-            automation_read: Some(Box::new(|_| panic!("resident fallback must not run"))),
-            ..Default::default()
-        });
-        app.session.add_document(photocraft_doc::Document::new("existing", photocraft_geom::Size::new(1, 1),
-            photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8), None).unwrap();
+        let mut app = PhotocraftApp::new(
+            photocraft_engine::Session::new(),
+            crate::Services {
+                automation_owned_xcf_open: Some(Box::new(move |_, _, _| {
+                    seen.set(seen.get() + 1);
+                    Err("closed XCF class refused".into())
+                })),
+                owned_xcf_open: Some(Box::new(|_, _, _| panic!("interactive XCF authority must not run"))),
+                automation_read: Some(Box::new(|_| panic!("resident fallback must not run"))),
+                ..Default::default()
+            },
+        );
+        app.session
+            .add_document(
+                photocraft_doc::Document::new("existing", photocraft_geom::Size::new(1, 1), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8),
+                None,
+            )
+            .unwrap();
         let before = app.session.active().unwrap().doc.clone();
         let reply = call(&mut app, &egui::Context::default(), "app.open", json!({"path":"source.xcf","xcfProfilePolicy":"keepCurrent"}));
         assert_eq!(reply["ok"], false);
@@ -1805,13 +1868,15 @@ mod tests {
     // UNRUN: explicit policies cannot silently disappear into ordinary Open.
     #[test]
     fn explicit_owned_xcf_control_bad_or_conflicting_policy_is_denied() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services {
-            automation_read: Some(Box::new(|_| panic!("ordinary read must not run"))),
-            ..Default::default()
-        });
-        for params in [json!({"path":"source.xcf","xcfProfilePolicy":"convert"}),
+        let mut app = PhotocraftApp::new(
+            photocraft_engine::Session::new(),
+            crate::Services { automation_read: Some(Box::new(|_| panic!("ordinary read must not run"))), ..Default::default() },
+        );
+        for params in [
+            json!({"path":"source.xcf","xcfProfilePolicy":"convert"}),
             json!({"path":"source.xcf","xcfProfilePolicy":null}),
-            json!({"path":"source.xcf","xcfProfilePolicy":"keepCurrent","nativeProfilePolicy":"keepCurrent"})] {
+            json!({"path":"source.xcf","xcfProfilePolicy":"keepCurrent","nativeProfilePolicy":"keepCurrent"}),
+        ] {
             assert_eq!(call(&mut app, &egui::Context::default(), "app.open", params)["ok"], false);
             assert!(app.session.active().is_none());
         }
@@ -1846,9 +1911,7 @@ mod tests {
         let dng = spec.build();
         for finish in ["commit", "cancel"] {
             let services = crate::Services {
-                import: Some(Box::new(|name, bytes, depth| {
-                    photocraft_io::import_with_svg_group_depth(name, bytes, depth).map_err(|e| e.to_string())
-                })),
+                import: Some(Box::new(|name, bytes, depth| photocraft_io::import_with_svg_group_depth(name, bytes, depth).map_err(|e| e.to_string()))),
                 ..Default::default()
             };
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
@@ -2920,7 +2983,8 @@ mod tests {
                     warnings: vec!["Adjustment layer flattened".to_string()],
                     origin: Default::default(),
                     assessment: None,
-                    source_read_only: false, preview_only: false,
+                    source_read_only: false,
+                    preview_only: false,
                 })
             })),
             export: Some(Box::new(|_d: &Document, _p: &str, _s: &crate::ExportSettings| Ok((b"out".to_vec(), vec!["Layers were flattened".to_string()])))),
@@ -2985,7 +3049,14 @@ mod tests {
                 }
             })),
             import: Some(Box::new(|name: &str, _b: &[u8], _depth: usize| {
-                Ok(photocraft_io::ImportResult { document: Document::new(name, photocraft_doc::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8), warnings: Vec::new(), origin: Default::default(), assessment: None, source_read_only: false, preview_only: false })
+                Ok(photocraft_io::ImportResult {
+                    document: Document::new(name, photocraft_doc::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8),
+                    warnings: Vec::new(),
+                    origin: Default::default(),
+                    assessment: None,
+                    source_read_only: false,
+                    preview_only: false,
+                })
             })),
             automation_read: Some(Box::new(|path: &str| {
                 if path == "zipped.pcraft" {
@@ -3034,15 +3105,19 @@ mod tests {
         app.background_jobs = true;
         app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
         // A "Save Document" binding that would leave a trace: automation saves never fire it.
-        app.session.edit_prefs(|prefs| {
-            prefs.script_events.enabled = true;
-            prefs.script_events.bindings = vec![ScriptBinding {
-                event: "saveDocument".into(),
-                script: None,
-                steps: Some(json!([["layer.new.layer", {"name": "From the binding"}]])),
-                name: "Binding".into(),
-            }];
-        });
+        assert!(
+            app.session
+                .edit_prefs(|prefs| {
+                    prefs.script_events.enabled = true;
+                    prefs.script_events.bindings = vec![ScriptBinding {
+                        event: "saveDocument".into(),
+                        script: None,
+                        steps: Some(json!([["layer.new.layer", {"name": "From the binding"}]])),
+                        name: "Binding".into(),
+                    }];
+                })
+                .is_ok()
+        );
         let ctx = egui::Context::default();
         let (tx, rx) = std::sync::mpsc::channel();
         let app = app.with_control(rx);
@@ -3070,10 +3145,16 @@ mod tests {
         assert_eq!(r["result"], json!({"path": "out.psd", "warnings": ["Layers were flattened"]}), "{r}");
 
         // An interactive save (File › Save's worker) still fires the binding.
-        let save = std::sync::Arc::new(|_doc: &photocraft_doc::Document, path: &str, _settings: &crate::ExportSettings, _ctl: &crate::jobs_ui::SaveCtl, _protection: &photocraft_engine::WriteProtection| {
-            let _ = path;
-            Ok(Vec::new())
-        }) as crate::SaveFileFn;
+        let save = std::sync::Arc::new(
+            |_doc: &photocraft_doc::Document,
+             path: &str,
+             _settings: &crate::ExportSettings,
+             _ctl: &crate::jobs_ui::SaveCtl,
+             _protection: &photocraft_engine::WriteProtection| {
+                let _ = path;
+                Ok(Vec::new())
+            },
+        ) as crate::SaveFileFn;
         crate::jobs_ui::start_save(&mut app, "user.psd".into(), crate::ExportSettings::default(), false, save, false).unwrap();
         for _ in 0..100 {
             crate::jobs_ui::tick(&mut app, &ctx);
@@ -3213,7 +3294,7 @@ mod tests {
         let output = written.clone();
         app.services.export =
             Some(Box::new(|doc, _, _| photocraft_engine::smart_cmds::encode_source(doc).map(|bytes| (bytes, Vec::new())).map_err(|e| e.to_string())));
-        app.services.automation_write = Some(Box::new(move |path, bytes| {
+        app.services.automation_write = Some(Box::new(move |path, bytes, _| {
             output.borrow_mut().push((path.to_string(), bytes.to_vec()));
             Ok(())
         }));
@@ -3230,7 +3311,6 @@ mod tests {
     #[test]
     fn control_refuses_linked_smart_objects_in_commands_and_actions_but_local_editing_still_works() {
         use photocraft_doc::{LayerContent, SmartSource};
-        use std::sync::Arc;
 
         let (mut app, ctx, smart) = smart_control_app();
         let path = std::env::temp_dir().join(format!("pc-control-smart-linked-{}.pcraft", std::process::id()));
@@ -3263,7 +3343,7 @@ mod tests {
             assert_eq!(r["result"]["ran"], 0, "{r}");
             assert_eq!(r["result"]["failed"]["id"], command, "{r}");
             assert_eq!(app.session.documents().len(), 1);
-            assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &before), "a refused operation must not edit the document");
+            assert!(app.session.active().unwrap().doc.shares_state(&before), "a refused operation must not edit the document");
             assert_eq!(app.session.active().unwrap().active_layer, active);
             assert!(app.session.authorize.is_none(), "a refused request must restore the local session");
         }
@@ -3421,6 +3501,7 @@ mod tests {
         let r = call(&mut app, &ctx, "ui.pointer", valid);
         assert_eq!(r["ok"], true, "{r}");
         assert_eq!(app.ui.tool, Tool::Brush);
+        crate::canvas::wait_for_test_live_stroke(&mut app);
         assert!(app.session.active().unwrap().revision > before, "the stroke painted");
         for button in ["left", "middle", "right", "secondary"] {
             let r = call(
@@ -3549,7 +3630,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod item_set_draft_tests {
     use super::*;
@@ -3572,7 +3652,10 @@ mod item_set_draft_tests {
     fn rejected_draft_does_not_apply_other_ui_fields() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let before = app.ui.clone();
-        let (request, _) = ControlRequest::new("ui.set", json!({"gradientClassic":!before.gradient_classic,"xcfItemSetDraft":{"document":"1","layer":"2","revision":"0","setId":"03","name":"Own set"}}));
+        let (request, _) = ControlRequest::new(
+            "ui.set",
+            json!({"gradientClassic":!before.tool_options.gradient_classic,"xcfItemSetDraft":{"document":"1","layer":"2","revision":"0","setId":"03","name":"Own set"}}),
+        );
         let Outcome::Done(value) = handle(&mut app, &egui::Context::default(), &request) else { panic!("expected immediate refusal") };
         assert_eq!(value["ok"], false);
         assert_eq!(app.ui, before);
@@ -3594,12 +3677,13 @@ mod filter_stack_page_tests {
         assert_eq!(crate::control_xcf_pages::composition_wire(app.ui.xcf_composition_draft.as_ref()), draft);
         assert!(app.ui.xcf_composition_origin.is_none());
         assert!(app.session.documents().is_empty());
-        for (key, value) in [("document", json!("01")), ("revision", json!(0)),
-            ("blendSpace", json!(3)), ("operator", json!(0)), ("sourceMode", json!(2147483648u64))] {
+        for (key, value) in
+            [("document", json!("01")), ("revision", json!(0)), ("blendSpace", json!(3)), ("operator", json!(0)), ("sourceMode", json!(2147483648u64))]
+        {
             let before = app.ui.clone();
             let mut invalid = draft.clone();
             invalid[key] = value;
-            let (request, _) = ControlRequest::new("ui.set", json!({"gradientClassic":!before.gradient_classic,"xcfCompositionDraft":invalid}));
+            let (request, _) = ControlRequest::new("ui.set", json!({"gradientClassic":!before.tool_options.gradient_classic,"xcfCompositionDraft":invalid}));
             let Outcome::Done(result) = handle(&mut app, &ctx, &request) else { panic!("expected refusal") };
             assert_eq!(result["ok"], false);
             assert_eq!(app.ui, before);
@@ -3624,7 +3708,7 @@ mod filter_stack_page_tests {
         ] {
             let before = app.ui.clone();
             let mut params = bad.as_object().unwrap().clone();
-            params.insert("gradientClassic".into(), json!(!before.gradient_classic));
+            params.insert("gradientClassic".into(), json!(!before.tool_options.gradient_classic));
             let (request, _) = ControlRequest::new("ui.set", Value::Object(params));
             let Outcome::Done(result) = handle(&mut app, &ctx, &request) else { panic!("expected a cursor refusal") };
             assert_eq!(result["ok"], false);
@@ -3633,24 +3717,31 @@ mod filter_stack_page_tests {
     }
     #[test]
     fn exact_cursor_round_trip_and_malformed_mixed_request_is_atomic() {
-        let mut app=PhotocraftApp::new(photocraft_engine::Session::new(),crate::Services::default());
-        let ctx=egui::Context::default();
-        let page=json!({"document":"18446744073709551615","layer":"9007199254740993","revision":"0","offset":960});
-        let (request,_)=ControlRequest::new("ui.set",json!({"xcfFilterStackPage":page}));
-        let Outcome::Done(result)=handle(&mut app,&ctx,&request) else {panic!("expected immediate view update")};
-        assert_eq!(result["ok"],true);
-        let stored=app.ui.xcf_filter_stack_page.as_ref().unwrap();
-        assert_eq!(stored.document,u64::MAX);assert_eq!(stored.layer,9_007_199_254_740_993);assert_eq!(stored.offset,960);
-        for offset in [json!(63),json!(1024),json!(-64),json!(64.5),json!("64")] {
-            let before=app.ui.clone();
-            let (request,_)=ControlRequest::new("ui.set",json!({"gradientClassic":!before.gradient_classic,"xcfFilterStackPage":{"document":"1","layer":"2","revision":"0","offset":offset}}));
-            let Outcome::Done(result)=handle(&mut app,&ctx,&request) else {panic!("expected immediate refusal")};
-            assert_eq!(result["ok"],false);assert_eq!(app.ui,before);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let page = json!({"document":"18446744073709551615","layer":"9007199254740993","revision":"0","offset":960});
+        let (request, _) = ControlRequest::new("ui.set", json!({"xcfFilterStackPage":page}));
+        let Outcome::Done(result) = handle(&mut app, &ctx, &request) else { panic!("expected immediate view update") };
+        assert_eq!(result["ok"], true);
+        let stored = app.ui.xcf_filter_stack_page.as_ref().unwrap();
+        assert_eq!(stored.document, u64::MAX);
+        assert_eq!(stored.layer, 9_007_199_254_740_993);
+        assert_eq!(stored.offset, 960);
+        for offset in [json!(63), json!(1024), json!(-64), json!(64.5), json!("64")] {
+            let before = app.ui.clone();
+            let (request, _) = ControlRequest::new(
+                "ui.set",
+                json!({"gradientClassic":!before.tool_options.gradient_classic,"xcfFilterStackPage":{"document":"1","layer":"2","revision":"0","offset":offset}}),
+            );
+            let Outcome::Done(result) = handle(&mut app, &ctx, &request) else { panic!("expected immediate refusal") };
+            assert_eq!(result["ok"], false);
+            assert_eq!(app.ui, before);
         }
         assert!(filter_stack_page_field(&json!({"xcfFilterStackPage":{"document":"01","layer":"2","revision":"0","offset":0}})).is_err());
-        let (request,_)=ControlRequest::new("ui.set",json!({"xcfFilterStackPage":null}));
-        let Outcome::Done(result)=handle(&mut app,&ctx,&request) else {panic!("expected immediate view clear")};
-        assert_eq!(result["ok"],true);assert!(app.ui.xcf_filter_stack_page.is_none());
+        let (request, _) = ControlRequest::new("ui.set", json!({"xcfFilterStackPage":null}));
+        let Outcome::Done(result) = handle(&mut app, &ctx, &request) else { panic!("expected immediate view clear") };
+        assert_eq!(result["ok"], true);
+        assert!(app.ui.xcf_filter_stack_page.is_none());
     }
 }
 

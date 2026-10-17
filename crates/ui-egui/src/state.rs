@@ -970,6 +970,9 @@ pub enum MadeLayer {
 /// In-progress inline type editing (Type tool). Offsets are character indices.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TextEdit {
+    /// Runtime origin of this editor; restored UI state cannot end a history group.
+    #[serde(skip)]
+    pub document: Option<photocraft_doc::DocId>,
     pub layer: u64,
     pub caret: usize,
     pub anchor: usize,
@@ -1234,6 +1237,43 @@ pub struct UiState {
     /// Clock time in seconds when type cursor blink was last reset (e.g. on keypress/caret move).
     #[serde(skip)]
     pub caret_blink_time: f64,
+    /// Imported GIMP text Properties draft, separate from canonical content/history.
+    #[serde(default)]
+    pub xcf_text_draft: Option<XcfTextDraft>,
+    #[serde(default)]
+    pub xcf_text_name_draft: Option<XcfTextNameDraft>,
+    #[serde(default)]
+    pub xcf_channel_name_draft: Option<XcfChannelNameDraft>,
+    #[serde(default)]
+    pub xcf_indexed_palette_draft: Option<XcfIndexedPaletteDraft>,
+    #[serde(default)]
+    pub xcf_path_name_draft: Option<XcfPathNameDraft>,
+    #[serde(default)]
+    pub xcf_link_geometry_draft: Option<XcfLinkedGeometryDraft>,
+    #[serde(default)]
+    pub xcf_graph_page_draft: Option<XcfGraphPageDraft>,
+    #[serde(default)]
+    pub xcf_source_page_draft: Option<XcfSourcePageDraft>,
+    #[serde(default)]
+    pub xcf_resource_page_draft: Option<crate::xcf_notices::ResourcePageDraft>,
+    #[serde(default)]
+    pub xcf_composition_draft: Option<crate::xcf_panels::composition::CompositionDraft>,
+    #[serde(skip)]
+    pub(crate) xcf_composition_origin: Option<crate::xcf_panels::composition::CompositionOrigin>,
+    #[serde(default)]
+    pub xcf_filter_stack_page: Option<XcfFilterStackPage>,
+    #[serde(default)]
+    pub xcf_item_set_page: Option<XcfItemSetPage>,
+    #[serde(default)]
+    pub xcf_mask_geometry_draft: Option<XcfMaskGeometryDraft>,
+    /// Imported underline selection draft; only the engine can apply it.
+    #[serde(default)]
+    pub xcf_underline_draft: Option<XcfUnderlineDraft>,
+    /// View-only paired destination angles; never canonical filter authority.
+    #[serde(default)]
+    pub xcf_color_rotate_draft: Option<XcfColorRotateDraft>,
+    #[serde(default)]
+    pub xcf_item_set_draft: Option<XcfItemSetDraft>,
     /// Tool to restore when an inline type edit session commits or cancels (e.g. Move tool, #1132).
     #[serde(skip)]
     pub text_edit_return_tool: Option<Tool>,
@@ -1514,6 +1554,23 @@ impl Default for UiState {
             recent_files: Vec::new(),
             text_edit: None,
             caret_blink_time: 0.0,
+            xcf_text_draft: None,
+            xcf_text_name_draft: None,
+            xcf_channel_name_draft: None,
+            xcf_indexed_palette_draft: None,
+            xcf_path_name_draft: None,
+            xcf_link_geometry_draft: None,
+            xcf_graph_page_draft: None,
+            xcf_source_page_draft: None,
+            xcf_resource_page_draft: None,
+            xcf_composition_draft: None,
+            xcf_composition_origin: None,
+            xcf_filter_stack_page: None,
+            xcf_item_set_page: None,
+            xcf_mask_geometry_draft: None,
+            xcf_underline_draft: None,
+            xcf_color_rotate_draft: None,
+            xcf_item_set_draft: None,
             text_edit_return_tool: None,
             type_transform: None,
             type_transform_pivot: None,

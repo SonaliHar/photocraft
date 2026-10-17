@@ -785,7 +785,7 @@ mod title_tests {
         let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.custom_titlebar = custom_titlebar;
         // The preference that makes the shell launch without its own title bar.
-        app.session.edit_prefs(|p| p.interface.system_title_bar = !custom_titlebar);
+        assert!(app.session.edit_prefs(|p| p.interface.system_title_bar = !custom_titlebar).is_ok());
         app
     }
 
@@ -797,10 +797,12 @@ mod title_tests {
     }
 
     fn open_named(app: &mut crate::PhotocraftApp, name: &str) {
-        app.session.add_document(
-            photocraft_doc::Document::new(name, photocraft_doc::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8),
-            None,
-        ).unwrap();
+        app.session
+            .add_document(
+                photocraft_doc::Document::new(name, photocraft_doc::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8),
+                None,
+            )
+            .unwrap();
     }
 
     #[test]
@@ -2451,9 +2453,10 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 && let Some(at) = drawn.iter().position(|(id, _)| id.0 == from)
                 && let Some(&(next, _)) = if up { at.checked_sub(1).and_then(|i| drawn.get(i)) } else { drawn.get(at + 1) }
                 && let Some(l) = doc.layer(next).filter(|l| !crate::doc_props_ui::is_background(&doc, l))
-                && let Some(done) = crate::layer_row_ui::start_rename(ui.ctx(), next.0, &l.name)
             {
-                actions.push(done);
+                // Bind the next editor only after the previous checked rename
+                // has published; the new revision and snapshot then belong to it.
+                actions.push(("ui.continueLayerRename".into(), json!({"layer":next.0,"name":l.name})));
             }
             // ⌥-click the line between two layers: clip / release the upper one (#967).
             crate::clip_line_ui::show(ui, &doc, &mut actions);
@@ -2613,11 +2616,58 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             actions.push(("layer.linkLayers".into(), json!({})));
         }
     });
+    let mut rename_snapshot = doc.clone();
+    let mut rename_commit_succeeded = true;
+    let mut selected_for_rename = None;
     for (id, p) in actions {
         // A row click commits even when it selects the layer already being edited (#5584).
         // Finish before selection changes so the existing type session keeps its own target.
         if id == "layer.select" && app.ui.text_edit.is_some() {
             crate::type_tool::commit(app);
+        }
+        if id == "ui.continueLayerRename" {
+            let target = p.get("layer").and_then(Value::as_u64).zip(p.get("name").and_then(Value::as_str));
+            if let Some((layer, name)) = target.filter(|(layer, name)| {
+                rename_commit_succeeded
+                    && app.session.active().is_some_and(|active| {
+                        active.doc.shares_state(&rename_snapshot)
+                            && active.doc.layer(photocraft_doc::LayerId(*layer)).is_some_and(|current| current.name == *name)
+                    })
+            }) {
+                let context = ui.ctx().clone();
+                let _ = crate::layer_row_ui::start_rename_checked(app, &context, layer, name);
+            } else {
+                app.ui.status = "layer.rename.ui.stale-target".into();
+                app.ui.status_error = true;
+            }
+            continue;
+        }
+        if id == "ui.startLayerRename" {
+            let layer = p.get("layer").and_then(Value::as_u64);
+            let name = p.get("name").and_then(Value::as_str);
+            if let (Some(layer), Some(name)) = (layer, name) {
+                crate::layer_row_ui::start_rename_after_selection(
+                    app,
+                    ui.ctx(),
+                    &rename_snapshot,
+                    layer,
+                    name,
+                    rename_commit_succeeded && selected_for_rename == Some(layer),
+                );
+            }
+            continue;
+        }
+        if id == "layer.select" {
+            selected_for_rename = None;
+            let selected = p.get("layer").and_then(Value::as_u64);
+            match app.run(&id, p) {
+                Ok(_) => selected_for_rename = selected,
+                Err(error) => {
+                    app.ui.status = error;
+                    app.ui.status_error = true;
+                }
+            }
+            continue;
         }
         if id == "ui.maskTarget" {
             app.ui.mask_target = p.as_bool().unwrap_or(false);
@@ -2650,9 +2700,15 @@ fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             continue;
         }
         if id == "layer.renameLayer" {
+            let expected = app.session.active().is_some_and(|active| active.doc.shares_state(&rename_snapshot));
             if let Err(error) = app.run(&id, p) {
+                rename_commit_succeeded = false;
                 app.ui.status = error;
                 app.ui.status_error = true;
+            } else if expected && let Some(active) = app.session.active() {
+                // An earlier editor committed in this same action queue. Its
+                // exact successful publication is the next editor's baseline.
+                rename_snapshot = active.doc.clone();
             }
         } else {
             let _ = app.run(&id, p);
@@ -3032,10 +3088,9 @@ fn layer_row(
         if crate::doc_props_ui::is_background(doc, l) {
             actions.push(("layer.new.layerFromBackground".into(), json!({})));
         } else if name_rect.is_some_and(|n| on(Rect::from_x_y_ranges(n.x_range(), rect.y_range()))) {
-            if let Some(done) = crate::layer_row_ui::start_rename_checked(app, ctx, l.id.0, &l.name) {
-                // One rename at a time: starting this one commits any other (#314).
-                actions.push(done);
-            }
+            // The click's layer.select is queued above and advances revision.
+            // Capture the editor only after that real selection succeeds.
+            actions.push(("ui.startLayerRename".into(), json!({"layer":l.id.0,"name":l.name})));
         } else if let Some(kind) = pos.and_then(|p| masks.hit(p)) {
             match kind {
                 crate::mask_thumbs_ui::MaskKind::Pixel => actions.push(("ui.maskTarget".into(), json!(true))),
@@ -3063,7 +3118,9 @@ fn layer_row(
     }
     let edit_rect = Rect::from_min_max(pos2(x - 3.0, rect.center().y - 11.0), pos2(name_right.max(x + 40.0), rect.center().y + 11.0));
     if let Some(done) = crate::layer_row_ui::rename_field_checked(app, ui, l.id.0, edit_rect) {
-        actions.push(done);
+        // Rows draw top-first: a click on a higher row may already have queued
+        // selection. Commit the one old editor before that view revision changes.
+        actions.insert(0, done);
     }
     // The visibility icon has its own color menu, and the layer-mask thumbnail its mask menu
     // (#4575); elsewhere use the full layer menu.
@@ -3125,10 +3182,17 @@ fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui,
             if ui.is_rect_visible(rect) {
                 // The texture is a letterboxed square: draw only the part its frame (the document,
                 // or the layer's bounds) fills.
-                let (tex, frame) = app.layer_thumb(ctx, doc, l);
-                let (fitted, uv) = layer_thumb_fit(rect, frame.width(), frame.height());
-                widgets::checker(p, fitted, 5.0);
-                p.image(tex, fitted, uv, Color32::WHITE);
+                match app.layer_thumb(ctx, doc, l) {
+                    Ok((tex, frame)) => {
+                        let (fitted, uv) = layer_thumb_fit(rect, frame.width(), frame.height());
+                        widgets::checker(p, fitted, 5.0);
+                        p.image(tex, fitted, uv, Color32::WHITE);
+                    }
+                    Err(error) => {
+                        app.ui.status = error;
+                        app.ui.status_error = true;
+                    }
+                }
             }
         }
     }
@@ -3154,9 +3218,11 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         return;
     };
     let doc = st.doc.clone();
-    let entries = st.history.entries();
-    let current = entries.len() - 1;
-    let redo: Vec<String> = st.history.redo_labels().map(str::to_string).collect();
+    let Some(current) = st.history.entry_labels().count().checked_sub(1) else {
+        app.ui.status = "History has no current state".into();
+        app.ui.status_error = true;
+        return;
+    };
     let selected_snap = selected_snapshot(ui.ctx(), st);
     let ctx = ui.ctx().clone();
     // A row dragged onto the trash (#5324); a drag that never saw its release must not outlive it.
@@ -3171,8 +3237,15 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         if let Some(layer) = doc.layers.first() {
             widgets::checker(ui.painter(), thumb, 4.0);
-            let (tex, _) = app.layer_thumb(&ctx, &doc, layer);
-            ui.painter().image(tex, thumb, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+            match app.layer_thumb(&ctx, &doc, layer) {
+                Ok((tex, _)) => {
+                    ui.painter().image(tex, thumb, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+                }
+                Err(error) => {
+                    app.ui.status = error;
+                    app.ui.status_error = true;
+                }
+            }
         }
         ui.painter().rect_stroke(thumb, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Outside);
         ui.painter().text(pos2(thumb.right() + 8.0, rect.center().y), Align2::LEFT_CENTER, &doc.name, egui::FontId::proportional(12.0), t.text);
@@ -3180,7 +3253,6 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let mut snap_cmd = None;
     let mut target: Option<usize> = None;
-    let all = entries.iter().map(|e| (e.as_str(), false)).chain(redo.map(|e| (e, true)));
     // The dock gives History a fixed height: the rows scroll above the footer.
     let footer = if t.pro { widgets::footer_height(ui) + ui.spacing().item_spacing.y } else { 0.0 };
     let max_h = (ui.available_height() - footer).max(40.0);
@@ -3188,13 +3260,17 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         // Snapshots head the list and scroll with the states, so many of them never push the
         // footer out of a short dock.
         snap_cmd = snapshot_rows(app, ui, selected_snap);
+        let Some(st) = app.session.active() else { return };
+        // Rows only display labels: borrow them from the actual retained history,
+        // after snapshot-row interaction, without copying an uncharged history list.
+        let all = st.history.entry_labels().map(|label| (label, false)).chain(st.history.redo_labels().map(|label| (label, true)));
         for (i, (e, is_redo)) in all.enumerate() {
             // The current state shows selected unless a snapshot is (Photoshop highlights one row).
             let selected = i == current && selected_snap.is_none();
             // Past states can be dragged onto the trash; the oldest one can't be deleted.
             let sense = if is_redo || i == 0 { Sense::click() } else { Sense::click_and_drag() };
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), sense);
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, &e));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, e));
             if resp.drag_started() {
                 ui.ctx().data_mut(|d| d.insert_temp(history_drag_key(), HistoryDrag::State(i)));
             }
@@ -3235,7 +3311,7 @@ fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     {
         let label = match drag {
             HistoryDrag::Snapshot(id) => app.session.active().and_then(|st| st.snapshots.iter().find(|s| s.id == id)).map(|s| s.name.clone()),
-            HistoryDrag::State(i) => entries.get(i).cloned(),
+            HistoryDrag::State(i) => app.session.active().and_then(|st| st.history.entry_labels().nth(i)).map(str::to_owned),
         };
         crate::layer_transfer::ghost(&ctx, p, &label.unwrap_or_default());
     }
@@ -3319,7 +3395,7 @@ type SelectedSnapshot = (u64, HistorySpot);
 type HistorySpot = (usize, Option<String>, usize);
 
 fn history_spot(st: &photocraft_engine::DocState) -> HistorySpot {
-    (st.history.past_len(), st.history.entries().pop(), st.history.redo_labels().count())
+    (st.history.past_len(), st.history.entry_labels().last().map(str::to_owned), st.history.redo_labels().count())
 }
 
 fn selected_snapshot_key(doc: photocraft_doc::DocId) -> egui::Id {
@@ -3478,7 +3554,14 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.add_space(6.0);
             widgets::hairline(ui);
             ui.add_space(8.0);
-            properties_body(app, ui);
+            // Retained properties can be taller than the viewport. Keep the title reachable
+            // while scrolling the body, including controls below source metadata.
+            let body_height = (ctx.input(|input| input.viewport_rect()).bottom() - ui.cursor().top() - 14.0).max(0.0);
+            egui::ScrollArea::vertical()
+                .id_salt("properties-card-body")
+                .max_height(body_height)
+                .auto_shrink([false, true])
+                .show(ui, |ui| properties_body(app, ui));
         });
     });
     if drag != egui::Vec2::ZERO && canvas.is_positive() {
@@ -4476,6 +4559,7 @@ mod color_tests {
             app.run("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
             let anchor = if selected { 6 } else { 11 };
             app.ui.text_edit = Some(crate::state::TextEdit {
+                document: Some(app.session.active().unwrap().doc.id),
                 layer: id.0,
                 caret: 11,
                 anchor,
@@ -4938,14 +5022,22 @@ mod snapshot_row_tests {
         h.key_press(egui::Key::Escape);
         h.run_steps(2);
         assert_eq!(snapshot_names(&h), ["Lesson start"], "Escape cancels");
-        assert_eq!(h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), steps_now + 1, "the click selected it once");
+        assert_eq!(
+            h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(),
+            steps_now + 1,
+            "the click selected it once"
+        );
         // Right-click › Delete (the snapshot's row, above the state the click made).
         h.get_all_by_label("Lesson start").next().unwrap().click_secondary();
         h.run_steps(2);
         h.get_by_label("Delete").click();
         h.run_steps(2);
         assert!(snapshot_names(&h).is_empty());
-        assert_eq!(h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(), steps + 2, "deleting leaves the history alone");
+        assert_eq!(
+            h.state().session.active().unwrap().history.entries(&photocraft_engine::read_control_none()).unwrap().values().len(),
+            steps + 2,
+            "deleting leaves the history alone"
+        );
     }
 
     /// A History panel in the Photoshop theme (the footer with the trash) on red, Snapshot 1, blue.
@@ -5004,13 +5096,13 @@ mod snapshot_row_tests {
         let mut h = pro_history();
         h.get_by_label("Snapshot 1").click();
         h.run_steps(2);
-        let steps = h.state().session.active().unwrap().history.entries().len();
+        let steps = h.state().session.active().unwrap().history.entry_labels().count();
         assert!(selected(&h, "Snapshot 1"), "the clicked snapshot shows selected");
         let p = trash(&h);
         click(&mut h, p);
         let st = h.state().session.active().unwrap();
         assert!(st.snapshots.is_empty(), "the trash deleted the snapshot");
-        assert_eq!(st.history.entries().len(), steps, "and left the states alone");
+        assert_eq!(st.history.entry_labels().count(), steps, "and left the states alone");
 
         // An edit after the click deselects the snapshot: the trash deletes the state.
         let mut h = pro_history();
@@ -5019,36 +5111,36 @@ mod snapshot_row_tests {
         h.state_mut().run("edit.fill", json!({"color": "#00ff00"})).unwrap();
         h.run_steps(2);
         assert!(!selected(&h, "Snapshot 1"), "an edit deselects the snapshot");
-        let steps = h.state().session.active().unwrap().history.entries().len();
+        let steps = h.state().session.active().unwrap().history.entry_labels().count();
         let p = trash(&h);
         click(&mut h, p);
         let st = h.state().session.active().unwrap();
         assert_eq!(st.snapshots.len(), 1, "the snapshot is kept");
-        assert_eq!(st.history.entries().len(), steps - 1, "the current state is deleted");
+        assert_eq!(st.history.entry_labels().count(), steps - 1, "the current state is deleted");
     }
 
     /// A snapshot or a past state dragged onto the trash is deleted (#5324).
     #[test]
     fn rows_dragged_onto_the_trash_are_deleted() {
         let mut h = pro_history();
-        let steps = h.state().session.active().unwrap().history.entries().len();
+        let steps = h.state().session.active().unwrap().history.entry_labels().count();
         let row = h.get_by_label("Snapshot 1").rect().center();
         let to = trash(&h);
         drag(&mut h, egui::pos2(row.x, row.y), to);
         let st = h.state().session.active().unwrap();
         assert!(st.snapshots.is_empty(), "the dragged snapshot is deleted");
-        assert_eq!(st.history.entries().len(), steps, "no state is");
+        assert_eq!(st.history.entry_labels().count(), steps, "no state is");
 
         // The second-to-last state: it and the state after it go, as with Delete.
         let mut h = pro_history();
         // The states are Open (or New), New Layer, Fill, Fill: drag New Layer.
-        let entries = h.state().session.active().unwrap().history.entries();
+        let entries: Vec<String> = h.state().session.active().unwrap().history.entry_labels().map(str::to_owned).collect();
         assert_eq!(entries.len(), 4, "{entries:?}");
         let row = h.get_by_label(&entries[1]).rect().center();
         let to = trash(&h);
         drag(&mut h, egui::pos2(row.x, row.y), to);
         let st = h.state().session.active().unwrap();
-        assert_eq!(st.history.entries().len(), 1, "the dragged state and the ones after it are deleted");
+        assert_eq!(st.history.entry_labels().count(), 1, "the dragged state and the ones after it are deleted");
         assert_eq!(st.snapshots.len(), 1, "the snapshot is kept");
     }
 
@@ -5169,6 +5261,7 @@ mod swatch_type_tests {
         let fg = app.session.tools.foreground;
         app.ui.tool = Tool::Type;
         app.ui.text_edit = Some(crate::state::TextEdit {
+            document: app.session.active().map(|state| state.doc.id),
             layer: id,
             caret: 0,
             anchor: 5,
@@ -6554,7 +6647,7 @@ mod layer_click_type_commit_tests {
             let row = h.get_by_label("Other pixels").rect();
             click(&mut h, pos2(row.left() + 120.0, row.center().y), egui::Modifiers { command: true, ..Default::default() });
             assert!(h.state().ui.text_edit.is_none());
-            let selected = h.state().session.active().unwrap().selected_layers();
+            let selected = h.state().session.active().unwrap().selected_layers().expect("valid selected resident layers");
             assert!(selected.contains(&text) && selected.contains(&other));
             preserved(h.state(), text);
 
@@ -6614,3 +6707,15 @@ mod sampler_readout_tests {
         assert_eq!(sampler_readouts(&mut app).len(), 2, "so does a new sampler");
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "observed_box_metadata_ui_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+mod observed_box_metadata_ui_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "programme_layer_select_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+mod programme_layer_select_tests;

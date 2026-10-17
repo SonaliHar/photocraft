@@ -163,37 +163,37 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // are still borrowed. The normal frame snapshot below must not clone their
     // point arrays or recursively nested values before admission.
     for dialog in &mut app.ui.dialogs {
-        if crate::color_range_ui::owns(&dialog.fields) {
-            if let Err(error) = crate::color_range_origin::fields(&dialog.fields) {
-                dialog.kind = DialogKind::Error;
-                dialog.fields = serde_json::Map::new();
-                dialog.fields.insert("message".into(), Value::String(error.clone()));
-                app.ui.color_range_origin = None;
-                app.color_range = None;
-                app.ui.status = error;
-                app.ui.status_error = true;
-            }
+        if crate::color_range_ui::owns(&dialog.fields)
+            && let Err(error) = crate::color_range_origin::fields(&dialog.fields)
+        {
+            dialog.kind = DialogKind::Error;
+            dialog.fields = serde_json::Map::new();
+            dialog.fields.insert("message".into(), Value::String(error.clone()));
+            app.ui.color_range_origin = None;
+            app.color_range = None;
+            app.ui.status = error;
+            app.ui.status_error = true;
         }
-        if crate::selection_color_origin::owns(&dialog.fields) {
-            if let Err(error) = crate::selection_color_origin::fields(&dialog.fields) {
-                dialog.kind = DialogKind::Error;
-                dialog.fields = serde_json::Map::new();
-                dialog.fields.insert("message".into(), Value::String(error.clone()));
-                app.ui.selection_color_origin = None;
-                app.ui.status = error;
-                app.ui.status_error = true;
-            }
+        if crate::selection_color_origin::owns(&dialog.fields)
+            && let Err(error) = crate::selection_color_origin::fields(&dialog.fields)
+        {
+            dialog.kind = DialogKind::Error;
+            dialog.fields = serde_json::Map::new();
+            dialog.fields.insert("message".into(), Value::String(error.clone()));
+            app.ui.selection_color_origin = None;
+            app.ui.status = error;
+            app.ui.status_error = true;
         }
-        if crate::selection_refine_origin::owns(&dialog.fields) {
-            if let Err(error) = crate::selection_refine_origin::fields(&dialog.fields) {
-                dialog.kind = DialogKind::Error;
-                dialog.fields = serde_json::Map::new();
-                dialog.fields.insert("message".into(), Value::String(error.clone()));
-                app.ui.selection_refine_origin = None;
-                app.filter_preview = None;
-                app.ui.status = error;
-                app.ui.status_error = true;
-            }
+        if crate::selection_refine_origin::owns(&dialog.fields)
+            && let Err(error) = crate::selection_refine_origin::fields(&dialog.fields)
+        {
+            dialog.kind = DialogKind::Error;
+            dialog.fields = serde_json::Map::new();
+            dialog.fields.insert("message".into(), Value::String(error.clone()));
+            app.ui.selection_refine_origin = None;
+            app.filter_preview = None;
+            app.ui.status = error;
+            app.ui.status_error = true;
         }
     }
     let dialogs = app.ui.dialogs.clone();
@@ -403,26 +403,26 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     let room = (ctx.content_rect().height() - DIALOG_CHROME - crate::filter_preview_ui::reserved_height(&fields)).max(120.0);
                     let body = |ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>| {
                         egui::ScrollArea::vertical().id_salt(id.with("body")).max_height(room).show(ui, |ui| {
-                    if crate::mode_conversion_dialog::owns(fields) {
-                        crate::mode_conversion_dialog::body(ui, fields)
-                    } else if crate::channel_create_dialog::owns(fields) {
-                        crate::channel_create_dialog::body(ui, fields)
-                    } else if crate::guide_dialog::owns(fields) {
-                        crate::guide_dialog::body(ui, fields)
-                    } else if crate::path_selection_dialog::owns(fields) {
-                        crate::path_selection_dialog::body(ui, fields)
-                    } else if crate::path_transform_dialog::owns(fields) {
-                        crate::path_transform_dialog::body(ui, fields)
-                    } else if crate::path_fill_dialog::owns(fields) {
-                        crate::path_fill_dialog::body(ui, fields)
-                    } else if crate::path_clipping_dialog::owns(fields) {
-                        crate::path_clipping_dialog::body(ui, fields)
-                    } else if crate::path_stroke_dialog::owns(fields) {
-                        crate::path_stroke_dialog::body(ui, fields)
-                    } else {
-                        crate::filter_dialog::body(ui, fields)
-                    }
-                    });
+                            if crate::mode_conversion_dialog::owns(fields) {
+                                crate::mode_conversion_dialog::body(ui, fields)
+                            } else if crate::channel_create_dialog::owns(fields) {
+                                crate::channel_create_dialog::body(ui, fields)
+                            } else if crate::guide_dialog::owns(fields) {
+                                crate::guide_dialog::body(ui, fields)
+                            } else if crate::path_selection_dialog::owns(fields) {
+                                crate::path_selection_dialog::body(ui, fields)
+                            } else if crate::path_transform_dialog::owns(fields) {
+                                crate::path_transform_dialog::body(ui, fields)
+                            } else if crate::path_fill_dialog::owns(fields) {
+                                crate::path_fill_dialog::body(ui, fields)
+                            } else if crate::path_clipping_dialog::owns(fields) {
+                                crate::path_clipping_dialog::body(ui, fields)
+                            } else if crate::path_stroke_dialog::owns(fields) {
+                                crate::path_stroke_dialog::body(ui, fields)
+                            } else {
+                                crate::filter_dialog::body(ui, fields)
+                            }
+                        });
                         // The in-dialog preview window sits under the scrolling parameters (#3769),
                         // so it never shifts them.
                         crate::filter_preview_ui::window(app, d.id, ui, fields);
@@ -662,6 +662,7 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     // Keep an invalid or stale selection form available for Cancel/reopening.
     // These borrowed checks also precede closing the form or cloning params.
     if let Some(dialog) = app.ui.dialogs.iter().find(|dialog| dialog.id == id) {
+        crate::filter_dialog::validate_rotation_target(app, &dialog.fields)?;
         if crate::color_range_ui::owns(&dialog.fields) {
             crate::color_range_origin::validate(app, id, &dialog.fields)?;
         }
@@ -750,9 +751,12 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
                     crate::native_gray_adjustment_origin::validate(app, id, &d.fields)?;
                 }
                 let params = crate::filter_dialog::params_of(&d.fields);
+                let params = crate::filter_dialog::rotation_confirm_params(&d.fields, params)?;
                 let params = if crate::native_gray_adjustment_origin::handles(&cmd) {
                     crate::native_gray_adjustment_origin::prepare(app, id, &d.fields, params)?
-                } else { params };
+                } else {
+                    params
+                };
                 let (confirmed, params) = crate::smart_ui::confirm_command(&d.fields, cmd.clone(), params);
                 cmd = confirmed;
                 if crate::selection_modify_origin::handles(&cmd) {
@@ -761,7 +765,9 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
                     crate::selection_color_origin::prepare(app, id, &d.fields, params)
                 } else if crate::selection_refine_origin::handles(&cmd) {
                     crate::selection_refine_origin::prepare(app, id, &d.fields, params)
-                } else { Ok(params) }
+                } else {
+                    Ok(params)
+                }
             })();
             let (params, result) = match preparation {
                 Ok(params) => {
@@ -900,7 +906,7 @@ mod tests {
             params: serde_json::json!({"radius": 4.0}),
             k: 1,
         };
-        app.filter_preview = Some(crate::filter_dialog::FilterPreview { key, result: result.map(std::sync::Arc::new), committing: false });
+        app.filter_preview = Some(crate::filter_dialog::FilterPreview { key, result: Some(std::sync::Arc::new(result.unwrap())), committing: false });
         (app, id)
     }
 
