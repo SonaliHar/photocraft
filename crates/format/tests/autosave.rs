@@ -35,7 +35,9 @@ fn background_save_outcomes_report_failure_then_recovery() {
     let blocked = root.join("recovery");
     std::fs::write(&blocked, b"not a directory").unwrap();
     let saver = Autosaver::new(&blocked, "doc");
-    let doc = Arc::new(rich_doc(ColorMode::Rgb, SampleType::U8));
+    // Keep the worker-notification fixture small under concurrent CI filesystem load.
+    // Rich-document round trips are covered by autosave_then_recover.
+    let doc = Arc::new(Document::with_background("Retry", photocraft_geom::Size::new(8, 8), ColorMode::Rgb, SampleType::U8, photocraft_color::Color::WHITE));
     saver.request_checked(doc.clone(), 7, None, SaveOptions::default()).unwrap();
 
     let receive = |saver: &Autosaver| {
