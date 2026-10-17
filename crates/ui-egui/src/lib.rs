@@ -29,7 +29,7 @@ pub mod bidi_text;
 mod blend_keys;
 pub(crate) mod blend_preview;
 pub mod blur_pins;
-mod brand;
+pub mod brand;
 pub(crate) mod brush_cursor;
 pub mod brush_panel;
 pub mod brush_picker;
