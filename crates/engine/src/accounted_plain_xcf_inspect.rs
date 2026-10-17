@@ -191,16 +191,29 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     } else {
         owner.validate_plain_xcf_inspection(control)?;
     }
-    prepare_metadata_page(owner,offset,limit,false,control)
+    prepare_metadata_page(owner, offset, limit, false, control)
 }
 /// Paid metadata only on the actual readonly flat class. This is independent
 /// of source enrollment, current rendering and all editing permissions.
-pub(crate) fn prepare_flat_composite(owner:&photocraft_doc::accounted_document::AccountedDocument,offset:usize,limit:usize,control:&ReadControl<'_>)->Result<OwnedFilterInspectReply>{
-    if offset>100000 || !(1..=128).contains(&limit) {return Err(BackingError::Length.into())}
+pub(crate) fn prepare_flat_composite(
+    owner: &photocraft_doc::accounted_document::AccountedDocument,
+    offset: usize,
+    limit: usize,
+    control: &ReadControl<'_>,
+) -> Result<OwnedFilterInspectReply> {
+    if offset > 100000 || !(1..=128).contains(&limit) {
+        return Err(BackingError::Length.into());
+    }
     owner.validate_readonly_flat_composite_storage(control)?;
-    prepare_metadata_page(owner,offset,limit,true,control)
+    prepare_metadata_page(owner, offset, limit, true, control)
 }
-fn prepare_metadata_page(owner:&photocraft_doc::accounted_document::AccountedDocument,offset:usize,limit:usize,all_item_text:bool,control:&ReadControl<'_>)->Result<OwnedFilterInspectReply>{
+fn prepare_metadata_page(
+    owner: &photocraft_doc::accounted_document::AccountedDocument,
+    offset: usize,
+    limit: usize,
+    all_item_text: bool,
+    control: &ReadControl<'_>,
+) -> Result<OwnedFilterInspectReply> {
     let doc = owner.document();
     let state = doc.xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     if !doc.paths.is_empty() {
@@ -213,11 +226,13 @@ fn prepare_metadata_page(owner:&photocraft_doc::accounted_document::AccountedDoc
         // Keep the readonly query's conservative debit for every canonical
         // name/epoch, even though only the requested page needs text facts.
         // plan() already includes page text; add only the other rows.
-        for (index,item) in state.items.iter().enumerate() {
+        for (index, item) in state.items.iter().enumerate() {
             control.check(1)?;
-            if index<offset || index.saturating_sub(offset)>=limit {
-                add(&mut plan.scanned,item.name.len())?;
-                if let Some(policy)=&item.composition {add(&mut plan.scanned,policy.compatibility_epoch.len())?;}
+            if index < offset || index.saturating_sub(offset) >= limit {
+                add(&mut plan.scanned, item.name.len())?;
+                if let Some(policy) = &item.composition {
+                    add(&mut plan.scanned, policy.compatibility_epoch.len())?;
+                }
             }
         }
     }
@@ -234,12 +249,16 @@ fn prepare_metadata_page(owner:&photocraft_doc::accounted_document::AccountedDoc
 }
 #[cfg(test)]
 #[path = "accounted_plain_xcf_inspect_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "accounted_masked_analytic_inspect_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod masked_analytic_tests;
 
 #[cfg(test)]
-#[path="accounted_flat_composite_inspect_tests.rs"]
+#[path = "accounted_flat_composite_inspect_tests.rs"]
 mod flat_composite_tests;

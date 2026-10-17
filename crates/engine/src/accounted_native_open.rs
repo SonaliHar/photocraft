@@ -33,65 +33,135 @@ pub fn is_current_box_work_candidate(document: &photocraft_doc::Document, contro
     photocraft_compose::backed_box_context::is_candidate(document, control)
 }
 
-#[path="accounted_point_work.rs"]
+#[path = "accounted_point_work.rs"]
 mod standard_work;
-pub use standard_work::is_current_standard_work_candidate;
 pub use standard_work::is_current_pure_point_work_candidate;
+pub use standard_work::is_current_standard_work_candidate;
 
 /// Owned archive routing intent only; a marked failure is final. Full typed
 /// storage, native/profile and complete CURRENT recipe proof remain mandatory.
-pub fn is_owned_current_filtered_flat_candidate(archive:&OwnedDocumentArchive, control:&ReadControl<'_>)->std::result::Result<bool,BackingError>{
+pub fn is_owned_current_filtered_flat_candidate(archive: &OwnedDocumentArchive, control: &ReadControl<'_>) -> std::result::Result<bool, BackingError> {
     control.check(1)?;
     match archive.current_storage_hint() {
         Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) => return Ok(true),
-        Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage | photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint | photocraft_format::NativeCurrentStorageHint::NormalHierarchy) => return Ok(false),
+        Some(
+            photocraft_format::NativeCurrentStorageHint::PointF32Coverage
+            | photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint
+            | photocraft_format::NativeCurrentStorageHint::NormalHierarchy,
+        ) => return Ok(false),
         None => {}
     }
-    is_current_filtered_flat_candidate(archive.document(),control)
+    is_current_filtered_flat_candidate(archive.document(), control)
 }
 
 /// Explicit marker-only purpose. No unmarked metadata can select this class.
-pub fn is_owned_current_masked_filtered_flat_candidate(archive:&OwnedDocumentArchive,c:&ReadControl<'_>)->std::result::Result<bool,BackingError>{
- c.check(1)?;Ok(archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint))
+pub fn is_owned_current_masked_filtered_flat_candidate(archive: &OwnedDocumentArchive, c: &ReadControl<'_>) -> std::result::Result<bool, BackingError> {
+    c.check(1)?;
+    Ok(archive.current_storage_hint() == Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint))
 }
 
 /// Marker13 selects only the distinct hierarchy handoff, never an unmarked shape.
-pub fn is_owned_current_normal_hierarchy_candidate(archive:&OwnedDocumentArchive,c:&ReadControl<'_>)->std::result::Result<bool,BackingError>{c.check(1)?;Ok(archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::NormalHierarchy))}
+pub fn is_owned_current_normal_hierarchy_candidate(archive: &OwnedDocumentArchive, c: &ReadControl<'_>) -> std::result::Result<bool, BackingError> {
+    c.check(1)?;
+    Ok(archive.current_storage_hint() == Some(photocraft_format::NativeCurrentStorageHint::NormalHierarchy))
+}
 
 /// Multi-root filtered identity hint only. A selected refusal is final and
 /// must precede the older singleton Point hint in explicit owned native routes.
 pub fn is_current_filtered_flat_candidate(document: &photocraft_doc::Document, control: &ReadControl<'_>) -> std::result::Result<bool, BackingError> {
     control.check(1)?;
-    if document.layers.is_empty() { return Ok(false); }
-    let Some(state)=&document.xcf_state else {return Ok(false)};
-    if document.layers.len()>4096 || state.filter_stacks.len()>4096 {return Ok(!state.filter_stacks.is_empty())}
-    let mut nodes=0usize;
-    for stack in &state.filter_stacks {control.check(1)?;
-        nodes=nodes.checked_add(stack.nodes.len()).ok_or(BackingError::Length)?;
-        if nodes>4096{return Ok(true)}
+    if document.layers.is_empty() {
+        return Ok(false);
+    }
+    let Some(state) = &document.xcf_state else { return Ok(false) };
+    if document.layers.len() > 4096 || state.filter_stacks.len() > 4096 {
+        return Ok(!state.filter_stacks.is_empty());
+    }
+    let mut nodes = 0usize;
+    for stack in &state.filter_stacks {
+        control.check(1)?;
+        nodes = nodes.checked_add(stack.nodes.len()).ok_or(BackingError::Length)?;
+        if nodes > 4096 {
+            return Ok(true);
+        }
     }
     // Preserve existing singleton Point epochs. A new mixed-only identity
     // cannot fall back through that older native interpretation.
-    if document.layers.len()==1 && nodes<2 {
-        for stack in &state.filter_stacks {control.check(1)?;for node in &stack.nodes {
+    if document.layers.len() == 1 && nodes < 2 {
+        for stack in &state.filter_stacks {
             control.check(1)?;
-            control.check(node.operation.schema_epoch.len() as u64)?;
-            if matches!(node.operation.schema_epoch.as_str(),photocraft_compose::EXPOSURE_MIXED_EPOCH|photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH|photocraft_compose::INVERT_LINEAR_MIXED_EPOCH|photocraft_compose::INVERT_GAMMA_MIXED_EPOCH|photocraft_compose::COLOR_TEMPERATURE_MIXED_EPOCH|photocraft_compose::SEPIA_MIXED_EPOCH|photocraft_compose::ALIEN_MAP_RGB_MIXED_EPOCH|photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH){return Ok(true)}
-            if let Some(policy)=&node.composition {
-                control.check(policy.compatibility_epoch.len() as u64)?;
-                if matches!(policy.compatibility_epoch.as_str(),photocraft_compose::EXPOSURE_MIXED_EPOCH|photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH|photocraft_compose::INVERT_LINEAR_MIXED_EPOCH|photocraft_compose::INVERT_GAMMA_MIXED_EPOCH|photocraft_compose::COLOR_TEMPERATURE_MIXED_EPOCH|photocraft_compose::SEPIA_MIXED_EPOCH|photocraft_compose::ALIEN_MAP_RGB_MIXED_EPOCH|photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH){return Ok(true)}
+            for node in &stack.nodes {
+                control.check(1)?;
+                control.check(node.operation.schema_epoch.len() as u64)?;
+                if matches!(
+                    node.operation.schema_epoch.as_str(),
+                    photocraft_compose::EXPOSURE_MIXED_EPOCH
+                        | photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH
+                        | photocraft_compose::INVERT_LINEAR_MIXED_EPOCH
+                        | photocraft_compose::INVERT_GAMMA_MIXED_EPOCH
+                        | photocraft_compose::COLOR_TEMPERATURE_MIXED_EPOCH
+                        | photocraft_compose::SEPIA_MIXED_EPOCH
+                        | photocraft_compose::ALIEN_MAP_RGB_MIXED_EPOCH
+                        | photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH
+                ) {
+                    return Ok(true);
+                }
+                if let Some(policy) = &node.composition {
+                    control.check(policy.compatibility_epoch.len() as u64)?;
+                    if matches!(
+                        policy.compatibility_epoch.as_str(),
+                        photocraft_compose::EXPOSURE_MIXED_EPOCH
+                            | photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH
+                            | photocraft_compose::INVERT_LINEAR_MIXED_EPOCH
+                            | photocraft_compose::INVERT_GAMMA_MIXED_EPOCH
+                            | photocraft_compose::COLOR_TEMPERATURE_MIXED_EPOCH
+                            | photocraft_compose::SEPIA_MIXED_EPOCH
+                            | photocraft_compose::ALIEN_MAP_RGB_MIXED_EPOCH
+                            | photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH
+                    ) {
+                        return Ok(true);
+                    }
+                }
             }
-        }}
+        }
         return Ok(false);
     }
-    for stack in &state.filter_stacks { control.check(1)?;
-        if document.layers.len()>1 && stack.nodes.len()>1 {return Ok(true)}
+    for stack in &state.filter_stacks {
+        control.check(1)?;
+        if document.layers.len() > 1 && stack.nodes.len() > 1 {
+            return Ok(true);
+        }
 
-        for node in &stack.nodes { control.check(1)?;
-            for text in [&node.operation.name,&node.operation.schema_epoch] {control.check(text.len() as u64)?;}
-            let epoch=|s:&str|matches!(s,photocraft_compose::SEMI_FLATTEN_EPOCH|photocraft_compose::HUE_CHROMA_EPOCH|photocraft_compose::VIBRANCE_EPOCH|photocraft_compose::EXPOSURE_MIXED_EPOCH|photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH|photocraft_compose::INVERT_LINEAR_MIXED_EPOCH|photocraft_compose::INVERT_GAMMA_MIXED_EPOCH|photocraft_compose::COLOR_TEMPERATURE_MIXED_EPOCH|photocraft_compose::SEPIA_MIXED_EPOCH|photocraft_compose::ALIEN_MAP_RGB_MIXED_EPOCH|photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH);
-            if matches!(node.operation.name.as_str(),"gimp:semi-flatten"|"gegl:hue-chroma"|"gegl:vibrance") || epoch(&node.operation.schema_epoch) {return Ok(true)}
-            if let Some(p)=&node.composition {control.check(p.compatibility_epoch.len() as u64)?;if epoch(&p.compatibility_epoch){return Ok(true)}}
+        for node in &stack.nodes {
+            control.check(1)?;
+            for text in [&node.operation.name, &node.operation.schema_epoch] {
+                control.check(text.len() as u64)?;
+            }
+            let epoch = |s: &str| {
+                matches!(
+                    s,
+                    photocraft_compose::SEMI_FLATTEN_EPOCH
+                        | photocraft_compose::HUE_CHROMA_EPOCH
+                        | photocraft_compose::VIBRANCE_EPOCH
+                        | photocraft_compose::EXPOSURE_MIXED_EPOCH
+                        | photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH
+                        | photocraft_compose::INVERT_LINEAR_MIXED_EPOCH
+                        | photocraft_compose::INVERT_GAMMA_MIXED_EPOCH
+                        | photocraft_compose::COLOR_TEMPERATURE_MIXED_EPOCH
+                        | photocraft_compose::SEPIA_MIXED_EPOCH
+                        | photocraft_compose::ALIEN_MAP_RGB_MIXED_EPOCH
+                        | photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH
+                )
+            };
+            if matches!(node.operation.name.as_str(), "gimp:semi-flatten" | "gegl:hue-chroma" | "gegl:vibrance") || epoch(&node.operation.schema_epoch) {
+                return Ok(true);
+            }
+            if let Some(p) = &node.composition {
+                control.check(p.compatibility_epoch.len() as u64)?;
+                if epoch(&p.compatibility_epoch) {
+                    return Ok(true);
+                }
+            }
         }
     }
     Ok(false)
@@ -115,11 +185,31 @@ pub fn is_current_point_candidate(document: &photocraft_doc::Document, control: 
             control.check(1)?;
             for node in &stack.nodes {
                 control.check(1)?;
-                if node.operation.schema_epoch==photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH{control.check(node.operation.schema_epoch.len() as u64)?;return Ok(true)}
-                if let Some(p)=&node.composition {if p.compatibility_epoch==photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH{control.check(p.compatibility_epoch.len() as u64)?;return Ok(true)}}
-                if node.operation.schema_epoch==photocraft_compose::VIBRANCE_EPOCH || node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::VIBRANCE_EPOCH){return Ok(true);}
-                if node.operation.schema_epoch==photocraft_compose::HUE_CHROMA_EPOCH || node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::HUE_CHROMA_EPOCH){return Ok(true);}
-                if node.operation.schema_epoch==photocraft_compose::SEMI_FLATTEN_EPOCH || node.composition.as_ref().is_some_and(|p|p.compatibility_epoch==photocraft_compose::SEMI_FLATTEN_EPOCH){return Ok(true);}
+                if node.operation.schema_epoch == photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH {
+                    control.check(node.operation.schema_epoch.len() as u64)?;
+                    return Ok(true);
+                }
+                if let Some(p) = &node.composition
+                    && p.compatibility_epoch == photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH
+                {
+                    control.check(p.compatibility_epoch.len() as u64)?;
+                    return Ok(true);
+                }
+                if node.operation.schema_epoch == photocraft_compose::VIBRANCE_EPOCH
+                    || node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == photocraft_compose::VIBRANCE_EPOCH)
+                {
+                    return Ok(true);
+                }
+                if node.operation.schema_epoch == photocraft_compose::HUE_CHROMA_EPOCH
+                    || node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == photocraft_compose::HUE_CHROMA_EPOCH)
+                {
+                    return Ok(true);
+                }
+                if node.operation.schema_epoch == photocraft_compose::SEMI_FLATTEN_EPOCH
+                    || node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == photocraft_compose::SEMI_FLATTEN_EPOCH)
+                {
+                    return Ok(true);
+                }
                 if matches!(
                     node.operation.name.as_str(),
                     "gegl:brightness-contrast"
@@ -186,42 +276,65 @@ pub fn is_current_isolated_normal_group_candidate(document: &photocraft_doc::Doc
 }
 /// Route hint only. Exact retained Gaussian-group schema selects its strict
 /// class/profile/native handoff; a refusal never retries another endpoint.
-pub fn is_current_isolated_gaussian_group_candidate(document:&photocraft_doc::Document,control:&ReadControl<'_>)->std::result::Result<bool,BackingError>{
- if let Some(state)=&document.xcf_state {
-  for stack in &state.filter_stacks {control.check(1)?;for node in &stack.nodes {control.check(1)?;
-   control.check(node.operation.schema_epoch.len() as u64)?;
-   if node.operation.schema_epoch=="xcf22-isolated-small-auto-v1" {return Ok(true)}
-  }}
- }
- Ok(false)
+pub fn is_current_isolated_gaussian_group_candidate(document: &photocraft_doc::Document, control: &ReadControl<'_>) -> std::result::Result<bool, BackingError> {
+    if let Some(state) = &document.xcf_state {
+        for stack in &state.filter_stacks {
+            control.check(1)?;
+            for node in &stack.nodes {
+                control.check(1)?;
+                control.check(node.operation.schema_epoch.len() as u64)?;
+                if node.operation.schema_epoch == "xcf22-isolated-small-auto-v1" {
+                    return Ok(true);
+                }
+            }
+        }
+    }
+    Ok(false)
 }
 /// Route hint only: a retained modern flat-blend source mode selects the strict
 /// endpoint even when other metadata is malformed. Exact epochs and tuples are
 /// checked by that endpoint, and refusal never retries generic native adoption.
-pub fn is_current_separable_blend_candidate(document:&photocraft_doc::Document,control:&ReadControl<'_>)->std::result::Result<bool,BackingError>{
- let Some(state)=&document.xcf_state else {return Ok(false)};
- let mut explicit_normal=false;
- let mut all_normal=true;
- for item in &state.items {control.check(1)?;
-  if let Some(policy)=&item.composition {
-   if matches!(policy.source_mode,3|4|6..=21|23..=27|30..=60) {return Ok(true)}
-   all_normal &= policy.source_mode==28;
-   explicit_normal |= policy.source_mode==28 && (policy.stored_blend_space>0 || policy.stored_composite_space>0 || policy.stored_operator>0);
-  } else {all_normal=false;}
- }
- // Explicit CURRENT Normal policies also belong to the general flat compiler.
- // Preserve ordinary Auto Normal routing. This metadata hint checks no samples
- // and accepts no policy: malformed matching tuples must fail the strict endpoint.
- if !explicit_normal || !all_normal || document.mode!=photocraft_doc::ColorMode::Rgb || document.depth!=photocraft_doc::SampleType::F32
-  || document.sample_encoding!=Some(photocraft_doc::SampleEncoding::NonlinearProfile)
-  || !matches!(document.working_profile_interpretation,photocraft_doc::WorkingProfileInterpretation::ImplicitSrgb{..})
-  || document.source_color_context.as_ref().is_none_or(|source|source.source_precision!=650 || source.original_icc.is_some())
-  || document.layers.is_empty() || document.layers.len()>4096 || state.items.len()!=document.layers.len()
-  || !state.filter_stacks.is_empty() || !state.filter_masks.is_empty() {return Ok(false)}
- for layer in &document.layers {control.check(1)?;
-  if !matches!(&layer.content,photocraft_doc::LayerContent::BackedRaster(_)) || layer.mask.is_some() {return Ok(false)}
- }
- Ok(true)
+pub fn is_current_separable_blend_candidate(document: &photocraft_doc::Document, control: &ReadControl<'_>) -> std::result::Result<bool, BackingError> {
+    let Some(state) = &document.xcf_state else { return Ok(false) };
+    let mut explicit_normal = false;
+    let mut all_normal = true;
+    for item in &state.items {
+        control.check(1)?;
+        if let Some(policy) = &item.composition {
+            if matches!(policy.source_mode,3|4|6..=21|23..=27|30..=60) {
+                return Ok(true);
+            }
+            all_normal &= policy.source_mode == 28;
+            explicit_normal |= policy.source_mode == 28 && (policy.stored_blend_space > 0 || policy.stored_composite_space > 0 || policy.stored_operator > 0);
+        } else {
+            all_normal = false;
+        }
+    }
+    // Explicit CURRENT Normal policies also belong to the general flat compiler.
+    // Preserve ordinary Auto Normal routing. This metadata hint checks no samples
+    // and accepts no policy: malformed matching tuples must fail the strict endpoint.
+    if !explicit_normal
+        || !all_normal
+        || document.mode != photocraft_doc::ColorMode::Rgb
+        || document.depth != photocraft_doc::SampleType::F32
+        || document.sample_encoding != Some(photocraft_doc::SampleEncoding::NonlinearProfile)
+        || !matches!(document.working_profile_interpretation, photocraft_doc::WorkingProfileInterpretation::ImplicitSrgb { .. })
+        || document.source_color_context.as_ref().is_none_or(|source| source.source_precision != 650 || source.original_icc.is_some())
+        || document.layers.is_empty()
+        || document.layers.len() > 4096
+        || state.items.len() != document.layers.len()
+        || !state.filter_stacks.is_empty()
+        || !state.filter_masks.is_empty()
+    {
+        return Ok(false);
+    }
+    for layer in &document.layers {
+        control.check(1)?;
+        if !matches!(&layer.content, photocraft_doc::LayerContent::BackedRaster(_)) || layer.mask.is_some() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 /// Exact retained geometry epochs select the stricter current endpoint only.
 /// No class, source/profile authority or locator access follows from this hint;
@@ -276,29 +389,37 @@ pub(crate) fn validate_current_observed_box_storage(owner: &photocraft_doc::acco
         return Err(BackingError::Unsupported.into());
     }
     let limits = photocraft_compose::backed_normal::NormalBandLimits::default();
-    let prepared = photocraft_compose::backed_box_document::PreparedBackedBoxDocument::new(owner, limits, control).map_err(|e|point_error(e,control))?;
-    prepared.validate_operative(control).map_err(|e|point_error(e,control))?;
+    let prepared = photocraft_compose::backed_box_document::PreparedBackedBoxDocument::new(owner, limits, control).map_err(|e| point_error(e, control))?;
+    prepared.validate_operative(control).map_err(|e| point_error(e, control))?;
     let rect = prepared.bounds();
-    if rect.is_empty() { return Err(BackingError::Bounds.into()); }
-    let columns = u64::from(rect.width()).min(limits.max_pixels).min(photocraft_geom::TILE_SIZE as u64);
-    if columns == 0 { return Err(BackingError::Bounds.into()); }
-    let rows = (limits.max_pixels / columns).min(u64::from(limits.max_rows));
-    let columns = i32::try_from(columns).map_err(|_|BackingError::Bounds)?;
-    let rows = i32::try_from(rows).map_err(|_|BackingError::Bounds)?;
-    if rows == 0 { return Err(BackingError::Bounds.into()); }
-    let mut y=rect.y0;
-    while y<rect.y1 {
-        let end_y=y.saturating_add(rows.min(photocraft_geom::TILE_SIZE-y.rem_euclid(photocraft_geom::TILE_SIZE))).min(rect.y1);
-        let mut x=rect.x0;
-        while x<rect.x1 {
-            let end_x=x.saturating_add(columns.min(photocraft_geom::TILE_SIZE-x.rem_euclid(photocraft_geom::TILE_SIZE))).min(rect.x1);
-            drop(prepared.render_band(photocraft_geom::Rect::new(x,y,end_x,end_y),control).map_err(|e|point_error(e,control))?);
-            control.check(1)?;
-            x=end_x;
-        }
-        y=end_y;
+    if rect.is_empty() {
+        return Err(BackingError::Bounds.into());
     }
-    drop(prepared);control.check(1)?;Ok(())
+    let columns = u64::from(rect.width()).min(limits.max_pixels).min(photocraft_geom::TILE_SIZE as u64);
+    if columns == 0 {
+        return Err(BackingError::Bounds.into());
+    }
+    let rows = (limits.max_pixels / columns).min(u64::from(limits.max_rows));
+    let columns = i32::try_from(columns).map_err(|_| BackingError::Bounds)?;
+    let rows = i32::try_from(rows).map_err(|_| BackingError::Bounds)?;
+    if rows == 0 {
+        return Err(BackingError::Bounds.into());
+    }
+    let mut y = rect.y0;
+    while y < rect.y1 {
+        let end_y = y.saturating_add(rows.min(photocraft_geom::TILE_SIZE - y.rem_euclid(photocraft_geom::TILE_SIZE))).min(rect.y1);
+        let mut x = rect.x0;
+        while x < rect.x1 {
+            let end_x = x.saturating_add(columns.min(photocraft_geom::TILE_SIZE - x.rem_euclid(photocraft_geom::TILE_SIZE))).min(rect.x1);
+            drop(prepared.render_band(photocraft_geom::Rect::new(x, y, end_x, end_y), control).map_err(|e| point_error(e, control))?);
+            control.check(1)?;
+            x = end_x;
+        }
+        y = end_y;
+    }
+    drop(prepared);
+    control.check(1)?;
+    Ok(())
 }
 
 /// Shared current-filter recipe validation. The exact neighborhood name hint
@@ -308,15 +429,21 @@ pub(crate) fn validate_current_owned_filter_storage(owner: &photocraft_doc::acco
     control.check(1)?;
     // This CURRENT-only selector does not widen original source admission.
     // Once selected, a failed bounded Box recipe never retries an eager lane.
-    if photocraft_compose::backed_box_context::is_candidate(owner.document(),control)? {
-        let prepared=photocraft_compose::backed_box_context::PreparedBackedBoxContext::new(owner,Default::default(),control).map_err(|e|point_error(e,control))?;
-        prepared.validate_operative(control).map_err(|e|point_error(e,control))?;
-        drop(prepared);control.check(1)?;return Ok(());
+    if photocraft_compose::backed_box_context::is_candidate(owner.document(), control)? {
+        let prepared =
+            photocraft_compose::backed_box_context::PreparedBackedBoxContext::new(owner, Default::default(), control).map_err(|e| point_error(e, control))?;
+        prepared.validate_operative(control).map_err(|e| point_error(e, control))?;
+        drop(prepared);
+        control.check(1)?;
+        return Ok(());
     }
     if owner.is_readonly_assigned_point_storage() {
-        let prepared=photocraft_compose::backed_neighborhood_context::PreparedBackedNeighborhoodContext::new_assigned(owner,Default::default(),control).map_err(|e|point_error(e,control))?;
-        prepared.validate_operative(control).map_err(|e|point_error(e,control))?;
-        drop(prepared);control.check(1)?;return Ok(());
+        let prepared = photocraft_compose::backed_neighborhood_context::PreparedBackedNeighborhoodContext::new_assigned(owner, Default::default(), control)
+            .map_err(|e| point_error(e, control))?;
+        prepared.validate_operative(control).map_err(|e| point_error(e, control))?;
+        drop(prepared);
+        control.check(1)?;
+        return Ok(());
     }
     let profile = match owner.document().mode {
         photocraft_doc::ColorMode::Rgb => photocraft_cms::Builtin::Srgb.profile(),
@@ -425,9 +552,8 @@ pub(crate) fn validate_current_threshold_alpha_storage(
         _ => return Err(BackingError::Unsupported.into()),
     };
     control.check(1)?;
-    let prepared =
-        photocraft_compose::backed_threshold_alpha_context::PreparedBackedThresholdAlphaContext::new(document, profile, Default::default(), control)
-            .map_err(|error| match error {
+    let prepared = photocraft_compose::backed_threshold_alpha_context::PreparedBackedThresholdAlphaContext::new(document, profile, Default::default(), control)
+        .map_err(|error| match error {
             photocraft_compose::backed_normal::BackedNormalError::Backing(error) => EngineError::from(error),
             _ if control.interrupt.cancelled() => EngineError::Cancelled,
             other => EngineError::Other(format!("owned native current Threshold Alpha: {other}")),
@@ -516,7 +642,11 @@ impl Session {
         authorized_native_path: Option<&str>,
         control: &ReadControl<'_>,
     ) -> Result<usize> {
-        let handoff=if archive.document().source_color_context.as_ref().is_some_and(|s|s.original_icc.is_some()){NativeHandoff::CurrentAssignedPoint}else{NativeHandoff::CurrentPoint};
+        let handoff = if archive.document().source_color_context.as_ref().is_some_and(|s| s.original_icc.is_some()) {
+            NativeHandoff::CurrentAssignedPoint
+        } else {
+            NativeHandoff::CurrentPoint
+        };
         self.add_owned_native_with(archive, label, authorized_native_path, control, handoff)
     }
 
@@ -547,26 +677,58 @@ impl Session {
     }
     /// Strict current isolated Gaussian group native continuation, without
     /// source locator authority or a broader retry after typed refusal.
-    pub fn add_owned_native_isolated_gaussian_group_archive(&mut self,archive:OwnedDocumentArchive,label:&str,authorized_native_path:Option<&str>,control:&ReadControl<'_>)->Result<usize>{
-     self.add_owned_native_with(archive,label,authorized_native_path,control,NativeHandoff::CurrentIsolatedGaussianGroup)
+    pub fn add_owned_native_isolated_gaussian_group_archive(
+        &mut self,
+        archive: OwnedDocumentArchive,
+        label: &str,
+        authorized_native_path: Option<&str>,
+        control: &ReadControl<'_>,
+    ) -> Result<usize> {
+        self.add_owned_native_with(archive, label, authorized_native_path, control, NativeHandoff::CurrentIsolatedGaussianGroup)
     }
     /// Strict readonly flat-composite native continuation; inert source locators
     /// confer no authority and full current rendering precedes publication.
-    pub fn add_owned_native_separable_blend_archive(&mut self,archive:OwnedDocumentArchive,label:&str,authorized_native_path:Option<&str>,control:&ReadControl<'_>)->Result<usize>{
-        self.add_owned_native_with(archive,label,authorized_native_path,control,NativeHandoff::CurrentSeparableBlend)
+    pub fn add_owned_native_separable_blend_archive(
+        &mut self,
+        archive: OwnedDocumentArchive,
+        label: &str,
+        authorized_native_path: Option<&str>,
+        control: &ReadControl<'_>,
+    ) -> Result<usize> {
+        self.add_owned_native_with(archive, label, authorized_native_path, control, NativeHandoff::CurrentSeparableBlend)
     }
     /// Explicit consuming readonly mixed filtered-root handoff; no fallback.
-    pub fn add_owned_native_filtered_flat_archive(&mut self,archive:OwnedDocumentArchive,label:&str,authorized_native_path:Option<&str>,control:&ReadControl<'_>)->Result<usize>{
-        self.add_owned_native_with(archive,label,authorized_native_path,control,NativeHandoff::CurrentFilteredFlat)
+    pub fn add_owned_native_filtered_flat_archive(
+        &mut self,
+        archive: OwnedDocumentArchive,
+        label: &str,
+        authorized_native_path: Option<&str>,
+        control: &ReadControl<'_>,
+    ) -> Result<usize> {
+        self.add_owned_native_with(archive, label, authorized_native_path, control, NativeHandoff::CurrentFilteredFlat)
     }
 
     /// Marker12-only masked filtered-flat CURRENT continuation; failure is final.
-    pub fn add_owned_native_masked_filtered_flat_archive(&mut self,archive:OwnedDocumentArchive,label:&str,path:Option<&str>,control:&ReadControl<'_>)->Result<usize>{
-        self.add_owned_native_with(archive,label,path,control,NativeHandoff::CurrentMaskedFilteredFlat)
+    pub fn add_owned_native_masked_filtered_flat_archive(
+        &mut self,
+        archive: OwnedDocumentArchive,
+        label: &str,
+        path: Option<&str>,
+        control: &ReadControl<'_>,
+    ) -> Result<usize> {
+        self.add_owned_native_with(archive, label, path, control, NativeHandoff::CurrentMaskedFilteredFlat)
     }
 
     /// Explicit native13 actual-tree CURRENT continuation; selected failures never retry.
-    pub fn add_owned_native_normal_hierarchy_archive(&mut self,archive:OwnedDocumentArchive,label:&str,path:Option<&str>,control:&ReadControl<'_>)->Result<usize>{self.add_owned_native_with(archive,label,path,control,NativeHandoff::CurrentNormalHierarchy)}
+    pub fn add_owned_native_normal_hierarchy_archive(
+        &mut self,
+        archive: OwnedDocumentArchive,
+        label: &str,
+        path: Option<&str>,
+        control: &ReadControl<'_>,
+    ) -> Result<usize> {
+        self.add_owned_native_with(archive, label, path, control, NativeHandoff::CurrentNormalHierarchy)
+    }
 
     fn add_owned_native_with(
         &mut self,
@@ -593,14 +755,23 @@ impl Session {
             }
         }
         match archive.current_storage_hint() {
-            Some(photocraft_format::NativeCurrentStorageHint::NormalHierarchy) if !matches!(handoff,NativeHandoff::CurrentNormalHierarchy)=>return Err(BackingError::Unsupported.into()),
-            Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint) if !matches!(handoff,NativeHandoff::CurrentMaskedFilteredFlat)=>return Err(BackingError::Unsupported.into()),
-            Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) if !matches!(handoff,NativeHandoff::CurrentFilteredFlat) => return Err(BackingError::Unsupported.into()),
-            Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) if !matches!(handoff,NativeHandoff::CurrentPoint) => return Err(BackingError::Unsupported.into()),
+            Some(photocraft_format::NativeCurrentStorageHint::NormalHierarchy) if !matches!(handoff, NativeHandoff::CurrentNormalHierarchy) => {
+                return Err(BackingError::Unsupported.into());
+            }
+            Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint) if !matches!(handoff, NativeHandoff::CurrentMaskedFilteredFlat) => {
+                return Err(BackingError::Unsupported.into());
+            }
+            Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) if !matches!(handoff, NativeHandoff::CurrentFilteredFlat) => {
+                return Err(BackingError::Unsupported.into());
+            }
+            Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) if !matches!(handoff, NativeHandoff::CurrentPoint) => {
+                return Err(BackingError::Unsupported.into());
+            }
             _ => {}
         }
         if matches!(handoff, NativeHandoff::Document)
-            && (is_owned_current_filtered_flat_candidate(&archive,control)? || is_current_point_candidate(archive.document(), control)?
+            && (is_owned_current_filtered_flat_candidate(&archive, control)?
+                || is_current_point_candidate(archive.document(), control)?
                 || is_current_analytic_geometry_candidate(archive.document(), control)?
                 || is_current_isolated_normal_group_candidate(archive.document(), control)?
                 || is_current_isolated_gaussian_group_candidate(archive.document(), control)?
@@ -619,16 +790,25 @@ impl Session {
             NativeHandoff::CurrentIsolatedGaussianGroup => archive.into_accounted_readonly_gaussian_group_storage(control),
             NativeHandoff::CurrentSeparableBlend => archive.into_accounted_readonly_flat_composite_storage(control),
             NativeHandoff::CurrentFilteredFlat => archive.into_accounted_readonly_filtered_flat_storage(control),
-            NativeHandoff::CurrentMaskedFilteredFlat=>archive.into_accounted_readonly_masked_filtered_flat_storage(control),
-            NativeHandoff::CurrentNormalHierarchy=>archive.into_accounted_readonly_normal_hierarchy_storage(control),
+            NativeHandoff::CurrentMaskedFilteredFlat => archive.into_accounted_readonly_masked_filtered_flat_storage(control),
+            NativeHandoff::CurrentNormalHierarchy => archive.into_accounted_readonly_normal_hierarchy_storage(control),
         }
         .map_err(|error| {
-            if matches!(handoff, NativeHandoff::CurrentAssignedPoint | NativeHandoff::CurrentPoint | NativeHandoff::CurrentAnalyticGeometry | NativeHandoff::CurrentIsolatedNormalGroup | NativeHandoff::CurrentIsolatedGaussianGroup | NativeHandoff::CurrentSeparableBlend | NativeHandoff::CurrentFilteredFlat | NativeHandoff::CurrentMaskedFilteredFlat | NativeHandoff::CurrentNormalHierarchy) {
-                if let photocraft_format::FormatError::Io(io) = &error {
-                    if let Some(backing) = io.get_ref().and_then(|source| source.downcast_ref::<BackingError>()) {
-                        return EngineError::from(*backing);
-                    }
-                }
+            if matches!(
+                handoff,
+                NativeHandoff::CurrentAssignedPoint
+                    | NativeHandoff::CurrentPoint
+                    | NativeHandoff::CurrentAnalyticGeometry
+                    | NativeHandoff::CurrentIsolatedNormalGroup
+                    | NativeHandoff::CurrentIsolatedGaussianGroup
+                    | NativeHandoff::CurrentSeparableBlend
+                    | NativeHandoff::CurrentFilteredFlat
+                    | NativeHandoff::CurrentMaskedFilteredFlat
+                    | NativeHandoff::CurrentNormalHierarchy
+            ) && let photocraft_format::FormatError::Io(io) = &error
+                && let Some(backing) = io.get_ref().and_then(|source| source.downcast_ref::<BackingError>())
+            {
+                return EngineError::from(*backing);
             }
             if matches!(error, photocraft_format::FormatError::Cancelled) {
                 EngineError::Cancelled
@@ -636,18 +816,20 @@ impl Session {
                 EngineError::Other(format!("owned native reopen: {error}"))
             }
         })?;
-        if let NativeHandoff::CurrentNormalHierarchy=handoff{crate::accounted_xcf_open::normal_hierarchy::validate_current_normal_hierarchy_storage(&document,control)?;}
-        if let NativeHandoff::CurrentMaskedFilteredFlat=handoff{
-            crate::accounted_xcf_open::masked_filtered_flat::validate_current_masked_filtered_flat_storage(&document,control)?;
+        if let NativeHandoff::CurrentNormalHierarchy = handoff {
+            crate::accounted_xcf_open::normal_hierarchy::validate_current_normal_hierarchy_storage(&document, control)?;
+        }
+        if let NativeHandoff::CurrentMaskedFilteredFlat = handoff {
+            crate::accounted_xcf_open::masked_filtered_flat::validate_current_masked_filtered_flat_storage(&document, control)?;
         }
         if let NativeHandoff::CurrentFilteredFlat = handoff {
-            crate::accounted_xcf_open::filtered_flat::validate_current_filtered_flat_storage(&document,control)?;
+            crate::accounted_xcf_open::filtered_flat::validate_current_filtered_flat_storage(&document, control)?;
         }
         if let NativeHandoff::CurrentSeparableBlend = handoff {
-            crate::accounted_xcf_open::separable_blend::validate_current_separable_blend_storage(&document,control)?;
+            crate::accounted_xcf_open::separable_blend::validate_current_separable_blend_storage(&document, control)?;
         }
         if let NativeHandoff::CurrentIsolatedGaussianGroup = handoff {
-            crate::accounted_xcf_open::gaussian_group::validate_current_isolated_gaussian_group_storage(&document,control)?;
+            crate::accounted_xcf_open::gaussian_group::validate_current_isolated_gaussian_group_storage(&document, control)?;
         }
         if let NativeHandoff::CurrentIsolatedNormalGroup = handoff {
             crate::accounted_xcf_open::isolated_normal_group::validate_current_isolated_normal_group_storage(&document, control)?;
@@ -658,7 +840,7 @@ impl Session {
         if let NativeHandoff::CurrentHistogramThreshold = handoff {
             validate_current_threshold_storage(&document, control)?;
         }
-        if matches!(handoff,NativeHandoff::CurrentPoint|NativeHandoff::CurrentAssignedPoint) {
+        if matches!(handoff, NativeHandoff::CurrentPoint | NativeHandoff::CurrentAssignedPoint) {
             validate_current_stock_point_storage(&document, control)?;
         }
         if let NativeHandoff::CurrentAnalyticGeometry = handoff {
@@ -696,6 +878,8 @@ impl Session {
 
 #[cfg(test)]
 #[path = "accounted_native_open_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
 #[cfg(test)]
 #[path = "accounted_native_threshold_alpha_open_tests.rs"]
@@ -707,6 +891,8 @@ mod hint_tests;
 
 #[cfg(all(test, feature = "corpus"))]
 #[path = "accounted_histogram_threshold_open_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod histogram_threshold_integration_tests;
 
 #[cfg(test)]
@@ -715,76 +901,114 @@ mod point_handoff_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_residual_point_workflow_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod residual_point_workflow_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_scalar_point_workflow_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod scalar_point_workflow_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_neighborhood_workflow_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod neighborhood_workflow_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_analytic_geometry_workflow_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod analytic_geometry_workflow_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_isolated_normal_group_workflow_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod isolated_normal_group_workflow_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_gaussian_workflow_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod gaussian_workflow_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_gaussian_group_workflow_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod gaussian_group_workflow_tests;
 
-#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
-#[path="accounted_separable_blend_workflow_tests.rs"]
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_separable_blend_workflow_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod separable_blend_workflow_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_assigned_box_workflow_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod assigned_box_workflow_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_assigned_median_workflow_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod assigned_median_workflow_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_assigned_gaussian_workflow_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod assigned_gaussian_workflow_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "accounted_filtered_flat_workflow_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod filtered_flat_workflow_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="accounted_filtered_flat_source_activity_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "accounted_filtered_flat_source_activity_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod filtered_flat_source_activity_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="accounted_filtered_flat_ordered_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "accounted_filtered_flat_ordered_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod filtered_flat_ordered_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "accounted_masked_native_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod masked_native_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "accounted_stock_rgb_native_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod stock_rgb_native_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "accounted_hsl_native_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod hsl_native_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "accounted_masked_scalar_native_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod masked_scalar_native_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="accounted_masked_filtered_flat_native_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "accounted_masked_filtered_flat_native_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod masked_filtered_flat_native_tests;

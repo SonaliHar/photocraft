@@ -188,8 +188,7 @@ impl<'a> Request<'a> {
         let updated = !staged.shares_model(owner);
         let mut history = state.history.clone();
         let snapshot = if updated {
-            history.max_states = session.prefs().performance.history_states.max(1) as usize;
-            history.max_bytes = session.prefs().performance.history_budget_bytes();
+            history.set_accounted_state_limit(session.prefs().performance.history_states.max(1) as usize)?;
             history.set_current_layers_borrowed(view.target(), ctl)?;
             history.try_commit_prepared_accounted(
                 owner,
@@ -354,4 +353,6 @@ impl Prepared<'_> {
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "gaussian_group_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;

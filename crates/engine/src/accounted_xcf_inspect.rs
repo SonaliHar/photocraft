@@ -90,10 +90,11 @@ pub(crate) fn validate_resolution(resolution: &photocraft_doc::PhysicalResolutio
 pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> Result<OwnedFilterInspectReply> {
     let (offset, limit) = pagination(params, control)?;
     let owner = session.active().ok_or(EngineError::NoDocument)?.doc.accounted().ok_or(BackingError::Unsupported)?;
-    if owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage() {
-        return filtered_flat::prepare(owner,offset,limit,control);
+    if owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage()
+    {
+        return filtered_flat::prepare(owner, offset, limit, control);
     } else if owner.is_readonly_flat_composite_storage() {
-        return crate::accounted_plain_xcf_inspect::prepare_flat_composite(owner,offset,limit,control);
+        return crate::accounted_plain_xcf_inspect::prepare_flat_composite(owner, offset, limit, control);
     } else if owner.is_readonly_threshold_alpha_storage() {
         owner.validate_readonly_threshold_alpha_storage(control)?;
     } else if owner.is_readonly_threshold_storage() {
@@ -110,14 +111,19 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     let doc = owner.document();
     let state = doc.xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     let point = owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage();
-    let gaussian_group=owner.is_readonly_gaussian_group_storage();
+    let gaussian_group = owner.is_readonly_gaussian_group_storage();
     // Actual class/census already enforces these; repeat the small shape before
     // deriving response counts so future class expansion cannot widen this API.
     // An empty CURRENT Point retains its stack/owner/revision, with no masks
     // and exactly one layer item. This is metadata, not a source/render grant.
     let filters_in_owner = if gaussian_group {
-        if state.items.len()!=6 || state.filter_masks.len()!=1 || state.filter_stacks.len()!=1
-            || state.filter_stacks.first().is_none_or(|s|s.nodes.len()!=1) {return Err(BackingError::Unsupported.into())}
+        if state.items.len() != 6
+            || state.filter_masks.len() != 1
+            || state.filter_stacks.len() != 1
+            || state.filter_stacks.first().is_none_or(|s| s.nodes.len() != 1)
+        {
+            return Err(BackingError::Unsupported.into());
+        }
         1
     } else if point {
         let [stack] = state.filter_stacks.as_slice() else { return Err(BackingError::Unsupported.into()) };
@@ -240,11 +246,15 @@ mod tests;
 
 #[cfg(all(test, feature = "corpus"))]
 #[path = "accounted_point_stack_inspect_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod point_stack_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_empty_point_inspect_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod empty_point_tests;
 
-#[path="accounted_xcf_inspect_filtered_flat.rs"]
+#[path = "accounted_xcf_inspect_filtered_flat.rs"]
 mod filtered_flat;

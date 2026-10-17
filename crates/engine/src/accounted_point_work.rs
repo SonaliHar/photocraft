@@ -6,7 +6,11 @@ use photocraft_raster::backing::{BackingError, ReadControl};
 /// implicit Point routes. Full current/native/command validation remains mandatory.
 pub fn is_current_standard_work_candidate(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<bool, BackingError> {
     c.check(1)?;
-    if owner.is_readonly_filtered_flat_point_storage() || (owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage()) { return Ok(true); }
+    if owner.is_readonly_filtered_flat_point_storage()
+        || (owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage())
+    {
+        return Ok(true);
+    }
     if !(owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage()) {
         return Ok(false);
     }
@@ -18,7 +22,11 @@ pub fn is_current_standard_work_candidate(owner: &AccountedDocument, c: &ReadCon
 /// Separate from Box so registered command selection retains every old Box route.
 pub fn is_current_pure_point_work_candidate(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<bool, BackingError> {
     c.check(1)?;
-    if owner.is_readonly_filtered_flat_point_storage() || (owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage()) { return Ok(true); }
+    if owner.is_readonly_filtered_flat_point_storage()
+        || (owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage())
+    {
+        return Ok(true);
+    }
     if !owner.is_readonly_point_storage() {
         return Ok(false);
     }
@@ -58,19 +66,33 @@ pub fn is_current_pure_point_work_candidate(owner: &AccountedDocument, c: &ReadC
                         | ("gegl:alpha-clip","xcf22-stock-alpha-clip-precision-v1")
                         | ("gegl:alpha-clip","xcf22-stock-alpha-clip-finite-precision-v1"));
             // New loaded Point policy is exact and never selects mixed storage.
-            if node.operation.name=="gegl:exposure" && node.operation.stored_version=="1:0"
-                && node.operation.schema_epoch==photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH
-                && compat==Some(photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH){return Ok(true)}
+            if node.operation.name == "gegl:exposure"
+                && node.operation.stored_version == "1:0"
+                && node.operation.schema_epoch == photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH
+                && compat == Some(photocraft_compose::EXPOSURE_LOADED_POINT_EPOCH)
+            {
+                return Ok(true);
+            }
             // Masked Point uses its own exact triple, never an Exposure name grant.
-            if node.operation.name=="gegl:exposure" && node.operation.stored_version=="1:0"
-                && node.operation.schema_epoch==photocraft_compose::EXPOSURE_MASKED_EPOCH
-                && compat==Some(photocraft_compose::EXPOSURE_MASKED_EPOCH){return Ok(true)}
-            if node.operation.stored_version=="0:0" && compat==Some(node.operation.schema_epoch.as_str())
-                && matches!((node.operation.name.as_str(),node.operation.schema_epoch.as_str()),
-                    ("gegl:invert-linear",photocraft_compose::INVERT_LINEAR_MASKED_EPOCH)
-                    |("gegl:invert-gamma",photocraft_compose::INVERT_GAMMA_MASKED_EPOCH)
-                    |("gegl:brightness-contrast",photocraft_compose::BRIGHTNESS_CONTRAST_MASKED_EPOCH)
-                    |("gegl:levels",photocraft_compose::GEGL_LEVELS_MASKED_EPOCH)){return Ok(true)}
+            if node.operation.name == "gegl:exposure"
+                && node.operation.stored_version == "1:0"
+                && node.operation.schema_epoch == photocraft_compose::EXPOSURE_MASKED_EPOCH
+                && compat == Some(photocraft_compose::EXPOSURE_MASKED_EPOCH)
+            {
+                return Ok(true);
+            }
+            if node.operation.stored_version == "0:0"
+                && compat == Some(node.operation.schema_epoch.as_str())
+                && matches!(
+                    (node.operation.name.as_str(), node.operation.schema_epoch.as_str()),
+                    ("gegl:invert-linear", photocraft_compose::INVERT_LINEAR_MASKED_EPOCH)
+                        | ("gegl:invert-gamma", photocraft_compose::INVERT_GAMMA_MASKED_EPOCH)
+                        | ("gegl:brightness-contrast", photocraft_compose::BRIGHTNESS_CONTRAST_MASKED_EPOCH)
+                        | ("gegl:levels", photocraft_compose::GEGL_LEVELS_MASKED_EPOCH)
+                )
+            {
+                return Ok(true);
+            }
             // Existing positive routes retain their exact prior checks/debits.
             if existing {
                 return Ok(true);
@@ -81,14 +103,16 @@ pub fn is_current_pure_point_work_candidate(owner: &AccountedDocument, c: &ReadC
             c.check(7 * 128)?;
             Ok(node.operation.stored_version == "0:0"
                 && compat == Some(node.operation.schema_epoch.as_str())
-                && matches!((node.operation.name.as_str(), node.operation.schema_epoch.as_str()),
+                && matches!(
+                    (node.operation.name.as_str(), node.operation.schema_epoch.as_str()),
                     ("gimp:desaturate", "xcf-22-stock-desaturate-precision-v1")
-                    | ("gegl:saturation", "xcf-22-stock-saturation-precision-v1")
-                    | ("gegl:saturation", "xcf-22-stock-gray-saturation-precision-v1")
-                    | ("gegl:saturation", "xcf-22-stock-rgb-yuv-saturation-precision-v1")
-                    | ("gegl:value-invert", "xcf-22-stock-value-invert-precision-v1")
-                    | ("gimp:color-balance", "xcf-22-stock-color-balance-precision-v1")
-                    | ("gimp:color-balance", "xcf-22-stock-color-balance-depth-v1")))
+                        | ("gegl:saturation", "xcf-22-stock-saturation-precision-v1")
+                        | ("gegl:saturation", "xcf-22-stock-gray-saturation-precision-v1")
+                        | ("gegl:saturation", "xcf-22-stock-rgb-yuv-saturation-precision-v1")
+                        | ("gegl:value-invert", "xcf-22-stock-value-invert-precision-v1")
+                        | ("gimp:color-balance", "xcf-22-stock-color-balance-precision-v1")
+                        | ("gimp:color-balance", "xcf-22-stock-color-balance-depth-v1")
+                ))
         }
         [] => {
             c.check(128)?;
@@ -124,4 +148,6 @@ pub fn is_current_pure_point_work_candidate(owner: &AccountedDocument, c: &ReadC
 
 #[cfg(test)]
 #[path = "accounted_point_work_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;

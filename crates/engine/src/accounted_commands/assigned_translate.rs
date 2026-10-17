@@ -26,4 +26,6 @@ pub(super) fn current(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "assigned_translate_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;

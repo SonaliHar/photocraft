@@ -21,7 +21,11 @@ pub(super) struct Request<'a> {
     only_visibility: bool,
 }
 pub(super) fn applies(session: &Session) -> bool {
-    session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| o.is_readonly_threshold_alpha_storage() || o.is_readonly_threshold_storage() || (o.is_readonly_point_storage() && !crate::accounted_session::metadata_gesture::observed_box_layer_metadata_candidate(o)))
+    session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| {
+        o.is_readonly_threshold_alpha_storage()
+            || o.is_readonly_threshold_storage()
+            || (o.is_readonly_point_storage() && !crate::accounted_session::metadata_gesture::observed_box_layer_metadata_candidate(o))
+    })
 }
 impl<'a> Request<'a> {
     pub(super) fn parse(params: &'a Value, ctl: &ReadControl<'_>) -> Result<Self> {
@@ -155,8 +159,7 @@ impl<'a> Request<'a> {
         let updated = !staged.shares_model(owner);
         let mut history = state.history.clone();
         let snapshot = if updated {
-            history.max_states = session.prefs().performance.history_states.max(1) as usize;
-            history.max_bytes = session.prefs().performance.history_budget_bytes();
+            history.set_accounted_state_limit(session.prefs().performance.history_states.max(1) as usize)?;
             history.set_current_layers_borrowed(view.target(), ctl)?;
             history.try_commit_prepared_accounted(
                 owner,

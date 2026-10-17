@@ -187,8 +187,7 @@ impl<'a> Request<'a> {
         let updated = !staged.shares_model(owner);
         let mut history = state.history.clone();
         let snapshot = if updated {
-            history.max_states = session.prefs().performance.history_states.max(1) as usize;
-            history.max_bytes = session.prefs().performance.history_budget_bytes();
+            history.set_accounted_state_limit(session.prefs().performance.history_states.max(1) as usize)?;
             history.set_current_layers_borrowed(view.target(), ctl)?;
             history.try_commit_prepared_accounted(owner, staged, "Edit GIMP Stock Filter", view.target(), ctl)?
         } else {

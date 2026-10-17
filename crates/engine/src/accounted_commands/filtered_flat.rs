@@ -4,28 +4,80 @@
 use super::*;
 use crate::{DocumentSnapshot, accounted_view::AccountedView, channel_cmds::ChannelView, document_history::DocumentHistory, source_policy::SourceIdentity};
 use photocraft_doc::{
-    accounted_document::{AccountedDocument, PointArgumentPatch, PointArgumentValue, PointFilterPatch, PointFilterMovePatch, PointFilterRemovePatch},
+    accounted_document::{AccountedDocument, PointArgumentPatch, PointArgumentValue, PointFilterMovePatch, PointFilterPatch, PointFilterRemovePatch},
     item_identity::{FilterId, ItemRef},
 };
 
-#[derive(Clone,Copy,PartialEq,Eq)]
-enum Route { Original, Masked, Hierarchy }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Route {
+    Original,
+    Masked,
+    Hierarchy,
+}
 impl Route {
- fn owner(o:&AccountedDocument)->Option<Self>{if o.is_readonly_normal_hierarchy_storage(){Some(Self::Hierarchy)}else if o.is_readonly_masked_filtered_flat_point_storage(){Some(Self::Masked)}else if o.is_readonly_filtered_flat_point_storage(){Some(Self::Original)}else{None}}
- fn validate(self,o:&AccountedDocument,c:&ReadControl<'_>)->Result<()>{if Self::owner(o)!=Some(self){return Err(BackingError::Unsupported.into())}match self{Self::Original=>Ok(o.validate_readonly_filtered_flat_point_storage(c)?),Self::Masked=>Ok(o.validate_readonly_masked_filtered_flat_point_storage(c)?),Self::Hierarchy=>Ok(o.validate_readonly_normal_hierarchy_current_storage(c)?)}}
- fn recipe(self,o:&AccountedDocument,c:&ReadControl<'_>)->Result<()>{if Self::owner(o)!=Some(self){return Err(BackingError::Unsupported.into())}match self{Self::Original=>crate::accounted_xcf_open::filtered_flat::validate_current_filtered_flat_storage(o,c),Self::Masked=>crate::accounted_xcf_open::masked_filtered_flat::validate_current_masked_filtered_flat_storage(o,c),Self::Hierarchy=>crate::accounted_xcf_open::normal_hierarchy::validate_current_normal_hierarchy_storage(o,c)}}
+    fn owner(o: &AccountedDocument) -> Option<Self> {
+        if o.is_readonly_normal_hierarchy_storage() {
+            Some(Self::Hierarchy)
+        } else if o.is_readonly_masked_filtered_flat_point_storage() {
+            Some(Self::Masked)
+        } else if o.is_readonly_filtered_flat_point_storage() {
+            Some(Self::Original)
+        } else {
+            None
+        }
+    }
+    fn validate(self, o: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
+        if Self::owner(o) != Some(self) {
+            return Err(BackingError::Unsupported.into());
+        }
+        match self {
+            Self::Original => Ok(o.validate_readonly_filtered_flat_point_storage(c)?),
+            Self::Masked => Ok(o.validate_readonly_masked_filtered_flat_point_storage(c)?),
+            Self::Hierarchy => Ok(o.validate_readonly_normal_hierarchy_current_storage(c)?),
+        }
+    }
+    fn recipe(self, o: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
+        if Self::owner(o) != Some(self) {
+            return Err(BackingError::Unsupported.into());
+        }
+        match self {
+            Self::Original => crate::accounted_xcf_open::filtered_flat::validate_current_filtered_flat_storage(o, c),
+            Self::Masked => crate::accounted_xcf_open::masked_filtered_flat::validate_current_masked_filtered_flat_storage(o, c),
+            Self::Hierarchy => crate::accounted_xcf_open::normal_hierarchy::validate_current_normal_hierarchy_storage(o, c),
+        }
+    }
 }
-fn masked_kind(n:&photocraft_doc::xcf_filters::FilterNode)->Option<photocraft_compose::MaskedMixedKind>{
- use photocraft_compose::MaskedMixedKind as K;
- let (k,v,e)=match n.operation.name.as_str(){
- "gegl:exposure"=>(K::Exposure,"1:0",photocraft_compose::EXPOSURE_MASKED_MIXED_EPOCH),
- "gegl:invert-linear"=>(K::InvertLinear,"0:0",photocraft_compose::INVERT_LINEAR_MASKED_MIXED_EPOCH),
- "gegl:invert-gamma"=>(K::InvertGamma,"0:0",photocraft_compose::INVERT_GAMMA_MASKED_MIXED_EPOCH),
- "gegl:brightness-contrast"=>(K::BrightnessContrast,"0:0",photocraft_compose::BRIGHTNESS_CONTRAST_MASKED_MIXED_EPOCH),
- "gegl:levels"=>(K::GeglLevels,"0:0",photocraft_compose::GEGL_LEVELS_MASKED_MIXED_EPOCH),_=>return None};
- (n.operation.stored_version==v&&n.operation.schema_epoch==e&&n.composition.as_ref().is_some_and(|p|p.compatibility_epoch==e)&&photocraft_compose::masked_mixed_parameters(k,&n.arguments).is_ok()).then_some(k)
+fn masked_kind(n: &photocraft_doc::xcf_filters::FilterNode) -> Option<photocraft_compose::MaskedMixedKind> {
+    use photocraft_compose::MaskedMixedKind as K;
+    let (k, v, e) = match n.operation.name.as_str() {
+        "gegl:exposure" => (K::Exposure, "1:0", photocraft_compose::EXPOSURE_MASKED_MIXED_EPOCH),
+        "gegl:invert-linear" => (K::InvertLinear, "0:0", photocraft_compose::INVERT_LINEAR_MASKED_MIXED_EPOCH),
+        "gegl:invert-gamma" => (K::InvertGamma, "0:0", photocraft_compose::INVERT_GAMMA_MASKED_MIXED_EPOCH),
+        "gegl:brightness-contrast" => (K::BrightnessContrast, "0:0", photocraft_compose::BRIGHTNESS_CONTRAST_MASKED_MIXED_EPOCH),
+        "gegl:levels" => (K::GeglLevels, "0:0", photocraft_compose::GEGL_LEVELS_MASKED_MIXED_EPOCH),
+        _ => return None,
+    };
+    (n.operation.stored_version == v
+        && n.operation.schema_epoch == e
+        && n.composition.as_ref().is_some_and(|p| p.compatibility_epoch == e)
+        && photocraft_compose::masked_mixed_parameters(k, &n.arguments).is_ok())
+    .then_some(k)
 }
-fn route_family(r:Route,n:&photocraft_doc::xcf_filters::FilterNode)->Option<u8>{if matches!(r,Route::Masked|Route::Hierarchy) {if let Some(k)=masked_kind(n){use photocraft_compose::MaskedMixedKind as K;return Some(match k{K::Exposure=>3,K::InvertLinear=>4,K::InvertGamma=>5,K::BrightnessContrast=>6,K::GeglLevels=>7})}}family(n)}
+fn route_family(r: Route, n: &photocraft_doc::xcf_filters::FilterNode) -> Option<u8> {
+    if matches!(r, Route::Masked | Route::Hierarchy)
+        && let Some(k) = masked_kind(n)
+    {
+        use photocraft_compose::MaskedMixedKind as K;
+        return Some(match k {
+            K::Exposure => 3,
+            K::InvertLinear => 4,
+            K::InvertGamma => 5,
+            K::BrightnessContrast => 6,
+            K::GeglLevels => 7,
+        });
+    }
+    family(n)
+}
 
 pub(super) const REPLY_ENVELOPE: u64 = 8192;
 #[derive(Clone, Copy)]
@@ -40,7 +92,7 @@ struct Fields<'a> {
     arguments: [Option<Argument<'a>>; 10],
     count: usize,
     enabled: Option<bool>,
-    opacity:Option<u64>,
+    opacity: Option<u64>,
 }
 
 fn flat_value_with_literal(v: &serde_json::Map<String, Value>, literal: bool) -> Option<(PointArgumentValue, Option<&str>)> {
@@ -110,12 +162,15 @@ fn flat_value_with_literal(v: &serde_json::Map<String, Value>, literal: bool) ->
 }
 
 // Resident bits64 grammar is private; retain its bounded canonical form here.
-fn opacity_bits(value:&Value)->Option<u64>{
-    let text=value.as_str().filter(|s|s.len()==18&&s.starts_with("0x"))?;
-    let digits=text.get(2..)?;
-    if !digits.bytes().all(|b|b.is_ascii_hexdigit()&&!b.is_ascii_uppercase()){return None}
-    let bits=u64::from_str_radix(digits,16).ok()?;let value=f64::from_bits(bits);
-    (value.is_finite()&&(0.0..=1.0).contains(&value)).then_some(bits)
+fn opacity_bits(value: &Value) -> Option<u64> {
+    let text = value.as_str().filter(|s| s.len() == 18 && s.starts_with("0x"))?;
+    let digits = text.get(2..)?;
+    if !digits.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) {
+        return None;
+    }
+    let bits = u64::from_str_radix(digits, 16).ok()?;
+    let value = f64::from_bits(bits);
+    (value.is_finite() && (0.0..=1.0).contains(&value)).then_some(bits)
 }
 
 // This is a bounded borrowed wire check, not operation or source eligibility.
@@ -139,7 +194,10 @@ fn wire_with_literal<'a>(id: &str, params: &'a Value, literal: bool) -> Option<F
         None if enable => return None,
         None => None,
     };
-    let opacity=match p.get("opacityF64Bits"){Some(value)=>Some(opacity_bits(value)?),None=>None};
+    let opacity = match p.get("opacityF64Bits") {
+        Some(value) => Some(opacity_bits(value)?),
+        None => None,
+    };
     let mut arguments = [None; 10];
     let mut count = 0;
     if let Some(values) = p.get("arguments") {
@@ -172,18 +230,31 @@ fn family(node: &photocraft_doc::xcf_filters::FilterNode) -> Option<u8> {
         "gimp:semi-flatten" => (0, "0:0", photocraft_compose::SEMI_FLATTEN_EPOCH),
         "gegl:hue-chroma" => (1, "0:0", photocraft_compose::HUE_CHROMA_EPOCH),
         "gegl:vibrance" => (2, "0:0", photocraft_compose::VIBRANCE_EPOCH),
-        "gegl:exposure" => (3, "1:0", if node.operation.schema_epoch==photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH {photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH}else{photocraft_compose::EXPOSURE_MIXED_EPOCH}),
+        "gegl:exposure" => (
+            3,
+            "1:0",
+            if node.operation.schema_epoch == photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH {
+                photocraft_compose::EXPOSURE_LOADED_MIXED_EPOCH
+            } else {
+                photocraft_compose::EXPOSURE_MIXED_EPOCH
+            },
+        ),
         "gegl:invert-linear" => (4, "0:0", photocraft_compose::INVERT_LINEAR_MIXED_EPOCH),
         "gegl:invert-gamma" => (5, "0:0", photocraft_compose::INVERT_GAMMA_MIXED_EPOCH),
         "gegl:brightness-contrast" => (6, "0:0", photocraft_compose::BRIGHTNESS_CONTRAST_MIXED_EPOCH),
         "gegl:levels" => (7, "0:0", photocraft_compose::GEGL_LEVELS_MIXED_EPOCH),
         "gegl:color-temperature" => (8, "0:0", photocraft_compose::COLOR_TEMPERATURE_MIXED_EPOCH),
         "gegl:sepia" => (9, "0:0", photocraft_compose::SEPIA_MIXED_EPOCH),
-        "gegl:alien-map" if node.operation.schema_epoch==photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH => (11, "0:0", photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH),
+        "gegl:alien-map" if node.operation.schema_epoch == photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH => {
+            (11, "0:0", photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH)
+        }
         "gegl:alien-map" => (10, "0:0", photocraft_compose::ALIEN_MAP_RGB_MIXED_EPOCH),
         _ => return None,
     };
-    (node.operation.stored_version == version && node.operation.schema_epoch == epoch && node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == epoch)).then_some(kind)
+    (node.operation.stored_version == version
+        && node.operation.schema_epoch == epoch
+        && node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == epoch))
+    .then_some(kind)
 }
 fn range(kind: u8, name: &str) -> Option<(f32, f32)> {
     match (kind, name) {
@@ -192,38 +263,56 @@ fn range(kind: u8, name: &str) -> Option<(f32, f32)> {
         (2, "saturation") => Some((0., 10.)),
         (8, "original-temperature" | "intended-temperature") => Some((1000., 12000.)),
         (9, "scale") => Some((0., 1.)),
-        (10|11, "cpn-1-frequency" | "cpn-2-frequency" | "cpn-3-frequency") => Some((0., 20.)),
-        (10|11, "cpn-1-phaseshift" | "cpn-2-phaseshift" | "cpn-3-phaseshift") => Some((0., 360.)),
+        (10 | 11, "cpn-1-frequency" | "cpn-2-frequency" | "cpn-3-frequency") => Some((0., 20.)),
+        (10 | 11, "cpn-1-phaseshift" | "cpn-2-phaseshift" | "cpn-3-phaseshift") => Some((0., 360.)),
         (6, "brightness") => Some((-3., 3.)),
         (6, "contrast") => Some((-5., 5.)),
         _ => None,
     }
 }
-fn number_in_domain(kind:u8,name:&str,bits:u32)->bool {
-    let value=f32::from_bits(bits);
-    if !value.is_finite(){return false}
-    if kind==7 {return matches!(name,"in-low"|"in-high"|"out-low"|"out-high")}
-    if kind==3 {
+fn number_in_domain(kind: u8, name: &str, bits: u32) -> bool {
+    let value = f32::from_bits(bits);
+    if !value.is_finite() {
+        return false;
+    }
+    if kind == 7 {
+        return matches!(name, "in-low" | "in-high" | "out-low" | "out-high");
+    }
+    if kind == 3 {
         return match name {
-            "exposure"=>true,
+            "exposure" => true,
             // Preserve the existing promoted-f64 kernel domain. The f32 .1
             // word lies outside it and must not be silently normalized.
-            "black-level"=>(-0.1f64..=0.1f64).contains(&f64::from(value)),
-            _=>false,
+            "black-level" => (-0.1f64..=0.1f64).contains(&f64::from(value)),
+            _ => false,
         };
     }
-    range(kind,name).is_some_and(|(lo,hi)|(lo..=hi).contains(&value))
+    range(kind, name).is_some_and(|(lo, hi)| (lo..=hi).contains(&value))
 }
 fn valid_node(node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
     use photocraft_doc::xcf_filters::{ExactNumber, FilterValue};
     let Some(kind) = family(node) else { return false };
-    if kind == 8 { return photocraft_compose::color_temperature_mixed_parameters(&node.arguments).is_ok(); }
-    if kind == 9 { return photocraft_compose::sepia_mixed_parameters(&node.arguments).is_ok(); }
-    if kind == 10 { return photocraft_compose::alien_map_rgb_mixed_parameters(&node.arguments).is_ok(); }
-    if kind == 11 { return photocraft_compose::alien_map_hsl_mixed_parameters(&node.arguments).is_ok(); }
-    if kind == 6 { return photocraft_compose::brightness_contrast_mixed_parameters(&node.arguments).is_ok(); }
-    if kind == 7 { return photocraft_compose::gegl_levels_mixed_parameters(&node.arguments).is_ok(); }
-    if matches!(kind,4|5) { return node.arguments.is_empty(); }
+    if kind == 8 {
+        return photocraft_compose::color_temperature_mixed_parameters(&node.arguments).is_ok();
+    }
+    if kind == 9 {
+        return photocraft_compose::sepia_mixed_parameters(&node.arguments).is_ok();
+    }
+    if kind == 10 {
+        return photocraft_compose::alien_map_rgb_mixed_parameters(&node.arguments).is_ok();
+    }
+    if kind == 11 {
+        return photocraft_compose::alien_map_hsl_mixed_parameters(&node.arguments).is_ok();
+    }
+    if kind == 6 {
+        return photocraft_compose::brightness_contrast_mixed_parameters(&node.arguments).is_ok();
+    }
+    if kind == 7 {
+        return photocraft_compose::gegl_levels_mixed_parameters(&node.arguments).is_ok();
+    }
+    if matches!(kind, 4 | 5) {
+        return node.arguments.is_empty();
+    }
     if kind == 0 {
         return matches!(node.arguments.as_slice(),[a] if a.name=="color"&&matches!(&a.value,FilterValue::Color{components,encoding:photocraft_doc::SampleEncoding::Linear|photocraft_doc::SampleEncoding::NonlinearProfile,profile:None} if components.len()==4&&components.iter().all(|v|matches!(v,ExactNumber::Float32Bits(b) if f32::from_bits(*b).is_finite()&&(0.0..=1.0).contains(&f32::from_bits(*b))))));
     }
@@ -241,16 +330,28 @@ fn valid_node(node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
 }
 /// Borrowed actual-class/retained-target hint, never a source/profile/render proof.
 pub fn candidate(owner: &AccountedDocument, layer: LayerId, node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
-    if !owner.is_readonly_filtered_flat_point_storage(){return false} candidate_route(Route::Original,owner,layer,node)
+    if !owner.is_readonly_filtered_flat_point_storage() {
+        return false;
+    }
+    candidate_route(Route::Original, owner, layer, node)
 }
-pub fn masked_candidate(owner:&AccountedDocument,layer:LayerId,node:&photocraft_doc::xcf_filters::FilterNode)->bool{
- if !owner.is_readonly_masked_filtered_flat_point_storage(){return false} candidate_route(Route::Masked,owner,layer,node)
+pub fn masked_candidate(owner: &AccountedDocument, layer: LayerId, node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
+    if !owner.is_readonly_masked_filtered_flat_point_storage() {
+        return false;
+    }
+    candidate_route(Route::Masked, owner, layer, node)
 }
-pub fn hierarchy_candidate(owner:&AccountedDocument,layer:LayerId,node:&photocraft_doc::xcf_filters::FilterNode)->bool{
- if !owner.is_readonly_normal_hierarchy_storage(){return false} candidate_route(Route::Hierarchy,owner,layer,node)
+pub fn hierarchy_candidate(owner: &AccountedDocument, layer: LayerId, node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
+    if !owner.is_readonly_normal_hierarchy_storage() {
+        return false;
+    }
+    candidate_route(Route::Hierarchy, owner, layer, node)
 }
-fn candidate_route(route:Route,owner:&AccountedDocument,layer:LayerId,node:&photocraft_doc::xcf_filters::FilterNode)->bool{
-    if Route::owner(owner)!=Some(route) || node.id.0==0 || !(valid_node(node)||matches!(route,Route::Masked|Route::Hierarchy)&&masked_kind(node).is_some()&&node.opacity_f64_bits==1.0f64.to_bits()) {
+fn candidate_route(route: Route, owner: &AccountedDocument, layer: LayerId, node: &photocraft_doc::xcf_filters::FilterNode) -> bool {
+    if Route::owner(owner) != Some(route)
+        || node.id.0 == 0
+        || !(valid_node(node) || matches!(route, Route::Masked | Route::Hierarchy) && masked_kind(node).is_some() && node.opacity_f64_bits == 1.0f64.to_bits())
+    {
         return false;
     }
     let doc = owner.document();
@@ -258,8 +359,8 @@ fn candidate_route(route:Route,owner:&AccountedDocument,layer:LayerId,node:&phot
     if doc.layers.len() > 4096 || state.filter_stacks.len() > 4096 {
         return false;
     }
-    (route==Route::Hierarchy || doc.layers.iter().any(|l| l.id == layer))
-        && state.filter_stacks.iter().any(|s| s.owner == ItemRef::Layer(layer) && s.nodes.len()<=1024 && s.nodes.iter().any(|n|std::ptr::eq(n,node)))
+    (route == Route::Hierarchy || doc.layers.iter().any(|l| l.id == layer))
+        && state.filter_stacks.iter().any(|s| s.owner == ItemRef::Layer(layer) && s.nodes.len() <= 1024 && s.nodes.iter().any(|n| std::ptr::eq(n, node)))
 }
 fn context(session: &Session, id: &str, params: &Value) -> Result<()> {
     let state = session.active().ok_or(EngineError::NoDocument)?;
@@ -282,83 +383,169 @@ fn context(session: &Session, id: &str, params: &Value) -> Result<()> {
     }
     Ok(())
 }
-#[derive(Clone,Copy,PartialEq,Eq)]
-struct TreeWitness{ordinal:usize,parent:Option<usize>,canonical:usize}
-fn tree_witness(owner:&AccountedDocument,layer:LayerId,c:&ReadControl<'_>)->Result<Option<TreeWitness>>{
- if !owner.is_readonly_normal_hierarchy_storage(){return Ok(None)}
- let index=owner.checked_readonly_normal_hierarchy_current_index(c)?;
- let mut found=None;
- for row in index.rows(){c.check(1)?;if row.layer.id==layer{
-   if found.is_some()||!matches!(row.layer.content,photocraft_doc::LayerContent::BackedRaster(_)){return Err(BackingError::Integrity.into())}
-   found=Some(TreeWitness{ordinal:row.ordinal,parent:row.parent,canonical:row.canonical_item_index});
- }}
- found.map(Some).ok_or_else(||BackingError::Bounds.into())
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TreeWitness {
+    ordinal: usize,
+    parent: Option<usize>,
+    canonical: usize,
+}
+fn tree_witness(owner: &AccountedDocument, layer: LayerId, c: &ReadControl<'_>) -> Result<Option<TreeWitness>> {
+    if !owner.is_readonly_normal_hierarchy_storage() {
+        return Ok(None);
+    }
+    let index = owner.checked_readonly_normal_hierarchy_current_index(c)?;
+    let mut found = None;
+    for row in index.rows() {
+        c.check(1)?;
+        if row.layer.id == layer {
+            if found.is_some() || !matches!(row.layer.content, photocraft_doc::LayerContent::BackedRaster(_)) {
+                return Err(BackingError::Integrity.into());
+            }
+            found = Some(TreeWitness { ordinal: row.ordinal, parent: row.parent, canonical: row.canonical_item_index });
+        }
+    }
+    found.map(Some).ok_or_else(|| BackingError::Bounds.into())
 }
 fn target<'a>(
     owner: &'a AccountedDocument,
     id: FilterId,
     c: &ReadControl<'_>,
-) -> Result<(&'a photocraft_doc::xcf_filters::FilterStack, &'a photocraft_doc::xcf_filters::FilterNode, LayerId,usize,Option<TreeWitness>)> {
+) -> Result<(&'a photocraft_doc::xcf_filters::FilterStack, &'a photocraft_doc::xcf_filters::FilterNode, LayerId, usize, Option<TreeWitness>)> {
     let state = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     if state.filter_stacks.len() > 4096 {
         return Err(BackingError::Length.into());
     }
-    let mut found = None;let mut nodes=0usize;
+    let mut found = None;
+    let mut nodes = 0usize;
     for stack in &state.filter_stacks {
         c.check(1)?;
-        nodes=nodes.checked_add(stack.nodes.len()).filter(|n|*n<=4096).ok_or(BackingError::Length)?;
-        if stack.nodes.len()>1024{return Err(BackingError::Length.into())}
-        for (index,node) in stack.nodes.iter().enumerate(){c.check(1)?;
+        nodes = nodes.checked_add(stack.nodes.len()).filter(|n| *n <= 4096).ok_or(BackingError::Length)?;
+        if stack.nodes.len() > 1024 {
+            return Err(BackingError::Length.into());
+        }
+        for (index, node) in stack.nodes.iter().enumerate() {
+            c.check(1)?;
             if node.id == id {
-                if found.is_some(){return Err(BackingError::Integrity.into())}
-                let ItemRef::Layer(layer)=stack.owner else{return Err(BackingError::Integrity.into())};
-                c.check(owner.document().layers.len().checked_add(state.filter_stacks.len()).and_then(|n|n.checked_add(nodes)).ok_or(BackingError::Length)? as u64)?;
-                if !candidate_route(Route::owner(owner).ok_or(BackingError::Unsupported)?,owner,layer,node){return Err(BackingError::Unsupported.into())}
-                found=Some((stack,node,layer,index,tree_witness(owner,layer,c)?));
+                if found.is_some() {
+                    return Err(BackingError::Integrity.into());
+                }
+                let ItemRef::Layer(layer) = stack.owner else { return Err(BackingError::Integrity.into()) };
+                c.check(
+                    owner.document().layers.len().checked_add(state.filter_stacks.len()).and_then(|n| n.checked_add(nodes)).ok_or(BackingError::Length)? as u64
+                )?;
+                if !candidate_route(Route::owner(owner).ok_or(BackingError::Unsupported)?, owner, layer, node) {
+                    return Err(BackingError::Unsupported.into());
+                }
+                found = Some((stack, node, layer, index, tree_witness(owner, layer, c)?));
             }
         }
     }
     found.ok_or_else(|| bad("xcf.filter.set", "unknown mixed filterId"))
 }
-fn patch_limit(kind:u8)->usize {match kind {7=>4,10|11=>10,8|9=>2,_=>3}}
-fn incoming(kind:u8,argument:&Argument<'_>)->bool {
-    if matches!(kind,10|11) && argument.name=="color-model" {
-        return argument.domain==Some("gegl:alien-map/color-model") && matches!(argument.value,PointArgumentValue::Enum(v) if v==if kind==10{0}else{1});
+fn patch_limit(kind: u8) -> usize {
+    match kind {
+        7 => 4,
+        10 | 11 => 10,
+        8 | 9 => 2,
+        _ => 3,
     }
-    if argument.domain.is_some(){return false}
-    if (kind==9 && argument.name=="srgb") || (matches!(kind,10|11) && matches!(argument.name,"cpn-1-keep"|"cpn-2-keep"|"cpn-3-keep")) {
-        return matches!(argument.value,PointArgumentValue::Bool(_));
+}
+fn incoming(kind: u8, argument: &Argument<'_>) -> bool {
+    if matches!(kind, 10 | 11) && argument.name == "color-model" {
+        return argument.domain == Some("gegl:alien-map/color-model") && matches!(argument.value,PointArgumentValue::Enum(v) if v==if kind==10{0}else{1});
     }
-    if kind==0 {return argument.name=="color" && matches!(argument.value,PointArgumentValue::LiteralColor4F32{components,encoding:photocraft_doc::SampleEncoding::Linear|photocraft_doc::SampleEncoding::NonlinearProfile} if components.iter().all(|b|f32::from_bits(*b).is_finite()&&(0.0..=1.0).contains(&f32::from_bits(*b))))}
+    if argument.domain.is_some() {
+        return false;
+    }
+    if (kind == 9 && argument.name == "srgb") || (matches!(kind, 10 | 11) && matches!(argument.name, "cpn-1-keep" | "cpn-2-keep" | "cpn-3-keep")) {
+        return matches!(argument.value, PointArgumentValue::Bool(_));
+    }
+    if kind == 0 {
+        return argument.name == "color"
+            && matches!(argument.value,PointArgumentValue::LiteralColor4F32{components,encoding:photocraft_doc::SampleEncoding::Linear|photocraft_doc::SampleEncoding::NonlinearProfile} if components.iter().all(|b|f32::from_bits(*b).is_finite()&&(0.0..=1.0).contains(&f32::from_bits(*b))));
+    }
     matches!(argument.value,PointArgumentValue::Float32Bits(b) if number_in_domain(kind,argument.name,b))
 }
-fn stage_patches<const N:usize>(route:Route,owner:&AccountedDocument,fields:&Fields<'_>,kind:u8,layer:photocraft_doc::LayerId,revision:u64,stack_len:usize,id:&str,move_to:Option<usize>,ctl:&ReadControl<'_>)->Result<AccountedDocument>{
-    if fields.count>N {return Err(BackingError::Length.into())}
-        // This scratch is additional to OLD/history/STAGED and the reply fees.
-        // Declare the fee before the real array and retain it through full proof.
-        let patch_bytes = std::mem::size_of::<[PointArgumentPatch<'_>; N]>()
-            .checked_add(std::mem::size_of::<photocraft_raster::backing::quota::QuotaLease>())
-            .and_then(|n| n.checked_add(128)).ok_or(BackingError::Length)?;
-        let _patch_fee = owner.quota().reserve(QuotaKind::Index, patch_bytes as u64).map_err(|_| BackingError::Quota)?;
-        let mut patches = [PointArgumentPatch { name: "", value: PointArgumentValue::Bool(false) }; N];
-        for (slot, argument) in patches.iter_mut().zip(fields.arguments.iter().take(fields.count)) {
-            let argument = argument.as_ref().ok_or(BackingError::Integrity)?;
-            ctl.check(4096)?;
-            if !incoming(kind,argument) {return Err(BackingError::Unsupported.into());}
-            *slot = PointArgumentPatch { name: argument.name, value: argument.value };
+// Keep the explicit authority, borrowed payload and original-control proof inputs together.
+#[allow(clippy::too_many_arguments)]
+fn stage_patches<const N: usize>(
+    route: Route,
+    owner: &AccountedDocument,
+    fields: &Fields<'_>,
+    kind: u8,
+    layer: photocraft_doc::LayerId,
+    revision: u64,
+    stack_len: usize,
+    id: &str,
+    move_to: Option<usize>,
+    ctl: &ReadControl<'_>,
+) -> Result<AccountedDocument> {
+    if fields.count > N {
+        return Err(BackingError::Length.into());
+    }
+    // This scratch is additional to OLD/history/STAGED and the reply fees.
+    // Declare the fee before the real array and retain it through full proof.
+    let patch_bytes = std::mem::size_of::<[PointArgumentPatch<'_>; N]>()
+        .checked_add(std::mem::size_of::<photocraft_raster::backing::quota::QuotaLease>())
+        .and_then(|n| n.checked_add(128))
+        .ok_or(BackingError::Length)?;
+    let _patch_fee = owner.quota().reserve(QuotaKind::Index, patch_bytes as u64).map_err(|_| BackingError::Quota)?;
+    let mut patches = [PointArgumentPatch { name: "", value: PointArgumentValue::Bool(false) }; N];
+    for (slot, argument) in patches.iter_mut().zip(fields.arguments.iter().take(fields.count)) {
+        let argument = argument.as_ref().ok_or(BackingError::Integrity)?;
+        ctl.check(4096)?;
+        if !incoming(kind, argument) {
+            return Err(BackingError::Unsupported.into());
         }
-        let staged = if id=="xcf.filter.remove" {
-            match route{Route::Original=>owner.try_remove_readonly_filtered_flat_point_filter(PointFilterRemovePatch{layer,filter:fields.filter,expected_stack_revision:revision},ctl)?,Route::Masked=>owner.try_remove_readonly_masked_filtered_flat_point_filter(PointFilterRemovePatch{layer,filter:fields.filter,expected_stack_revision:revision},ctl)?,Route::Hierarchy=>owner.try_remove_readonly_normal_hierarchy_filter(PointFilterRemovePatch{layer,filter:fields.filter,expected_stack_revision:revision},ctl)?}
-        } else if let Some(index)=move_to {
-            if index>=stack_len{return Err(bad(id,"index is outside the current owner stack"))}
-            match route{Route::Original=>owner.try_move_readonly_filtered_flat_point_filter(PointFilterMovePatch{layer,filter:fields.filter,expected_stack_revision:revision,index},ctl)?,Route::Masked=>owner.try_move_readonly_masked_filtered_flat_point_filter(PointFilterMovePatch{layer,filter:fields.filter,expected_stack_revision:revision,index},ctl)?,Route::Hierarchy=>owner.try_move_readonly_normal_hierarchy_filter(PointFilterMovePatch{layer,filter:fields.filter,expected_stack_revision:revision,index},ctl)?}
-        } else {
- let patch=PointFilterPatch{layer,filter:fields.filter,expected_stack_revision:revision,arguments:patches.get(..fields.count).ok_or(BackingError::Integrity)?,enabled:fields.enabled};
- match route{Route::Original=>owner.try_with_readonly_filtered_flat_point_filter_with_opacity(patch,fields.opacity,ctl)?,Route::Masked=>owner.try_with_readonly_masked_filtered_flat_point_filter_with_opacity(patch,fields.opacity,ctl)?,Route::Hierarchy=>owner.try_with_readonly_normal_hierarchy_filter_with_opacity(patch,fields.opacity,ctl)?}
- };
-        route.recipe(&staged, ctl)?;
-        Ok(staged)
-
+        *slot = PointArgumentPatch { name: argument.name, value: argument.value };
+    }
+    let staged = if id == "xcf.filter.remove" {
+        match route {
+            Route::Original => owner.try_remove_readonly_filtered_flat_point_filter(
+                PointFilterRemovePatch { layer, filter: fields.filter, expected_stack_revision: revision },
+                ctl,
+            )?,
+            Route::Masked => owner.try_remove_readonly_masked_filtered_flat_point_filter(
+                PointFilterRemovePatch { layer, filter: fields.filter, expected_stack_revision: revision },
+                ctl,
+            )?,
+            Route::Hierarchy => owner
+                .try_remove_readonly_normal_hierarchy_filter(PointFilterRemovePatch { layer, filter: fields.filter, expected_stack_revision: revision }, ctl)?,
+        }
+    } else if let Some(index) = move_to {
+        if index >= stack_len {
+            return Err(bad(id, "index is outside the current owner stack"));
+        }
+        match route {
+            Route::Original => owner.try_move_readonly_filtered_flat_point_filter(
+                PointFilterMovePatch { layer, filter: fields.filter, expected_stack_revision: revision, index },
+                ctl,
+            )?,
+            Route::Masked => owner.try_move_readonly_masked_filtered_flat_point_filter(
+                PointFilterMovePatch { layer, filter: fields.filter, expected_stack_revision: revision, index },
+                ctl,
+            )?,
+            Route::Hierarchy => owner.try_move_readonly_normal_hierarchy_filter(
+                PointFilterMovePatch { layer, filter: fields.filter, expected_stack_revision: revision, index },
+                ctl,
+            )?,
+        }
+    } else {
+        let patch = PointFilterPatch {
+            layer,
+            filter: fields.filter,
+            expected_stack_revision: revision,
+            arguments: patches.get(..fields.count).ok_or(BackingError::Integrity)?,
+            enabled: fields.enabled,
+        };
+        match route {
+            Route::Original => owner.try_with_readonly_filtered_flat_point_filter_with_opacity(patch, fields.opacity, ctl)?,
+            Route::Masked => owner.try_with_readonly_masked_filtered_flat_point_filter_with_opacity(patch, fields.opacity, ctl)?,
+            Route::Hierarchy => owner.try_with_readonly_normal_hierarchy_filter_with_opacity(patch, fields.opacity, ctl)?,
+        }
+    };
+    route.recipe(&staged, ctl)?;
+    Ok(staged)
 }
 
 pub(super) struct Request<'a> {
@@ -372,7 +559,7 @@ impl<'a> Request<'a> {
     pub(super) fn parse(session: &Session, id: &str, params: &'a Value, c: &ReadControl<'_>) -> Result<Self> {
         c.check(32768)?;
         context(session, id, params)?;
-        let route=Route::owner(session.active().and_then(|s|s.doc.accounted()).ok_or(BackingError::Unsupported)?).ok_or(BackingError::Unsupported)?;
+        let route = Route::owner(session.active().and_then(|s| s.doc.accounted()).ok_or(BackingError::Unsupported)?).ok_or(BackingError::Unsupported)?;
         let id = match id {
             "xcf.filter.set" => "xcf.filter.set",
             "xcf.filter.enable" => "xcf.filter.enable",
@@ -381,21 +568,36 @@ impl<'a> Request<'a> {
             _ => return Err(BackingError::Unsupported.into()),
         };
         if id == "xcf.filter.remove" {
-            let object=params.as_object().filter(|o|o.len()==1 && o.contains_key("filterId")).ok_or_else(||bad(id,"only filterId supported"))?;
-            let text=object.get("filterId").and_then(Value::as_str).filter(|s|!s.is_empty()&&s.len()<=20&&!s.starts_with('0')&&s.bytes().all(|b|b.is_ascii_digit()))
-                .ok_or_else(||bad(id,"canonical filterId required"))?;
-            let filter=FilterId(text.parse().map_err(|_|bad(id,"filterId overflow"))?);
-            return Ok(Self{id,route,params,fields:Fields{filter,arguments:[None;10],count:0,enabled:None,opacity:None},move_to:None});
+            let object = params.as_object().filter(|o| o.len() == 1 && o.contains_key("filterId")).ok_or_else(|| bad(id, "only filterId supported"))?;
+            let text = object
+                .get("filterId")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty() && s.len() <= 20 && !s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit()))
+                .ok_or_else(|| bad(id, "canonical filterId required"))?;
+            let filter = FilterId(text.parse().map_err(|_| bad(id, "filterId overflow"))?);
+            return Ok(Self { id, route, params, fields: Fields { filter, arguments: [None; 10], count: 0, enabled: None, opacity: None }, move_to: None });
         }
         if id == "xcf.filter.move" {
-            let object=params.as_object().filter(|o|o.len()==2 && o.keys().all(|k|matches!(k.as_str(),"filterId"|"index")))
-                .ok_or_else(||bad(id,"only filterId,index supported"))?;
-            let text=object.get("filterId").and_then(Value::as_str).filter(|s|!s.is_empty()&&s.len()<=20&&!s.starts_with('0')&&s.bytes().all(|b|b.is_ascii_digit()))
-                .ok_or_else(||bad(id,"canonical filterId required"))?;
-            let filter=FilterId(text.parse().map_err(|_|bad(id,"filterId overflow"))?);
-            let index=object.get("index").and_then(Value::as_u64).filter(|i|*i<1024).ok_or_else(||bad(id,"index must be a bounded owner-local integer"))?;
-            let index=usize::try_from(index).map_err(|_|BackingError::Length)?;
-            return Ok(Self{id,route,params,fields:Fields{filter,arguments:[None;10],count:0,enabled:None,opacity:None},move_to:Some(index)});
+            let object = params
+                .as_object()
+                .filter(|o| o.len() == 2 && o.keys().all(|k| matches!(k.as_str(), "filterId" | "index")))
+                .ok_or_else(|| bad(id, "only filterId,index supported"))?;
+            let text = object
+                .get("filterId")
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty() && s.len() <= 20 && !s.starts_with('0') && s.bytes().all(|b| b.is_ascii_digit()))
+                .ok_or_else(|| bad(id, "canonical filterId required"))?;
+            let filter = FilterId(text.parse().map_err(|_| bad(id, "filterId overflow"))?);
+            let index =
+                object.get("index").and_then(Value::as_u64).filter(|i| *i < 1024).ok_or_else(|| bad(id, "index must be a bounded owner-local integer"))?;
+            let index = usize::try_from(index).map_err(|_| BackingError::Length)?;
+            return Ok(Self {
+                id,
+                route,
+                params,
+                fields: Fields { filter, arguments: [None; 10], count: 0, enabled: None, opacity: None },
+                move_to: Some(index),
+            });
         }
         let object = params
             .as_object()
@@ -410,27 +612,33 @@ impl<'a> Request<'a> {
         if fields.count > 3 {
             let owner = session.active().and_then(|s| s.doc.accounted()).ok_or(BackingError::Unsupported)?;
             let (_, node, _, _, _) = target(owner, fields.filter, c)?;
-            let kind=route_family(route,node).ok_or(BackingError::Unsupported)?;
-            if fields.count>patch_limit(kind) {return Err(bad(id,"patch count exceeds the actual target family"));}
+            let kind = route_family(route, node).ok_or(BackingError::Unsupported)?;
+            if fields.count > patch_limit(kind) {
+                return Err(bad(id, "patch count exceeds the actual target family"));
+            }
         }
-        Ok(Self { id, route, params, fields, move_to:None })
+        Ok(Self { id, route, params, fields, move_to: None })
     }
     pub(super) fn prepare(self, session: &Session, ctl: &ReadControl<'_>) -> Result<Prepared<'a>> {
         context(session, self.id, self.params)?;
         let state = session.active().ok_or(EngineError::NoDocument)?;
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
-        self.route.validate(owner,ctl)?;
+        self.route.validate(owner, ctl)?;
         if !state.history.current()?.shares_state(&state.doc) {
             return Err(BackingError::Integrity.into());
         }
         self.route.recipe(owner, ctl)?;
-        let (stack, node, layer,node_index,tree) = target(owner, self.fields.filter, ctl)?;
-        let kind = route_family(self.route,node).ok_or(BackingError::Unsupported)?;
-        if matches!(self.route,Route::Masked|Route::Hierarchy) && masked_kind(node).is_some() && self.fields.opacity.is_some_and(|b|b!=1.0f64.to_bits()){return Err(BackingError::Unsupported.into())}
+        let (stack, node, layer, node_index, tree) = target(owner, self.fields.filter, ctl)?;
+        let kind = route_family(self.route, node).ok_or(BackingError::Unsupported)?;
+        if matches!(self.route, Route::Masked | Route::Hierarchy) && masked_kind(node).is_some() && self.fields.opacity.is_some_and(|b| b != 1.0f64.to_bits()) {
+            return Err(BackingError::Unsupported.into());
+        }
         if self.fields.count > patch_limit(kind) {
             return Err(bad(self.id, "argument count exceeds the target family"));
         }
-        if (self.move_to.is_some() || self.id=="xcf.filter.remove") && stack.revision==u64::MAX {return Err(BackingError::Length.into())}
+        if (self.move_to.is_some() || self.id == "xcf.filter.remove") && stack.revision == u64::MAX {
+            return Err(BackingError::Length.into());
+        }
         let visibility_changed = self.fields.enabled.is_some_and(|v| v != node.enabled);
         locks(owner, layer, visibility_changed, ctl)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
@@ -483,18 +691,29 @@ impl<'a> Request<'a> {
             .ok_or(BackingError::Length)?;
         lease.reconcile_capacity(actual as u64).map_err(|_| BackingError::Allocation)?;
 
-        let staged = if matches!(kind,10|11) {
-            stage_patches::<10>(self.route,owner,&self.fields,kind,layer,stack.revision,stack.nodes.len(),self.id,self.move_to,ctl)?
+        let staged = if matches!(kind, 10 | 11) {
+            stage_patches::<10>(self.route, owner, &self.fields, kind, layer, stack.revision, stack.nodes.len(), self.id, self.move_to, ctl)?
         } else {
-            stage_patches::<4>(self.route,owner,&self.fields,kind,layer,stack.revision,stack.nodes.len(),self.id,self.move_to,ctl)?
+            stage_patches::<4>(self.route, owner, &self.fields, kind, layer, stack.revision, stack.nodes.len(), self.id, self.move_to, ctl)?
         };
         let updated = !staged.shares_model(owner);
         let mut history = state.history.clone();
         let snapshot = if updated {
-            history.max_states = session.prefs().performance.history_states.max(1) as usize;
-            history.max_bytes = session.prefs().performance.history_budget_bytes();
+            history.set_accounted_state_limit(session.prefs().performance.history_states.max(1) as usize)?;
             history.set_current_layers_borrowed(view.target(), ctl)?;
-            history.try_commit_prepared_accounted(owner, staged, if self.move_to.is_some(){"Move GIMP Stock Filter"}else if self.id=="xcf.filter.remove"{"Remove GIMP Stock Filter"}else{"Edit GIMP Stock Filter"}, view.target(), ctl)?
+            history.try_commit_prepared_accounted(
+                owner,
+                staged,
+                if self.move_to.is_some() {
+                    "Move GIMP Stock Filter"
+                } else if self.id == "xcf.filter.remove" {
+                    "Remove GIMP Stock Filter"
+                } else {
+                    "Edit GIMP Stock Filter"
+                },
+                view.target(),
+                ctl,
+            )?
         } else {
             state.doc.clone()
         };
@@ -597,8 +816,8 @@ pub(super) struct Prepared<'a> {
     layer: LayerId,
     visibility_changed: bool,
     stack_revision: u64,
-    node_index:usize,
-    tree:Option<TreeWitness>,
+    node_index: usize,
+    tree: Option<TreeWitness>,
     updated: bool,
     reply: Value,
     _reply_lease: QuotaLease,
@@ -635,12 +854,14 @@ impl Prepared<'_> {
             return Err(EngineError::Other("the prepared Point edit targets older Session state".into()));
         }
         let owner = state.doc.accounted().ok_or(BackingError::Integrity)?;
-        if Route::owner(owner)!=Some(self.request.route){return Err(BackingError::Integrity.into())}
+        if Route::owner(owner) != Some(self.request.route) {
+            return Err(BackingError::Integrity.into());
+        }
         if !state.history.current()?.shares_state(&state.doc) {
             return Err(BackingError::Integrity.into());
         }
-        let (stack, _, layer,node_index,tree) = target(owner, self.request.fields.filter, ctl)?;
-        if layer != self.layer || stack.revision != self.stack_revision || node_index!=self.node_index || tree!=self.tree {
+        let (stack, _, layer, node_index, tree) = target(owner, self.request.fields.filter, ctl)?;
+        if layer != self.layer || stack.revision != self.stack_revision || node_index != self.node_index || tree != self.tree {
             return Err(BackingError::Integrity.into());
         }
         locks(owner, self.layer, self.visibility_changed, ctl)?;
@@ -660,50 +881,80 @@ impl Prepared<'_> {
     }
 }
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="filtered_flat_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "filtered_flat_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="filtered_flat_move_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "filtered_flat_move_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod move_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="filtered_flat_remove_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "filtered_flat_remove_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod remove_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="filtered_flat_current_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "filtered_flat_current_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod current_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="filtered_flat_exposure_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "filtered_flat_exposure_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod exposure_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="filtered_flat_invert_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "filtered_flat_invert_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod invert_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="filtered_flat_opacity_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "filtered_flat_opacity_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod opacity_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="filtered_flat_source_opacity_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "filtered_flat_source_opacity_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod source_opacity_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "filtered_flat_affine_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod affine_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="filtered_flat_stock_rgb_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "filtered_flat_stock_rgb_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod stock_rgb_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="filtered_flat_hsl_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "filtered_flat_hsl_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod hsl_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="masked_filtered_flat_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "masked_filtered_flat_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod masked_tests;

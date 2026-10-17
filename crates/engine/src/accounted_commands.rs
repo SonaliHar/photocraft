@@ -18,22 +18,24 @@ pub use save_journal::PreparedAccountedSaveReply;
 pub(crate) use save_journal::PreparedSaveJournalWitness;
 mod assigned_mask;
 mod assigned_translate;
+mod filtered_flat;
+mod hierarchy_expanded;
 #[path = "imported_accounted_metadata.rs"]
 mod imported_metadata;
 mod imported_translate;
 mod point;
-mod filtered_flat;
-mod hierarchy_expanded;
 mod programme_select;
 pub use filtered_flat::candidate as filtered_flat_filter_edit_candidate;
-pub use filtered_flat::masked_candidate as masked_filtered_flat_filter_edit_candidate;
 pub use filtered_flat::hierarchy_candidate as normal_hierarchy_filter_edit_candidate;
-mod gaussian_group;
+pub use filtered_flat::masked_candidate as masked_filtered_flat_filter_edit_candidate;
 mod flat_composition;
+mod gaussian_group;
 mod readonly_layer_name;
 mod threshold;
 mod threshold_alpha;
 #[cfg(test)]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod threshold_alpha_journal_tests;
 pub(crate) use job_journal::PreparedAccountedJobJournal;
 
@@ -77,12 +79,17 @@ pub fn supports(id: &str) -> bool {
 /// Observed Box admits only its sealed CURRENT filter edit lane, viewing and
 /// history navigation. Other mutations retain the original refusal.
 pub(crate) fn observed_box_mutation_refused(session: &Session, id: &str) -> bool {
-    if matches!(id,"edit.clear"|"edit.fill"|"select.all"|"select.deselect"|"select.inverse")&&session.active().and_then(|s|s.doc.accounted()).is_some_and(programme_pixels_candidate){return false}
+    if matches!(id, "edit.clear" | "edit.fill" | "select.all" | "select.deselect" | "select.inverse")
+        && session.active().and_then(|s| s.doc.accounted()).is_some_and(programme_pixels_candidate)
+    {
+        return false;
+    }
     supports(id)
         && !matches!(id, "layer.select" | "edit.undo" | "edit.redo" | "history.selectState")
         && session.active().and_then(|state| state.doc.accounted()).is_some_and(point::observed_box_readonly)
-        && !(id == "layer.translate" && session.active().and_then(|s|s.doc.accounted()).is_some_and(crate::observed_box_translation_candidate))
-        && !(id == "layer.setProps" && session.active().and_then(|s|s.doc.accounted()).is_some_and(crate::accounted_session::metadata_gesture::observed_box_layer_metadata_candidate))
+        && !(id == "layer.translate" && session.active().and_then(|s| s.doc.accounted()).is_some_and(crate::observed_box_translation_candidate))
+        && !(id == "layer.setProps"
+            && session.active().and_then(|s| s.doc.accounted()).is_some_and(crate::accounted_session::metadata_gesture::observed_box_layer_metadata_candidate))
         && !(matches!(id, "xcf.filter.set" | "xcf.filter.enable")
             && session.active().and_then(|state| state.doc.accounted()).is_some_and(point::observed_box_edit_candidate))
 }
@@ -92,22 +99,61 @@ fn bad(id: &str, message: &str) -> EngineError {
 }
 
 /// Preserve the old global command set; rename is admitted only on this actual class.
-pub(crate) fn supports_for_session(session:&Session,id:&str)->bool{
- supports(id) || matches!(id,"paint.stroke"|"paint.pencil") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|crate::accounted_native_stroke::candidate(o)) || id=="layer.setExpanded" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()) || id=="layer.renameLayer" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()))
+pub(crate) fn supports_for_session(session: &Session, id: &str) -> bool {
+    supports(id)
+        || matches!(id, "paint.stroke" | "paint.pencil")
+            && session.active().and_then(|s| s.doc.accounted()).is_some_and(crate::accounted_native_stroke::candidate)
+        || id == "layer.setExpanded" && session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| o.is_readonly_normal_hierarchy_storage())
+        || id == "layer.renameLayer"
+            && session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| {
+                o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage())
+            })
 }
 /// No editing or selection route is granted by readonly mixed-root storage.
-pub(crate) fn filtered_flat_mutation_refused(session:&Session,id:&str)->bool{
-    if (id=="layer.select"&&session.active().and_then(|s|s.doc.accounted()).is_some_and(programme_select_candidate))||(matches!(id,"edit.clear"|"edit.fill"|"select.all"|"select.deselect"|"select.inverse")&&session.active().and_then(|s|s.doc.accounted()).is_some_and(programme_pixels_candidate)){return false}
-    if matches!(id,"paint.stroke"|"paint.pencil")&&session.active().and_then(|s|s.doc.accounted()).is_some_and(crate::accounted_native_stroke::candidate){return false}
-    if matches!(id,"layer.select"|"layer.setExpanded"|"paint.stroke"|"paint.pencil") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()){return false}
-    supports_for_session(session,id) && !matches!(id,"edit.undo"|"edit.redo"|"history.selectState"|"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move"|"xcf.filter.remove"|"layer.setProps"|"layer.renameLayer")
-        && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage()))
+pub(crate) fn filtered_flat_mutation_refused(session: &Session, id: &str) -> bool {
+    if (id == "layer.select" && session.active().and_then(|s| s.doc.accounted()).is_some_and(programme_select_candidate))
+        || (matches!(id, "edit.clear" | "edit.fill" | "select.all" | "select.deselect" | "select.inverse")
+            && session.active().and_then(|s| s.doc.accounted()).is_some_and(programme_pixels_candidate))
+    {
+        return false;
+    }
+    if matches!(id, "paint.stroke" | "paint.pencil") && session.active().and_then(|s| s.doc.accounted()).is_some_and(crate::accounted_native_stroke::candidate)
+    {
+        return false;
+    }
+    if matches!(id, "layer.select" | "layer.setExpanded" | "paint.stroke" | "paint.pencil")
+        && session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| o.is_readonly_normal_hierarchy_storage())
+    {
+        return false;
+    }
+    supports_for_session(session, id)
+        && !matches!(
+            id,
+            "edit.undo"
+                | "edit.redo"
+                | "history.selectState"
+                | "xcf.filter.set"
+                | "xcf.filter.enable"
+                | "xcf.filter.move"
+                | "xcf.filter.remove"
+                | "layer.setProps"
+                | "layer.renameLayer"
+        )
+        && session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| {
+            o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage())
+        })
 }
 
 /// O(1) registered routing hints, never document/native edit capabilities.
-pub(crate) fn programme_select_candidate(owner:&photocraft_doc::accounted_document::AccountedDocument)->bool{programme_select::kind(owner).is_some()}
-pub(crate) fn programme_pixels_candidate(owner:&photocraft_doc::accounted_document::AccountedDocument)->bool{crate::accounted_programme_current::kind(owner).is_some()}
+pub(crate) fn programme_select_candidate(owner: &photocraft_doc::accounted_document::AccountedDocument) -> bool {
+    programme_select::kind(owner).is_some()
+}
+pub(crate) fn programme_pixels_candidate(owner: &photocraft_doc::accounted_document::AccountedDocument) -> bool {
+    crate::accounted_programme_current::kind(owner).is_some()
+}
 
+// Keep the prepaid inline representation; boxing introduces a separate heap owner and quota lifetime.
+#[allow(clippy::large_enum_variant)]
 enum Request<'a> {
     NativeStroke(crate::accounted_native_stroke::Request<'a>),
     PreparedNativeStroke(crate::accounted_native_stroke::Prepared<'a>),
@@ -138,12 +184,12 @@ enum Request<'a> {
     Fill(&'a Value),
     PreparedFill(crate::accounted_fill::Prepared<'a>),
     Select(LayerId),
-    HierarchySelect(LayerId,hierarchy_expanded::SelectionWitness),
-    ProgrammeSelect(LayerId,programme_select::SelectionWitness),
+    HierarchySelect(LayerId, hierarchy_expanded::SelectionWitness),
+    ProgrammeSelect(LayerId, programme_select::SelectionWitness),
     Edit(AccountedEdit<'a>),
-    SelectionInverse(&'a Value,crate::accounted_selection_session::AccountedSelectionTarget),
+    SelectionInverse(&'a Value, crate::accounted_selection_session::AccountedSelectionTarget),
     ProgrammeClearSelection(crate::accounted_selection_session::AccountedSelectionTarget),
-    ProgrammeSelectAll(&'a Value,crate::accounted_selection_session::AccountedSelectionTarget),
+    ProgrammeSelectAll(&'a Value, crate::accounted_selection_session::AccountedSelectionTarget),
     ClearSelection,
     SelectAll(&'a Value),
     ColorRange(&'a Value),
@@ -164,11 +210,11 @@ fn require_history_selection_enabled(session: &Session) -> Result<()> {
 }
 
 fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadControl<'_>) -> Result<Request<'a>> {
-    if observed_box_mutation_refused(session, id) || filtered_flat_mutation_refused(session,id) {
+    if observed_box_mutation_refused(session, id) || filtered_flat_mutation_refused(session, id) {
         return Err(BackingError::Unsupported.into());
     }
     if id == "xcf.composition.set" {
-        return Ok(Request::FlatComposition(flat_composition::Request::parse(session,params,control)?));
+        return Ok(Request::FlatComposition(flat_composition::Request::parse(session, params, control)?));
     }
     if id == "layer.translate" {
         return Ok(Request::ImportedTranslate(imported_translate::Request::parse(session, params, control)?));
@@ -184,24 +230,29 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
         crate::accounted_clear::validate_request(session, params)?;
         return Ok(Request::Clear(params));
     }
-    if matches!(id,"paint.stroke"|"paint.pencil") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|crate::accounted_native_stroke::candidate(o)) {
-        return Ok(Request::NativeStroke(crate::accounted_native_stroke::Request::parse(session,id,params,control)?));
+    if matches!(id, "paint.stroke" | "paint.pencil") && session.active().and_then(|s| s.doc.accounted()).is_some_and(crate::accounted_native_stroke::candidate)
+    {
+        return Ok(Request::NativeStroke(crate::accounted_native_stroke::Request::parse(session, id, params, control)?));
     }
-    if id=="layer.setExpanded" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()) {
-        return Ok(Request::HierarchyExpanded(hierarchy_expanded::Request::parse(session,params,control)?));
+    if id == "layer.setExpanded" && session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| o.is_readonly_normal_hierarchy_storage()) {
+        return Ok(Request::HierarchyExpanded(hierarchy_expanded::Request::parse(session, params, control)?));
     }
-    if matches!(id,"xcf.filter.set"|"xcf.filter.enable"|"xcf.filter.move"|"xcf.filter.remove") && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage())) {
-        return Ok(Request::FilteredFlat(filtered_flat::Request::parse(session,id,params,control)?));
+    if matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove")
+        && session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| {
+            o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage())
+        })
+    {
+        return Ok(Request::FilteredFlat(filtered_flat::Request::parse(session, id, params, control)?));
     }
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable" | "xcf.filter.move" | "xcf.filter.remove") {
         if session.active().and_then(|state| state.doc.accounted()).is_some_and(point::observed_box_readonly) {
-            return Ok(Request::Point(point::Request::parse_observed_box(session,id,params,control)?));
+            return Ok(Request::Point(point::Request::parse_observed_box(session, id, params, control)?));
         }
-        if session.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_assigned_point_storage()) {
-            return Ok(Request::Point(point::Request::parse_assigned_enabled(session,id,params,control)?));
+        if session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_assigned_point_storage()) {
+            return Ok(Request::Point(point::Request::parse_assigned_enabled(session, id, params, control)?));
         }
-        if session.active().and_then(|state|state.doc.accounted()).is_some_and(|owner|owner.is_readonly_gaussian_group_storage()) {
-            return Ok(Request::GaussianGroup(gaussian_group::Request::parse(session,id,params,control)?));
+        if session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_gaussian_group_storage()) {
+            return Ok(Request::GaussianGroup(gaussian_group::Request::parse(session, id, params, control)?));
         }
         if session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| owner.is_readonly_point_storage()) {
             return Ok(Request::Point(point::Request::parse(session, id, params, control)?));
@@ -221,8 +272,12 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
         params.as_object().ok_or_else(|| bad(id, "parameters must be an object"))?;
         return Ok(Request::HistorySelect(crate::history_select_cmds::validate_request(session, params, control)?));
     }
-    if id=="layer.renameLayer" && session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage())) {
-        return Ok(Request::ImportedMetadata(imported_metadata::parse_rename(session,params,control)?));
+    if id == "layer.renameLayer"
+        && session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| {
+            o.is_readonly_filtered_flat_point_storage() || (o.is_readonly_masked_filtered_flat_point_storage() || o.is_readonly_normal_hierarchy_storage())
+        })
+    {
+        return Ok(Request::ImportedMetadata(imported_metadata::parse_rename(session, params, control)?));
     }
     if id == "layer.setProps" && readonly_layer_name::applies(session) {
         return Ok(Request::ReadonlyLayerName(readonly_layer_name::Request::parse(params, control)?));
@@ -230,14 +285,17 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
     if id == "layer.setProps" && imported_metadata::applies(session) {
         return Ok(Request::ImportedMetadata(imported_metadata::parse(params)?));
     }
-    if id=="select.inverse"{
-        crate::accounted_select_inverse::validate_request(session,params)?;
-        return Ok(Request::SelectionInverse(params,crate::accounted_selection_session::AccountedSelectionTarget::capture_with_control(session,control)?));
+    if id == "select.inverse" {
+        crate::accounted_select_inverse::validate_request(session, params)?;
+        return Ok(Request::SelectionInverse(params, crate::accounted_selection_session::AccountedSelectionTarget::capture_with_control(session, control)?));
     }
     if id == "select.all" {
         crate::accounted_select_all::validate_request(session, params)?;
-        if session.active().and_then(|s|s.doc.accounted()).is_some_and(programme_pixels_candidate){
-            return Ok(Request::ProgrammeSelectAll(params,crate::accounted_selection_session::AccountedSelectionTarget::capture_with_control(session,control)?));
+        if session.active().and_then(|s| s.doc.accounted()).is_some_and(programme_pixels_candidate) {
+            return Ok(Request::ProgrammeSelectAll(
+                params,
+                crate::accounted_selection_session::AccountedSelectionTarget::capture_with_control(session, control)?,
+            ));
         }
         return Ok(Request::SelectAll(params));
     }
@@ -247,8 +305,8 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
     }
     if id == "select.deselect" {
         crate::selection_inverse_controlled::storage_dispatch_preflight(session, id, params, false)?;
-        if session.active().and_then(|s|s.doc.accounted()).is_some_and(programme_pixels_candidate){
-            return Ok(Request::ProgrammeClearSelection(crate::accounted_selection_session::AccountedSelectionTarget::capture_with_control(session,control)?));
+        if session.active().and_then(|s| s.doc.accounted()).is_some_and(programme_pixels_candidate) {
+            return Ok(Request::ProgrammeClearSelection(crate::accounted_selection_session::AccountedSelectionTarget::capture_with_control(session, control)?));
         }
         return Ok(Request::ClearSelection);
     }
@@ -284,12 +342,14 @@ fn request<'a>(session: &Session, id: &str, params: &'a Value, control: &ReadCon
                 }
             }
             let layer = object.get("layer").and_then(Value::as_u64).filter(|id| *id != 0).ok_or_else(|| bad(id, "layer must be a nonzero integer identity"))?;
-            let layer=LayerId(layer);
-            if session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|o.is_readonly_normal_hierarchy_storage()) {
-                Ok(Request::HierarchySelect(layer,hierarchy_expanded::SelectionWitness::prepare(session,layer,control)?))
-            }else if session.active().and_then(|s|s.doc.accounted()).is_some_and(programme_select_candidate){
-                Ok(Request::ProgrammeSelect(layer,programme_select::SelectionWitness::prepare(session,layer,control)?))
-            }else{Ok(Request::Select(layer))}
+            let layer = LayerId(layer);
+            if session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| o.is_readonly_normal_hierarchy_storage()) {
+                Ok(Request::HierarchySelect(layer, hierarchy_expanded::SelectionWitness::prepare(session, layer, control)?))
+            } else if session.active().and_then(|s| s.doc.accounted()).is_some_and(programme_select_candidate) {
+                Ok(Request::ProgrammeSelect(layer, programme_select::SelectionWitness::prepare(session, layer, control)?))
+            } else {
+                Ok(Request::Select(layer))
+            }
         }
         "layer.setProps" => {
             if object.keys().any(|key| !matches!(key.as_str(), "layer" | "coalesce" | "name" | "visible" | "opacity")) {
@@ -353,14 +413,14 @@ fn global_refusal(session: &Session) -> Option<&'static str> {
 }
 
 pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Option<&'static str>> {
-    if !supports_for_session(session,id) {
+    if !supports_for_session(session, id) {
         return Ok(Some("this command has no qualified accounted dispatch"));
     }
     let state = session.active().ok_or(EngineError::NoDocument)?;
     if let Some(reason) = global_refusal(session) {
         return Ok(Some(reason));
     }
-    if id == "xcf.composition.set" && !state.doc.accounted().is_some_and(|owner|owner.is_readonly_flat_composite_storage()) {
+    if id == "xcf.composition.set" && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_flat_composite_storage()) {
         return Ok(Some("this accounted storage has no qualified explicit composition transaction"));
     }
     if id == "layer.translate" && !state.doc.accounted().is_some_and(imported_translate::candidate) {
@@ -375,26 +435,41 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     if observed_box_mutation_refused(session, id) {
         return Ok(Some("this observed Box geometry recipe is read-only"));
     }
-    if matches!(id, "xcf.filter.move" | "xcf.filter.remove") && !state.doc.accounted().is_some_and(|owner| owner.is_readonly_point_storage() || (owner.is_readonly_filtered_flat_point_storage() || (owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage()))) {
+    if matches!(id, "xcf.filter.move" | "xcf.filter.remove")
+        && !state.doc.accounted().is_some_and(|owner| {
+            owner.is_readonly_point_storage()
+                || (owner.is_readonly_filtered_flat_point_storage()
+                    || (owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage()))
+        })
+    {
         return Ok(Some("this accounted filter storage has no qualified stack edit recipe"));
     }
     if matches!(id, "xcf.filter.set" | "xcf.filter.enable")
-        && !state
-            .doc
-            .accounted()
-            .is_some_and(|owner| owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_gaussian_group_storage() || (owner.is_readonly_filtered_flat_point_storage() || (owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage())) || point::assigned_enabled_candidate(owner))
+        && !state.doc.accounted().is_some_and(|owner| {
+            owner.is_readonly_threshold_alpha_storage()
+                || owner.is_readonly_threshold_storage()
+                || owner.is_readonly_point_storage()
+                || owner.is_readonly_gaussian_group_storage()
+                || (owner.is_readonly_filtered_flat_point_storage()
+                    || (owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage()))
+                || point::assigned_enabled_candidate(owner)
+        })
     {
         return Ok(Some("this accounted filter storage has no qualified editing recipe"));
     }
     if id == "edit.clear"
         && (state.doc.xcf_state.is_none()
-            || state.doc.accounted().is_none_or(|owner|!programme_pixels_candidate(owner)&&(owner.is_readonly_threshold_alpha_storage()||owner.is_readonly_threshold_storage())))
+            || state.doc.accounted().is_none_or(|owner| {
+                !programme_pixels_candidate(owner) && (owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage())
+            }))
     {
         return Ok(Some("accounted Clear requires the plain imported native owner"));
     }
     if id == "edit.fill"
         && (state.doc.xcf_state.is_none()
-            || state.doc.accounted().is_none_or(|owner|!programme_pixels_candidate(owner)&&(owner.is_readonly_threshold_alpha_storage()||owner.is_readonly_threshold_storage())))
+            || state.doc.accounted().is_none_or(|owner| {
+                !programme_pixels_candidate(owner) && (owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage())
+            }))
     {
         return Ok(Some("accounted Fill requires the plain imported native owner"));
     }
@@ -404,16 +479,25 @@ pub fn disabled_reason(session: &Session, id: &str, params: &Value) -> Result<Op
     // Null is the existing enabled-query shape, not a layer-property call.
     // Do not disable a menu because its eventual call parameters are absent.
     if !params.is_null() {
-        if matches!(id,"select.all"|"select.deselect"|"select.inverse") && state.doc.accounted().is_some(){
+        if matches!(id, "select.all" | "select.deselect" | "select.inverse") && state.doc.accounted().is_some() {
             // Availability performs bounded wire/context checks only. The real
             // captured owner proof is paid by registered preparation.
-            if id=="select.inverse"{crate::accounted_select_inverse::validate_request(session,params)?;}
-            else if id=="select.all"{crate::accounted_select_all::validate_request(session,params)?;}
-            else{crate::selection_inverse_controlled::storage_dispatch_preflight(session,id,params,false)?;}
-        } else if matches!(id,"xcf.filter.set"|"xcf.filter.enable") && state.doc.accounted().is_some_and(point::observed_box_readonly) {
-            if !point::observed_box_wire_valid(id,params) { return Err(bad(id,"observed Box requires radius Signed32 0..1000 and/or enabled")); }
-        } else if matches!(id,"xcf.filter.set"|"xcf.filter.enable") && state.doc.accounted().is_some_and(|owner|owner.is_readonly_assigned_point_storage()) {
-            if !point::assigned_enabled_wire_valid(id,params) { return Err(bad(id,"assigned activation requires only filterId and enabled")); }
+            if id == "select.inverse" {
+                crate::accounted_select_inverse::validate_request(session, params)?;
+            } else if id == "select.all" {
+                crate::accounted_select_all::validate_request(session, params)?;
+            } else {
+                crate::selection_inverse_controlled::storage_dispatch_preflight(session, id, params, false)?;
+            }
+        } else if matches!(id, "xcf.filter.set" | "xcf.filter.enable") && state.doc.accounted().is_some_and(point::observed_box_readonly) {
+            if !point::observed_box_wire_valid(id, params) {
+                return Err(bad(id, "observed Box requires radius Signed32 0..1000 and/or enabled"));
+            }
+        } else if matches!(id, "xcf.filter.set" | "xcf.filter.enable") && state.doc.accounted().is_some_and(|owner| owner.is_readonly_assigned_point_storage())
+        {
+            if !point::assigned_enabled_wire_valid(id, params) {
+                return Err(bad(id, "assigned activation requires only filterId and enabled"));
+            }
         } else {
             request(session, id, params, &crate::read_control_none())?;
         }
@@ -699,15 +783,15 @@ impl<'a> PreparedAccountedCommand<'a> {
             return Err(EngineError::Other(reason.into()));
         }
         let request = match request {
-            Request::NativeStroke(request)=>Request::PreparedNativeStroke(request.prepare(session,control)?),
-            Request::HierarchyExpanded(request)=>Request::PreparedHierarchyExpanded(request.prepare(session,control)?),
-            Request::FlatComposition(request)=>Request::PreparedFlatComposition(request.prepare(session,control)?),
+            Request::NativeStroke(request) => Request::PreparedNativeStroke(request.prepare(session, control)?),
+            Request::HierarchyExpanded(request) => Request::PreparedHierarchyExpanded(request.prepare(session, control)?),
+            Request::FlatComposition(request) => Request::PreparedFlatComposition(request.prepare(session, control)?),
             Request::ImportedTranslate(request) => Request::PreparedImportedTranslate(request.prepare(session, control)?),
             Request::AssignedMask(request) => Request::PreparedAssignedMask(request.prepare(session, control)?),
             Request::ImportedMetadata(request) => Request::PreparedMetadata(request.prepare(session, control)?),
             Request::ThresholdAlpha(request) => Request::PreparedThresholdAlpha(request.prepare(session, control)?),
             Request::Threshold(request) => Request::PreparedThreshold(request.prepare(session, control)?),
-            Request::FilteredFlat(request) => Request::PreparedFilteredFlat(request.prepare(session,control)?),
+            Request::FilteredFlat(request) => Request::PreparedFilteredFlat(request.prepare(session, control)?),
             Request::Point(request) => Request::PreparedPoint(request.prepare(session, control)?),
             Request::GaussianGroup(request) => Request::PreparedGaussianGroup(request.prepare(session, control)?),
             Request::ReadonlyLayerName(request) => Request::PreparedReadonlyLayerName(request.prepare(session, control)?),
@@ -738,7 +822,11 @@ impl<'a> PreparedAccountedCommand<'a> {
         };
         // Mask enablement preserves its upstream journal:false contract. Its
         // retained response still owns a real fee beside the unchanged journal.
-        let journal_policy = if matches!(&request, Request::PreparedAssignedMask(_)|Request::PreparedHierarchyExpanded(_)) { JournalPolicy::Retain } else { JournalPolicy::Append };
+        let journal_policy = if matches!(&request, Request::PreparedAssignedMask(_) | Request::PreparedHierarchyExpanded(_)) {
+            JournalPolicy::Retain
+        } else {
+            JournalPolicy::Append
+        };
         let count = session.journal.len().checked_add(usize::from(matches!(journal_policy, JournalPolicy::Append))).ok_or(BackingError::Length)?;
         if count > MAX_RECORDS {
             return Err(BackingError::Length.into());
@@ -772,8 +860,8 @@ impl<'a> PreparedAccountedCommand<'a> {
             census.string(id)?;
             census.command_value(id, params, control)?;
         }
-        if matches!(&request,Request::ProgrammeSelect(_,_)){
-            census.add(0,std::mem::size_of::<PreparedAccountedCommand<'_>>().checked_add(1024).ok_or(BackingError::Length)?)?;
+        if matches!(&request, Request::ProgrammeSelect(_, _)) {
+            census.add(0, std::mem::size_of::<PreparedAccountedCommand<'_>>().checked_add(1024).ok_or(BackingError::Length)?)?;
         }
         if matches!(&request, Request::PreparedAssignedMask(_)) {
             census.add(0, usize::try_from(assigned_mask::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
@@ -785,17 +873,19 @@ impl<'a> PreparedAccountedCommand<'a> {
             census.add(0, usize::try_from(threshold_alpha::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
         }
         if matches!(&request, Request::PreparedFlatComposition(_)) {
-            census.add(0,usize::try_from(flat_composition::REPLY_ENVELOPE).map_err(|_|BackingError::Length)?)?;
+            census.add(0, usize::try_from(flat_composition::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
         }
-        if matches!(&request,Request::PreparedNativeStroke(_)){census.add(0,usize::try_from(crate::accounted_native_stroke::reply_envelope()).map_err(|_|BackingError::Length)?)?;}
+        if matches!(&request, Request::PreparedNativeStroke(_)) {
+            census.add(0, usize::try_from(crate::accounted_native_stroke::reply_envelope()).map_err(|_| BackingError::Length)?)?;
+        }
         if matches!(&request, Request::PreparedHierarchyExpanded(_)) {
-            census.add(0,usize::try_from(hierarchy_expanded::REPLY_ENVELOPE).map_err(|_|BackingError::Length)?)?;
+            census.add(0, usize::try_from(hierarchy_expanded::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
         }
         if matches!(&request, Request::PreparedGaussianGroup(_)) {
-            census.add(0,usize::try_from(gaussian_group::REPLY_ENVELOPE).map_err(|_|BackingError::Length)?)?;
+            census.add(0, usize::try_from(gaussian_group::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
         }
         if matches!(&request, Request::PreparedFilteredFlat(_)) {
-            census.add(0,usize::try_from(filtered_flat::REPLY_ENVELOPE).map_err(|_|BackingError::Length)?)?;
+            census.add(0, usize::try_from(filtered_flat::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
         }
         if matches!(&request, Request::PreparedPoint(_)) {
             census.add(0, usize::try_from(point::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
@@ -809,7 +899,7 @@ impl<'a> PreparedAccountedCommand<'a> {
         if matches!(&request, Request::PreparedFill(_)) {
             // The temporary native transaction pays its prepared reply until
             // publication; the retained journal covers the returned value.
-            census.add(0, usize::try_from(crate::accounted_fill::REPLY_ENVELOPE).map_err(|_| BackingError::Length)?)?;
+            census.add(0, crate::accounted_fill::REPLY_ENVELOPE)?;
         }
         // The copier polls Value visits but String copies do not debit bytes.
         // Prepay actual bounded payload and known Value/entry slot copies before
@@ -848,13 +938,13 @@ impl<'a> PreparedAccountedCommand<'a> {
         };
         let history = if matches!(
             &request,
-            Request::SelectionInverse(_,_)
+            Request::SelectionInverse(_, _)
                 | Request::ProgrammeClearSelection(_)
-                | Request::ProgrammeSelectAll(_,_)
+                | Request::ProgrammeSelectAll(_, _)
                 | Request::HistorySelect(_)
                 | Request::PreparedNativeStroke(_)
-                | Request::HierarchySelect(_,_)
-                | Request::ProgrammeSelect(_,_)
+                | Request::HierarchySelect(_, _)
+                | Request::ProgrammeSelect(_, _)
                 | Request::PreparedImportedTranslate(_)
                 | Request::PreparedFilteredFlat(_)
                 | Request::PreparedPoint(_)
@@ -906,13 +996,13 @@ impl<'a> PreparedAccountedCommand<'a> {
         }
         if matches!(
             &self.request,
-            Request::SelectionInverse(_,_)
+            Request::SelectionInverse(_, _)
                 | Request::ProgrammeClearSelection(_)
-                | Request::ProgrammeSelectAll(_,_)
+                | Request::ProgrammeSelectAll(_, _)
                 | Request::ClearSelection
                 | Request::PreparedNativeStroke(_)
-                | Request::HierarchySelect(_,_)
-                | Request::ProgrammeSelect(_,_)
+                | Request::HierarchySelect(_, _)
+                | Request::ProgrammeSelect(_, _)
                 | Request::PreparedHierarchyExpanded(_)
                 | Request::PreparedImportedTranslate(_)
                 | Request::SelectAll(_)
@@ -959,19 +1049,19 @@ impl<'a> PreparedAccountedCommand<'a> {
             return Err(BackingError::Integrity.into());
         }
         let result = match self.request {
-            Request::PreparedNativeStroke(prepared)=>prepared.execute(session,control)?,
-            Request::NativeStroke(_)=>return Err(BackingError::Integrity.into()),
-            Request::PreparedHierarchyExpanded(prepared)=>prepared.execute(session,control)?,
-            Request::HierarchyExpanded(_)=>return Err(BackingError::Integrity.into()),
-            Request::PreparedFlatComposition(prepared)=>prepared.execute(session,control)?,
-            Request::FlatComposition(_)=>return Err(BackingError::Integrity.into()),
+            Request::PreparedNativeStroke(prepared) => prepared.execute(session, control)?,
+            Request::NativeStroke(_) => return Err(BackingError::Integrity.into()),
+            Request::PreparedHierarchyExpanded(prepared) => prepared.execute(session, control)?,
+            Request::HierarchyExpanded(_) => return Err(BackingError::Integrity.into()),
+            Request::PreparedFlatComposition(prepared) => prepared.execute(session, control)?,
+            Request::FlatComposition(_) => return Err(BackingError::Integrity.into()),
             Request::PreparedImportedTranslate(prepared) => prepared.execute(session, control)?,
             Request::ImportedTranslate(_) => return Err(BackingError::Integrity.into()),
             Request::PreparedAssignedMask(prepared) => prepared.execute(session, control)?,
             Request::PreparedMetadata(prepared) => prepared.execute(session, control)?,
             Request::PreparedThresholdAlpha(prepared) => prepared.execute(session, control)?,
             Request::PreparedThreshold(prepared) => prepared.execute(session, control)?,
-            Request::PreparedFilteredFlat(prepared) => prepared.execute(session,control)?,
+            Request::PreparedFilteredFlat(prepared) => prepared.execute(session, control)?,
             Request::PreparedPoint(prepared) => prepared.execute(session, control)?,
             Request::PreparedGaussianGroup(prepared) => prepared.execute(session, control)?,
             Request::PreparedReadonlyLayerName(prepared) => prepared.execute(session, control)?,
@@ -987,14 +1077,14 @@ impl<'a> PreparedAccountedCommand<'a> {
             Request::ReadonlyLayerName(_) => return Err(BackingError::Integrity.into()),
             Request::AssignedMask(_) => return Err(BackingError::Integrity.into()),
             Request::ImportedMetadata(_) => return Err(BackingError::Integrity.into()),
-            Request::HierarchySelect(layer,witness)=>{
-                witness.validate(session,control)?;
-                session.select_accounted_with_control(layer,control)?;
+            Request::HierarchySelect(layer, witness) => {
+                witness.validate(session, control)?;
+                session.select_accounted_with_control(layer, control)?;
                 Value::Null
             }
-            Request::ProgrammeSelect(layer,witness)=>{
-                witness.validate(session,layer,control)?;
-                session.select_accounted_with_control(layer,control)?;
+            Request::ProgrammeSelect(layer, witness) => {
+                witness.validate(session, layer, control)?;
+                session.select_accounted_with_control(layer, control)?;
                 Value::Null
             }
             Request::Select(layer) => {
@@ -1006,13 +1096,13 @@ impl<'a> PreparedAccountedCommand<'a> {
                 session.edit_accounted(label, edit, control)?;
                 Value::Null
             }
-            Request::SelectionInverse(params,target)=>crate::accounted_select_inverse::run_captured(session,params,target,control)?,
-            Request::ProgrammeClearSelection(target)=>{
-                target.validate_with_control(session,control)?;
-                session.replace_accounted_selection(target,"Deselect",None,control)?;
+            Request::SelectionInverse(params, target) => crate::accounted_select_inverse::run_captured(session, params, target, control)?,
+            Request::ProgrammeClearSelection(target) => {
+                target.validate_with_control(session, control)?;
+                session.replace_accounted_selection(target, "Deselect", None, control)?;
                 Value::Null
             }
-            Request::ProgrammeSelectAll(params,target)=>crate::accounted_select_all::run_captured(session,params,target,control)?,
+            Request::ProgrammeSelectAll(params, target) => crate::accounted_select_all::run_captured(session, params, target, control)?,
             Request::ClearSelection => {
                 let target = crate::accounted_selection_session::AccountedSelectionTarget::capture(session)?;
                 session.replace_accounted_selection(target, "Deselect", None, control)?;
@@ -1045,14 +1135,18 @@ impl Session {
         }
         let state = self.active_mut().ok_or(EngineError::NoDocument)?;
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
-        if owner.is_readonly_normal_hierarchy_storage(){
-            if !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
-            crate::accounted_xcf_open::normal_hierarchy::validate_current_normal_hierarchy_storage(owner,control)?;
+        if owner.is_readonly_normal_hierarchy_storage() {
+            if !state.history.current()?.shares_state(&state.doc) {
+                return Err(BackingError::Integrity.into());
+            }
+            crate::accounted_xcf_open::normal_hierarchy::validate_current_normal_hierarchy_storage(owner, control)?;
         }
-        if let Some(kind)=programme_select::kind(owner){
-            if !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
-            crate::accounted_programme_current::validate(owner,kind,control)?;
-            owner.accounted_layer_access(id,control)?.ok_or(EngineError::NoLayer(id))?;
+        if let Some(kind) = programme_select::kind(owner) {
+            if !state.history.current()?.shares_state(&state.doc) {
+                return Err(BackingError::Integrity.into());
+            }
+            crate::accounted_programme_current::validate(owner, kind, control)?;
+            owner.accounted_layer_access(id, control)?.ok_or(EngineError::NoLayer(id))?;
         }
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
         if state.active_layer != view.target().active || state.layer_anchor != view.anchor() || !state.selected_layers.is_empty() {
@@ -1080,24 +1174,36 @@ impl Session {
 
 #[cfg(test)]
 #[path = "accounted_history_select_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod history_select_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_legacy_flat_composite_workflow_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod legacy_flat_composite_workflow_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_component_luma_workflow_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod component_luma_workflow_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_alpha_flat_workflow_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod alpha_flat_workflow_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_lab_flat_workflow_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod lab_flat_workflow_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="accounted_commands/exposure_loaded_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "accounted_commands/exposure_loaded_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod exposure_loaded_tests;

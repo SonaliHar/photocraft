@@ -27,9 +27,9 @@ struct Fields<'a> {
 }
 
 fn flat_value(v: &serde_json::Map<String, Value>) -> Option<(PointArgumentValue, Option<&str>)> {
-    flat_value_with_literal(v,false)
+    flat_value_with_literal(v, false)
 }
-fn flat_value_with_literal(v: &serde_json::Map<String,Value>,literal:bool)->Option<(PointArgumentValue,Option<&str>)>{
+fn flat_value_with_literal(v: &serde_json::Map<String, Value>, literal: bool) -> Option<(PointArgumentValue, Option<&str>)> {
     if v.len() != 1 {
         return None;
     }
@@ -53,10 +53,10 @@ fn flat_value_with_literal(v: &serde_json::Map<String,Value>,literal:bool)->Opti
         }
     } else if let Some(color) = v.get("Color") {
         let color = color.as_object()?;
-        let encoding=match color.get("encoding")?.as_str()?{
-            "nonlinear_profile"=>photocraft_doc::SampleEncoding::NonlinearProfile,
-            "linear" if literal=>photocraft_doc::SampleEncoding::Linear,
-            _=>return None,
+        let encoding = match color.get("encoding")?.as_str()? {
+            "nonlinear_profile" => photocraft_doc::SampleEncoding::NonlinearProfile,
+            "linear" if literal => photocraft_doc::SampleEncoding::Linear,
+            _ => return None,
         };
         if color.len() != 3 || !color.get("profile")?.is_null() {
             return None;
@@ -78,7 +78,7 @@ fn flat_value_with_literal(v: &serde_json::Map<String,Value>,literal:bool)->Opti
             }
             *word = bits;
         }
-        (if literal{PointArgumentValue::LiteralColor4F32{components:words,encoding}}else{PointArgumentValue::Color4F32(words)}, None)
+        (if literal { PointArgumentValue::LiteralColor4F32 { components: words, encoding } } else { PointArgumentValue::Color4F32(words) }, None)
     } else if let Some(v) = v.get("Bool") {
         (PointArgumentValue::Bool(v.as_bool()?), None)
     } else {
@@ -97,9 +97,9 @@ fn flat_value_with_literal(v: &serde_json::Map<String,Value>,literal:bool)->Opti
 
 // This is a bounded borrowed wire check, not operation or source eligibility.
 fn wire<'a>(id: &str, params: &'a Value) -> Option<Fields<'a>> {
-    wire_with_literal(id,params,false)
+    wire_with_literal(id, params, false)
 }
-fn wire_with_literal<'a>(id:&str,params:&'a Value,literal:bool)->Option<Fields<'a>>{
+fn wire_with_literal<'a>(id: &str, params: &'a Value, literal: bool) -> Option<Fields<'a>> {
     let enable = match id {
         "xcf.filter.set" => false,
         "xcf.filter.enable" => true,
@@ -138,7 +138,7 @@ fn wire_with_literal<'a>(id:&str,params:&'a Value,literal:bool)->Option<Fields<'
             if name.is_empty() || name.len() > 128 || name.as_bytes().contains(&0) || arguments.iter().flatten().any(|v: &Argument<'_>| v.name == name) {
                 return None;
             }
-            let (value, domain) = flat_value_with_literal(a.get("value")?.as_object()?,literal)?;
+            let (value, domain) = flat_value_with_literal(a.get("value")?.as_object()?, literal)?;
             *arguments.get_mut(count)? = Some(Argument { name, value, domain });
             count += 1;
         }
@@ -159,7 +159,7 @@ pub(super) fn flat_journal_depth(id: &str, params: &Value) -> usize {
     // -> component object6 -> Float32Bits scalar7. Only this exact closed
     // literal wire gains depth7. Signed32 adds Number4 -> Signed5 ->
     // width/value6; old flat set shapes remain depth5.
-    if fields.arguments.iter().flatten().any(|a| matches!(a.value, PointArgumentValue::Color4F32(_) | PointArgumentValue::LiteralColor4F32{..})) {
+    if fields.arguments.iter().flatten().any(|a| matches!(a.value, PointArgumentValue::Color4F32(_) | PointArgumentValue::LiteralColor4F32 { .. })) {
         7
     } else if fields.arguments.iter().flatten().any(|a| matches!(a.value, PointArgumentValue::Signed32(_))) {
         6
@@ -221,7 +221,9 @@ enum EditStorage {
     ObservedBox,
 }
 /// Cheap CURRENT routing hint only; complete recipe proof remains mandatory.
-fn semi_flatten_edit_candidate(owner:&AccountedDocument)->bool{crate::xcf_filter_cmds::semi_flatten_literal_owner(owner)}
+fn semi_flatten_edit_candidate(owner: &AccountedDocument) -> bool {
+    crate::xcf_filter_cmds::semi_flatten_literal_owner(owner)
+}
 pub(super) fn observed_box_edit_candidate(owner: &AccountedDocument) -> bool {
     (owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage())
         && owner.document().xcf_state.as_ref().is_some_and(|state| {
@@ -258,9 +260,9 @@ pub(super) fn observed_box_wire_valid(id: &str, params: &Value) -> bool {
 /// runs before either equal or changed activation can be accepted.
 pub(super) fn assigned_enabled_candidate(owner: &AccountedDocument) -> bool {
     owner.is_readonly_assigned_point_storage()
-        && owner.document().xcf_state.as_ref().is_some_and(|state| {
-            matches!(state.filter_stacks.as_slice(), [stack] if matches!(stack.nodes.as_slice(), [node] if node.operation.name == "gegl:box-blur"))
-        })
+        && owner.document().xcf_state.as_ref().is_some_and(
+            |state| matches!(state.filter_stacks.as_slice(), [stack] if matches!(stack.nodes.as_slice(), [node] if node.operation.name == "gegl:box-blur")),
+        )
 }
 /// The observational source geometry epoch has rendering/native continuation
 /// only. It must not inherit the generic implicit Point mutation wire.
@@ -272,15 +274,19 @@ pub(super) fn observed_box_readonly(owner: &AccountedDocument) -> bool {
     })
 }
 fn assigned_enabled_fields<'a>(id: &str, params: &'a Value) -> Option<Fields<'a>> {
-    if !matches!(id,"xcf.filter.set"|"xcf.filter.enable") { return None; }
-    let object=params.as_object()?;
-    if object.len()!=2 || object.keys().any(|key| !matches!(key.as_str(),"filterId"|"enabled")) { return None; }
-    wire(id,params).filter(|fields|fields.enabled.is_some())
+    if !matches!(id, "xcf.filter.set" | "xcf.filter.enable") {
+        return None;
+    }
+    let object = params.as_object()?;
+    if object.len() != 2 || object.keys().any(|key| !matches!(key.as_str(), "filterId" | "enabled")) {
+        return None;
+    }
+    wire(id, params).filter(|fields| fields.enabled.is_some())
 }
 /// Cheap borrowed eligibility; never invokes upstream helpers with an unpaid
 /// work control. Actual parse and preparation repeat it under the real ledger.
 pub(super) fn assigned_enabled_wire_valid(id: &str, params: &Value) -> bool {
-    assigned_enabled_fields(id,params).is_some()
+    assigned_enabled_fields(id, params).is_some()
 }
 pub(super) struct Request<'a> {
     id: &'static str,
@@ -300,10 +306,14 @@ impl<'a> Request<'a> {
         };
         let fields = observed_box_fields(id, params).ok_or_else(|| bad(id, "observed Box requires radius Signed32 0..1000 and/or boolean enabled"))?;
         let owner = session.active().and_then(|state| state.doc.accounted()).ok_or(BackingError::Unsupported)?;
-        if !observed_box_edit_candidate(owner) { return Err(BackingError::Unsupported.into()); }
+        if !observed_box_edit_candidate(owner) {
+            return Err(BackingError::Unsupported.into());
+        }
         ctl.check(32768)?;
         pre_dispatch(session, id, params)?;
-        if crate::xcf_filter_cmds::id(id, params)? != fields.filter { return Err(BackingError::Integrity.into()); }
+        if crate::xcf_filter_cmds::id(id, params)? != fields.filter {
+            return Err(BackingError::Integrity.into());
+        }
         Ok(Self { id, params, fields, structured: None, move_to: None, storage: EditStorage::ObservedBox })
     }
     /// Assigned storage does not inherit the implicit Point patch parser.
@@ -315,13 +325,17 @@ impl<'a> Request<'a> {
             "xcf.filter.enable" => "xcf.filter.enable",
             _ => return Err(BackingError::Unsupported.into()),
         };
-        let fields=assigned_enabled_fields(id,params).ok_or_else(||bad(id,"assigned activation requires only canonical filterId and boolean enabled"))?;
-        let owner=session.active().and_then(|state|state.doc.accounted()).ok_or(BackingError::Unsupported)?;
-        if !assigned_enabled_candidate(owner) { return Err(BackingError::Unsupported.into()); }
+        let fields = assigned_enabled_fields(id, params).ok_or_else(|| bad(id, "assigned activation requires only canonical filterId and boolean enabled"))?;
+        let owner = session.active().and_then(|state| state.doc.accounted()).ok_or(BackingError::Unsupported)?;
+        if !assigned_enabled_candidate(owner) {
+            return Err(BackingError::Unsupported.into());
+        }
         ctl.check(32768)?;
-        pre_dispatch(session,id,params)?;
-        if crate::xcf_filter_cmds::id(id,params)? != fields.filter { return Err(BackingError::Integrity.into()); }
-        Ok(Self { id,params,fields,structured:None,move_to:None,storage:EditStorage::AssignedBox })
+        pre_dispatch(session, id, params)?;
+        if crate::xcf_filter_cmds::id(id, params)? != fields.filter {
+            return Err(BackingError::Integrity.into());
+        }
+        Ok(Self { id, params, fields, structured: None, move_to: None, storage: EditStorage::AssignedBox })
     }
     pub(super) fn parse(session: &Session, id: &str, params: &'a Value, ctl: &ReadControl<'_>) -> Result<Self> {
         ctl.check(32768)?;
@@ -335,7 +349,7 @@ impl<'a> Request<'a> {
             "xcf.filter.remove" => "xcf.filter.remove",
             _ => return Err(BackingError::Unsupported.into()),
         };
-        let literal=session.active().and_then(|state|state.doc.accounted()).is_some_and(semi_flatten_edit_candidate);
+        let literal = session.active().and_then(|state| state.doc.accounted()).is_some_and(semi_flatten_edit_candidate);
         let (fields, structured, move_to) = if id == "xcf.filter.move" {
             let (fields, index) = move_wire(params).ok_or_else(|| bad(id, "canonical filterId and bounded owner-local index required"))?;
             (fields, None, Some(index))
@@ -356,7 +370,7 @@ impl<'a> Request<'a> {
         if crate::xcf_filter_cmds::id(id, params)? != fields.filter {
             return Err(BackingError::Integrity.into());
         }
-        Ok(Self { id, params, fields, structured, move_to, storage:EditStorage::ImplicitPoint })
+        Ok(Self { id, params, fields, structured, move_to, storage: EditStorage::ImplicitPoint })
     }
     pub(super) fn prepare(self, session: &Session, ctl: &ReadControl<'_>) -> Result<Prepared<'a>> {
         let state = session.active().ok_or(EngineError::NoDocument)?;
@@ -366,21 +380,41 @@ impl<'a> Request<'a> {
         }
         match self.storage {
             EditStorage::ObservedBox => {
-                if !observed_box_edit_candidate(owner) { return Err(BackingError::Unsupported.into()); }
+                if !observed_box_edit_candidate(owner) {
+                    return Err(BackingError::Unsupported.into());
+                }
                 if owner.is_readonly_assigned_point_storage() {
                     owner.validate_readonly_assigned_point_storage(ctl)?;
                 } else {
                     owner.validate_readonly_point_storage(ctl)?;
                 }
                 ctl.check(1)?;
-                if !state.history.current()?.shares_state(&state.doc) { return Err(BackingError::Integrity.into()); }
+                if !state.history.current()?.shares_state(&state.doc) {
+                    return Err(BackingError::Integrity.into());
+                }
             }
-            EditStorage::ImplicitPoint => {owner.validate_readonly_point_storage(ctl)?;if (semi_flatten_edit_candidate(owner) || crate::xcf_filter_cmds::hue_chroma_owner(owner) || crate::xcf_filter_cmds::vibrance_owner(owner) || crate::xcf_filter_cmds::loaded_exposure_point_owner(owner) || crate::xcf_filter_cmds::masked_exposure_point_owner(owner) || crate::xcf_filter_cmds::masked_scalar_point_owner(owner)) && !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into());}},
+            EditStorage::ImplicitPoint => {
+                owner.validate_readonly_point_storage(ctl)?;
+                if (semi_flatten_edit_candidate(owner)
+                    || crate::xcf_filter_cmds::hue_chroma_owner(owner)
+                    || crate::xcf_filter_cmds::vibrance_owner(owner)
+                    || crate::xcf_filter_cmds::loaded_exposure_point_owner(owner)
+                    || crate::xcf_filter_cmds::masked_exposure_point_owner(owner)
+                    || crate::xcf_filter_cmds::masked_scalar_point_owner(owner))
+                    && !state.history.current()?.shares_state(&state.doc)
+                {
+                    return Err(BackingError::Integrity.into());
+                }
+            }
             EditStorage::AssignedBox => {
                 owner.validate_readonly_assigned_point_storage(ctl)?;
                 ctl.check(1)?;
-                if !state.history.current()?.shares_state(&state.doc) { return Err(BackingError::Integrity.into()); }
-                if !assigned_enabled_candidate(owner) { return Err(BackingError::Unsupported.into()); }
+                if !state.history.current()?.shares_state(&state.doc) {
+                    return Err(BackingError::Integrity.into());
+                }
+                if !assigned_enabled_candidate(owner) {
+                    return Err(BackingError::Unsupported.into());
+                }
             }
         }
         let xcf = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
@@ -410,8 +444,14 @@ impl<'a> Request<'a> {
             }
             for candidate in &stack.nodes {
                 ctl.check(8192)?;
-                if !(semi_flatten_edit_candidate(owner) || crate::xcf_filter_cmds::hue_chroma_owner(owner) || crate::xcf_filter_cmds::vibrance_owner(owner) || crate::xcf_filter_cmds::loaded_exposure_point_owner(owner) || crate::xcf_filter_cmds::masked_exposure_point_owner(owner) || self.id=="xcf.filter.remove" && crate::xcf_filter_cmds::masked_scalar_point_owner(owner)) && (candidate.operation.schema_epoch != STACK_EDITS_EPOCH
-                    || candidate.composition.as_ref().is_none_or(|p| p.compatibility_epoch != STACK_EDITS_EPOCH))
+                if !(semi_flatten_edit_candidate(owner)
+                    || crate::xcf_filter_cmds::hue_chroma_owner(owner)
+                    || crate::xcf_filter_cmds::vibrance_owner(owner)
+                    || crate::xcf_filter_cmds::loaded_exposure_point_owner(owner)
+                    || crate::xcf_filter_cmds::masked_exposure_point_owner(owner)
+                    || self.id == "xcf.filter.remove" && crate::xcf_filter_cmds::masked_scalar_point_owner(owner))
+                    && (candidate.operation.schema_epoch != STACK_EDITS_EPOCH
+                        || candidate.composition.as_ref().is_none_or(|p| p.compatibility_epoch != STACK_EDITS_EPOCH))
                 {
                     return Err(BackingError::Unsupported.into());
                 }
@@ -474,25 +514,44 @@ impl<'a> Request<'a> {
         // these new selected families admit an ABI-computed needed deficit;
         // retained Request Fields[10] are already in sizeof(Prepared).
         let _masked_patch_fee = if crate::xcf_filter_cmds::masked_scalar_point_owner(owner) {
-            let required=std::mem::size_of::<[PointArgumentPatch<'_>;10]>().checked_add(std::mem::size_of::<Option<photocraft_raster::backing::quota::QuotaLease>>()).and_then(|n|n.checked_add(128)).ok_or(BackingError::Length)?;
-            let extra=required.saturating_sub(512);
-            if extra==0{None}else{Some(owner.quota().reserve(QuotaKind::Index,u64::try_from(extra).map_err(|_|BackingError::Length)?).map_err(|_|BackingError::Quota)?)}
-        }else{None};
+            let required = std::mem::size_of::<[PointArgumentPatch<'_>; 10]>()
+                .checked_add(std::mem::size_of::<Option<photocraft_raster::backing::quota::QuotaLease>>())
+                .and_then(|n| n.checked_add(128))
+                .ok_or(BackingError::Length)?;
+            let extra = required.saturating_sub(512);
+            if extra == 0 {
+                None
+            } else {
+                Some(owner.quota().reserve(QuotaKind::Index, u64::try_from(extra).map_err(|_| BackingError::Length)?).map_err(|_| BackingError::Quota)?)
+            }
+        } else {
+            None
+        };
         validate_recipe(owner, ctl)?;
-        let masked_kind=if crate::xcf_filter_cmds::masked_scalar_point_owner(owner){crate::xcf_filter_cmds::masked_scalar_point_node_kind(node)}else{None};
-        if let Some(kind)=masked_kind{
+        let masked_kind =
+            if crate::xcf_filter_cmds::masked_scalar_point_owner(owner) { crate::xcf_filter_cmds::masked_scalar_point_node_kind(node) } else { None };
+        if let Some(kind) = masked_kind {
             use photocraft_compose::MaskedScalarKind as K;
-            let limit=match kind{K::InvertLinear|K::InvertGamma=>0,K::BrightnessContrast=>2,K::GeglLevels=>4};
-            if self.fields.count>limit || self.structured.is_some(){return Err(BackingError::Unsupported.into());}
+            let limit = match kind {
+                K::InvertLinear | K::InvertGamma => 0,
+                K::BrightnessContrast => 2,
+                K::GeglLevels => 4,
+            };
+            if self.fields.count > limit || self.structured.is_some() {
+                return Err(BackingError::Unsupported.into());
+            }
         }
         // Fixed stack storage retains the original argument names and enum domains.
         // No parser proxy or per-operation arithmetic is reconstructed here.
-        let staged = if matches!(self.storage,EditStorage::AssignedBox) {
+        let staged = if matches!(self.storage, EditStorage::AssignedBox) {
             owner.try_with_readonly_assigned_point_enabled(
                 photocraft_doc::accounted_document::AssignedPointEnabledPatch {
-                    layer,filter:self.fields.filter,expected_stack_revision:stack.revision,
-                    enabled:self.fields.enabled.ok_or(BackingError::Integrity)?,
-                },ctl,
+                    layer,
+                    filter: self.fields.filter,
+                    expected_stack_revision: stack.revision,
+                    enabled: self.fields.enabled.ok_or(BackingError::Integrity)?,
+                },
+                ctl,
             )?
         } else if let Some(index) = self.move_to {
             owner.try_move_readonly_point_filter(
@@ -532,20 +591,33 @@ impl<'a> Request<'a> {
                 // New incoming black words remain STRICT even when the loaded
                 // stored endpoint has V2 effective-zero interpretation.
                 if crate::xcf_filter_cmds::loaded_exposure_point_owner(owner) || crate::xcf_filter_cmds::masked_exposure_point_owner(owner) {
-                    let PointArgumentValue::Float32Bits(bits)=argument.value else{return Err(BackingError::Unsupported.into())};
-                    let value=f64::from(f32::from_bits(bits));
-                    if !value.is_finite() || !matches!(argument.name,"exposure"|"black-level") || argument.name=="black-level" && !(-0.1..=0.1).contains(&value){return Err(BackingError::Unsupported.into())}
+                    let PointArgumentValue::Float32Bits(bits) = argument.value else { return Err(BackingError::Unsupported.into()) };
+                    let value = f64::from(f32::from_bits(bits));
+                    if !value.is_finite()
+                        || !matches!(argument.name, "exposure" | "black-level")
+                        || argument.name == "black-level" && !(-0.1..=0.1).contains(&value)
+                    {
+                        return Err(BackingError::Unsupported.into());
+                    }
                 }
-                if let Some(kind)=masked_kind {
+                if let Some(kind) = masked_kind {
                     use photocraft_compose::MaskedScalarKind as K;
-                    let PointArgumentValue::Float32Bits(bits)=argument.value else{return Err(BackingError::Unsupported.into())};
-                    let value=f64::from(f32::from_bits(bits));
-                    let valid=argument.domain.is_none()&&value.is_finite()&&match kind{
-                        K::InvertLinear|K::InvertGamma=>false,
-                        K::BrightnessContrast=>match argument.name{"brightness"=>(-3.0..=3.0).contains(&value),"contrast"=>(-5.0..=5.0).contains(&value),_=>false},
-                        K::GeglLevels=>matches!(argument.name,"in-low"|"in-high"|"out-low"|"out-high"),
-                    };
-                    if !valid{return Err(BackingError::Unsupported.into());}
+                    let PointArgumentValue::Float32Bits(bits) = argument.value else { return Err(BackingError::Unsupported.into()) };
+                    let value = f64::from(f32::from_bits(bits));
+                    let valid = argument.domain.is_none()
+                        && value.is_finite()
+                        && match kind {
+                            K::InvertLinear | K::InvertGamma => false,
+                            K::BrightnessContrast => match argument.name {
+                                "brightness" => (-3.0..=3.0).contains(&value),
+                                "contrast" => (-5.0..=5.0).contains(&value),
+                                _ => false,
+                            },
+                            K::GeglLevels => matches!(argument.name, "in-low" | "in-high" | "out-low" | "out-high"),
+                        };
+                    if !valid {
+                        return Err(BackingError::Unsupported.into());
+                    }
                 }
                 let stored = node.arguments.iter().find(|v| v.name == argument.name).ok_or(BackingError::Unsupported)?;
                 use photocraft_doc::xcf_filters::{ExactNumber, FilterValue};
@@ -560,25 +632,29 @@ impl<'a> Request<'a> {
                         PointArgumentValue::Color4F32(_),
                         None,
                     ) if components.len() == 4 && components.iter().all(|c| matches!(c, ExactNumber::Float32Bits(_))) => {}
-                    (FilterValue::Color{components,encoding,profile:None},PointArgumentValue::LiteralColor4F32{encoding:requested,..},None)
-                        if semi_flatten_edit_candidate(owner) && matches!(encoding,photocraft_doc::SampleEncoding::Linear|photocraft_doc::SampleEncoding::NonlinearProfile) && matches!(requested,photocraft_doc::SampleEncoding::Linear|photocraft_doc::SampleEncoding::NonlinearProfile) && components.len()==4 && components.iter().all(|v|matches!(v,ExactNumber::Float32Bits(_)))=>{}
+                    (FilterValue::Color { components, encoding, profile: None }, PointArgumentValue::LiteralColor4F32 { encoding: requested, .. }, None)
+                        if semi_flatten_edit_candidate(owner)
+                            && matches!(encoding, photocraft_doc::SampleEncoding::Linear | photocraft_doc::SampleEncoding::NonlinearProfile)
+                            && matches!(requested, photocraft_doc::SampleEncoding::Linear | photocraft_doc::SampleEncoding::NonlinearProfile)
+                            && components.len() == 4
+                            && components.iter().all(|v| matches!(v, ExactNumber::Float32Bits(_))) => {}
                     _ => return Err(BackingError::Unsupported.into()),
                 }
                 *patches.get_mut(index).ok_or(BackingError::Integrity)? = PointArgumentPatch { name: argument.name, value: argument.value };
             }
             let patch = PointFilterPatch {
-                    layer,
-                    filter: self.fields.filter,
-                    expected_stack_revision: stack.revision,
-                    arguments: patches.get(..self.fields.count).ok_or(BackingError::Integrity)?,
-                    enabled: self.fields.enabled,
-                };
-            let staged = if matches!(self.storage, EditStorage::ObservedBox) && owner.is_readonly_assigned_point_storage() {
+                layer,
+                filter: self.fields.filter,
+                expected_stack_revision: stack.revision,
+                arguments: patches.get(..self.fields.count).ok_or(BackingError::Integrity)?,
+                enabled: self.fields.enabled,
+            };
+
+            if matches!(self.storage, EditStorage::ObservedBox) && owner.is_readonly_assigned_point_storage() {
                 owner.try_with_readonly_assigned_point_filter(patch, ctl)?
             } else {
                 owner.try_with_readonly_point_filter(patch, ctl)?
-            };
-            staged
+            }
         };
         if self.structured.is_none() {
             validate_recipe(&staged, ctl)?;
@@ -586,8 +662,7 @@ impl<'a> Request<'a> {
         let updated = !staged.shares_model(owner);
         let mut history = state.history.clone();
         let snapshot = if updated {
-            history.max_states = session.prefs().performance.history_states.max(1) as usize;
-            history.max_bytes = session.prefs().performance.history_budget_bytes();
+            history.set_accounted_state_limit(session.prefs().performance.history_states.max(1) as usize)?;
             history.set_current_layers_borrowed(view.target(), ctl)?;
             history.try_commit_prepared_accounted(
                 owner,
@@ -714,7 +789,8 @@ impl Prepared<'_> {
     pub(super) fn execute(self, session: &mut Session, ctl: &ReadControl<'_>) -> Result<Value> {
         ctl.check(self.request.structured.map_or(Ok(32768), |plan| plan.helper_work())?)?;
         if session.active().and_then(|state| state.doc.accounted()).is_some_and(observed_box_readonly)
-            && !matches!(self.request.storage, EditStorage::ObservedBox) {
+            && !matches!(self.request.storage, EditStorage::ObservedBox)
+        {
             return Err(BackingError::Unsupported.into());
         }
         pre_dispatch(session, self.request.id, self.request.params)?;
@@ -767,6 +843,8 @@ mod tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "point_stack_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod stack_tests;
 
 #[cfg(test)]
@@ -779,44 +857,64 @@ mod remove_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "point_empty_lifecycle_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod empty_lifecycle_tests;
 
-#[cfg(all(test, feature="corpus", not(target_arch="wasm32")))]
-#[path="point_assigned_enabled_tests.rs"]
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "point_assigned_enabled_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod assigned_enabled_tests;
 
-#[cfg(all(test, feature="corpus", not(target_arch="wasm32")))]
-#[path="point_observed_edit_tests.rs"]
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "point_observed_edit_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod observed_edit_tests;
 
-#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
-#[path="point_semi_flatten_tests.rs"]
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "point_semi_flatten_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod semi_flatten_tests;
 
-#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
-#[path="point_hue_chroma_tests.rs"]
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "point_hue_chroma_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod hue_chroma_tests;
 
 #[cfg(test)]
-#[path="point_vibrance_tests.rs"]
+#[path = "point_vibrance_tests.rs"]
 mod vibrance_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "point_origin_geometry_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod origin_geometry_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "point_bundle_geometry_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod bundle_geometry_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "point_residual_geometry_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod residual_geometry_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="exposure_masked_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "exposure_masked_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod exposure_masked_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="masked_scalar_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "masked_scalar_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod masked_scalar_tests;

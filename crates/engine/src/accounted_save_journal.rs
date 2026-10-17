@@ -83,10 +83,10 @@ impl PreparedAccountedSaveReply {
         if path.contains('\0') {
             return Err(BackingError::Length.into());
         }
-        if let Some((id, _)) = record {
-            if !matches!(id, "file.save" | "file.saveAs") {
-                return Err(BackingError::Unsupported.into());
-            }
+        if let Some((id, _)) = record
+            && !matches!(id, "file.save" | "file.saveAs")
+        {
+            return Err(BackingError::Unsupported.into());
         }
         if let Some((id, params)) = record {
             let object = params.as_object().ok_or(BackingError::Unsupported)?;

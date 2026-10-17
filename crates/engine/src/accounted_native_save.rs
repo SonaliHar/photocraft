@@ -235,8 +235,12 @@ impl PreparedAccountedNativeSave {
 }
 #[cfg(test)]
 #[path = "accounted_native_save_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
 
 #[cfg(test)]
 #[path = "accounted_native_save_title_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod title_tests;

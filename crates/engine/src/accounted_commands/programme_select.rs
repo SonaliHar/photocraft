@@ -1,10 +1,27 @@
 //! Paid view-only focus for two actual mixed programme classes.
 //! No document/native/selection-plane mutation or broader layer.select grammar.
 use super::*;
-use crate::{DocumentSnapshot,accounted_view::AccountedView,channel_cmds::ChannelView,document_history::DocumentHistory,source_policy::SourceIdentity,accounted_programme_current::{self,ProgrammeKind}};
+use crate::{
+    DocumentSnapshot,
+    accounted_programme_current::{self, ProgrammeKind},
+    accounted_view::AccountedView,
+    channel_cmds::ChannelView,
+    document_history::DocumentHistory,
+    source_policy::SourceIdentity,
+};
 use photocraft_doc::accounted_document::AccountedDocument;
-pub(super) fn kind(owner:&AccountedDocument)->Option<ProgrammeKind>{match accounted_programme_current::kind(owner){Some(kind @ (ProgrammeKind::FilteredFlatPoint|ProgrammeKind::MaskedFilteredFlatPoint))=>Some(kind),_=>None}}
-fn recipe(owner:&AccountedDocument,expected:ProgrammeKind,c:&ReadControl<'_>)->Result<()>{if kind(owner)!=Some(expected){return Err(BackingError::Unsupported.into())}accounted_programme_current::validate(owner,expected,c)}
+pub(super) fn kind(owner: &AccountedDocument) -> Option<ProgrammeKind> {
+    match accounted_programme_current::kind(owner) {
+        Some(kind @ (ProgrammeKind::FilteredFlatPoint | ProgrammeKind::MaskedFilteredFlatPoint)) => Some(kind),
+        _ => None,
+    }
+}
+fn recipe(owner: &AccountedDocument, expected: ProgrammeKind, c: &ReadControl<'_>) -> Result<()> {
+    if kind(owner) != Some(expected) {
+        return Err(BackingError::Unsupported.into());
+    }
+    accounted_programme_current::validate(owner, expected, c)
+}
 fn copy(v: &str) -> Result<String> {
     let mut s = String::new();
     s.try_reserve_exact(v.len()).map_err(|_| BackingError::Allocation)?;
@@ -39,7 +56,7 @@ fn channel_shape(v: &ChannelView) -> Result<()> {
     Ok(())
 }
 fn idle(session: &Session) -> Result<()> {
-    if session.active().is_some_and(|s|s.coalesce.is_some()||s.floating.is_some()||s.doc.xcf_state.as_ref().is_some_and(|x|x.floating.is_some()))
+    if session.active().is_some_and(|s| s.coalesce.is_some() || s.floating.is_some() || s.doc.xcf_state.as_ref().is_some_and(|x| x.floating.is_some()))
         || session.coalesce_request.is_some()
         || session.color_restrict.is_some()
         || session.command_is_background()
@@ -50,19 +67,35 @@ fn idle(session: &Session) -> Result<()> {
     }
     Ok(())
 }
-pub(super) struct SelectionWitness{
- kind:ProgrammeKind,layer:LayerId,captured:DocumentSnapshot,old_history:DocumentHistory,view:AccountedView,
- revision:u64,view_revision:u64,active:Option<LayerId>,anchor:Option<LayerId>,
- channel:ChannelView,path:Option<String>,source:Option<SourceIdentity>,read_only:bool,
- history_states:u32,history_bytes:usize,_lease:QuotaLease,
+pub(super) struct SelectionWitness {
+    kind: ProgrammeKind,
+    layer: LayerId,
+    captured: DocumentSnapshot,
+    old_history: DocumentHistory,
+    view: AccountedView,
+    revision: u64,
+    view_revision: u64,
+    active: Option<LayerId>,
+    anchor: Option<LayerId>,
+    channel: ChannelView,
+    path: Option<String>,
+    source: Option<SourceIdentity>,
+    read_only: bool,
+    history_states: u32,
+    history_bytes: usize,
+    _lease: QuotaLease,
 }
-impl SelectionWitness{
- pub(super) fn prepare(session:&Session,layer:LayerId,ctl:&ReadControl<'_>)->Result<Self>{
-  idle(session)?;let state=session.active().ok_or(EngineError::NoDocument)?;
-  let owner=state.doc.accounted().ok_or(BackingError::Unsupported)?;let kind=kind(owner).ok_or(BackingError::Unsupported)?;
-  if !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
-  recipe(owner,kind,ctl)?;
-  owner.accounted_layer_access(layer,ctl)?.ok_or(EngineError::NoLayer(layer))?;
+impl SelectionWitness {
+    pub(super) fn prepare(session: &Session, layer: LayerId, ctl: &ReadControl<'_>) -> Result<Self> {
+        idle(session)?;
+        let state = session.active().ok_or(EngineError::NoDocument)?;
+        let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
+        let kind = kind(owner).ok_or(BackingError::Unsupported)?;
+        if !state.history.current()?.shares_state(&state.doc) {
+            return Err(BackingError::Integrity.into());
+        }
+        recipe(owner, kind, ctl)?;
+        owner.accounted_layer_access(layer, ctl)?.ok_or(EngineError::NoLayer(layer))?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
         if state.active_layer != view.target().active || state.layer_anchor != view.anchor() || !state.selected_layers.is_empty() {
             return Err(BackingError::Integrity.into());
@@ -113,9 +146,26 @@ impl SelectionWitness{
             .ok_or(BackingError::Length)?;
         lease.reconcile_capacity(actual as u64).map_err(|_| BackingError::Allocation)?;
 
-  Ok(Self{kind,layer,captured:state.doc.clone(),old_history:state.history.clone(),view:view.clone(),revision:state.revision,view_revision:state.view_revision,active:state.active_layer,anchor:state.layer_anchor,channel,path,source,read_only:state.source_read_only,history_states:session.prefs().performance.history_states,history_bytes:session.prefs().performance.history_budget_bytes(),_lease:lease})
- }
- pub(super) fn validate(&self,session:&Session,layer:LayerId,ctl:&ReadControl<'_>)->Result<()>{
+        Ok(Self {
+            kind,
+            layer,
+            captured: state.doc.clone(),
+            old_history: state.history.clone(),
+            view: view.clone(),
+            revision: state.revision,
+            view_revision: state.view_revision,
+            active: state.active_layer,
+            anchor: state.layer_anchor,
+            channel,
+            path,
+            source,
+            read_only: state.source_read_only,
+            history_states: session.prefs().performance.history_states,
+            history_bytes: session.prefs().performance.history_budget_bytes(),
+            _lease: lease,
+        })
+    }
+    pub(super) fn validate(&self, session: &Session, layer: LayerId, ctl: &ReadControl<'_>) -> Result<()> {
         ctl.check(1)?;
         idle(session)?;
         let state = session.active().ok_or(EngineError::NoDocument)?;
@@ -145,14 +195,21 @@ impl SelectionWitness{
             return Err(EngineError::Other("the prepared programme focus targets older Session state".into()));
         }
 
-  let owner=state.doc.accounted().ok_or(BackingError::Unsupported)?;
-  if layer!=self.layer||kind(owner)!=Some(self.kind)||!state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
-  recipe(owner,self.kind,ctl)?;
-  owner.accounted_layer_access(self.layer,ctl)?.ok_or(EngineError::NoLayer(self.layer))?;
-  ctl.check(1)?;Ok(())
- }
+        let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
+        if layer != self.layer || kind(owner) != Some(self.kind) || !state.history.current()?.shares_state(&state.doc) {
+            return Err(BackingError::Integrity.into());
+        }
+        recipe(owner, self.kind, ctl)?;
+        owner.accounted_layer_access(self.layer, ctl)?.ok_or(EngineError::NoLayer(self.layer))?;
+        ctl.check(1)?;
+        Ok(())
+    }
 }
 
-#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
-#[path="programme_select_tests.rs"]
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "programme_select_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod tests;

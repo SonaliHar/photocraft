@@ -8,8 +8,11 @@ use photocraft_raster::backing::quota::{BackingQuota, QuotaLease};
 /// current profile/native validation remains mandatory; this grants no authority.
 /// Layer-properties routing only; unlike the assigned helper this may include
 /// readonly flat composites and must never be used for mask or Move admission.
-pub fn owned_layer_metadata_candidate(owner:&AccountedDocument)->bool {
-    (owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage()) || observed_box_layer_metadata_candidate(owner) || owner.is_readonly_flat_composite_storage() || assigned_geometry_metadata_candidate(owner)
+pub fn owned_layer_metadata_candidate(owner: &AccountedDocument) -> bool {
+    (owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage())
+        || observed_box_layer_metadata_candidate(owner)
+        || owner.is_readonly_flat_composite_storage()
+        || assigned_geometry_metadata_candidate(owner)
 }
 /// CURRENT Move routing only. Actual storage, target and Box proofs remain mandatory.
 pub fn observed_box_translation_candidate(owner: &AccountedDocument) -> bool {
@@ -20,16 +23,22 @@ pub(crate) fn point_metadata_class(owner: &AccountedDocument) -> bool {
 }
 /// Either retained epoch selects strict validation; divergent epochs never fall back.
 pub(crate) fn observed_box_layer_metadata_candidate(owner: &AccountedDocument) -> bool {
-    point_metadata_class(owner) && owner.document().xcf_state.as_ref().is_some_and(|state| {
-        // Actual Point storage admits at most two nodes. Inspect both fixed
-        // slots so a malformed multi-node observed owner cannot use an older route.
-        state.filter_stacks.first().is_some_and(|stack| stack.nodes.iter().take(2).any(|node|
-            node.operation.schema_epoch == photocraft_compose::backed_box_source::BOX_GEOMETRY_EPOCH
-                || node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == photocraft_compose::backed_box_source::BOX_GEOMETRY_EPOCH)))
-    })
+    point_metadata_class(owner)
+        && owner.document().xcf_state.as_ref().is_some_and(|state| {
+            // Actual Point storage admits at most two nodes. Inspect both fixed
+            // slots so a malformed multi-node observed owner cannot use an older route.
+            state.filter_stacks.first().is_some_and(|stack| {
+                stack.nodes.iter().take(2).any(|node| {
+                    node.operation.schema_epoch == photocraft_compose::backed_box_source::BOX_GEOMETRY_EPOCH
+                        || node.composition.as_ref().is_some_and(|p| p.compatibility_epoch == photocraft_compose::backed_box_source::BOX_GEOMETRY_EPOCH)
+                })
+            })
+        })
 }
 pub fn assigned_geometry_metadata_candidate(owner: &AccountedDocument) -> bool {
-    if owner.is_readonly_gaussian_group_storage() { return true; }
+    if owner.is_readonly_gaussian_group_storage() {
+        return true;
+    }
     if owner.is_readonly_point_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_threshold_alpha_storage() {
         return false;
     }
@@ -57,7 +66,13 @@ pub(crate) enum MetadataPolicy {
 }
 impl MetadataPolicy {
     pub(crate) fn for_owner(owner: &AccountedDocument) -> Self {
-        if owner.is_readonly_normal_hierarchy_storage(){Self::NormalHierarchy}else if owner.is_readonly_masked_filtered_flat_point_storage(){Self::MaskedFilteredFlat}else if owner.is_readonly_filtered_flat_point_storage() { Self::FilteredFlat } else if observed_box_layer_metadata_candidate(owner) {
+        if owner.is_readonly_normal_hierarchy_storage() {
+            Self::NormalHierarchy
+        } else if owner.is_readonly_masked_filtered_flat_point_storage() {
+            Self::MaskedFilteredFlat
+        } else if owner.is_readonly_filtered_flat_point_storage() {
+            Self::FilteredFlat
+        } else if observed_box_layer_metadata_candidate(owner) {
             Self::ObservedBox
         } else if owner.is_readonly_flat_composite_storage() {
             Self::FlatComposite
@@ -77,10 +92,16 @@ impl MetadataPolicy {
     pub(crate) fn validate_storage(self, owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
         match self {
             Self::Plain => Err(BackingError::Unsupported.into()),
-            Self::ObservedBox => if owner.is_readonly_assigned_point_storage() { Ok(owner.validate_readonly_assigned_point_storage(c)?) } else { Ok(owner.validate_readonly_point_storage(c)?) },
+            Self::ObservedBox => {
+                if owner.is_readonly_assigned_point_storage() {
+                    Ok(owner.validate_readonly_assigned_point_storage(c)?)
+                } else {
+                    Ok(owner.validate_readonly_point_storage(c)?)
+                }
+            }
             Self::FilteredFlat => Ok(owner.validate_readonly_filtered_flat_point_storage(c)?),
-            Self::MaskedFilteredFlat=>Ok(owner.validate_readonly_masked_filtered_flat_point_storage(c)?),
-            Self::NormalHierarchy=>Ok(owner.validate_readonly_normal_hierarchy_current_storage(c)?),
+            Self::MaskedFilteredFlat => Ok(owner.validate_readonly_masked_filtered_flat_point_storage(c)?),
+            Self::NormalHierarchy => Ok(owner.validate_readonly_normal_hierarchy_current_storage(c)?),
             Self::FlatComposite => Ok(owner.validate_readonly_flat_composite_storage(c)?),
             Self::AssignedGeometry => Ok(owner.validate_assigned_analytic_geometry_storage(c)?),
             Self::IsolatedNormalGroup => Ok(owner.validate_assigned_isolated_normal_group_storage(c)?),
@@ -89,15 +110,21 @@ impl MetadataPolicy {
     }
     pub(crate) fn validate_current(self, owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
         match self {
-            Self::Plain => if point_metadata_class(owner) { Err(BackingError::Unsupported.into()) } else { Ok(()) },
-            Self::ObservedBox => crate::accounted_native_open::validate_current_observed_box_storage(owner,c),
-            Self::FilteredFlat => crate::accounted_xcf_open::filtered_flat::validate_current_filtered_flat_storage(owner,c),
-            Self::MaskedFilteredFlat=>crate::accounted_xcf_open::masked_filtered_flat::validate_current_masked_filtered_flat_storage(owner,c),
-            Self::NormalHierarchy=>crate::accounted_xcf_open::normal_hierarchy::validate_current_normal_hierarchy_storage(owner,c),
-            Self::FlatComposite => crate::accounted_xcf_open::separable_blend::validate_current_separable_blend_storage(owner,c),
+            Self::Plain => {
+                if point_metadata_class(owner) {
+                    Err(BackingError::Unsupported.into())
+                } else {
+                    Ok(())
+                }
+            }
+            Self::ObservedBox => crate::accounted_native_open::validate_current_observed_box_storage(owner, c),
+            Self::FilteredFlat => crate::accounted_xcf_open::filtered_flat::validate_current_filtered_flat_storage(owner, c),
+            Self::MaskedFilteredFlat => crate::accounted_xcf_open::masked_filtered_flat::validate_current_masked_filtered_flat_storage(owner, c),
+            Self::NormalHierarchy => crate::accounted_xcf_open::normal_hierarchy::validate_current_normal_hierarchy_storage(owner, c),
+            Self::FlatComposite => crate::accounted_xcf_open::separable_blend::validate_current_separable_blend_storage(owner, c),
             Self::AssignedGeometry => crate::accounted_xcf_open::analytic_geometry::validate_current_analytic_geometry_storage(owner, c),
             Self::IsolatedNormalGroup => crate::accounted_xcf_open::isolated_normal_group::validate_current_isolated_normal_group_storage(owner, c),
-            Self::GaussianGroup => crate::accounted_xcf_open::gaussian_group::validate_current_isolated_gaussian_group_storage(owner,c),
+            Self::GaussianGroup => crate::accounted_xcf_open::gaussian_group::validate_current_isolated_gaussian_group_storage(owner, c),
         }
     }
 }
@@ -159,8 +186,12 @@ impl Session {
         }
         let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
         let policy = MetadataPolicy::for_owner(owner);
-        if matches!(policy,MetadataPolicy::FilteredFlat|MetadataPolicy::MaskedFilteredFlat|MetadataPolicy::NormalHierarchy) && state.revision==u64::MAX {return Err(BackingError::Length.into());}
-        if point_metadata_class(owner) && !matches!(policy, MetadataPolicy::ObservedBox) { return Err(BackingError::Unsupported.into()); }
+        if matches!(policy, MetadataPolicy::FilteredFlat | MetadataPolicy::MaskedFilteredFlat | MetadataPolicy::NormalHierarchy) && state.revision == u64::MAX {
+            return Err(BackingError::Length.into());
+        }
+        if point_metadata_class(owner) && !matches!(policy, MetadataPolicy::ObservedBox) {
+            return Err(BackingError::Unsupported.into());
+        }
         owner.validate_imported_metadata_edit(edit, c)?;
         if policy.needs_assigned_fence() && !state.history.current()?.shares_state(&state.doc) {
             return Err(BackingError::Integrity.into());
@@ -194,15 +225,17 @@ impl Session {
         } else {
             history.try_commit_accounted(edit, label, view.target(), c)?
         };
-        if matches!(policy,MetadataPolicy::FilteredFlat|MetadataPolicy::MaskedFilteredFlat|MetadataPolicy::NormalHierarchy) {
-            policy.validate_current(snapshot.accounted().ok_or(BackingError::Integrity)?,c)?;
+        if matches!(policy, MetadataPolicy::FilteredFlat | MetadataPolicy::MaskedFilteredFlat | MetadataPolicy::NormalHierarchy) {
+            policy.validate_current(snapshot.accounted().ok_or(BackingError::Integrity)?, c)?;
         }
         if snapshot.shares_state(&state.doc) {
             c.check(1)?;
             return Ok(());
         }
         let current = snapshot.accounted().ok_or(BackingError::Integrity)?;
-        if !matches!(policy,MetadataPolicy::FilteredFlat|MetadataPolicy::MaskedFilteredFlat|MetadataPolicy::NormalHierarchy) {policy.validate_current(current, c)?;}
+        if !matches!(policy, MetadataPolicy::FilteredFlat | MetadataPolicy::MaskedFilteredFlat | MetadataPolicy::NormalHierarchy) {
+            policy.validate_current(current, c)?;
+        }
         let next_view = view.try_replace(current, state.active_layer, view.selected(), state.layer_anchor, c)?;
         let gesture = match key {
             None => None,
@@ -225,10 +258,14 @@ impl Session {
 #[path = "accounted_metadata_gesture_tests.rs"]
 mod tests;
 
-#[cfg(all(test,feature="corpus",not(target_arch="wasm32")))]
-#[path="accounted_gaussian_group_metadata_tests.rs"]
+#[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
+#[path = "accounted_gaussian_group_metadata_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod gaussian_group_tests;
 
 #[cfg(all(test, feature = "corpus", not(target_arch = "wasm32")))]
 #[path = "accounted_observed_box_metadata_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod observed_box_tests;

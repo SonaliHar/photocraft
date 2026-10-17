@@ -222,4 +222,6 @@ pub(crate) fn run(session: &mut Session, params: &Value, control: &ReadControl<'
 }
 #[cfg(test)]
 #[path = "accounted_color_range_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unreachable)]
 mod tests;

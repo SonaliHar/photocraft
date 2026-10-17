@@ -6,18 +6,18 @@ use photocraft_raster::backing::{BackingError, ReadControl};
 
 #[path = "accounted_xcf_open/analytic_geometry.rs"]
 pub(crate) mod analytic_geometry;
-#[path = "accounted_xcf_open/isolated_normal_group.rs"]
-pub(crate) mod isolated_normal_group;
 #[path = "accounted_xcf_open/gaussian_group.rs"]
 pub(crate) mod gaussian_group;
+#[path = "accounted_xcf_open/isolated_normal_group.rs"]
+pub(crate) mod isolated_normal_group;
 #[path = "accounted_xcf_open/separable_blend.rs"]
 pub(crate) mod separable_blend;
 
 #[path = "accounted_xcf_open/filtered_flat.rs"]
 pub(crate) mod filtered_flat;
-#[path="accounted_xcf_open/masked_filtered_flat.rs"]
+#[path = "accounted_xcf_open/masked_filtered_flat.rs"]
 pub(crate) mod masked_filtered_flat;
-#[path="accounted_xcf_open/normal_hierarchy.rs"]
+#[path = "accounted_xcf_open/normal_hierarchy.rs"]
 pub(crate) mod normal_hierarchy;
 
 struct ImportedModel<'a> {
@@ -58,9 +58,15 @@ impl Session {
         source_path: Option<&str>,
         control: &ReadControl<'_>,
     ) -> Result<usize> {
-        if imported.document().is_readonly_normal_hierarchy_storage() || imported.document().is_readonly_masked_filtered_flat_point_storage() || imported.document().is_readonly_filtered_flat_point_storage() || crate::accounted_native_open::is_current_filtered_flat_candidate(imported.document().document(),control)? || imported.document().is_readonly_flat_composite_storage() || crate::accounted_native_open::is_current_separable_blend_candidate(imported.document().document(),control)?
+        if imported.document().is_readonly_normal_hierarchy_storage()
+            || imported.document().is_readonly_masked_filtered_flat_point_storage()
+            || imported.document().is_readonly_filtered_flat_point_storage()
+            || crate::accounted_native_open::is_current_filtered_flat_candidate(imported.document().document(), control)?
+            || imported.document().is_readonly_flat_composite_storage()
+            || crate::accounted_native_open::is_current_separable_blend_candidate(imported.document().document(), control)?
             || crate::accounted_native_open::is_current_isolated_normal_group_candidate(imported.document().document(), control)?
-            || crate::accounted_native_open::is_current_isolated_gaussian_group_candidate(imported.document().document(), control)? {
+            || crate::accounted_native_open::is_current_isolated_gaussian_group_candidate(imported.document().document(), control)?
+        {
             return Err(BackingError::Unsupported.into());
         }
         self.add_owned_xcf_model(
@@ -202,7 +208,11 @@ impl Session {
 
 #[cfg(test)]
 #[path = "accounted_xcf_open_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
 #[cfg(all(test, feature = "corpus"))]
 #[path = "accounted_threshold_alpha_xcf_open_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod threshold_alpha_tests;
