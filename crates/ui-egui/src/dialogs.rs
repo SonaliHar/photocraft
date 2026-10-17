@@ -634,10 +634,8 @@ fn run_dialog_command(app: &mut PhotocraftApp, cmd: &str, params: Value, fields:
     let result = app.run(cmd, params.clone());
     // A filter that runs as a background job keeps its preview on screen until the job
     // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.
-    let running = app
-        .session
-        .active()
-        .is_some_and(|st| app.filter_preview.as_ref().is_some_and(|p| p.key.doc == st.doc.id) && app.session.job_on(st.doc.id).is_some());
+    let running =
+        app.session.active().is_some_and(|st| app.filter_preview.as_ref().is_some_and(|p| p.key.doc == st.doc.id) && app.session.job_on(st.doc.id).is_some());
     match app.filter_preview.as_mut() {
         Some(p) if result.is_ok() && running => p.committing = true,
         _ => app.filter_preview = None,
