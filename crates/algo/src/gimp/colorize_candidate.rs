@@ -263,6 +263,8 @@ impl PreparedColorize {
     pub fn preparation_requirements() -> PreparationRequirements {
         PreparationRequirements { retained_bytes: std::mem::size_of::<Self>() as u64, work_units: PREPARATION_WORK }
     }
+    // Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         format: PixelFormat,
         context: WorkingContext,

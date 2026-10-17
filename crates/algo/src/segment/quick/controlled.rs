@@ -230,6 +230,8 @@ fn working(img: &RgbImage, seeds: &[bool], radius: f32, t: &Tuning, b: &Budget<'
     let weight = |d2: f32| t.floor + 1. / (1. + (d2.sqrt() / sigma).powf(t.k));
     levels(img, &fixed, &cf, &weight, 1., t.direct_px.max(1024), 0, b)
 }
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 fn levels(
     img: &RgbImage,
     fixed: &[u8],
@@ -390,6 +392,8 @@ pub fn quick_select_with_interrupt(
 }
 /// Shared work ledger plus bounded pre-window accounting hook for rendering callers.
 /// Hook runs before sampling/allocation; it must not alter numerical inputs.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn quick_select_accounted_with_interrupt(
     sampler: &dyn Sampler,
     canvas: Rect,
@@ -522,7 +526,10 @@ mod dynamic_window_tests {
     use super::*;
     #[test]
     fn early_settling_large_canvas_does_not_require_full_canvas_graph() {
-        let surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
+        // A bounded contrasting object settles inside the first window. A
+        // uniform canvas has no such boundary and legitimately grows windows.
+        let mut surface = photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::RGBA8, &[0., 0., 1., 1.]);
+        surface.fill_rect(Rect::new(2980, 1980, 3020, 2020), &[1., 0., 0., 1.]);
         let sampler = crate::segment::SurfaceSampler(&surface);
         let canvas = Rect::new(0, 0, 6000, 4000);
         let points = [(3000., 2000.)];

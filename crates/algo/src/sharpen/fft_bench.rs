@@ -56,6 +56,7 @@ fn unsharp_fft_performance() {
                     SampleType::U8 => 1.0 / 255.0 + 1e-7,
                     SampleType::U16 => 3.0 / 65535.0 + 1e-7,
                     SampleType::F32 => 3e-5 * (1.0 + a.abs()),
+                    SampleType::U32 | SampleType::F64 => panic!("FFT benchmark fixture is restricted to U8/U16/F32"),
                 };
                 assert!(e <= limit, "quality regression: {a} != {b} at radius {radius}, threshold {threshold}");
                 max_error = max_error.max(e);

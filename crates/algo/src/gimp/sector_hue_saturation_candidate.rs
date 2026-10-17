@@ -387,7 +387,7 @@ impl PreparedSectorHueSaturation {
             let combined_saturation = self.all_saturation + weight * self.local_saturation;
             let combined_lightness = self.all_lightness + weight * self.local_lightness;
             hue = (hue + combined_hue / 2.0).rem_euclid(1.0);
-            saturation = saturation * (1.0 + combined_saturation);
+            saturation *= 1.0 + combined_saturation;
             // Unit-input observations support this output-equivalent bound;
             // the hidden location of the negative floor remains unidentified.
             saturation = saturation.clamp(0.0, 1.0);

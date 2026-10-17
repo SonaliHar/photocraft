@@ -257,7 +257,7 @@ impl PreparedHueSaturation {
                 };
                 hue = (hue + 0.5 * (self.all_hue + weight * self.red_hue)).rem_euclid(1.0);
             }
-            Lane::Saturation => saturation = saturation * (1.0 + self.all_saturation),
+            Lane::Saturation => saturation *= 1.0 + self.all_saturation,
             Lane::Lightness => light = light + (1.0 - light) * self.all_lightness,
         }
         // Stable inverse of the same public HSL relation: subtracting from1

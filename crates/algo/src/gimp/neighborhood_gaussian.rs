@@ -288,6 +288,8 @@ fn accumulate(sum: &mut f64, value: f64, weight: f64) -> Result<()> {
 /// Colors are finite HDR, without premultiplication/TRC conversion. Filter alpha
 /// additionally requires unit finite alpha; PreserveRaw never evaluates alpha.
 /// Output is private until success; original/default/outside bytes are retained.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn try_apply(
     source: &Surface,
     input_extent: Rect,

@@ -69,4 +69,6 @@ impl PreparedPointOperation {
 
 #[cfg(test)]
 #[path = "derived_rgb_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unreachable)]
 mod tests;

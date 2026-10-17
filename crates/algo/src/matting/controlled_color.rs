@@ -74,10 +74,10 @@ pub fn guided_filter_color_with_interrupt(guide: &RgbImage, p: &[f32], r: usize,
         let v = mapped(n, ctl, |i| Ok(value(a, i)? * value(b, i)?))?;
         mean(&v)
     };
-    let m = [mean(chans.get(0).ok_or(E::LengthMismatch)?)?, mean(chans.get(1).ok_or(E::LengthMismatch)?)?, mean(chans.get(2).ok_or(E::LengthMismatch)?)?];
+    let m = [mean(chans.first().ok_or(E::LengthMismatch)?)?, mean(chans.get(1).ok_or(E::LengthMismatch)?)?, mean(chans.get(2).ok_or(E::LengthMismatch)?)?];
     let mp = mean(p)?;
     let mip = [
-        product(chans.get(0).ok_or(E::LengthMismatch)?, p)?,
+        product(chans.first().ok_or(E::LengthMismatch)?, p)?,
         product(chans.get(1).ok_or(E::LengthMismatch)?, p)?,
         product(chans.get(2).ok_or(E::LengthMismatch)?, p)?,
     ];
@@ -91,7 +91,7 @@ pub fn guided_filter_color_with_interrupt(guide: &RgbImage, p: &[f32], r: usize,
     for i in 0..n {
         poll(ctl)?;
         let mu = [
-            value(m.get(0).ok_or(E::LengthMismatch)?, i)? as f64,
+            value(m.first().ok_or(E::LengthMismatch)?, i)? as f64,
             value(m.get(1).ok_or(E::LengthMismatch)?, i)? as f64,
             value(m.get(2).ok_or(E::LengthMismatch)?, i)? as f64,
         ];
@@ -101,7 +101,7 @@ pub fn guided_filter_color_with_interrupt(guide: &RgbImage, p: &[f32], r: usize,
         let e = eps as f64;
         let (rr, rg, rb, gg, gb, bb) = (s(0, 0, 0)? + e, s(1, 0, 1)?, s(2, 0, 2)?, s(3, 1, 1)? + e, s(4, 1, 2)?, s(5, 2, 2)? + e);
         let cov = [
-            value(mip.get(0).ok_or(E::LengthMismatch)?, i)? as f64 - *mu.get(0).ok_or(E::LengthMismatch)? * value(&mp, i)? as f64,
+            value(mip.first().ok_or(E::LengthMismatch)?, i)? as f64 - *mu.first().ok_or(E::LengthMismatch)? * value(&mp, i)? as f64,
             value(mip.get(1).ok_or(E::LengthMismatch)?, i)? as f64 - *mu.get(1).ok_or(E::LengthMismatch)? * value(&mp, i)? as f64,
             value(mip.get(2).ok_or(E::LengthMismatch)?, i)? as f64 - *mu.get(2).ok_or(E::LengthMismatch)? * value(&mp, i)? as f64,
         ];
@@ -117,23 +117,26 @@ pub fn guided_filter_color_with_interrupt(guide: &RgbImage, p: &[f32], r: usize,
             (0.0, 0.0, 0.0)
         } else {
             (
-                (i00 * *cov.get(0).ok_or(E::LengthMismatch)? + i01 * *cov.get(1).ok_or(E::LengthMismatch)? + i02 * *cov.get(2).ok_or(E::LengthMismatch)?) / det,
-                (i01 * *cov.get(0).ok_or(E::LengthMismatch)? + i11 * *cov.get(1).ok_or(E::LengthMismatch)? + i12 * *cov.get(2).ok_or(E::LengthMismatch)?) / det,
-                (i02 * *cov.get(0).ok_or(E::LengthMismatch)? + i12 * *cov.get(1).ok_or(E::LengthMismatch)? + i22 * *cov.get(2).ok_or(E::LengthMismatch)?) / det,
+                (i00 * *cov.first().ok_or(E::LengthMismatch)? + i01 * *cov.get(1).ok_or(E::LengthMismatch)? + i02 * *cov.get(2).ok_or(E::LengthMismatch)?)
+                    / det,
+                (i01 * *cov.first().ok_or(E::LengthMismatch)? + i11 * *cov.get(1).ok_or(E::LengthMismatch)? + i12 * *cov.get(2).ok_or(E::LengthMismatch)?)
+                    / det,
+                (i02 * *cov.first().ok_or(E::LengthMismatch)? + i12 * *cov.get(1).ok_or(E::LengthMismatch)? + i22 * *cov.get(2).ok_or(E::LengthMismatch)?)
+                    / det,
             )
         };
         *av.get_mut(0).and_then(|v| v.get_mut(i)).ok_or(E::LengthMismatch)? = a0 as f32;
         *av.get_mut(1).and_then(|v| v.get_mut(i)).ok_or(E::LengthMismatch)? = a1 as f32;
         *av.get_mut(2).and_then(|v| v.get_mut(i)).ok_or(E::LengthMismatch)? = a2 as f32;
         *bv.get_mut(i).ok_or(E::LengthMismatch)? = (value(&mp, i)? as f64
-            - a0 * *mu.get(0).ok_or(E::LengthMismatch)?
+            - a0 * *mu.first().ok_or(E::LengthMismatch)?
             - a1 * *mu.get(1).ok_or(E::LengthMismatch)?
             - a2 * *mu.get(2).ok_or(E::LengthMismatch)?) as f32;
     }
-    let ma = [mean(av.get(0).ok_or(E::LengthMismatch)?)?, mean(av.get(1).ok_or(E::LengthMismatch)?)?, mean(av.get(2).ok_or(E::LengthMismatch)?)?];
+    let ma = [mean(av.first().ok_or(E::LengthMismatch)?)?, mean(av.get(1).ok_or(E::LengthMismatch)?)?, mean(av.get(2).ok_or(E::LengthMismatch)?)?];
     let mb = mean(&bv)?;
     mapped(n, ctl, |i| {
-        Ok(value(ma.get(0).ok_or(E::LengthMismatch)?, i)? * value(chans.get(0).ok_or(E::LengthMismatch)?, i)?
+        Ok(value(ma.first().ok_or(E::LengthMismatch)?, i)? * value(chans.first().ok_or(E::LengthMismatch)?, i)?
             + value(ma.get(1).ok_or(E::LengthMismatch)?, i)? * value(chans.get(1).ok_or(E::LengthMismatch)?, i)?
             + value(ma.get(2).ok_or(E::LengthMismatch)?, i)? * value(chans.get(2).ok_or(E::LengthMismatch)?, i)?
             + value(&mb, i)?)

@@ -259,7 +259,7 @@ impl PreparedMixedHueSaturation {
         let combined_saturation = self.all_saturation + weight * self.red_saturation;
         let combined_lightness = self.all_lightness + weight * self.red_lightness;
         hue = (hue + combined_hue / 2.0).rem_euclid(1.0);
-        saturation = saturation * (1.0 + combined_saturation);
+        saturation *= 1.0 + combined_saturation;
         // Only this upper ceiling is supported by the declared bounded recipe.
         // No unobserved lower floor or combined-parameter normalization is added.
         if saturation < 0.0 {

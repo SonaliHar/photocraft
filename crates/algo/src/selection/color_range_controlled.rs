@@ -16,6 +16,8 @@ fn poll(control: &Interrupt<'_>) -> Result<(), RasterInputError> {
 }
 /// The borrowed Lab buffer and output are charged together. Positions/radius are
 /// caller-established image-space values, not source-schema or profile admission.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn color_range_lab_with_interrupt(
     lab: &[[f32; 4]],
     width: usize,

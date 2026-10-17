@@ -127,6 +127,8 @@ pub fn try_box_blur(
 
 // One shared numeric loop. Legacy callers retain their requested-ROI tilepart;
 // bounded callers supply the canonical tilepart of the full operation extent.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 fn tile_core(
     part: Rect,
     input: Rect,
@@ -175,6 +177,8 @@ fn tile_core(
 
 // The additive row scheduler reuses these equations. The old full-horizontal
 // evaluator keeps its exact row/column traversal, read order and poll counts.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 fn horizontal_row<E: From<RasterInputError>>(
     dest: &mut [f64],
     part: Rect,

@@ -118,7 +118,7 @@ pub fn validate_arguments(arguments: &[FilterArgument], extent: Rect, params: Pa
                     if raw.is_empty() || text.len() != raw.len() * 2 {
                         false
                     } else {
-                        text.as_bytes().chunks_exact(2).zip(raw).all(|(pair, byte)| {
+                        text.as_bytes().as_chunks::<2>().0.iter().zip(raw).all(|(pair, byte)| {
                             let digits = b"0123456789abcdef";
                             pair.first() == digits.get(usize::from(byte >> 4)) && pair.get(1) == digits.get(usize::from(byte & 15))
                         })

@@ -291,6 +291,8 @@ fn means(img: &RgbImage, wt: &[f32], r: usize, l: MattingLimits, c: &Interrupt<'
     let sums = [channel(0)?, channel(1)?, channel(2)?];
     Ok((box_mean_with_interrupt(wt, img.w, img.h, r, l, c)?, sums))
 }
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn estimate_with_interrupt(
     img: &RgbImage,
     m: &[f32],

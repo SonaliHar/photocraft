@@ -1312,10 +1312,10 @@ pub fn try_puppet_warp_with_mask(
 ) -> Result<Option<(Surface, Option<Surface>)>, photocraft_raster::RasterInputError> {
     use photocraft_raster::RasterInputError;
     control.check().map_err(|_| RasterInputError::Cancelled)?;
-    if let Some(mask) = mask {
-        if mask.channels() != 1 || matches!(mask.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
-            return Err(RasterInputError::UnsupportedConversion);
-        }
+    if let Some(mask) = mask
+        && (mask.channels() != 1 || matches!(mask.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64))
+    {
+        return Err(RasterInputError::UnsupportedConversion);
     }
     if matches!(src.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
         return Err(photocraft_raster::RasterInputError::UnsupportedConversion);

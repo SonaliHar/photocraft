@@ -136,6 +136,8 @@ fn allocate<T: Default + Clone>(length: usize, control: &Interrupt<'_>) -> Resul
     }
     Ok(values)
 }
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 fn read(source: &Surface, extent: Rect, mut x: i64, mut y: i64, abyss: Abyss, pixel: &mut [f64], meter: &mut Meter, control: &Interrupt<'_>) -> Result<()> {
     poll(control)?;
     meter.debit(mul(pixel.len() as u64, 32)?)?;

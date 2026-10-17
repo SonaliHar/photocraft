@@ -233,7 +233,7 @@ pub fn try_box_blur_row_tile<E>(
     let mut units = 0;
     for j in 0..k {
         row(plan, j, row_scratch, &mut remove, &mut units, interrupt, read_row)?;
-        for (sum, sample) in sums.chunks_exact_mut(4).zip(remove.chunks_exact(4)) {
+        for (sum, sample) in sums.as_chunks_mut::<4>().0.iter_mut().zip(remove.as_chunks::<4>().0.iter()) {
             poll(&mut units, 4, interrupt)?;
             for (s, v) in sum.iter_mut().zip(sample) {
                 *s += v;
@@ -261,7 +261,7 @@ pub fn try_box_blur_row_tile<E>(
             row(plan, y, row_scratch, &mut remove, &mut units, interrupt, read_row)?;
             row(plan, y.checked_add(k).ok_or(RasterInputError::LimitExceeded)?, row_scratch, &mut add, &mut units, interrupt, read_row)?;
             for (sign, values) in [(-1., remove.as_slice()), (1., add.as_slice())] {
-                for (sum, sample) in sums.chunks_exact_mut(4).zip(values.chunks_exact(4)) {
+                for (sum, sample) in sums.as_chunks_mut::<4>().0.iter_mut().zip(values.as_chunks::<4>().0.iter()) {
                     poll(&mut units, 4, interrupt)?;
                     for (s, v) in sum.iter_mut().zip(sample) {
                         *s += sign * v;

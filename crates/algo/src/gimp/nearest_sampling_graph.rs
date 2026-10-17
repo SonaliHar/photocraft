@@ -293,6 +293,8 @@ fn find<'a, 'data>(bindings: &'a [Binding<'data>], id: GraphNodeId, control: &In
 /// Convenience all-nearest graph lane. Binding/lookup/footprint work is debited
 /// before structural planning; validators' own allocations/work remain caller
 /// responsibility. Mixed graphs can instead reuse the two callback adapters.
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn execute<'a>(
     graph: &FilterGraph,
     bindings: &[Binding<'_>],

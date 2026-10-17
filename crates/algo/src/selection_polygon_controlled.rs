@@ -222,9 +222,9 @@ pub fn polygon_with_interrupt(points: &[(f32, f32)], area: Rect, anti_alias: boo
                 poll(ctl)?;
                 let row_start = (py0 + r).checked_mul(width).ok_or(RasterInputError::LimitExceeded)?;
                 let row = output.get_mut(row_start..row_start + width).ok_or(RasterInputError::LengthMismatch)?;
-                for span in xs.chunks_exact(2) {
+                for span in xs.as_chunks::<2>().0 {
                     let (x0, x1) = (
-                        (span.get(0).ok_or(RasterInputError::LengthMismatch)? - area.x0 as f32).max(0.0),
+                        (span.first().ok_or(RasterInputError::LengthMismatch)? - area.x0 as f32).max(0.0),
                         (span.get(1).ok_or(RasterInputError::LengthMismatch)? - area.x0 as f32).min(width as f32),
                     );
                     if x1 <= x0 {

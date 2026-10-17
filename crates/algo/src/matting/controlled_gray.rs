@@ -118,6 +118,8 @@ pub fn box_mean_with_interrupt(src: &[f32], w: usize, h: usize, r: usize, l: Mat
     poll(c)?;
     Ok(out)
 }
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn guided_filter_gray_with_interrupt(
     guide: &[f32],
     p: &[f32],

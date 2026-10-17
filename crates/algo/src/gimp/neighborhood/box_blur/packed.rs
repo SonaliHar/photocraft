@@ -168,9 +168,9 @@ pub fn try_box_blur_packed_tile(
     let mut units = 0;
     let raw = if plan.radius == 0 {
         let mut raw = allocate::<u8>(plan.output_bytes()?)?;
-        for (pixel, bytes) in packed.iter().zip(raw.chunks_exact_mut(32)) {
+        for (pixel, bytes) in packed.iter().zip(raw.as_chunks_mut::<32>().0.iter_mut()) {
             poll(&mut units, 32, interrupt)?;
-            for (v, dest) in pixel.iter().zip(bytes.chunks_exact_mut(8)) {
+            for (v, dest) in pixel.iter().zip(bytes.as_chunks_mut::<8>().0.iter_mut()) {
                 dest.copy_from_slice(&v.to_ne_bytes());
             }
         }

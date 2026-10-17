@@ -275,6 +275,7 @@ mod tests {
         .unwrap();
         assert_eq!(output.surface().try_read_interleaved(roi).unwrap(), 3f64.to_ne_bytes());
         assert_eq!(output.surface().default_bytes(), source.default_bytes());
+        let cancelled = || true;
         for (limits, control) in [
             (ExecutionLimits { work_units: 1, ..ExecutionLimits::default() }, Interrupt::NONE),
             (ExecutionLimits::default(), Interrupt::cancel_only(&cancelled)),

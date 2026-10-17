@@ -63,14 +63,14 @@ fn mixed_sum_uses_original_hue_weight_and_achromatic_local_skip() {
     let candidate = prepare(PixelFormat::RGBA32F, p);
     // Retained GIMP endpoint words support this declared model within residual,
     // not source-exact/internal precision or overall rendering admission.
-    near(candidate.try_eval_float_rgb([0.8, 0.4, 0.2]).unwrap(), [0.82382816, 0.52064347, 0.3220052]);
+    near(candidate.try_eval_float_rgb([0.8, 0.4, 0.2]).unwrap(), [0.82382816, 0.520_643_5, 0.3220052]);
     near(candidate.try_eval_float_rgb([0.4; 3]).unwrap(), [0.55; 3]);
 }
 #[test]
 fn explicit_float_six_phase_includes_the_observed_red_hard_boundary() {
     let mut p = parameters();
     p.ranges[1][1] = (-0.25f64).to_bits();
-    let rgb = [0.6499999761581421f32, 0.3499999940395355, 0.5];
+    let rgb = [0.65_f32, 0.35, 0.5];
     let output = prepare(PixelFormat::RGBA32F, p).try_eval_float_rgb(rgb).unwrap();
     near(output, [0.6125, 0.3875, 0.5]);
     assert!(output[0] < rgb[0]);

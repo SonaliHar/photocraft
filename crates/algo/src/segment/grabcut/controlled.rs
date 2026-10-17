@@ -319,6 +319,8 @@ pub(crate) fn iterations(img: &RgbImage, trimap: &mut [u8], iters: usize, b: &Bu
     Ok(models)
 }
 
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn finish(
     s: &dyn Sampler,
     window: Rect,

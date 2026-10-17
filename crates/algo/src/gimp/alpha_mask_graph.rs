@@ -2,7 +2,7 @@
 //! Exact identities, ports, versions, contexts and mathematical policies are
 //! mandatory. This performs no CMS conversion or GEGL/source admission.
 use super::{
-    graph_execute::{AvailableInputBinding, AvailableNodeRequest, InputPixels, ExecutionDomain, GraphExecuteError, NodeBudget, NodeOutput, NodeRequest},
+    graph_execute::{AvailableInputBinding, AvailableNodeRequest, ExecutionDomain, GraphExecuteError, InputPixels, NodeBudget, NodeOutput, NodeRequest},
     graph_plan::{Endpoint, PortDirection},
     graph_roi::{FootprintRequest, GraphRoiError, InputFootprint},
     multi_input_alpha_mask as kernel,
@@ -165,18 +165,31 @@ impl StagingBudget for TrimBudget {
 /// Per-node execution supplies actual source and independent mask domains.
 /// The raw kernel colors survive, and only a privately trimmed ROI is published.
 pub fn execute_alpha_mask(config: &Config<'_>, request: NodeRequest<'_>, budget: &mut NodeBudget<'_, '_>) -> Result<NodeOutput, GraphExecuteError> {
-    if request.inputs.len() != 2 { return Err(GraphExecuteError::Domain); }
-    fn convert<'a>(input: &super::graph_execute::InputBinding<'a>) -> AvailableInputBinding<'a> {
-        AvailableInputBinding { input_port: input.input_port, output_port: input.output_port, endpoint: input.endpoint,
-            pixels: InputPixels::Materialized(input.surface), domain: input.domain, roi: input.roi, footprint: input.footprint }
+    if request.inputs.len() != 2 {
+        return Err(GraphExecuteError::Domain);
     }
-    let inputs = [convert(request.inputs.first().ok_or(GraphExecuteError::MissingInput)?),
-        convert(request.inputs.get(1).ok_or(GraphExecuteError::MissingInput)?)];
+    fn convert<'a>(input: &super::graph_execute::InputBinding<'a>) -> AvailableInputBinding<'a> {
+        AvailableInputBinding {
+            input_port: input.input_port,
+            output_port: input.output_port,
+            endpoint: input.endpoint,
+            pixels: InputPixels::Materialized(input.surface),
+            domain: input.domain,
+            roi: input.roi,
+            footprint: input.footprint,
+        }
+    }
+    let inputs =
+        [convert(request.inputs.first().ok_or(GraphExecuteError::MissingInput)?), convert(request.inputs.get(1).ok_or(GraphExecuteError::MissingInput)?)];
     execute_alpha_mask_available(config, AvailableNodeRequest { node: request.node, inputs: &inputs, roi: request.roi, domain: request.domain }, budget)
 }
 /// Explicit no-mask-pixels route: only a proven empty mask read region with an
 /// exact caller outside rational may omit the mask owner. Source stays real.
-pub fn execute_alpha_mask_available(config: &Config<'_>, request: AvailableNodeRequest<'_>, budget: &mut NodeBudget<'_, '_>) -> Result<NodeOutput, GraphExecuteError> {
+pub fn execute_alpha_mask_available(
+    config: &Config<'_>,
+    request: AvailableNodeRequest<'_>,
+    budget: &mut NodeBudget<'_, '_>,
+) -> Result<NodeOutput, GraphExecuteError> {
     budget.poll()?;
     validate(config, request.roi)?;
     if request.node.id != config.node
@@ -202,9 +215,12 @@ pub fn execute_alpha_mask_available(config: &Config<'_>, request: AvailableNodeR
         if input.roi != expected.source_read() {
             return Err(GraphExecuteError::Roi);
         }
-        if matches!(input.pixels, InputPixels::NoPixelsRequired) && (port.input != config.mask.input
-            || !expected.source_read().is_empty() || input.footprint.is_none()
-            || !matches!(config.schema.outside, kernel::OutsideCoverage::Constant { .. })) {
+        if matches!(input.pixels, InputPixels::NoPixelsRequired)
+            && (port.input != config.mask.input
+                || !expected.source_read().is_empty()
+                || input.footprint.is_none()
+                || !matches!(config.schema.outside, kernel::OutsideCoverage::Constant { .. }))
+        {
             return Err(GraphExecuteError::Roi);
         }
         if let Some(actual) = input.footprint {
@@ -222,8 +238,13 @@ pub fn execute_alpha_mask_available(config: &Config<'_>, request: AvailableNodeR
     }
     let source = request.inputs.iter().find(|input| input.input_port == config.source.input).ok_or(GraphExecuteError::MissingInput)?;
     let mask = request.inputs.iter().find(|input| input.input_port == config.mask.input).ok_or(GraphExecuteError::MissingInput)?;
-    let InputPixels::Materialized(source_surface) = source.pixels else { return Err(GraphExecuteError::MissingInput); };
-    let mask_surface = match mask.pixels { InputPixels::Materialized(surface) => Some(surface), InputPixels::NoPixelsRequired => None };
+    let InputPixels::Materialized(source_surface) = source.pixels else {
+        return Err(GraphExecuteError::MissingInput);
+    };
+    let mask_surface = match mask.pixels {
+        InputPixels::Materialized(surface) => Some(surface),
+        InputPixels::NoPixelsRequired => None,
+    };
     let native = kernel::AvailableRequest {
         source: kernel::Source {
             surface: source_surface,
@@ -269,9 +290,12 @@ pub fn execute_alpha_mask_available(config: &Config<'_>, request: AvailableNodeR
     budget.reserve_index(index_bytes)?;
     budget.reserve_scratch(scratch)?;
     budget.charge_work(checked_add(checked_mul(requirements.work_units, 2)?, trim_work)?)?;
-    let filtered =
-        kernel::try_apply_available(native, kernel::Limits { resident_bytes: requirements.peak_bytes, work_units: requirements.work_units }, budget.interrupt())
-            .map_err(raster)?;
+    let filtered = kernel::try_apply_available(
+        native,
+        kernel::Limits { resident_bytes: requirements.peak_bytes, work_units: requirements.work_units },
+        budget.interrupt(),
+    )
+    .map_err(raster)?;
     let mut staging = TrimBudget { ceiling: checked_add(output_bytes, index_bytes)?, work: trim_work, used: 0 };
     let mut builder = StagedSurfaceBuilder::new(format, filtered.default_bytes(), request.roi, &mut staging, budget.interrupt()).map_err(raster)?;
     let mut cell = Vec::new();
@@ -315,41 +339,92 @@ mod tests {
     use photocraft_doc::{SampleEncoding, xcf_filters::GraphEdge};
     #[test]
     fn availability_pipeline_skips_mask_producer_and_keeps_exact_rational_alpha() {
-        use super::super::{graph_execute::{DomainAssignment, ExecutionLimits}, graph_pipeline::execute_pipeline_with_roi_domains_available};
+        use super::super::{
+            graph_execute::{DomainAssignment, ExecutionLimits},
+            graph_pipeline::execute_pipeline_with_roi_domains_available,
+        };
         use photocraft_doc::xcf_filters::{FilterGraph, GraphNode};
         use photocraft_raster::Surface;
         for sample in [SampleType::U32, SampleType::F64] {
             let context = kernel::WorkingContext { encoding: SampleEncoding::Linear, profile_identity: [6; 32] };
-            let domain = ExecutionDomain { format: PixelFormat::new(ColorMode::Rgb, sample, true), encoding: context.encoding, profile_fingerprint: Some(context.profile_identity) };
+            let domain = ExecutionDomain {
+                format: PixelFormat::new(ColorMode::Rgb, sample, true),
+                encoding: context.encoding,
+                profile_fingerprint: Some(context.profile_identity),
+            };
             let mask_domain = ExecutionDomain { format: PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false), ..domain };
-            let raw = if sample == SampleType::U32 { [1u32, 17, u32::MAX, 3].into_iter().flat_map(u32::to_ne_bytes).collect::<Vec<_>>() }
-                else { [0x7ff8_0000_0000_1234u64, (-0.0f64).to_bits(), (-3.5f64).to_bits(), 0.75f64.to_bits()].into_iter().flat_map(u64::to_ne_bytes).collect() };
-            let source = Surface::try_with_default_bytes(domain.format, &raw).unwrap(); let before = source.clone();
+            let raw = if sample == SampleType::U32 {
+                [1u32, 17, u32::MAX, 3].into_iter().flat_map(u32::to_ne_bytes).collect::<Vec<_>>()
+            } else {
+                [0x7ff8_0000_0000_1234u64, (-0.0f64).to_bits(), (-3.5f64).to_bits(), 0.75f64.to_bits()].into_iter().flat_map(u64::to_ne_bytes).collect()
+            };
+            let source = Surface::try_with_default_bytes(domain.format, &raw).unwrap();
+            let before = source.clone();
             let identity = OperationIdentity { name: "Own absent mask".into(), stored_version: "1".into(), schema_epoch: "own".into() };
             let node = |id| GraphNode { id: GraphNodeId(id), operation: identity.clone(), version_origin: GraphVersionOrigin::Stored, arguments: vec![] };
-            let graph = FilterGraph { input: Some(GraphNodeId(9)), nodes: vec![node(1), node(2)], edges: vec![
-                GraphEdge { from: GraphNodeId(9), to: GraphNodeId(2), input_port: "source".into(), output_port: "color".into() },
-                GraphEdge { from: GraphNodeId(1), to: GraphNodeId(2), input_port: "mask".into(), output_port: "coverage".into() }],
-                output: GraphNodeId(2), original_pipeline: None };
+            let graph = FilterGraph {
+                input: Some(GraphNodeId(9)),
+                nodes: vec![node(1), node(2)],
+                edges: vec![
+                    GraphEdge { from: GraphNodeId(9), to: GraphNodeId(2), input_port: "source".into(), output_port: "color".into() },
+                    GraphEdge { from: GraphNodeId(1), to: GraphNodeId(2), input_port: "mask".into(), output_port: "coverage".into() },
+                ],
+                output: GraphNodeId(2),
+                original_pipeline: None,
+            };
             let roi = Rect::new(-1, 0, 0, 1);
-            let config = Config { node: GraphNodeId(2), schema: Schema { identity: &identity, version_origin: GraphVersionOrigin::Stored,
-                apply: kernel::Apply::Multiply, outside: kernel::OutsideCoverage::Constant { numerator: 1, denominator: 2 },
-                rounding: kernel::Rounding::NearestTiesUp, interpretation: kernel::CoverageInterpretation::UnitSamples },
+            let config = Config {
+                node: GraphNodeId(2),
+                schema: Schema {
+                    identity: &identity,
+                    version_origin: GraphVersionOrigin::Stored,
+                    apply: kernel::Apply::Multiply,
+                    outside: kernel::OutsideCoverage::Constant { numerator: 1, denominator: 2 },
+                    rounding: kernel::Rounding::NearestTiesUp,
+                    interpretation: kernel::CoverageInterpretation::UnitSamples,
+                },
                 source: Port { input: "source", upstream_output: "color", endpoint: Endpoint::ExternalInput(GraphNodeId(9)), extent: roi, domain, context },
-                mask: Port { input: "mask", upstream_output: "coverage", endpoint: Endpoint::Node { id: GraphNodeId(1), index: 0 },
-                    extent: Rect::new(1, 0, 2, 1), domain: mask_domain, context }, output_port: "result", output_domain: domain,
-                output_context: context, coordinate_space: [7; 32] };
+                mask: Port {
+                    input: "mask",
+                    upstream_output: "coverage",
+                    endpoint: Endpoint::Node { id: GraphNodeId(1), index: 0 },
+                    extent: Rect::new(1, 0, 2, 1),
+                    domain: mask_domain,
+                    context,
+                },
+                output_port: "result",
+                output_domain: domain,
+                output_context: context,
+                coordinate_space: [7; 32],
+            };
             let domains = [DomainAssignment { node: GraphNodeId(1), domain: mask_domain }, DomainAssignment { node: GraphNodeId(2), domain }];
-            let output = execute_pipeline_with_roi_domains_available(&graph, 2, Some(&source), roi, domain, &domains, ExecutionLimits::default(), &Interrupt::NONE,
-                |_, _, _| true, |request| alpha_mask_roi_footprint(&config, request), |request, budget| {
+            let output = execute_pipeline_with_roi_domains_available(
+                &graph,
+                2,
+                Some(&source),
+                roi,
+                domain,
+                &domains,
+                ExecutionLimits::default(),
+                &Interrupt::NONE,
+                |_, _, _| true,
+                |request| alpha_mask_roi_footprint(&config, request),
+                |request, budget| {
                     assert_eq!(request.node.id, GraphNodeId(2), "no-read mask producer must never execute");
                     execute_alpha_mask_available(&config, request, budget)
-                }).unwrap();
-            let pixel = output.surface().try_read_interleaved(roi).unwrap(); let color_bytes = 3 * sample.bytes();
+                },
+            )
+            .unwrap();
+            let pixel = output.surface().try_read_interleaved(roi).unwrap();
+            let color_bytes = 3 * sample.bytes();
             assert_eq!(&pixel[..color_bytes], &raw[..color_bytes]);
-            if sample == SampleType::U32 { assert_eq!(u32::from_ne_bytes(pixel[color_bytes..].try_into().unwrap()), 2); }
-            else { assert_eq!(photocraft_color::try_read_sample_f64(&pixel, sample, 3).unwrap(), 0.375); }
-            assert_eq!(output.surface().default_bytes(), raw); assert_eq!(source, before);
+            if sample == SampleType::U32 {
+                assert_eq!(u32::from_ne_bytes(pixel[color_bytes..].try_into().unwrap()), 2);
+            } else {
+                assert_eq!(photocraft_color::try_read_sample_f64(&pixel, sample, 3).unwrap(), 0.375);
+            }
+            assert_eq!(output.surface().default_bytes(), raw);
+            assert_eq!(source, before);
         }
     }
     #[test]
@@ -402,10 +477,9 @@ mod tests {
         assert!(port_allowed(&config, GraphNodeId(3), PortDirection::Input, "owned-source"));
         assert!(!port_allowed(&config, GraphNodeId(3), PortDirection::Input, "input"));
         let edge = GraphEdge { from: GraphNodeId(2), to: GraphNodeId(3), input_port: "owned-mask".into(), output_port: "owned-coverage".into() };
-        assert!(matches!(
-            alpha_mask_roi_footprint(&config, FootprintRequest { node: GraphNodeId(3), declared_index: 0, edge_index: 0, edge: &edge, output: extent }),
-            Ok(_)
-        ));
+        assert!(
+            alpha_mask_roi_footprint(&config, FootprintRequest { node: GraphNodeId(3), declared_index: 0, edge_index: 0, edge: &edge, output: extent }).is_ok()
+        );
     }
     #[test]
     fn per_node_pipeline_executes_native_alpha_with_independent_mask_depth() {

@@ -27,7 +27,7 @@ fn colors() -> ([u8; 32], [u8; 32]) {
         (&mut a, [(-0f64).to_bits(), 0.25f64.to_bits(), 0.5f64.to_bits(), 1f64.to_bits()]),
         (&mut b, [1f64.to_bits(), 0.5f64.to_bits(), 0.25f64.to_bits(), 1f64.to_bits()]),
     ] {
-        for (chunk, word) in out.chunks_exact_mut(8).zip(words) {
+        for (chunk, word) in out.as_chunks_mut::<8>().0.iter_mut().zip(words) {
             chunk.copy_from_slice(&word.to_ne_bytes());
         }
     }

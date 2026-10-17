@@ -106,7 +106,7 @@ fn tile_count(r: Rect) -> Result<u64> {
     let span = |a: i32, b: i32| {
         u64::try_from(i64::from(b.div_euclid(TILE_SIZE)) - i64::from(a.div_euclid(TILE_SIZE)) + 1).map_err(|_| RasterInputError::InvalidBounds)
     };
-    Ok(mul(span(r.x0, r.x1.checked_sub(1).ok_or(RasterInputError::InvalidBounds)?)?, span(r.y0, r.y1.checked_sub(1).ok_or(RasterInputError::InvalidBounds)?)?)?)
+    mul(span(r.x0, r.x1.checked_sub(1).ok_or(RasterInputError::InvalidBounds)?)?, span(r.y0, r.y1.checked_sub(1).ok_or(RasterInputError::InvalidBounds)?)?)
 }
 fn support(r: Rect, w: usize, h: usize) -> Result<Rect> {
     let x = i32::try_from(w / 2).map_err(|_| RasterInputError::InvalidBounds)?;

@@ -24,7 +24,7 @@ fn procedural(bounds: Rect) -> Surface {
         for x in bounds.x0..bounds.x1 {
             let i = (x - bounds.x0) as u32;
             let j = (y - bounds.y0) as u32;
-            let alpha = if (i + j) % 11 == 0 { 0. } else { ((i * 3 + j * 7) % 31) as f64 / 30. };
+            let alpha = if (i + j).is_multiple_of(11) { 0. } else { ((i * 3 + j * 7) % 31) as f64 / 30. };
             source.try_write_pixel_f64(x, y, &[i as f64 / 137. - 0.25, j as f64 / 113., ((i * 7 + j * 13) % 97) as f64 / 61., alpha]).unwrap();
         }
     }
@@ -162,7 +162,7 @@ fn expanded_halo_repeats_original_endpoint_and_zero_identity_keeps_hidden_raw_wo
         let plan = BoxBlurTilePlan::new(bounds, coord, 4, &Interrupt::NONE).unwrap();
         let packed = pack(&source, plan);
         let raw = try_box_blur_packed_tile(&plan, &packed, limits(), &Interrupt::NONE).unwrap();
-        for p in raw.chunks_exact(32) {
+        for p in raw.as_chunks::<32>().0 {
             let expected: Vec<_> = [0.25f64, -0.5, 2., 1.].iter().flat_map(|v| v.to_ne_bytes()).collect();
             assert_eq!(p, expected.as_slice());
         }

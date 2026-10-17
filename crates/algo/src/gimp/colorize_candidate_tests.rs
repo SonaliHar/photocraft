@@ -38,7 +38,7 @@ fn gamma2_sealed_stored_negative_l_fixture_is_residual_only() {
     let params = Parameters::from_stored_bits([0x3e7b79e8, 0x3ebcf03f, 0xbf0899da], [0x3e7b79e8, 0x3ebcf03f, 0x3e6ecc4c]).unwrap();
     let p = prepare(params, TransferRole::CallerEstablishedExactGamma2);
     let output = p.try_eval_float_color([0.8, 0.4, 0.2]).unwrap();
-    for (actual, observed) in output.into_iter().zip([0.3512967526912689f32, 0.4070727527141571, 0.2763597071170807]) {
+    for (actual, observed) in output.into_iter().zip([0.351_296_75_f32, 0.407_072_75, 0.276_359_7]) {
         assert!((actual - observed).abs() <= 0.000001);
     }
 }
@@ -144,7 +144,7 @@ fn first_iec_packet_default_scalars_are_residual_fixture_not_raw_neutral_identit
     let input = [0.8, 0.4, 0.2];
     let output = p.try_eval_float_color(input).unwrap();
     assert_ne!(output, input);
-    for (actual, observed) in output.into_iter().zip([0.3746699094772339f32, 0.6241026520729065, 0.6241026520729065]) {
+    for (actual, observed) in output.into_iter().zip([0.374_669_9_f32, 0.624_102_65, 0.624_102_65]) {
         assert!((actual - observed).abs() <= 0.000001);
     }
 }

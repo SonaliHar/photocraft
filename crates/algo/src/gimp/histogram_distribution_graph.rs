@@ -62,6 +62,8 @@ impl<'a> PreparedGlobalStatistics<'a> {
     }
     /// One global scan/build, independent of subsequent output ROI callbacks.
     /// Caller supplies an immutable authoritative source and revision identity.
+    // Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         source: &'a Surface,
         source_identity: [u8; 32],

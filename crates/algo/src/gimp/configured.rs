@@ -119,6 +119,8 @@ pub struct LevelsConfigurationBits {
     pub clamp_input: bool,
     pub clamp_output: bool,
 }
+// Keep the bounded inline representation; boxing adds a new allocation and changes its controlled storage schedule.
+#[allow(clippy::large_enum_variant)]
 enum Kernel {
     Curves(OwnedPreparedCurveTables),
     Levels(LevelsConfiguration),

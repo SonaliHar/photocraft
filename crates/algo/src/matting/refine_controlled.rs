@@ -342,6 +342,8 @@ fn widths(img: &RgbImage, r: usize, l: MattingLimits, c: &Interrupt<'_>) -> Resu
 fn buffer(img: Option<&RgbImage>, m: &[f32], w: usize, h: usize, p: &RefineParams, l: MattingLimits, c: &Interrupt<'_>) -> Result<Vec<f32>, E> {
     buffer_brushed(img, m, w, h, p, None, l, c)
 }
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 fn buffer_brushed(
     img: Option<&RgbImage>,
     m: &[f32],
@@ -510,6 +512,8 @@ pub fn refine_mask_with_interrupt(
 ) -> Result<Option<Region>, E> {
     refine_mask_brushed_with_interrupt(sampler, mask, content, canvas, p, None, l, c)
 }
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn refine_mask_brushed_with_interrupt(
     sampler: &dyn Sampler,
     mask: &(dyn Fn(Rect) -> Result<Vec<f32>, E> + Sync),

@@ -48,6 +48,8 @@ fn reserve<T>(v: &mut Vec<T>, n: usize) -> Result<(), RasterInputError> {
     }
     Ok(())
 }
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn grow_with_interrupt(
     px: &[[f32; 4]],
     mask: &[f32],

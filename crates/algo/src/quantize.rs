@@ -565,127 +565,209 @@ pub fn to_bitmap(gray: &mut [f32], w: usize, method: BitmapMethod) {
 /// Lower-only resource limits for the ordinary finite F32 quantizer. They do
 /// not qualify wide/native storage, profiles, or a source operation schema.
 #[derive(Clone, Copy, Debug)]
-pub struct ControlledLimits { pub resident_bytes: u64, pub work_units: u64 }
+pub struct ControlledLimits {
+    pub resident_bytes: u64,
+    pub work_units: u64,
+}
 impl Default for ControlledLimits {
-    fn default() -> Self { Self { resident_bytes: photocraft_raster::MAX_CHECKED_RASTER_BYTES, work_units: 8_000_000_000 } }
+    fn default() -> Self {
+        Self { resident_bytes: photocraft_raster::MAX_CHECKED_RASTER_BYTES, work_units: 8_000_000_000 }
+    }
 }
 #[derive(Clone, Copy, Debug, Default)]
-pub struct ControlledRequirements { pub retained_bytes: u64, pub scratch_bytes: u64, pub output_bytes: u64, pub work_units: u64 }
+pub struct ControlledRequirements {
+    pub retained_bytes: u64,
+    pub scratch_bytes: u64,
+    pub output_bytes: u64,
+    pub work_units: u64,
+}
 type ControlledResult<T> = Result<T, photocraft_raster::RasterInputError>;
 fn controlled_poll(control: &photocraft_raster::Interrupt<'_>) -> ControlledResult<()> {
     control.check().map_err(|_| photocraft_raster::RasterInputError::Cancelled)
 }
-fn controlled_limit() -> photocraft_raster::RasterInputError { photocraft_raster::RasterInputError::LimitExceeded }
-fn controlled_invalid() -> photocraft_raster::RasterInputError { photocraft_raster::RasterInputError::InvalidBounds }
-fn controlled_add(a: u64, b: u64) -> ControlledResult<u64> { a.checked_add(b).ok_or_else(controlled_limit) }
-fn controlled_mul(a: u64, b: u64) -> ControlledResult<u64> { a.checked_mul(b).ok_or_else(controlled_limit) }
+fn controlled_limit() -> photocraft_raster::RasterInputError {
+    photocraft_raster::RasterInputError::LimitExceeded
+}
+fn controlled_invalid() -> photocraft_raster::RasterInputError {
+    photocraft_raster::RasterInputError::InvalidBounds
+}
+fn controlled_add(a: u64, b: u64) -> ControlledResult<u64> {
+    a.checked_add(b).ok_or_else(controlled_limit)
+}
+fn controlled_mul(a: u64, b: u64) -> ControlledResult<u64> {
+    a.checked_mul(b).ok_or_else(controlled_limit)
+}
 fn controlled_admit(requirements: ControlledRequirements, limits: ControlledLimits) -> ControlledResult<()> {
     let standard = ControlledLimits::default();
     if limits.resident_bytes == 0 || limits.work_units == 0 || limits.resident_bytes > standard.resident_bytes || limits.work_units > standard.work_units {
         return Err(controlled_limit());
     }
     let peak = controlled_add(controlled_add(requirements.retained_bytes, requirements.scratch_bytes)?, requirements.output_bytes)?;
-    if peak > limits.resident_bytes || requirements.work_units > limits.work_units { return Err(controlled_limit()); }
+    if peak > limits.resident_bytes || requirements.work_units > limits.work_units {
+        return Err(controlled_limit());
+    }
     Ok(())
 }
 fn controlled_vec<T>(count: usize, ceiling: u64) -> ControlledResult<Vec<T>> {
     let bytes = count.checked_mul(std::mem::size_of::<T>()).ok_or_else(controlled_limit)?;
-    if bytes as u64 > ceiling { return Err(controlled_limit()); }
+    if bytes as u64 > ceiling {
+        return Err(controlled_limit());
+    }
     let mut result = Vec::new();
     result.try_reserve_exact(count).map_err(|_| controlled_limit())?;
-    if (result.capacity() as u64).checked_mul(std::mem::size_of::<T>() as u64).is_none_or(|n| n > ceiling) { return Err(controlled_limit()); }
+    if (result.capacity() as u64).checked_mul(std::mem::size_of::<T>() as u64).is_none_or(|n| n > ceiling) {
+        return Err(controlled_limit());
+    }
     Ok(result)
 }
-fn controlled_finite(px: &[[f32;4]], control: &photocraft_raster::Interrupt<'_>) -> ControlledResult<()> {
+fn controlled_finite(px: &[[f32; 4]], control: &photocraft_raster::Interrupt<'_>) -> ControlledResult<()> {
     for chunk in px.chunks(4096) {
         controlled_poll(control)?;
-        if chunk.iter().flatten().any(|value| !value.is_finite()) { return Err(controlled_invalid()); }
+        if chunk.iter().flatten().any(|value| !value.is_finite()) {
+            return Err(controlled_invalid());
+        }
     }
     controlled_poll(control)
 }
 /// Allocation-free maximum envelope, including the caller's input and the
 /// ordinal result. Finite HDR RGB/alpha retain the legacy clamping decisions.
 pub fn quantize_requirements(pixels: usize, width: usize, palette: usize, dither: Dither) -> ControlledResult<ControlledRequirements> {
-    if width == 0 || pixels % width != 0 || palette == 0 || palette > 256 { return Err(controlled_invalid()); }
+    if width == 0 || !pixels.is_multiple_of(width) || palette == 0 || palette > 256 {
+        return Err(controlled_invalid());
+    }
     let count = u64::try_from(pixels).map_err(|_| controlled_limit())?;
-    let scratch = if dither == Dither::Diffusion { controlled_mul(u64::try_from(width.checked_add(2).ok_or_else(controlled_limit)?).map_err(|_| controlled_limit())?, 24)? } else { 0 };
-    let lookup=Nearest::checked_bytes(palette).ok_or_else(controlled_limit)? as u64;
-    let scratch=controlled_add(scratch,lookup)?;
-    Ok(ControlledRequirements { retained_bytes: controlled_add(controlled_mul(count,16)?, controlled_mul(palette as u64,3)?)?, output_bytes: count, scratch_bytes:scratch,
-        work_units: controlled_add(controlled_mul(count, controlled_add(controlled_mul(palette as u64,8)?,64)?)?,controlled_mul(controlled_mul(palette as u64,palette as u64)?,4)?)? })
+    let scratch = if dither == Dither::Diffusion {
+        controlled_mul(u64::try_from(width.checked_add(2).ok_or_else(controlled_limit)?).map_err(|_| controlled_limit())?, 24)?
+    } else {
+        0
+    };
+    let lookup = Nearest::checked_bytes(palette).ok_or_else(controlled_limit)? as u64;
+    let scratch = controlled_add(scratch, lookup)?;
+    Ok(ControlledRequirements {
+        retained_bytes: controlled_add(controlled_mul(count, 16)?, controlled_mul(palette as u64, 3)?)?,
+        output_bytes: count,
+        scratch_bytes: scratch,
+        work_units: controlled_add(
+            controlled_mul(count, controlled_add(controlled_mul(palette as u64, 8)?, 64)?)?,
+            controlled_mul(controlled_mul(palette as u64, palette as u64)?, 4)?,
+        )?,
+    })
 }
 /// The input belongs to a caller-private stage: cancellation may leave a mapped
 /// prefix in `px`, but returns no ordinal result. No public document is mutated.
-pub fn quantize_with_interrupt(px: &mut [[f32;4]], width: usize, palette: &[Rgb8], dither: Dither, amount: f32, transparent: Option<usize>, limits: ControlledLimits, control: &photocraft_raster::Interrupt<'_>) -> ControlledResult<Vec<u8>> {
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
+pub fn quantize_with_interrupt(
+    px: &mut [[f32; 4]],
+    width: usize,
+    palette: &[Rgb8],
+    dither: Dither,
+    amount: f32,
+    transparent: Option<usize>,
+    limits: ControlledLimits,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> ControlledResult<Vec<u8>> {
     controlled_poll(control)?;
-    let required = quantize_requirements(px.len(),width,palette.len(),dither)?;
-    controlled_admit(required,limits)?;
-    if !amount.is_finite() || transparent.is_some_and(|index| index >= palette.len()) { return Err(controlled_invalid()); }
-    controlled_finite(px,control)?;
-    let lookup=Nearest::try_new(palette.iter().map(|color|color.map(f32::from)),control)?;
-    let lookup_bytes=Nearest::checked_bytes(palette.len()).ok_or_else(controlled_limit)? as u64;
-    let mut indices = controlled_vec(px.len(),required.output_bytes)?;
-    while indices.len() < px.len() { controlled_poll(control)?; indices.resize(indices.len().saturating_add(64*1024).min(px.len()),0u8); }
-    let spread = (1.0 / (palette.len() as f32).cbrt().max(1.0)).min(0.5) * amount.clamp(0.0,1.0);
+    let required = quantize_requirements(px.len(), width, palette.len(), dither)?;
+    controlled_admit(required, limits)?;
+    if !amount.is_finite() || transparent.is_some_and(|index| index >= palette.len()) {
+        return Err(controlled_invalid());
+    }
+    controlled_finite(px, control)?;
+    let lookup = Nearest::try_new(palette.iter().map(|color| color.map(f32::from)), control)?;
+    let lookup_bytes = Nearest::checked_bytes(palette.len()).ok_or_else(controlled_limit)? as u64;
+    let mut indices = controlled_vec(px.len(), required.output_bytes)?;
+    while indices.len() < px.len() {
+        controlled_poll(control)?;
+        indices.resize(indices.len().saturating_add(64 * 1024).min(px.len()), 0u8);
+    }
+    let spread = (1.0 / (palette.len() as f32).cbrt().max(1.0)).min(0.5) * amount.clamp(0.0, 1.0);
     if dither != Dither::Diffusion {
         // Independent rows preserve the exact former per-row arithmetic and
         // coordinate hashing; scheduling order never affects their results.
-        for (y,(index_row,pixel_row)) in indices.chunks_exact_mut(width).zip(px.chunks_exact_mut(width)).enumerate() {
+        for (y, (index_row, pixel_row)) in indices.chunks_exact_mut(width).zip(px.chunks_exact_mut(width)).enumerate() {
             controlled_poll(control)?;
-            for (x,(index,pixel)) in index_row.iter_mut().zip(pixel_row.iter_mut()).enumerate() {
-                if x.is_multiple_of(256) { controlled_poll(control)?; }
+            for (x, (index, pixel)) in index_row.iter_mut().zip(pixel_row.iter_mut()).enumerate() {
+                if x.is_multiple_of(256) {
+                    controlled_poll(control)?;
+                }
                 let original = *pixel;
                 if original[3] < 0.5 {
-                    if let Some(value) = transparent { *index = value as u8; *pixel = [0.0;4]; continue; }
-                    if original[3] <= 0.0 { continue; }
+                    if let Some(value) = transparent {
+                        *index = value as u8;
+                        *pixel = [0.0; 4];
+                        continue;
+                    }
+                    if original[3] <= 0.0 {
+                        continue;
+                    }
                 }
-                let mut color = [original[0],original[1],original[2]];
+                let mut color = [original[0], original[1], original[2]];
                 match dither {
-                    Dither::Pattern => color = color.map(|value| value + bayer8(x,y) * spread),
-                    Dither::Noise => color = color.map(|value| value + (hash01(x,y,7)-0.5) * spread),
+                    Dither::Pattern => color = color.map(|value| value + bayer8(x, y) * spread),
+                    Dither::Noise => color = color.map(|value| value + (hash01(x, y, 7) - 0.5) * spread),
                     _ => {}
                 }
-                let selected = lookup.find(color.map(|value|value.clamp(0.0,1.0)*255.0));
-                let entry = palette.get(selected).ok_or_else(controlled_invalid)?.map(|value|f32::from(value)/255.0);
+                let selected = lookup.find(color.map(|value| value.clamp(0.0, 1.0) * 255.0));
+                let entry = palette.get(selected).ok_or_else(controlled_invalid)?.map(|value| f32::from(value) / 255.0);
                 *index = selected as u8;
-                *pixel = [entry[0],entry[1],entry[2],if transparent.is_some() {1.0} else {original[3]}];
+                *pixel = [entry[0], entry[1], entry[2], if transparent.is_some() { 1.0 } else { original[3] }];
             }
         }
     } else {
         let stride = width.checked_add(2).ok_or_else(controlled_limit)?;
         let count = stride.checked_mul(2).ok_or_else(controlled_limit)?;
-        let mut errors = controlled_vec::<[f32;3]>(count,required.scratch_bytes.checked_sub(lookup_bytes).ok_or_else(controlled_limit)?)?;
-        while errors.len() < count { controlled_poll(control)?; errors.resize(errors.len().saturating_add(4096).min(count),[0.0;3]); }
-        for y in 0..px.len()/width {
+        let mut errors = controlled_vec::<[f32; 3]>(count, required.scratch_bytes.checked_sub(lookup_bytes).ok_or_else(controlled_limit)?)?;
+        while errors.len() < count {
             controlled_poll(control)?;
-            let (current,next) = errors.split_at_mut_checked(stride).ok_or_else(controlled_invalid)?;
-            for (i,(target,source)) in current.iter_mut().zip(next.iter_mut()).enumerate() { if i.is_multiple_of(256) {controlled_poll(control)?;} *target=*source; *source=[0.0;3]; }
+            errors.resize(errors.len().saturating_add(4096).min(count), [0.0; 3]);
+        }
+        for y in 0..px.len() / width {
+            controlled_poll(control)?;
+            let (current, next) = errors.split_at_mut_checked(stride).ok_or_else(controlled_invalid)?;
+            for (i, (target, source)) in current.iter_mut().zip(next.iter_mut()).enumerate() {
+                if i.is_multiple_of(256) {
+                    controlled_poll(control)?;
+                }
+                *target = *source;
+                *source = [0.0; 3];
+            }
             for x in 0..width {
-                if x.is_multiple_of(256) { controlled_poll(control)?; }
-                let position = y.checked_mul(width).and_then(|n|n.checked_add(x)).ok_or_else(controlled_limit)?;
+                if x.is_multiple_of(256) {
+                    controlled_poll(control)?;
+                }
+                let position = y.checked_mul(width).and_then(|n| n.checked_add(x)).ok_or_else(controlled_limit)?;
                 let original = *px.get(position).ok_or_else(controlled_invalid)?;
                 if original[3] < 0.5 {
-                    if let Some(value) = transparent { *indices.get_mut(position).ok_or_else(controlled_invalid)?=value as u8; *px.get_mut(position).ok_or_else(controlled_invalid)?=[0.0;4]; continue; }
-                    if original[3] <= 0.0 { continue; }
+                    if let Some(value) = transparent {
+                        *indices.get_mut(position).ok_or_else(controlled_invalid)? = value as u8;
+                        *px.get_mut(position).ok_or_else(controlled_invalid)? = [0.0; 4];
+                        continue;
+                    }
+                    if original[3] <= 0.0 {
+                        continue;
+                    }
                 }
                 let offset = x.checked_add(1).ok_or_else(controlled_limit)?;
                 let accumulated = *errors.get(offset).ok_or_else(controlled_invalid)?;
-                let mut color = [original[0],original[1],original[2]];
-                for channel in 0..3 { color[channel] += accumulated[channel]; }
-                let color = color.map(|value|value.clamp(0.0,1.0));
-                let selected = lookup.find(color.map(|value|value*255.0));
-                let entry = palette.get(selected).ok_or_else(controlled_invalid)?.map(|value|f32::from(value)/255.0);
-                *indices.get_mut(position).ok_or_else(controlled_invalid)?=selected as u8;
-                let delta: [f32;3] = std::array::from_fn(|channel|(color[channel]-entry[channel])*amount.clamp(0.0,1.0));
-                let right = x.checked_add(2).ok_or_else(controlled_limit)?;
-                let (current,next) = errors.split_at_mut_checked(stride).ok_or_else(controlled_invalid)?;
+                let mut color = [original[0], original[1], original[2]];
                 for channel in 0..3 {
-                    current.get_mut(right).ok_or_else(controlled_invalid)?[channel] += delta[channel]*7.0/16.0;
-                    next.get_mut(x).ok_or_else(controlled_invalid)?[channel] += delta[channel]*3.0/16.0;
-                    next.get_mut(offset).ok_or_else(controlled_invalid)?[channel] += delta[channel]*5.0/16.0;
-                    next.get_mut(right).ok_or_else(controlled_invalid)?[channel] += delta[channel]/16.0;
+                    color[channel] += accumulated[channel];
                 }
-                *px.get_mut(position).ok_or_else(controlled_invalid)?=[entry[0],entry[1],entry[2],if transparent.is_some() {1.0} else {original[3]}];
+                let color = color.map(|value| value.clamp(0.0, 1.0));
+                let selected = lookup.find(color.map(|value| value * 255.0));
+                let entry = palette.get(selected).ok_or_else(controlled_invalid)?.map(|value| f32::from(value) / 255.0);
+                *indices.get_mut(position).ok_or_else(controlled_invalid)? = selected as u8;
+                let delta: [f32; 3] = std::array::from_fn(|channel| (color[channel] - entry[channel]) * amount.clamp(0.0, 1.0));
+                let right = x.checked_add(2).ok_or_else(controlled_limit)?;
+                let (current, next) = errors.split_at_mut_checked(stride).ok_or_else(controlled_invalid)?;
+                for (channel, value) in delta.iter().enumerate() {
+                    current.get_mut(right).ok_or_else(controlled_invalid)?[channel] += *value * 7.0 / 16.0;
+                    next.get_mut(x).ok_or_else(controlled_invalid)?[channel] += *value * 3.0 / 16.0;
+                    next.get_mut(offset).ok_or_else(controlled_invalid)?[channel] += *value * 5.0 / 16.0;
+                    next.get_mut(right).ok_or_else(controlled_invalid)?[channel] += *value / 16.0;
+                }
+                *px.get_mut(position).ok_or_else(controlled_invalid)? = [entry[0], entry[1], entry[2], if transparent.is_some() { 1.0 } else { original[3] }];
             }
         }
     }
@@ -699,249 +781,562 @@ pub fn quantize_with_interrupt(px: &mut [[f32;4]], width: usize, palette: &[Rgb8
 /// attempted before the complete envelope is admitted.
 pub fn build_palette_requirements(pixels: usize, kind: PaletteKind, colors: usize, forced: Forced) -> ControlledResult<ControlledRequirements> {
     let input = u64::try_from(pixels).map_err(|_| controlled_limit())?;
-    let room = colors.clamp(2,256).saturating_sub(match forced { Forced::None=>0, Forced::BlackWhite=>2, Forced::Primaries=>8, Forced::Web=>216 });
-    let unique = match kind { PaletteKind::Exact=>input.min(257), PaletteKind::Adaptive|PaletteKind::Perceptual|PaletteKind::Selective=>input.min(1<<24), _=>0 };
-    let iterations = if matches!(kind,PaletteKind::Perceptual|PaletteKind::Selective) {4} else {2};
-    let partition = if matches!(kind,PaletteKind::Adaptive|PaletteKind::Perceptual|PaletteKind::Selective) {
-        controlled_mul(unique,controlled_add(controlled_mul(room as u64,512)?,controlled_mul(iterations,controlled_mul(room as u64,16)?)?)?)?
-    } else {0};
-    Ok(ControlledRequirements { retained_bytes:controlled_mul(input,16)?, scratch_bytes:controlled_add(controlled_mul(unique,192)?,64*1024)?, output_bytes:768,
-        work_units:controlled_add(controlled_mul(input,32)?,controlled_add(controlled_mul(unique,512)?,partition)?)? })
+    let room = colors.clamp(2, 256).saturating_sub(match forced {
+        Forced::None => 0,
+        Forced::BlackWhite => 2,
+        Forced::Primaries => 8,
+        Forced::Web => 216,
+    });
+    let unique = match kind {
+        PaletteKind::Exact => input.min(257),
+        PaletteKind::Adaptive | PaletteKind::Perceptual | PaletteKind::Selective => input.min(1 << 24),
+        _ => 0,
+    };
+    let iterations = if matches!(kind, PaletteKind::Perceptual | PaletteKind::Selective) { 4 } else { 2 };
+    let partition = if matches!(kind, PaletteKind::Adaptive | PaletteKind::Perceptual | PaletteKind::Selective) {
+        controlled_mul(unique, controlled_add(controlled_mul(room as u64, 512)?, controlled_mul(iterations, controlled_mul(room as u64, 16)?)?)?)?
+    } else {
+        0
+    };
+    Ok(ControlledRequirements {
+        retained_bytes: controlled_mul(input, 16)?,
+        scratch_bytes: controlled_add(controlled_mul(unique, 192)?, 64 * 1024)?,
+        output_bytes: 768,
+        work_units: controlled_add(controlled_mul(input, 32)?, controlled_add(controlled_mul(unique, 512)?, partition)?)?,
+    })
 }
 fn controlled_web(palette: &mut Vec<Rgb8>) {
-    for r in 0..6u8 { for g in 0..6u8 { for b in 0..6u8 { palette.push([r*51,g*51,b*51]); } } }
+    for r in 0..6u8 {
+        for g in 0..6u8 {
+            for b in 0..6u8 {
+                palette.push([r * 51, g * 51, b * 51]);
+            }
+        }
+    }
 }
 fn controlled_forced(forced: Forced) -> ControlledResult<Vec<Rgb8>> {
-    let mut palette=controlled_vec(256,768)?;
+    let mut palette = controlled_vec(256, 768)?;
     match forced {
-        Forced::None=>{}, Forced::BlackWhite=>palette.extend_from_slice(&[[0,0,0],[255,255,255]]),
-        Forced::Primaries=>palette.extend_from_slice(&[[0,0,0],[255,255,255],[255,0,0],[0,255,0],[0,0,255],[0,255,255],[255,0,255],[255,255,0]]),
-        Forced::Web=>controlled_web(&mut palette),
+        Forced::None => {}
+        Forced::BlackWhite => palette.extend_from_slice(&[[0, 0, 0], [255, 255, 255]]),
+        Forced::Primaries => {
+            palette.extend_from_slice(&[[0, 0, 0], [255, 255, 255], [255, 0, 0], [0, 255, 0], [0, 0, 255], [0, 255, 255], [255, 0, 255], [255, 255, 0]])
+        }
+        Forced::Web => controlled_web(&mut palette),
     }
     Ok(palette)
 }
 fn controlled_fixed(kind: PaletteKind, count: usize) -> ControlledResult<Vec<Rgb8>> {
-    let mut palette=controlled_vec(256,768)?;
+    let mut palette = controlled_vec(256, 768)?;
     match kind {
-        PaletteKind::Web=>controlled_web(&mut palette),
-        PaletteKind::SystemMac=>{
+        PaletteKind::Web => controlled_web(&mut palette),
+        PaletteKind::SystemMac => {
             controlled_web(&mut palette);
-            for channel in 0..4 { for k in (1..=15u8).rev() { let value=k*17; if value%51!=0 { palette.push(match channel {0=>[value,0,0],1=>[0,value,0],2=>[0,0,value],_=>[value;3]}); } } }
+            for channel in 0..4 {
+                for k in (1..=15u8).rev() {
+                    let value = k * 17;
+                    if value % 51 != 0 {
+                        palette.push(match channel {
+                            0 => [value, 0, 0],
+                            1 => [0, value, 0],
+                            2 => [0, 0, value],
+                            _ => [value; 3],
+                        });
+                    }
+                }
+            }
             palette.truncate(256);
         }
-        PaletteKind::SystemWindows=>{
-            palette.extend_from_slice(&[[0,0,0],[128,0,0],[0,128,0],[128,128,0],[0,0,128],[128,0,128],[0,128,128],[192,192,192],[192,220,192],[166,202,240],[255,251,240],[160,160,164],[128,128,128],[255,0,0],[0,255,0],[255,255,0],[0,0,255],[255,0,255],[0,255,255],[255,255,255]]);
-            for r in 0..6u8 { for g in 0..6u8 { for b in 0..6u8 { let color=[r*51,g*51,b*51]; if !palette.contains(&color) {palette.push(color);} } } }
-            let mut gray=8u8;
-            while palette.len()<256 { if !palette.contains(&[gray;3]) {palette.push([gray;3]);} gray=gray.wrapping_add(12); }
-        }
-        PaletteKind::Uniform=>{
-            let side=((count as f32).cbrt().floor() as usize).max(2);
-            let level=|index:usize|((index as f32/(side-1) as f32)*255.0).round() as u8;
-            for r in 0..side {for g in 0..side {for b in 0..side {palette.push([level(r),level(g),level(b)]);}}}
-        }
-        _=>return Err(controlled_invalid()),
-    }
-    Ok(palette)
-}
-type ControlledPoint=([f32;3],u32);
-fn controlled_histogram_sort(values:&mut[(Rgb8,u32)],control:&photocraft_raster::Interrupt<'_>)->ControlledResult<()> {
-    fn sift(values:&mut[(Rgb8,u32)],mut root:usize,end:usize,control:&photocraft_raster::Interrupt<'_>)->ControlledResult<()> {
-        loop {
-            controlled_poll(control)?;
-            let Some(left)=root.checked_mul(2).and_then(|n|n.checked_add(1)).filter(|n|*n<end) else{return Ok(())};
-            let right=left.checked_add(1).ok_or_else(controlled_limit)?;
-            let selected=if right<end && values.get(left).ok_or_else(controlled_invalid)?<values.get(right).ok_or_else(controlled_invalid)? {right}else{left};
-            if values.get(root).ok_or_else(controlled_invalid)?>=values.get(selected).ok_or_else(controlled_invalid)? {return Ok(());}
-            values.swap(root,selected);root=selected;
-        }
-    }
-    for root in (0..values.len()/2).rev(){sift(values,root,values.len(),control)?;}
-    for end in (1..values.len()).rev(){controlled_poll(control)?;values.swap(0,end);sift(values,0,end,control)?;}
-    controlled_poll(control)
-}
-fn controlled_copy<T:Copy>(source:&[T], ceiling:u64, control:&photocraft_raster::Interrupt<'_>)->ControlledResult<Vec<T>> {
-    let mut output=controlled_vec(source.len(),ceiling)?;
-    for chunk in source.chunks(4096) {controlled_poll(control)?;output.extend_from_slice(chunk);}
-    Ok(output)
-}
-fn controlled_sort(points:&mut[ControlledPoint],axis:usize,ceiling:u64,control:&photocraft_raster::Interrupt<'_>)->ControlledResult<()> {
-    // Fallible stable merge sorting preserves equal-feature order exactly as
-    // the legacy stable sort, including ordering inherited from earlier splits.
-    let mut scratch=controlled_copy(points,ceiling,control)?;
-    let mut run=1usize;
-    while run<points.len() {
-        let step=run.checked_mul(2).ok_or_else(controlled_limit)?;
-        let mut start=0usize;
-        while start<points.len() {
-            controlled_poll(control)?;
-            let middle=start.saturating_add(run).min(points.len());
-            let end=start.saturating_add(step).min(points.len());
-            let (mut left,mut right)=(start,middle);
-            for target in start..end {
-                if target.is_multiple_of(256) {controlled_poll(control)?;}
-                let choose_left=left<middle && (right>=end || points.get(left).and_then(|p|p.0.get(axis)).ok_or_else(controlled_invalid)?.total_cmp(points.get(right).and_then(|p|p.0.get(axis)).ok_or_else(controlled_invalid)?)!=std::cmp::Ordering::Greater);
-                let next=if choose_left {let i=left;left+=1;i} else {let i=right;right+=1;i};
-                *scratch.get_mut(target).ok_or_else(controlled_invalid)?=*points.get(next).ok_or_else(controlled_invalid)?;
+        PaletteKind::SystemWindows => {
+            palette.extend_from_slice(&[
+                [0, 0, 0],
+                [128, 0, 0],
+                [0, 128, 0],
+                [128, 128, 0],
+                [0, 0, 128],
+                [128, 0, 128],
+                [0, 128, 128],
+                [192, 192, 192],
+                [192, 220, 192],
+                [166, 202, 240],
+                [255, 251, 240],
+                [160, 160, 164],
+                [128, 128, 128],
+                [255, 0, 0],
+                [0, 255, 0],
+                [255, 255, 0],
+                [0, 0, 255],
+                [255, 0, 255],
+                [0, 255, 255],
+                [255, 255, 255],
+            ]);
+            for r in 0..6u8 {
+                for g in 0..6u8 {
+                    for b in 0..6u8 {
+                        let color = [r * 51, g * 51, b * 51];
+                        if !palette.contains(&color) {
+                            palette.push(color);
+                        }
+                    }
+                }
             }
-            start=end;
-        }
-        for (target,source) in points.chunks_mut(4096).zip(scratch.chunks(4096)) {controlled_poll(control)?;target.copy_from_slice(source);}
-        run=step;
-    }
-    Ok(())
-}
-fn controlled_median(points:&[ControlledPoint],count:usize,ceiling:u64,control:&photocraft_raster::Interrupt<'_>)->ControlledResult<Vec<[f32;3]>> {
-    let mut centers=controlled_vec::<[f32;3]>(count,ceiling)?;
-    if points.is_empty() || count==0 {return Ok(centers);}
-    let mut boxes=controlled_vec::<Vec<ControlledPoint>>(count,ceiling)?;
-    boxes.push(controlled_copy(points,ceiling,control)?);
-    while boxes.len()<count {
-        controlled_poll(control)?;
-        let mut choice=(usize::MAX,0usize,-1.0f32);
-        for (index,part) in boxes.iter().enumerate().filter(|(_,part)|part.len()>1) {
-            let mut best=(0usize,-1.0f32);
-            for axis in 0..3 {
-                let (mut low,mut high)=(f32::MAX,f32::MIN);
-                for (i,point) in part.iter().enumerate() {if i.is_multiple_of(256){controlled_poll(control)?;} let value=*point.0.get(axis).ok_or_else(controlled_invalid)?;low=low.min(value);high=high.max(value);}
-                if high-low>best.1 {best=(axis,high-low);}
+            let mut gray = 8u8;
+            while palette.len() < 256 {
+                if !palette.contains(&[gray; 3]) {
+                    palette.push([gray; 3]);
+                }
+                gray = gray.wrapping_add(12);
             }
-            let mut weight=0.0f32;
-            for (i,point) in part.iter().enumerate(){if i.is_multiple_of(256){controlled_poll(control)?;}weight+=point.1 as f32;}
-            let score=best.1*weight.sqrt();
-            if score>choice.2 {choice=(index,best.0,score);}
         }
-        if choice.0==usize::MAX || choice.2<=0.0 {break;}
-        let mut part=boxes.swap_remove(choice.0);
-        controlled_sort(&mut part,choice.1,ceiling,control)?;
-        let mut total=0u64;
-        for (i,point) in part.iter().enumerate(){if i.is_multiple_of(256){controlled_poll(control)?;}total=total.checked_add(u64::from(point.1)).ok_or_else(controlled_limit)?;}
-        let mut accumulated=0u64;let mut cut=1usize;
-        for (i,point) in part.iter().enumerate(){if i.is_multiple_of(256){controlled_poll(control)?;}accumulated=accumulated.checked_add(u64::from(point.1)).ok_or_else(controlled_limit)?;if accumulated.checked_mul(2).ok_or_else(controlled_limit)?>=total {cut=(i+1).clamp(1,part.len()-1);break;}}
-        let left=controlled_copy(part.get(..cut).ok_or_else(controlled_invalid)?,ceiling,control)?;
-        let right=controlled_copy(part.get(cut..).ok_or_else(controlled_invalid)?,ceiling,control)?;
-        drop(part);boxes.push(left);boxes.push(right);
-    }
-    for part in &boxes {
-        let mut weight=0.0f64;
-        for (i,point) in part.iter().enumerate(){if i.is_multiple_of(256){controlled_poll(control)?;}weight+=f64::from(point.1);}
-        if weight<=0.0 {return Err(controlled_invalid());}
-        let mut center=[0.0;3];
-        for (axis,target) in center.iter_mut().enumerate() {let mut sum=0.0f64;for (i,point) in part.iter().enumerate(){if i.is_multiple_of(256){controlled_poll(control)?;}sum+=f64::from(*point.0.get(axis).ok_or_else(controlled_invalid)?)*f64::from(point.1);}*target=(sum/weight) as f32;}
-        centers.push(center);
-    }
-    Ok(centers)
-}
-fn controlled_kmeans(points:&[ControlledPoint],centers:&mut[[f32;3]],iterations:usize,ceiling:u64,control:&photocraft_raster::Interrupt<'_>)->ControlledResult<()> {
-    if centers.is_empty(){return Ok(());}
-    let mut sums=controlled_vec::<[f64;3]>(centers.len(),ceiling)?;sums.resize(centers.len(),[0.0;3]);
-    let mut counts=controlled_vec::<f64>(centers.len(),ceiling)?;counts.resize(centers.len(),0.0);
-    for _ in 0..iterations {
-        controlled_poll(control)?;sums.fill([0.0;3]);counts.fill(0.0);
-        let lookup=Nearest::try_new(centers.iter().copied(),control)?;
-        for (index,(point,weight)) in points.iter().enumerate() {
-            if index.is_multiple_of(256){controlled_poll(control)?;}
-            let selected=lookup.find(*point);
-            let sum=sums.get_mut(selected).ok_or_else(controlled_invalid)?;
-            for axis in 0..3 {sum[axis]+=f64::from(point[axis])*f64::from(*weight);}
-            *counts.get_mut(selected).ok_or_else(controlled_invalid)?+=f64::from(*weight);
-        }
-        for (index,center) in centers.iter_mut().enumerate() {
-            let weight=*counts.get(index).ok_or_else(controlled_invalid)?;
-            if weight>0.0 {let sum=sums.get(index).ok_or_else(controlled_invalid)?;*center=std::array::from_fn(|axis|(sum[axis]/weight) as f32);}
-        }
-    }
-    Ok(())
-}
-pub fn build_palette_with_interrupt(px:&[[f32;4]],kind:PaletteKind,colors:usize,forced:Forced,limits:ControlledLimits,control:&photocraft_raster::Interrupt<'_>)->ControlledResult<Vec<Rgb8>> {
-    controlled_poll(control)?;
-    let required=build_palette_requirements(px.len(),kind,colors,forced)?;
-    controlled_admit(required,limits)?;controlled_finite(px,control)?;
-    let colors=colors.clamp(2,256);let mut palette=controlled_forced(forced)?;let room=colors.saturating_sub(palette.len());
-    let mut computed=controlled_vec::<Rgb8>(256,768)?;
-    if matches!(kind,PaletteKind::SystemMac|PaletteKind::SystemWindows|PaletteKind::Web|PaletteKind::Uniform) {computed=controlled_fixed(kind,room.max(8))?;} else {
-        let upper=if kind==PaletteKind::Exact {px.len().min(257)} else {px.len().min(1<<24)};
-        let mut histogram=std::collections::HashMap::<Rgb8,u32>::new();
-        histogram.try_reserve(upper).map_err(|_|controlled_limit())?;
-        if controlled_mul(histogram.capacity() as u64,32)?>required.scratch_bytes {return Err(controlled_limit());}
-        for (index,pixel) in px.iter().enumerate() {
-            if index.is_multiple_of(256){controlled_poll(control)?;}
-            if pixel[3]<0.5 {continue;}
-            let color=rgb8(pixel);
-            if !histogram.contains_key(&color) && histogram.len()>=upper {return Err(controlled_limit());}
-            let count=histogram.entry(color).or_default();*count=count.checked_add(1).ok_or_else(controlled_limit)?;
-            if kind==PaletteKind::Exact && histogram.len()>256 {return Err(controlled_limit());}
-        }
-        let mut ordered=controlled_vec(histogram.len(),required.scratch_bytes)?;
-        for (index,value) in histogram.into_iter().enumerate(){if index.is_multiple_of(256){controlled_poll(control)?;}ordered.push(value);}
-        // Unique integer tuple ordering yields the exact legacy histogram order;
-        // the heap traversal additionally polls through every bounded sort step.
-        controlled_histogram_sort(&mut ordered,control)?;
-        if kind==PaletteKind::Exact || ordered.len()<=room {for value in &ordered {computed.push(value.0);}} else {
-            let mut points=controlled_vec(ordered.len(),required.scratch_bytes)?;
-            for (index,(color,count)) in ordered.iter().enumerate(){if index.is_multiple_of(256){controlled_poll(control)?;}let feature=if kind==PaletteKind::Adaptive {color.map(f32::from)} else {srgb_to_lab(color.map(|v|f32::from(v)/255.0))};points.push((feature,*count));}
-            let mut centers=controlled_median(&points,room,required.scratch_bytes,control)?;
-            controlled_kmeans(&points,&mut centers,if kind==PaletteKind::Adaptive {2} else {4},required.scratch_bytes,control)?;
-            for center in centers {computed.push(if kind==PaletteKind::Adaptive {center.map(|value|value.round().clamp(0.0,255.0) as u8)} else {lab_to_rgb8(center)});}
-            if kind==PaletteKind::Selective {for color in &mut computed {let snap=color.map(|v|((f32::from(v)/51.0).round()*51.0) as u8);if color.iter().zip(snap).all(|(a,b)|a.abs_diff(b)<=10){*color=snap;}}}
-        }
-    }
-    for color in computed {controlled_poll(control)?;if palette.len()>=256{break;}if !palette.contains(&color){palette.push(color);}}
-    if matches!(kind,PaletteKind::Adaptive|PaletteKind::Perceptual|PaletteKind::Selective|PaletteKind::Uniform){let forced_count=match forced{Forced::None=>0,Forced::BlackWhite=>2,Forced::Primaries=>8,Forced::Web=>216};palette.truncate(colors.max(forced_count));}
-    if palette.is_empty(){palette.push([0,0,0]);}
-    controlled_poll(control)?;Ok(palette)
-}
-
-pub fn bitmap_requirements(pixels:usize,width:usize,method:BitmapMethod)->ControlledResult<ControlledRequirements> {
-    if width==0 || pixels%width!=0 {return Err(controlled_invalid());}
-    if let BitmapMethod::Halftone {cell,angle,..}=method {if !cell.is_finite() || !angle.is_finite(){return Err(controlled_invalid());}}
-    let pixels=u64::try_from(pixels).map_err(|_|controlled_limit())?;
-    let retained=controlled_mul(pixels,4)?;
-    let (scratch,units)=match method {BitmapMethod::Threshold=>(0,4),BitmapMethod::Pattern=>(0,32),BitmapMethod::Diffusion=>(retained,64),BitmapMethod::Halftone{..}=>(4096,128)};
-    Ok(ControlledRequirements {retained_bytes:retained,scratch_bytes:scratch,output_bytes:0,work_units:controlled_add(controlled_mul(pixels,units)?,if matches!(method,BitmapMethod::Halftone{..}){32*1024}else{0})?})
-}
-/// Ordinary finite F32 bitmap mathematics on a caller-private buffer. Original
-/// APIs remain unchanged. Cancellation can leave private partial output only.
-pub fn to_bitmap_with_interrupt(gray:&mut[f32],width:usize,method:BitmapMethod,limits:ControlledLimits,control:&photocraft_raster::Interrupt<'_>)->ControlledResult<()> {
-    controlled_poll(control)?;
-    let required=bitmap_requirements(gray.len(),width,method)?;controlled_admit(required,limits)?;
-    for chunk in gray.chunks(4096){controlled_poll(control)?;if chunk.iter().any(|value|!value.is_finite()){return Err(controlled_invalid());}}
-    match method {
-        BitmapMethod::Threshold=>for chunk in gray.chunks_mut(4096){controlled_poll(control)?;for value in chunk{*value=if *value>=0.5{1.0}else{0.0};}},
-        BitmapMethod::Pattern=>for (index,value) in gray.iter_mut().enumerate(){if index.is_multiple_of(256){controlled_poll(control)?;}*value=if *value>bayer8(index%width,index/width)+0.5{1.0}else{0.0};},
-        BitmapMethod::Diffusion=>{
-            let mut buffer=controlled_copy(gray,required.scratch_bytes,control)?;
-            let height=gray.len()/width;
-            for y in 0..height {
-                controlled_poll(control)?;
-                for x in 0..width {
-                    if x.is_multiple_of(256){controlled_poll(control)?;}
-                    let index=y.checked_mul(width).and_then(|n|n.checked_add(x)).ok_or_else(controlled_limit)?;
-                    let old=*buffer.get(index).ok_or_else(controlled_invalid)?;
-                    let new=if old>=0.5{1.0}else{0.0};let error=old-new;
-                    *gray.get_mut(index).ok_or_else(controlled_invalid)?=new;
-                    if x+1<width {*buffer.get_mut(index.checked_add(1).ok_or_else(controlled_limit)?).ok_or_else(controlled_invalid)?+=error*7.0/16.0;}
-                    if y+1<height {
-                        if x>0 {*buffer.get_mut(index.checked_add(width).and_then(|n|n.checked_sub(1)).ok_or_else(controlled_limit)?).ok_or_else(controlled_invalid)?+=error*3.0/16.0;}
-                        *buffer.get_mut(index.checked_add(width).ok_or_else(controlled_limit)?).ok_or_else(controlled_invalid)?+=error*5.0/16.0;
-                        if x+1<width {*buffer.get_mut(index.checked_add(width).and_then(|n|n.checked_add(1)).ok_or_else(controlled_limit)?).ok_or_else(controlled_invalid)?+=error/16.0;}
+        PaletteKind::Uniform => {
+            let side = ((count as f32).cbrt().floor() as usize).max(2);
+            let level = |index: usize| ((index as f32 / (side - 1) as f32) * 255.0).round() as u8;
+            for r in 0..side {
+                for g in 0..side {
+                    for b in 0..side {
+                        palette.push([level(r), level(g), level(b)]);
                     }
                 }
             }
         }
-        BitmapMethod::Halftone{cell,angle,shape}=>{
-            let cell=cell.max(2.0);let (sin,cos)=angle.to_radians().sin_cos();
-            let mut table=controlled_vec::<f32>(1024,required.scratch_bytes)?;
-            for index in 0..1024usize {if index.is_multiple_of(256){controlled_poll(control)?;}table.push(spot(shape,((index%32) as f32+0.5)/16.0-1.0,((index/32) as f32+0.5)/16.0-1.0));}
+        _ => return Err(controlled_invalid()),
+    }
+    Ok(palette)
+}
+type ControlledPoint = ([f32; 3], u32);
+fn controlled_histogram_sort(values: &mut [(Rgb8, u32)], control: &photocraft_raster::Interrupt<'_>) -> ControlledResult<()> {
+    fn sift(values: &mut [(Rgb8, u32)], mut root: usize, end: usize, control: &photocraft_raster::Interrupt<'_>) -> ControlledResult<()> {
+        loop {
+            controlled_poll(control)?;
+            let Some(left) = root.checked_mul(2).and_then(|n| n.checked_add(1)).filter(|n| *n < end) else { return Ok(()) };
+            let right = left.checked_add(1).ok_or_else(controlled_limit)?;
+            let selected =
+                if right < end && values.get(left).ok_or_else(controlled_invalid)? < values.get(right).ok_or_else(controlled_invalid)? { right } else { left };
+            if values.get(root).ok_or_else(controlled_invalid)? >= values.get(selected).ok_or_else(controlled_invalid)? {
+                return Ok(());
+            }
+            values.swap(root, selected);
+            root = selected;
+        }
+    }
+    for root in (0..values.len() / 2).rev() {
+        sift(values, root, values.len(), control)?;
+    }
+    for end in (1..values.len()).rev() {
+        controlled_poll(control)?;
+        values.swap(0, end);
+        sift(values, 0, end, control)?;
+    }
+    controlled_poll(control)
+}
+fn controlled_copy<T: Copy>(source: &[T], ceiling: u64, control: &photocraft_raster::Interrupt<'_>) -> ControlledResult<Vec<T>> {
+    let mut output = controlled_vec(source.len(), ceiling)?;
+    for chunk in source.chunks(4096) {
+        controlled_poll(control)?;
+        output.extend_from_slice(chunk);
+    }
+    Ok(output)
+}
+fn controlled_sort(points: &mut [ControlledPoint], axis: usize, ceiling: u64, control: &photocraft_raster::Interrupt<'_>) -> ControlledResult<()> {
+    // Fallible stable merge sorting preserves equal-feature order exactly as
+    // the legacy stable sort, including ordering inherited from earlier splits.
+    let mut scratch = controlled_copy(points, ceiling, control)?;
+    let mut run = 1usize;
+    while run < points.len() {
+        let step = run.checked_mul(2).ok_or_else(controlled_limit)?;
+        let mut start = 0usize;
+        while start < points.len() {
+            controlled_poll(control)?;
+            let middle = start.saturating_add(run).min(points.len());
+            let end = start.saturating_add(step).min(points.len());
+            let (mut left, mut right) = (start, middle);
+            for target in start..end {
+                if target.is_multiple_of(256) {
+                    controlled_poll(control)?;
+                }
+                let choose_left = left < middle
+                    && (right >= end
+                        || points
+                            .get(left)
+                            .and_then(|p| p.0.get(axis))
+                            .ok_or_else(controlled_invalid)?
+                            .total_cmp(points.get(right).and_then(|p| p.0.get(axis)).ok_or_else(controlled_invalid)?)
+                            != std::cmp::Ordering::Greater);
+                let next = if choose_left {
+                    let i = left;
+                    left += 1;
+                    i
+                } else {
+                    let i = right;
+                    right += 1;
+                    i
+                };
+                *scratch.get_mut(target).ok_or_else(controlled_invalid)? = *points.get(next).ok_or_else(controlled_invalid)?;
+            }
+            start = end;
+        }
+        for (target, source) in points.chunks_mut(4096).zip(scratch.chunks(4096)) {
+            controlled_poll(control)?;
+            target.copy_from_slice(source);
+        }
+        run = step;
+    }
+    Ok(())
+}
+fn controlled_median(points: &[ControlledPoint], count: usize, ceiling: u64, control: &photocraft_raster::Interrupt<'_>) -> ControlledResult<Vec<[f32; 3]>> {
+    let mut centers = controlled_vec::<[f32; 3]>(count, ceiling)?;
+    if points.is_empty() || count == 0 {
+        return Ok(centers);
+    }
+    let mut boxes = controlled_vec::<Vec<ControlledPoint>>(count, ceiling)?;
+    boxes.push(controlled_copy(points, ceiling, control)?);
+    while boxes.len() < count {
+        controlled_poll(control)?;
+        let mut choice = (usize::MAX, 0usize, -1.0f32);
+        for (index, part) in boxes.iter().enumerate().filter(|(_, part)| part.len() > 1) {
+            let mut best = (0usize, -1.0f32);
+            for axis in 0..3 {
+                let (mut low, mut high) = (f32::MAX, f32::MIN);
+                for (i, point) in part.iter().enumerate() {
+                    if i.is_multiple_of(256) {
+                        controlled_poll(control)?;
+                    }
+                    let value = *point.0.get(axis).ok_or_else(controlled_invalid)?;
+                    low = low.min(value);
+                    high = high.max(value);
+                }
+                if high - low > best.1 {
+                    best = (axis, high - low);
+                }
+            }
+            let mut weight = 0.0f32;
+            for (i, point) in part.iter().enumerate() {
+                if i.is_multiple_of(256) {
+                    controlled_poll(control)?;
+                }
+                weight += point.1 as f32;
+            }
+            let score = best.1 * weight.sqrt();
+            if score > choice.2 {
+                choice = (index, best.0, score);
+            }
+        }
+        if choice.0 == usize::MAX || choice.2 <= 0.0 {
+            break;
+        }
+        let mut part = boxes.swap_remove(choice.0);
+        controlled_sort(&mut part, choice.1, ceiling, control)?;
+        let mut total = 0u64;
+        for (i, point) in part.iter().enumerate() {
+            if i.is_multiple_of(256) {
+                controlled_poll(control)?;
+            }
+            total = total.checked_add(u64::from(point.1)).ok_or_else(controlled_limit)?;
+        }
+        let mut accumulated = 0u64;
+        let mut cut = 1usize;
+        for (i, point) in part.iter().enumerate() {
+            if i.is_multiple_of(256) {
+                controlled_poll(control)?;
+            }
+            accumulated = accumulated.checked_add(u64::from(point.1)).ok_or_else(controlled_limit)?;
+            if accumulated.checked_mul(2).ok_or_else(controlled_limit)? >= total {
+                cut = (i + 1).clamp(1, part.len() - 1);
+                break;
+            }
+        }
+        let left = controlled_copy(part.get(..cut).ok_or_else(controlled_invalid)?, ceiling, control)?;
+        let right = controlled_copy(part.get(cut..).ok_or_else(controlled_invalid)?, ceiling, control)?;
+        drop(part);
+        boxes.push(left);
+        boxes.push(right);
+    }
+    for part in &boxes {
+        let mut weight = 0.0f64;
+        for (i, point) in part.iter().enumerate() {
+            if i.is_multiple_of(256) {
+                controlled_poll(control)?;
+            }
+            weight += f64::from(point.1);
+        }
+        if weight <= 0.0 {
+            return Err(controlled_invalid());
+        }
+        let mut center = [0.0; 3];
+        for (axis, target) in center.iter_mut().enumerate() {
+            let mut sum = 0.0f64;
+            for (i, point) in part.iter().enumerate() {
+                if i.is_multiple_of(256) {
+                    controlled_poll(control)?;
+                }
+                sum += f64::from(*point.0.get(axis).ok_or_else(controlled_invalid)?) * f64::from(point.1);
+            }
+            *target = (sum / weight) as f32;
+        }
+        centers.push(center);
+    }
+    Ok(centers)
+}
+fn controlled_kmeans(
+    points: &[ControlledPoint],
+    centers: &mut [[f32; 3]],
+    iterations: usize,
+    ceiling: u64,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> ControlledResult<()> {
+    if centers.is_empty() {
+        return Ok(());
+    }
+    let mut sums = controlled_vec::<[f64; 3]>(centers.len(), ceiling)?;
+    sums.resize(centers.len(), [0.0; 3]);
+    let mut counts = controlled_vec::<f64>(centers.len(), ceiling)?;
+    counts.resize(centers.len(), 0.0);
+    for _ in 0..iterations {
+        controlled_poll(control)?;
+        sums.fill([0.0; 3]);
+        counts.fill(0.0);
+        let lookup = Nearest::try_new(centers.iter().copied(), control)?;
+        for (index, (point, weight)) in points.iter().enumerate() {
+            if index.is_multiple_of(256) {
+                controlled_poll(control)?;
+            }
+            let selected = lookup.find(*point);
+            let sum = sums.get_mut(selected).ok_or_else(controlled_invalid)?;
+            for axis in 0..3 {
+                sum[axis] += f64::from(point[axis]) * f64::from(*weight);
+            }
+            *counts.get_mut(selected).ok_or_else(controlled_invalid)? += f64::from(*weight);
+        }
+        for (index, center) in centers.iter_mut().enumerate() {
+            let weight = *counts.get(index).ok_or_else(controlled_invalid)?;
+            if weight > 0.0 {
+                let sum = sums.get(index).ok_or_else(controlled_invalid)?;
+                *center = std::array::from_fn(|axis| (sum[axis] / weight) as f32);
+            }
+        }
+    }
+    Ok(())
+}
+pub fn build_palette_with_interrupt(
+    px: &[[f32; 4]],
+    kind: PaletteKind,
+    colors: usize,
+    forced: Forced,
+    limits: ControlledLimits,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> ControlledResult<Vec<Rgb8>> {
+    controlled_poll(control)?;
+    let required = build_palette_requirements(px.len(), kind, colors, forced)?;
+    controlled_admit(required, limits)?;
+    controlled_finite(px, control)?;
+    let colors = colors.clamp(2, 256);
+    let mut palette = controlled_forced(forced)?;
+    let room = colors.saturating_sub(palette.len());
+    let mut computed = controlled_vec::<Rgb8>(256, 768)?;
+    if matches!(kind, PaletteKind::SystemMac | PaletteKind::SystemWindows | PaletteKind::Web | PaletteKind::Uniform) {
+        computed = controlled_fixed(kind, room.max(8))?;
+    } else {
+        let upper = if kind == PaletteKind::Exact { px.len().min(257) } else { px.len().min(1 << 24) };
+        let mut histogram = std::collections::HashMap::<Rgb8, u32>::new();
+        histogram.try_reserve(upper).map_err(|_| controlled_limit())?;
+        if controlled_mul(histogram.capacity() as u64, 32)? > required.scratch_bytes {
+            return Err(controlled_limit());
+        }
+        for (index, pixel) in px.iter().enumerate() {
+            if index.is_multiple_of(256) {
+                controlled_poll(control)?;
+            }
+            if pixel[3] < 0.5 {
+                continue;
+            }
+            let color = rgb8(pixel);
+            if !histogram.contains_key(&color) && histogram.len() >= upper {
+                return Err(controlled_limit());
+            }
+            let count = histogram.entry(color).or_default();
+            *count = count.checked_add(1).ok_or_else(controlled_limit)?;
+            if kind == PaletteKind::Exact && histogram.len() > 256 {
+                return Err(controlled_limit());
+            }
+        }
+        let mut ordered = controlled_vec(histogram.len(), required.scratch_bytes)?;
+        for (index, value) in histogram.into_iter().enumerate() {
+            if index.is_multiple_of(256) {
+                controlled_poll(control)?;
+            }
+            ordered.push(value);
+        }
+        // Unique integer tuple ordering yields the exact legacy histogram order;
+        // the heap traversal additionally polls through every bounded sort step.
+        controlled_histogram_sort(&mut ordered, control)?;
+        if kind == PaletteKind::Exact || ordered.len() <= room {
+            for value in &ordered {
+                computed.push(value.0);
+            }
+        } else {
+            let mut points = controlled_vec(ordered.len(), required.scratch_bytes)?;
+            for (index, (color, count)) in ordered.iter().enumerate() {
+                if index.is_multiple_of(256) {
+                    controlled_poll(control)?;
+                }
+                let feature = if kind == PaletteKind::Adaptive { color.map(f32::from) } else { srgb_to_lab(color.map(|v| f32::from(v) / 255.0)) };
+                points.push((feature, *count));
+            }
+            let mut centers = controlled_median(&points, room, required.scratch_bytes, control)?;
+            controlled_kmeans(&points, &mut centers, if kind == PaletteKind::Adaptive { 2 } else { 4 }, required.scratch_bytes, control)?;
+            for center in centers {
+                computed.push(if kind == PaletteKind::Adaptive { center.map(|value| value.round().clamp(0.0, 255.0) as u8) } else { lab_to_rgb8(center) });
+            }
+            if kind == PaletteKind::Selective {
+                for color in &mut computed {
+                    let snap = color.map(|v| ((f32::from(v) / 51.0).round() * 51.0) as u8);
+                    if color.iter().zip(snap).all(|(a, b)| a.abs_diff(b) <= 10) {
+                        *color = snap;
+                    }
+                }
+            }
+        }
+    }
+    for color in computed {
+        controlled_poll(control)?;
+        if palette.len() >= 256 {
+            break;
+        }
+        if !palette.contains(&color) {
+            palette.push(color);
+        }
+    }
+    if matches!(kind, PaletteKind::Adaptive | PaletteKind::Perceptual | PaletteKind::Selective | PaletteKind::Uniform) {
+        let forced_count = match forced {
+            Forced::None => 0,
+            Forced::BlackWhite => 2,
+            Forced::Primaries => 8,
+            Forced::Web => 216,
+        };
+        palette.truncate(colors.max(forced_count));
+    }
+    if palette.is_empty() {
+        palette.push([0, 0, 0]);
+    }
+    controlled_poll(control)?;
+    Ok(palette)
+}
+
+pub fn bitmap_requirements(pixels: usize, width: usize, method: BitmapMethod) -> ControlledResult<ControlledRequirements> {
+    if width == 0 || !pixels.is_multiple_of(width) {
+        return Err(controlled_invalid());
+    }
+    if let BitmapMethod::Halftone { cell, angle, .. } = method
+        && (!cell.is_finite() || !angle.is_finite())
+    {
+        return Err(controlled_invalid());
+    }
+    let pixels = u64::try_from(pixels).map_err(|_| controlled_limit())?;
+    let retained = controlled_mul(pixels, 4)?;
+    let (scratch, units) = match method {
+        BitmapMethod::Threshold => (0, 4),
+        BitmapMethod::Pattern => (0, 32),
+        BitmapMethod::Diffusion => (retained, 64),
+        BitmapMethod::Halftone { .. } => (4096, 128),
+    };
+    Ok(ControlledRequirements {
+        retained_bytes: retained,
+        scratch_bytes: scratch,
+        output_bytes: 0,
+        work_units: controlled_add(controlled_mul(pixels, units)?, if matches!(method, BitmapMethod::Halftone { .. }) { 32 * 1024 } else { 0 })?,
+    })
+}
+/// Ordinary finite F32 bitmap mathematics on a caller-private buffer. Original
+/// APIs remain unchanged. Cancellation can leave private partial output only.
+pub fn to_bitmap_with_interrupt(
+    gray: &mut [f32],
+    width: usize,
+    method: BitmapMethod,
+    limits: ControlledLimits,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> ControlledResult<()> {
+    controlled_poll(control)?;
+    let required = bitmap_requirements(gray.len(), width, method)?;
+    controlled_admit(required, limits)?;
+    for chunk in gray.chunks(4096) {
+        controlled_poll(control)?;
+        if chunk.iter().any(|value| !value.is_finite()) {
+            return Err(controlled_invalid());
+        }
+    }
+    match method {
+        BitmapMethod::Threshold => {
+            for chunk in gray.chunks_mut(4096) {
+                controlled_poll(control)?;
+                for value in chunk {
+                    *value = if *value >= 0.5 { 1.0 } else { 0.0 };
+                }
+            }
+        }
+        BitmapMethod::Pattern => {
+            for (index, value) in gray.iter_mut().enumerate() {
+                if index.is_multiple_of(256) {
+                    controlled_poll(control)?;
+                }
+                *value = if *value > bayer8(index % width, index / width) + 0.5 { 1.0 } else { 0.0 };
+            }
+        }
+        BitmapMethod::Diffusion => {
+            let mut buffer = controlled_copy(gray, required.scratch_bytes, control)?;
+            let height = gray.len() / width;
+            for y in 0..height {
+                controlled_poll(control)?;
+                for x in 0..width {
+                    if x.is_multiple_of(256) {
+                        controlled_poll(control)?;
+                    }
+                    let index = y.checked_mul(width).and_then(|n| n.checked_add(x)).ok_or_else(controlled_limit)?;
+                    let old = *buffer.get(index).ok_or_else(controlled_invalid)?;
+                    let new = if old >= 0.5 { 1.0 } else { 0.0 };
+                    let error = old - new;
+                    *gray.get_mut(index).ok_or_else(controlled_invalid)? = new;
+                    if x + 1 < width {
+                        *buffer.get_mut(index.checked_add(1).ok_or_else(controlled_limit)?).ok_or_else(controlled_invalid)? += error * 7.0 / 16.0;
+                    }
+                    if y + 1 < height {
+                        if x > 0 {
+                            *buffer
+                                .get_mut(index.checked_add(width).and_then(|n| n.checked_sub(1)).ok_or_else(controlled_limit)?)
+                                .ok_or_else(controlled_invalid)? += error * 3.0 / 16.0;
+                        }
+                        *buffer.get_mut(index.checked_add(width).ok_or_else(controlled_limit)?).ok_or_else(controlled_invalid)? += error * 5.0 / 16.0;
+                        if x + 1 < width {
+                            *buffer
+                                .get_mut(index.checked_add(width).and_then(|n| n.checked_add(1)).ok_or_else(controlled_limit)?)
+                                .ok_or_else(controlled_invalid)? += error / 16.0;
+                        }
+                    }
+                }
+            }
+        }
+        BitmapMethod::Halftone { cell, angle, shape } => {
+            let cell = cell.max(2.0);
+            let (sin, cos) = angle.to_radians().sin_cos();
+            let mut table = controlled_vec::<f32>(1024, required.scratch_bytes)?;
+            for index in 0..1024usize {
+                if index.is_multiple_of(256) {
+                    controlled_poll(control)?;
+                }
+                table.push(spot(shape, ((index % 32) as f32 + 0.5) / 16.0 - 1.0, ((index / 32) as f32 + 0.5) / 16.0 - 1.0));
+            }
             // Exactly 1024 entries: this sort is a bounded cooperative region.
-            table.sort_unstable_by(f32::total_cmp);controlled_poll(control)?;
-            let cdf=|value:f32|table.partition_point(|threshold|*threshold<value) as f32/table.len() as f32;
-            for (index,value) in gray.iter_mut().enumerate(){
-                if index.is_multiple_of(256){controlled_poll(control)?;}
-                let (x,y)=((index%width) as f32+0.5,(index/width) as f32+0.5);
-                let (rx,ry)=(x*cos+y*sin,-x*sin+y*cos);
-                let u=(rx/cell).rem_euclid(1.0)*2.0-1.0;let v=(ry/cell).rem_euclid(1.0)*2.0-1.0;
-                *value=if cdf(spot(shape,u,v))>=*value{0.0}else{1.0};
+            table.sort_unstable_by(f32::total_cmp);
+            controlled_poll(control)?;
+            let cdf = |value: f32| table.partition_point(|threshold| *threshold < value) as f32 / table.len() as f32;
+            for (index, value) in gray.iter_mut().enumerate() {
+                if index.is_multiple_of(256) {
+                    controlled_poll(control)?;
+                }
+                let (x, y) = ((index % width) as f32 + 0.5, (index / width) as f32 + 0.5);
+                let (rx, ry) = (x * cos + y * sin, -x * sin + y * cos);
+                let u = (rx / cell).rem_euclid(1.0) * 2.0 - 1.0;
+                let v = (ry / cell).rem_euclid(1.0) * 2.0 - 1.0;
+                *value = if cdf(spot(shape, u, v)) >= *value { 0.0 } else { 1.0 };
             }
         }
     }
@@ -955,11 +1350,25 @@ mod tests {
     // Implementation-wave drafts, not run as part of this change.
     #[test]
     fn controlled_palette_matches_legacy_selection_forced_order_and_partition_ties() {
-        let pixels: Vec<[f32;4]>=(0..64).map(|i|[(i%8) as f32/7.0,(i/8) as f32/7.0,if i%3==0{1.25}else{-0.25},if i%5==0{0.499}else{1.0}]).collect();
-        for kind in [PaletteKind::Exact,PaletteKind::SystemMac,PaletteKind::SystemWindows,PaletteKind::Web,PaletteKind::Uniform,PaletteKind::Adaptive,PaletteKind::Perceptual,PaletteKind::Selective] {
-            for forced in [Forced::None,Forced::BlackWhite,Forced::Primaries,Forced::Web] {
-                for colors in [2,6,32] {
-                    assert_eq!(build_palette_with_interrupt(&pixels,kind,colors,forced,ControlledLimits::default(),&photocraft_raster::Interrupt::NONE).unwrap(),build_palette(&pixels,kind,colors,forced).unwrap());
+        let pixels: Vec<[f32; 4]> = (0..64)
+            .map(|i| [(i % 8) as f32 / 7.0, (i / 8) as f32 / 7.0, if i % 3 == 0 { 1.25 } else { -0.25 }, if i % 5 == 0 { 0.499 } else { 1.0 }])
+            .collect();
+        for kind in [
+            PaletteKind::Exact,
+            PaletteKind::SystemMac,
+            PaletteKind::SystemWindows,
+            PaletteKind::Web,
+            PaletteKind::Uniform,
+            PaletteKind::Adaptive,
+            PaletteKind::Perceptual,
+            PaletteKind::Selective,
+        ] {
+            for forced in [Forced::None, Forced::BlackWhite, Forced::Primaries, Forced::Web] {
+                for colors in [2, 6, 32] {
+                    assert_eq!(
+                        build_palette_with_interrupt(&pixels, kind, colors, forced, ControlledLimits::default(), &photocraft_raster::Interrupt::NONE).unwrap(),
+                        build_palette(&pixels, kind, colors, forced).unwrap()
+                    );
                 }
             }
         }
@@ -967,35 +1376,84 @@ mod tests {
 
     #[test]
     fn controlled_quantize_matches_legacy_ordinals_and_every_rgba_word() {
-        let input: Vec<[f32;4]>=(0..64).map(|i|[(i%8) as f32/7.0,(i/8) as f32/7.0,if i%3==0{1.5}else{-0.25},match i%5{0=>-0.0,1=>0.499,2=>0.5,_=>1.25}]).collect();
-        let palette=[[0,0,0],[255,255,255],[0,0,0],[255,0,0]];
-        for dither in [Dither::None,Dither::Pattern,Dither::Noise,Dither::Diffusion] {
-            for transparent in [None,Some(1)] {
-                let mut expected=input.clone();let mut actual=input.clone();
-                let indices=quantize(&mut expected,8,&palette,dither,0.73,transparent);
-                assert_eq!(quantize_with_interrupt(&mut actual,8,&palette,dither,0.73,transparent,ControlledLimits::default(),&photocraft_raster::Interrupt::NONE).unwrap(),indices);
-                assert!(actual.iter().flatten().zip(expected.iter().flatten()).all(|(a,b)|a.to_bits()==b.to_bits()));
+        let input: Vec<[f32; 4]> = (0..64)
+            .map(|i| {
+                [
+                    (i % 8) as f32 / 7.0,
+                    (i / 8) as f32 / 7.0,
+                    if i % 3 == 0 { 1.5 } else { -0.25 },
+                    match i % 5 {
+                        0 => -0.0,
+                        1 => 0.499,
+                        2 => 0.5,
+                        _ => 1.25,
+                    },
+                ]
+            })
+            .collect();
+        let palette = [[0, 0, 0], [255, 255, 255], [0, 0, 0], [255, 0, 0]];
+        for dither in [Dither::None, Dither::Pattern, Dither::Noise, Dither::Diffusion] {
+            for transparent in [None, Some(1)] {
+                let mut expected = input.clone();
+                let mut actual = input.clone();
+                let indices = quantize(&mut expected, 8, &palette, dither, 0.73, transparent);
+                assert_eq!(
+                    quantize_with_interrupt(
+                        &mut actual,
+                        8,
+                        &palette,
+                        dither,
+                        0.73,
+                        transparent,
+                        ControlledLimits::default(),
+                        &photocraft_raster::Interrupt::NONE
+                    )
+                    .unwrap(),
+                    indices
+                );
+                assert!(actual.iter().flatten().zip(expected.iter().flatten()).all(|(a, b)| a.to_bits() == b.to_bits()));
             }
         }
     }
 
     #[test]
     fn controlled_bitmap_matches_all_legacy_methods_and_early_refusals_keep_input() {
-        let input: Vec<f32>=(0..64).map(|i|i as f32/63.0).collect();
-        let mut methods=vec![BitmapMethod::Threshold,BitmapMethod::Pattern,BitmapMethod::Diffusion];
-        for shape in [HalftoneShape::Round,HalftoneShape::Ellipse,HalftoneShape::Line,HalftoneShape::Square,HalftoneShape::Diamond,HalftoneShape::Cross] {methods.push(BitmapMethod::Halftone{cell:2.3,angle:31.2,shape});}
-        for method in methods {
-            let mut expected=input.clone();let mut actual=input.clone();to_bitmap(&mut expected,8,method);
-            to_bitmap_with_interrupt(&mut actual,8,method,ControlledLimits::default(),&photocraft_raster::Interrupt::NONE).unwrap();assert_eq!(actual,expected);
+        let input: Vec<f32> = (0..64).map(|i| i as f32 / 63.0).collect();
+        let mut methods = vec![BitmapMethod::Threshold, BitmapMethod::Pattern, BitmapMethod::Diffusion];
+        for shape in [HalftoneShape::Round, HalftoneShape::Ellipse, HalftoneShape::Line, HalftoneShape::Square, HalftoneShape::Diamond, HalftoneShape::Cross] {
+            methods.push(BitmapMethod::Halftone { cell: 2.3, angle: 31.2, shape });
         }
-        let mut pixels=vec![[0.25,0.5,0.75,1.0];64];let before=pixels.clone();
-        let cancelled=photocraft_raster::Interrupt::cancel_only(&||true);
-        assert!(quantize_with_interrupt(&mut pixels,8,&[[0,0,0]],Dither::Diffusion,1.0,None,ControlledLimits::default(),&cancelled).is_err());
-        assert_eq!(pixels,before);
-        assert!(quantize_with_interrupt(&mut pixels,0,&[[0,0,0]],Dither::None,1.0,None,ControlledLimits::default(),&photocraft_raster::Interrupt::NONE).is_err());
-        assert_eq!(pixels,before);
-        assert!(quantize_with_interrupt(&mut pixels,8,&[[0,0,0]],Dither::None,1.0,None,ControlledLimits{resident_bytes:1,work_units:1},&photocraft_raster::Interrupt::NONE).is_err());
-        assert_eq!(pixels,before);
+        for method in methods {
+            let mut expected = input.clone();
+            let mut actual = input.clone();
+            to_bitmap(&mut expected, 8, method);
+            to_bitmap_with_interrupt(&mut actual, 8, method, ControlledLimits::default(), &photocraft_raster::Interrupt::NONE).unwrap();
+            assert_eq!(actual, expected);
+        }
+        let mut pixels = vec![[0.25, 0.5, 0.75, 1.0]; 64];
+        let before = pixels.clone();
+        let cancelled = photocraft_raster::Interrupt::cancel_only(&|| true);
+        assert!(quantize_with_interrupt(&mut pixels, 8, &[[0, 0, 0]], Dither::Diffusion, 1.0, None, ControlledLimits::default(), &cancelled).is_err());
+        assert_eq!(pixels, before);
+        assert!(
+            quantize_with_interrupt(&mut pixels, 0, &[[0, 0, 0]], Dither::None, 1.0, None, ControlledLimits::default(), &photocraft_raster::Interrupt::NONE)
+                .is_err()
+        );
+        assert_eq!(pixels, before);
+        assert!(
+            quantize_with_interrupt(
+                &mut pixels,
+                8,
+                &[[0, 0, 0]],
+                Dither::None,
+                1.0,
+                None,
+                ControlledLimits { resident_bytes: 1, work_units: 1 },
+                &photocraft_raster::Interrupt::NONE
+            )
+            .is_err()
+        );
+        assert_eq!(pixels, before);
     }
 
     fn gradient(w: usize, h: usize) -> Vec<[f32; 4]> {

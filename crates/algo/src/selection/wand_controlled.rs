@@ -95,6 +95,8 @@ pub fn try_rgba8_image_with_interrupt(s: &Surface, area: Rect, l: WandLimits, c:
 fn index(x: usize, y: usize, w: usize) -> Result<usize, E> {
     y.checked_mul(w).and_then(|n| n.checked_add(x)).ok_or(E::LimitExceeded)
 }
+// Keep the fixed math/authority inputs explicit; regrouping them changes the established API.
+#[allow(clippy::too_many_arguments)]
 pub fn try_wand_region_with_interrupt(
     img: &[[u8; 4]],
     area: Rect,

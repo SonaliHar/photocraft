@@ -179,7 +179,7 @@ fn ceil_div(numerator: u64, denominator: u64) -> Result<u64> {
     if denominator == 0 {
         return Err(Error::Schema);
     }
-    add(numerator / denominator, u64::from(numerator % denominator != 0))
+    add(numerator / denominator, u64::from(!numerator.is_multiple_of(denominator)))
 }
 fn bin_range(spec: Specification, index: usize) -> Result<Option<BinRange>> {
     if index >= spec.bins {
