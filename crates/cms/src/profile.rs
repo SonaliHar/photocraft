@@ -10,8 +10,8 @@ use crate::pipeline::Stage;
 use crate::{CmsError, Intent};
 
 mod controlled_parse;
-pub use controlled_parse::ParseRequirements;
 pub use crate::write::EncodeRequirements;
+pub use controlled_parse::ParseRequirements;
 
 /// Profile/device class (header bytes 12..16).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -196,7 +196,11 @@ impl Profile {
     /// Borrowed pre-allocation census for the additive controlled ICC parser.
     /// Peak includes borrowed bytes, their retained original copy, decoded model,
     /// and conservative tag/text/CLUT-shadow scratch. No profile policy inferred.
-    pub fn parse_requirements_with_control(bytes: &[u8], limits: crate::control::Limits, cancelled: &dyn Fn() -> bool) -> crate::control::Result<ParseRequirements> {
+    pub fn parse_requirements_with_control(
+        bytes: &[u8],
+        limits: crate::control::Limits,
+        cancelled: &dyn Fn() -> bool,
+    ) -> crate::control::Result<ParseRequirements> {
         controlled_parse::requirements(bytes, limits, cancelled)
     }
 
@@ -925,5 +929,631 @@ mod tests {
         d.extend(be(u32::MAX));
         d.extend(be(u32::MAX));
         assert_eq!(parse_text(&d), "");
+    }
+}
+
+impl Profile {
+    pub(crate) fn controlled_retained_bytes(&self, b: &crate::control::Budget<'_>) -> crate::control::Result<usize> {
+        use crate::control::Error;
+        b.poll()?;
+        let mut total = self
+            .description
+            .capacity()
+            .checked_add(self.copyright.capacity())
+            .and_then(|n| n.checked_add(self.bytes.as_ref().map_or(0, |v| v.capacity())))
+            .ok_or(Error::Limit("profile retention"))?;
+        for lut in self.a2b.iter().chain(&self.b2a).flatten() {
+            b.poll()?;
+            if lut.stages.len() > 4096 {
+                return Err(Error::Limit("profile stage count"));
+            }
+            total = total
+                .checked_add(lut.stages.capacity().checked_mul(std::mem::size_of::<Stage>()).ok_or(Error::Limit("profile stage capacity"))?)
+                .ok_or(Error::Limit("profile retention"))?;
+            for stage in &lut.stages {
+                b.poll()?;
+                total = total.checked_add(stage.controlled_bytes()?).ok_or(Error::Limit("profile retention"))?;
+            }
+        }
+        for c in self.trc.iter().flatten().chain(self.gray_trc.iter()) {
+            b.poll()?;
+            total = total.checked_add(c.controlled_bytes()?).ok_or(Error::Limit("profile curve retention"))?;
+        }
+        Ok(total)
+    }
+    pub(crate) fn controlled_side_cost(&self, input: bool, b: &crate::control::Budget<'_>) -> crate::control::Result<(usize, u64, usize)> {
+        use crate::control::Error;
+        b.poll()?;
+        let luts = if input { &self.a2b } else { &self.b2a };
+        if let Some(lut) = Self::lut_for(luts, Intent::RelativeColorimetric) {
+            if lut.stages.len() > 4096 {
+                return Err(Error::Limit("profile stage count"));
+            }
+            let count = lut.stages.len().checked_add(1).ok_or(Error::Limit("profile stages"))?;
+            let mut bytes = count.checked_mul(std::mem::size_of::<Stage>()).ok_or(Error::Limit("profile stage storage"))?;
+            let mut work = 128u64;
+            for stage in &lut.stages {
+                b.poll()?;
+                bytes = bytes.checked_add(stage.controlled_bytes()?).ok_or(Error::Limit("profile copied bytes"))?;
+                work = work.checked_add(stage.controlled_work()?).ok_or(Error::Limit("profile evaluation work"))?;
+            }
+            return Ok((bytes, work, count));
+        }
+        let mut bytes = 2 * std::mem::size_of::<Stage>() + 128;
+        let mut work = 256u64;
+        match self.color_space {
+            ColorSpace::Rgb => {
+                let curves = self.trc.as_ref().ok_or_else(|| crate::control::invalid("RGB profile without TRC or LUT"))?;
+                if self.matrix.is_none() {
+                    return Err(crate::control::invalid("RGB profile without matrix or LUT"));
+                }
+                bytes += 3 * std::mem::size_of::<Curve>();
+                for c in curves {
+                    b.poll()?;
+                    bytes = bytes.checked_add(c.controlled_bytes()?).ok_or(Error::Limit("profile copied curves"))?;
+                    work = work.checked_add(if input { 128 } else { c.controlled_work() }).ok_or(Error::Limit("profile curve work"))?;
+                }
+            }
+            ColorSpace::Gray => {
+                let c = self.gray_trc.as_ref().ok_or_else(|| crate::control::invalid("gray profile without kTRC"))?;
+                bytes = bytes
+                    .checked_add(c.controlled_bytes()?)
+                    .and_then(|n| n.checked_add(std::mem::size_of::<Curve>()))
+                    .ok_or(Error::Limit("profile copied curve"))?;
+                work = work.checked_add(if input { 128 } else { c.controlled_work() }).ok_or(Error::Limit("profile curve work"))?;
+            }
+            ColorSpace::Lab | ColorSpace::Xyz => {}
+            _ => return Err(crate::CmsError::Unsupported("profile without relative-colorimetric LUT".into()).into()),
+        }
+        Ok((bytes, work, 2))
+    }
+    pub(crate) fn relative_side_controlled(&self, input: bool, b: &mut crate::control::Budget<'_>) -> crate::control::Result<(Vec<Stage>, Pcs)> {
+        use crate::control::invalid;
+        b.poll()?;
+        let (_, _, count) = self.controlled_side_cost(input, b)?;
+        let mut out = b.reserve(count)?;
+        let luts = if input { &self.a2b } else { &self.b2a };
+        if let Some(lut) = Self::lut_for(luts, Intent::RelativeColorimetric) {
+            if input {
+                for stage in &lut.stages {
+                    out.push(stage.copy_controlled(b)?);
+                }
+                out.push(decode_pcs(self.pcs, lut.kind));
+            } else {
+                out.push(encode_pcs(self.pcs, lut.kind));
+                for stage in &lut.stages {
+                    out.push(stage.copy_controlled(b)?);
+                }
+            }
+            return Ok((out, self.pcs));
+        }
+        let matrix = |rows, cols, m: &[f64], offset: &[f64], b: &mut crate::control::Budget<'_>| -> crate::control::Result<Stage> {
+            Ok(Stage::Matrix { rows, cols, m: b.copy(m)?, offset: b.copy(offset)? })
+        };
+        match self.color_space {
+            ColorSpace::Rgb => {
+                let m = self.matrix.as_ref().ok_or_else(|| invalid("RGB profile without matrix"))?;
+                let curves = self.trc.as_ref().ok_or_else(|| invalid("RGB profile without TRC"))?;
+                let mut copied = b.reserve(3)?;
+                for curve in curves {
+                    copied.push(curve.copy_controlled(b)?);
+                }
+                let m = if input { *m } else { math::invert(m).ok_or_else(|| invalid("singular colorant matrix"))? };
+                let mut flat = [0f64; 9];
+                for (dst, value) in flat.iter_mut().zip(m.iter().flatten()) {
+                    *dst = *value;
+                }
+                if input {
+                    out.push(Stage::Curves(copied));
+                    out.push(matrix(3, 3, &flat, &[0.0; 3], b)?);
+                } else {
+                    out.push(matrix(3, 3, &flat, &[0.0; 3], b)?);
+                    out.push(Stage::InvCurves(copied));
+                }
+                Ok((out, Pcs::Xyz))
+            }
+            ColorSpace::Gray => {
+                let curve = self.gray_trc.as_ref().ok_or_else(|| invalid("gray profile without kTRC"))?;
+                let mut curves = b.reserve(1)?;
+                curves.push(curve.copy_controlled(b)?);
+                if input {
+                    out.push(Stage::Curves(curves));
+                    let values = if self.pcs == Pcs::Lab { [100.0, 0.0, 0.0] } else { math::D50 };
+                    out.push(matrix(3, 1, &values, &[0.0; 3], b)?);
+                } else {
+                    let values = if self.pcs == Pcs::Lab { [0.01, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+                    out.push(matrix(1, 3, &values, &[0.0], b)?);
+                    out.push(Stage::InvCurves(curves));
+                }
+                Ok((out, self.pcs))
+            }
+            ColorSpace::Lab => {
+                out.push(if input { Stage::DecodeLabV4 } else { Stage::EncodeLabV4 });
+                Ok((out, Pcs::Lab))
+            }
+            ColorSpace::Xyz => {
+                out.push(if input { Stage::DecodeXyz } else { Stage::EncodeXyz });
+                Ok((out, Pcs::Xyz))
+            }
+            _ => Err(crate::CmsError::Unsupported("profile without relative-colorimetric LUT".into()).into()),
+        }
+    }
+}
+
+/// Public model accounting; cached encoded ICC bytes remain shared, not copied.
+#[derive(Clone, Copy, Debug)]
+pub struct ProfileCloneRequirements {
+    pub retained_bytes: usize,
+    pub cloned_model_bytes: usize,
+    pub work_units: u64,
+}
+impl Profile {
+    pub fn clone_requirements_with_control(
+        &self,
+        limits: crate::control::Limits,
+        cancelled: &dyn Fn() -> bool,
+    ) -> crate::control::Result<ProfileCloneRequirements> {
+        use crate::control::{Budget, Error};
+        let b = Budget::new(limits, cancelled)?;
+        let retained = self.controlled_retained_bytes(&b)?;
+        let cached = self.bytes.as_ref().map_or(0, |v| v.capacity());
+        let cloned = retained.checked_sub(cached).ok_or(Error::Limit("profile clone accounting"))?;
+        b.admit(retained.checked_add(cloned).ok_or(Error::Limit("profile clone peak"))?, cloned as u64)?;
+        Ok(ProfileCloneRequirements { retained_bytes: retained, cloned_model_bytes: cloned, work_units: cloned as u64 })
+    }
+    /// Fallible cooperative public-model clone. No parsing/encoding/CMS policy is
+    /// introduced; retained original ICC Arc and cached hash are preserved.
+    pub fn try_clone_with_control(&self, limits: crate::control::Limits, cancelled: &dyn Fn() -> bool) -> crate::control::Result<Self> {
+        use crate::control::Budget;
+        let r = self.clone_requirements_with_control(limits, cancelled)?;
+        let mut b = Budget::new(limits, cancelled)?;
+        b.retained(r.retained_bytes)?;
+        let string = |v: &str, b: &mut Budget<'_>| -> crate::control::Result<String> {
+            String::from_utf8(b.copy(v.as_bytes())?).map_err(|_| crate::control::invalid("profile string encoding"))
+        };
+        let mut trc = None;
+        if let Some(curves) = &self.trc {
+            trc = Some([curves[0].copy_controlled(&mut b)?, curves[1].copy_controlled(&mut b)?, curves[2].copy_controlled(&mut b)?]);
+        }
+        let gray_trc = self.gray_trc.as_ref().map(|c| c.copy_controlled(&mut b)).transpose()?;
+        let lut = |value: &Option<Lut>, b: &mut Budget<'_>| -> crate::control::Result<Option<Lut>> {
+            match value {
+                None => Ok(None),
+                Some(l) => {
+                    let mut stages = b.reserve(l.stages.len())?;
+                    for stage in &l.stages {
+                        b.poll()?;
+                        stages.push(stage.copy_controlled(b)?);
+                    }
+                    Ok(Some(Lut { kind: l.kind, inputs: l.inputs, outputs: l.outputs, stages }))
+                }
+            }
+        };
+        let a2b = [lut(&self.a2b[0], &mut b)?, lut(&self.a2b[1], &mut b)?, lut(&self.a2b[2], &mut b)?];
+        let b2a = [lut(&self.b2a[0], &mut b)?, lut(&self.b2a[1], &mut b)?, lut(&self.b2a[2], &mut b)?];
+        let result = Self {
+            version: self.version,
+            class: self.class,
+            color_space: self.color_space,
+            pcs: self.pcs,
+            rendering_intent: self.rendering_intent,
+            description: string(&self.description, &mut b)?,
+            copyright: string(&self.copyright, &mut b)?,
+            white_point: self.white_point,
+            black_point: self.black_point,
+            chad: self.chad,
+            matrix: self.matrix,
+            trc,
+            gray_trc,
+            a2b,
+            b2a,
+            bytes: self.bytes.as_ref().map(std::sync::Arc::clone),
+            hash: self.hash.clone(),
+        };
+        b.poll()?;
+        Ok(result)
+    }
+}
+
+/// Source public-model retention and exact final Gray-as-RGB allocations.
+/// Discarded LUTs/cached ICC bytes remain source-owned and are never copied.
+#[derive(Clone, Copy, Debug)]
+pub struct GrayAsRgbRequirements {
+    pub retained_bytes: usize,
+    pub staged_bytes: usize,
+    pub work_units: u64,
+}
+impl Profile {
+    pub fn gray_as_rgb_requirements_with_control(
+        &self,
+        limits: crate::control::Limits,
+        cancelled: &dyn Fn() -> bool,
+    ) -> crate::control::Result<Option<GrayAsRgbRequirements>> {
+        use crate::control::{Budget, Error};
+        let b = Budget::new(limits, cancelled)?;
+        let Some(curve) = &self.gray_trc else {
+            return Ok(None);
+        };
+        if self.pcs != Pcs::Xyz {
+            return Ok(None);
+        }
+        let retained = self.controlled_retained_bytes(&b)?;
+        let text = self
+            .description
+            .len()
+            .checked_add(" (as RGB)".len())
+            .and_then(|n| n.checked_add(self.copyright.len()))
+            .ok_or(Error::Limit("gray-as-RGB description length"))?;
+        let staged =
+            text.checked_add(curve.controlled_bytes()?.checked_mul(3).ok_or(Error::Limit("gray-as-RGB curves"))?).ok_or(Error::Limit("gray-as-RGB model"))?;
+        let work = staged as u64;
+        b.admit(retained.checked_add(staged).ok_or(Error::Limit("gray-as-RGB peak"))?, work)?;
+        Ok(Some(GrayAsRgbRequirements { retained_bytes: retained, staged_bytes: staged, work_units: work }))
+    }
+    /// Controlled equivalent of gray_as_rgb for an already-resolved profile.
+    /// Preserves its legacy interpretation exactly; performs no parse/encoding.
+    pub fn gray_as_rgb_with_control(&self, limits: crate::control::Limits, cancelled: &dyn Fn() -> bool) -> crate::control::Result<Option<Self>> {
+        use crate::control::{Budget, Error};
+        let Some(r) = self.gray_as_rgb_requirements_with_control(limits, cancelled)? else {
+            return Ok(None);
+        };
+        let mut b = Budget::new(limits, cancelled)?;
+        b.retained(r.retained_bytes)?;
+        let curve = self.gray_trc.as_ref().ok_or_else(|| crate::control::invalid("gray-as-RGB curve disappeared"))?;
+        let suffix = " (as RGB)";
+        let count = self.description.len().checked_add(suffix.len()).ok_or(Error::Limit("gray-as-RGB description length"))?;
+        let mut text = b.reserve(count)?;
+        for part in self.description.as_bytes().chunks(1024) {
+            b.work(part.len() as u64)?;
+            text.extend_from_slice(part);
+        }
+        b.work(suffix.len() as u64)?;
+        text.extend_from_slice(suffix.as_bytes());
+        let description = String::from_utf8(text).map_err(|_| crate::control::invalid("gray-as-RGB description encoding"))?;
+        let copyright = String::from_utf8(b.copy(self.copyright.as_bytes())?).map_err(|_| crate::control::invalid("gray-as-RGB copyright encoding"))?;
+        let trc = Some([curve.copy_controlled(&mut b)?, curve.copy_controlled(&mut b)?, curve.copy_controlled(&mut b)?]);
+        let w = math::D50;
+        let matrix = Some([[w[0] / 3.0; 3], [w[1] / 3.0; 3], [w[2] / 3.0; 3]]);
+        let result = Self {
+            version: self.version,
+            class: self.class,
+            color_space: ColorSpace::Rgb,
+            pcs: self.pcs,
+            rendering_intent: self.rendering_intent,
+            description,
+            copyright,
+            white_point: self.white_point,
+            black_point: self.black_point,
+            chad: self.chad,
+            matrix,
+            trc,
+            gray_trc: None,
+            a2b: Default::default(),
+            b2a: Default::default(),
+            bytes: None,
+            hash: Default::default(),
+        };
+        b.poll()?;
+        Ok(Some(result))
+    }
+}
+#[cfg(test)]
+mod controlled_gray_rgb_tests {
+    use super::*;
+    #[test]
+    fn resolved_gray_rgb_matches_legacy_model_and_uncached_encoding_state() {
+        for builtin in [crate::Builtin::SGray, crate::Builtin::GrayGamma22, crate::Builtin::DotGain20Compat] {
+            let source = builtin.profile();
+            let before = source.clone();
+            let expected = source.gray_as_rgb().unwrap();
+            let controlled = source.gray_as_rgb_with_control(crate::control::Limits::default(), &|| false).unwrap().unwrap();
+            assert_eq!(controlled, expected);
+            assert!(controlled.encoded_bytes().is_none());
+            assert!(controlled.hash.get().is_none());
+            assert_eq!(source, &before);
+        }
+    }
+    #[test]
+    fn exact_table_curve_and_cached_source_identity_remain_source_owned() {
+        let mut source = crate::Builtin::SGray.profile().clone();
+        source.description = "Gray λ".into();
+        source.gray_trc = Some(Curve::Table64(vec![0.0, 0.5 + 2f64.powi(-45), 1.0]));
+        let _ = source.content_hash();
+        let before = source.clone();
+        let expected = source.gray_as_rgb().unwrap();
+        let controlled = source.gray_as_rgb_with_control(crate::control::Limits::default(), &|| false).unwrap().unwrap();
+        assert_eq!(controlled, expected);
+        assert_eq!(controlled.description, "Gray λ (as RGB)");
+        assert!(controlled.bytes.is_none() && controlled.hash.get().is_none());
+        assert_eq!(source, before);
+    }
+    #[test]
+    fn unsupported_cancel_and_tiny_budget_are_explicit_without_source_mutation() {
+        let source = crate::Builtin::SGray.profile();
+        let before = source.clone();
+        assert!(matches!(source.gray_as_rgb_with_control(crate::control::Limits::default(), &|| true), Err(crate::control::Error::Cancelled)));
+        assert!(matches!(
+            source.gray_as_rgb_with_control(crate::control::Limits { resident_bytes: 1, work_units: 1 }, &|| false),
+            Err(crate::control::Error::Limit(_))
+        ));
+        assert!(crate::Builtin::LabD50.profile().gray_as_rgb_with_control(crate::control::Limits::default(), &|| false).unwrap().is_none());
+        let mut lab = source.clone();
+        lab.pcs = Pcs::Lab;
+        assert_eq!(lab.gray_as_rgb(), None);
+        assert_eq!(lab.gray_as_rgb_with_control(crate::control::Limits::default(), &|| false).unwrap(), None);
+        assert_eq!(source, &before);
+    }
+}
+
+impl Profile {
+    /// Borrowed encoding admission, including source model and generated buffers.
+    pub fn encode_requirements_with_control(&self, limits: crate::control::Limits, cancelled: &dyn Fn() -> bool) -> crate::control::Result<EncodeRequirements> {
+        crate::write::requirements_with_control(self, limits, cancelled)
+    }
+    /// Encode exactly the legacy ICC model recipe with controlled admission,
+    /// replacing cached bytes and resetting the hash only after success.
+    pub fn with_encoded_bytes_with_control(mut self, limits: crate::control::Limits, cancelled: &dyn Fn() -> bool) -> crate::control::Result<Self> {
+        let bytes = crate::write::encode_with_control(&self, limits, cancelled)?;
+        if cancelled() {
+            return Err(crate::control::Error::Cancelled);
+        }
+        self.bytes = Some(std::sync::Arc::new(bytes));
+        self.hash = Default::default();
+        Ok(self)
+    }
+    /// Cached bytes are shared exactly; uncached models use the controlled writer.
+    /// Fixed-size Arc wrapper allocation remains standard-library managed.
+    pub fn to_bytes_with_control(&self, limits: crate::control::Limits, cancelled: &dyn Fn() -> bool) -> crate::control::Result<std::sync::Arc<Vec<u8>>> {
+        let budget = crate::control::Budget::new(limits, cancelled)?;
+        if let Some(bytes) = &self.bytes {
+            budget.admit(bytes.capacity(), 0)?;
+            budget.poll()?;
+            return Ok(std::sync::Arc::clone(bytes));
+        }
+        let bytes = crate::write::encode_with_control(self, limits, cancelled)?;
+        budget.poll()?;
+        Ok(std::sync::Arc::new(bytes))
+    }
+}
+
+// Intent-aware additive side recipe for cooperative Transform construction.
+impl Profile {
+    pub(crate) fn selected_side_cost(&self, input: bool, intent: Intent, b: &crate::control::Budget<'_>) -> crate::control::Result<(usize, u64, usize)> {
+        self.selected_side_cost_override(input, intent, None, b)
+    }
+    pub(crate) fn selected_side_cost_override(
+        &self,
+        input: bool,
+        intent: Intent,
+        override_curve: Option<&Curve>,
+        b: &crate::control::Budget<'_>,
+    ) -> crate::control::Result<(usize, u64, usize)> {
+        use crate::control::Error;
+        b.poll()?;
+        let luts = if input { &self.a2b } else { &self.b2a };
+        if let Some(lut) = Self::lut_for(luts, intent) {
+            if override_curve.is_some() {
+                return Err(crate::control::invalid("effective transfer override of LUT side"));
+            }
+            if lut.stages.len() > 4096 {
+                return Err(Error::Limit("profile stage count"));
+            }
+            let count = lut.stages.len().checked_add(1).ok_or(Error::Limit("profile stages"))?;
+            let mut bytes = count.checked_mul(std::mem::size_of::<Stage>()).ok_or(Error::Limit("profile stage storage"))?;
+            let mut work = 128u64;
+            for stage in &lut.stages {
+                b.poll()?;
+                bytes = bytes.checked_add(stage.controlled_bytes()?).ok_or(Error::Limit("profile copied bytes"))?;
+                work = work.checked_add(stage.controlled_work()?).ok_or(Error::Limit("profile evaluation work"))?;
+            }
+            return Ok((bytes, work, count));
+        }
+        let mut bytes = 2 * std::mem::size_of::<Stage>() + 128;
+        let mut work = 256u64;
+        match self.color_space {
+            ColorSpace::Rgb => {
+                let curves: [&Curve; 3] = if let Some(curve) = override_curve {
+                    [curve; 3]
+                } else {
+                    self.trc.as_ref().ok_or_else(|| crate::control::invalid("RGB profile without TRC or LUT"))?.each_ref()
+                };
+                if self.matrix.is_none() {
+                    return Err(crate::control::invalid("RGB profile without matrix or LUT"));
+                }
+                bytes += 3 * std::mem::size_of::<Curve>();
+                for c in curves {
+                    b.poll()?;
+                    bytes = bytes.checked_add(c.controlled_bytes()?).ok_or(Error::Limit("profile copied curves"))?;
+                    work = work.checked_add(if input { 128 } else { c.controlled_work() }).ok_or(Error::Limit("profile curve work"))?;
+                }
+            }
+            ColorSpace::Gray => {
+                let c = override_curve.or(self.gray_trc.as_ref()).ok_or_else(|| crate::control::invalid("gray profile without kTRC"))?;
+                bytes = bytes
+                    .checked_add(c.controlled_bytes()?)
+                    .and_then(|n| n.checked_add(std::mem::size_of::<Curve>()))
+                    .ok_or(Error::Limit("profile copied curve"))?;
+                work = work.checked_add(if input { 128 } else { c.controlled_work() }).ok_or(Error::Limit("profile curve work"))?;
+            }
+            ColorSpace::Lab | ColorSpace::Xyz => {}
+            _ => return Err(crate::CmsError::Unsupported("profile without relative-colorimetric LUT".into()).into()),
+        }
+        Ok((bytes, work, 2))
+    }
+    pub(crate) fn selected_side_controlled(
+        &self,
+        input: bool,
+        intent: Intent,
+        b: &mut crate::control::Budget<'_>,
+    ) -> crate::control::Result<(Vec<Stage>, Pcs)> {
+        use crate::control::invalid;
+        b.poll()?;
+        let (_, _, count) = self.selected_side_cost(input, intent, b)?;
+        let mut out = b.reserve(count)?;
+        let luts = if input { &self.a2b } else { &self.b2a };
+        if let Some(lut) = Self::lut_for(luts, intent) {
+            if input {
+                for stage in &lut.stages {
+                    out.push(stage.copy_controlled(b)?);
+                }
+                out.push(decode_pcs(self.pcs, lut.kind));
+            } else {
+                out.push(encode_pcs(self.pcs, lut.kind));
+                for stage in &lut.stages {
+                    out.push(stage.copy_controlled(b)?);
+                }
+            }
+            return Ok((out, self.pcs));
+        }
+        let matrix = |rows, cols, m: &[f64], offset: &[f64], b: &mut crate::control::Budget<'_>| -> crate::control::Result<Stage> {
+            Ok(Stage::Matrix { rows, cols, m: b.copy(m)?, offset: b.copy(offset)? })
+        };
+        match self.color_space {
+            ColorSpace::Rgb => {
+                let m = self.matrix.as_ref().ok_or_else(|| invalid("RGB profile without matrix"))?;
+                let curves = self.trc.as_ref().ok_or_else(|| invalid("RGB profile without TRC"))?;
+                let mut copied = b.reserve(3)?;
+                for curve in curves {
+                    copied.push(curve.copy_controlled(b)?);
+                }
+                let m = if input { *m } else { math::invert(m).ok_or_else(|| invalid("singular colorant matrix"))? };
+                let mut flat = [0f64; 9];
+                for (dst, value) in flat.iter_mut().zip(m.iter().flatten()) {
+                    *dst = *value;
+                }
+                if input {
+                    out.push(Stage::Curves(copied));
+                    out.push(matrix(3, 3, &flat, &[0.0; 3], b)?);
+                } else {
+                    out.push(matrix(3, 3, &flat, &[0.0; 3], b)?);
+                    out.push(Stage::InvCurves(copied));
+                }
+                Ok((out, Pcs::Xyz))
+            }
+            ColorSpace::Gray => {
+                let curve = self.gray_trc.as_ref().ok_or_else(|| invalid("gray profile without kTRC"))?;
+                let mut curves = b.reserve(1)?;
+                curves.push(curve.copy_controlled(b)?);
+                if input {
+                    out.push(Stage::Curves(curves));
+                    let values = if self.pcs == Pcs::Lab { [100.0, 0.0, 0.0] } else { math::D50 };
+                    out.push(matrix(3, 1, &values, &[0.0; 3], b)?);
+                } else {
+                    let values = if self.pcs == Pcs::Lab { [0.01, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+                    out.push(matrix(1, 3, &values, &[0.0], b)?);
+                    out.push(Stage::InvCurves(curves));
+                }
+                Ok((out, self.pcs))
+            }
+            ColorSpace::Lab => {
+                out.push(if input { Stage::DecodeLabV4 } else { Stage::EncodeLabV4 });
+                Ok((out, Pcs::Lab))
+            }
+            ColorSpace::Xyz => {
+                out.push(if input { Stage::DecodeXyz } else { Stage::EncodeXyz });
+                Ok((out, Pcs::Xyz))
+            }
+            _ => Err(crate::CmsError::Unsupported("profile without relative-colorimetric LUT".into()).into()),
+        }
+    }
+}
+impl Profile {
+    pub(crate) fn selected_lut(&self, input: bool, intent: Intent) -> Option<&Lut> {
+        Self::lut_for(if input { &self.a2b } else { &self.b2a }, intent)
+    }
+}
+
+/// Borrowed profile plus prospective selected side storage; no pipeline is copied.
+#[derive(Clone, Copy, Debug)]
+pub struct SidePipelineRequirements {
+    pub retained_profile_bytes: usize,
+    pub staged_bytes: usize,
+    pub peak_resident_bytes: usize,
+    pub work_units: u64,
+}
+impl Profile {
+    pub fn side_requirements_with_control(
+        &self,
+        input: bool,
+        intent: Intent,
+        limits: crate::control::Limits,
+        cancelled: &dyn Fn() -> bool,
+    ) -> crate::control::Result<SidePipelineRequirements> {
+        use crate::control::{Budget, Error};
+        let budget = Budget::new(limits, cancelled)?;
+        let retained = self.controlled_retained_bytes(&budget)?;
+        let (staged, side_work, _) = self.selected_side_cost(input, intent, &budget)?;
+        let work =
+            side_work.checked_add(u64::try_from(staged).map_err(|_| Error::Limit("profile side copy work"))?).ok_or(Error::Limit("profile side copy work"))?;
+        let peak = retained.checked_add(staged).ok_or(Error::Limit("profile side storage"))?;
+        budget.admit(peak, work)?;
+        Ok(SidePipelineRequirements { retained_profile_bytes: retained, staged_bytes: staged, peak_resident_bytes: peak, work_units: work })
+    }
+    fn side_with_control(
+        &self,
+        input: bool,
+        intent: Intent,
+        limits: crate::control::Limits,
+        cancelled: &dyn Fn() -> bool,
+    ) -> crate::control::Result<(Vec<Stage>, Pcs)> {
+        let required = self.side_requirements_with_control(input, intent, limits, cancelled)?;
+        let mut budget = crate::control::Budget::new(limits, cancelled)?;
+        budget.retained(required.retained_profile_bytes)?;
+        let output = self.selected_side_controlled(input, intent, &mut budget)?;
+        budget.poll()?;
+        Ok(output)
+    }
+    /// Exact device_to_pcs recipe with cooperative copying, without optimizer changes.
+    pub fn device_to_pcs_with_control(
+        &self,
+        intent: Intent,
+        limits: crate::control::Limits,
+        cancelled: &dyn Fn() -> bool,
+    ) -> crate::control::Result<(Vec<Stage>, Pcs)> {
+        self.side_with_control(true, intent, limits, cancelled)
+    }
+    /// Exact pcs_to_device recipe with cooperative copying, without optimizer changes.
+    pub fn pcs_to_device_with_control(
+        &self,
+        intent: Intent,
+        limits: crate::control::Limits,
+        cancelled: &dyn Fn() -> bool,
+    ) -> crate::control::Result<(Vec<Stage>, Pcs)> {
+        self.side_with_control(false, intent, limits, cancelled)
+    }
+}
+
+#[cfg(test)]
+mod side_pipeline_control_tests {
+    use super::*;
+    #[test]
+    fn controlled_sides_preserve_relative_stage_order_and_native_words() {
+        for builtin in [crate::Builtin::Srgb, crate::Builtin::GrayGamma22, crate::Builtin::LabD50] {
+            let p = builtin.profile();
+            for input in [true, false] {
+                let old = if input { p.device_to_pcs(Intent::RelativeColorimetric) } else { p.pcs_to_device(Intent::RelativeColorimetric) }.unwrap();
+                let controlled = if input {
+                    p.device_to_pcs_with_control(Intent::RelativeColorimetric, crate::control::Limits::default(), &|| false)
+                } else {
+                    p.pcs_to_device_with_control(Intent::RelativeColorimetric, crate::control::Limits::default(), &|| false)
+                }
+                .unwrap();
+                assert_eq!(old, controlled);
+            }
+        }
+    }
+    #[test]
+    fn side_admission_and_cancellation_do_not_copy_or_change_profile() {
+        let p = crate::Builtin::Srgb.profile();
+        let before = p.to_bytes();
+        assert!(matches!(
+            p.device_to_pcs_with_control(Intent::RelativeColorimetric, crate::control::Limits { resident_bytes: 1, work_units: 1 }, &|| false),
+            Err(crate::control::Error::Limit(_))
+        ));
+        assert!(matches!(
+            p.pcs_to_device_with_control(Intent::RelativeColorimetric, crate::control::Limits::default(), &|| true),
+            Err(crate::control::Error::Cancelled)
+        ));
+        assert_eq!(p.to_bytes().as_slice(), before.as_slice());
     }
 }

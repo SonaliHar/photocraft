@@ -40,7 +40,7 @@ fn physical_coordinates_use_the_explicit_linear_basis_without_clamping() {
 #[ignore = "UNRUN prospective full owner peak/work facts, lowered limits and unchanged composite Parts work-field meaning"]
 fn complete_peak_and_work_are_facts_for_all_retained_parts() {
     const CEILING: u64 = planning_work_ceiling();
-    assert!(CEILING > 0); // Const evaluation cannot initialize builtin profiles.
+    const { assert!(CEILING > 0) }; // Const evaluation cannot initialize builtin profiles.
     let r = requirements_with_control(Limits::default(), &|| false).unwrap();
     let exact = Limits { resident_bytes: r.peak_resident_bytes, work_units: r.work_units };
     let parts = construct_with_control(exact, &|| false).unwrap();

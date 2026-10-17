@@ -746,210 +746,586 @@ mod tests {
 
 /// Requirements for validating and reconstructing a current interpretation.
 /// Encoded source bytes remain source-owned; this is not rendering qualification.
-#[derive(Clone,Copy,Debug)]
-pub struct EffectiveProfileRequirements {pub retained_bytes:usize,pub peak_resident_bytes:usize,pub work_units:u64}
-fn controlled_curve(curve:&Curve,monotonic:bool,b:&mut crate::control::Budget<'_>)->crate::control::Result<()> {
- use crate::control::invalid;
- b.poll()?;let valid=match curve {
-  Curve::Identity=>true,Curve::Gamma(g)=>g.is_finite()&&*g>0.,
-  Curve::Table(t)=>{if !(2..=1<<20).contains(&t.len()){false}else{let mut prior=None;for &v in t{b.work(1)?;if !v.is_finite()||monotonic&&prior.is_some_and(|p|p>v){return Err(invalid("invalid XCF tone curve"));}prior=Some(v);}true}},
-  Curve::Table64(t)=>{if !(2..=1<<20).contains(&t.len()){false}else{let mut prior=None;for &v in t{b.work(1)?;if !v.is_finite()||monotonic&&prior.is_some_and(|p|p>v){return Err(invalid("invalid XCF tone curve"));}prior=Some(v);}true}},
-  Curve::Parametric{kind,p}=>*kind<=4&&p.iter().all(|v|v.is_finite())&&p[0]>0.&&(*kind==0||p[1]>0.)&&(*kind<3||p[3]>=0.)
- };
- if !valid{return Err(invalid("invalid XCF tone curve"));}
- b.work(128)?;let mut previous=curve.eval64(0.);if !previous.is_finite(){return Err(invalid("nonfinite XCF tone-curve endpoint"));}
- for i in 1..=256{b.work(128)?;let value=curve.eval64(f64::from(i)/256.);if !value.is_finite()||(monotonic&&value+0.0001<previous){return Err(invalid("nonmonotonic XCF tone curve"));}previous=value;}Ok(())
+#[derive(Clone, Copy, Debug)]
+pub struct EffectiveProfileRequirements {
+    pub retained_bytes: usize,
+    pub peak_resident_bytes: usize,
+    pub work_units: u64,
 }
-fn controlled_lut(lut:&crate::profile::Lut,inputs:usize,outputs:usize,b:&mut crate::control::Budget<'_>)->crate::control::Result<()> {
- use crate::{pipeline::Stage,control::{invalid,Error}};
- let bad=||invalid("invalid XCF ICC LUT dimensions, curves or nodes");
- if lut.inputs!=inputs||lut.outputs!=outputs{return Err(bad());}if lut.stages.len()>4096{return Err(Error::Limit("XCF ICC LUT stages"));}let mut channels=inputs;
- for stage in &lut.stages{b.work(1)?;match stage {
-  Stage::Curves(cs)|Stage::InvCurves(cs)=>{if cs.len()!=channels{return Err(bad());}for c in cs{controlled_curve(c,matches!(stage,Stage::InvCurves(_)),b)?;}},
-  Stage::Matrix{rows,cols,m,offset}=>{if *cols!=channels||!(1..=15).contains(rows)||m.len()!=rows.checked_mul(*cols).ok_or_else(bad)?||offset.len()!=*rows{return Err(bad());}for v in m.iter().chain(offset){b.work(1)?;if !v.is_finite(){return Err(bad());}}channels=*rows;},
-  Stage::Clut(c)=>{if c.inputs!=channels||!(1..=15).contains(&c.outputs){return Err(bad());}for v in &c.data{b.work(1)?;if !v.is_finite(){return Err(bad());}}let mut out=[0.;15];let input=[0.5;15];c.eval_f64_controlled(input.get(..channels).ok_or_else(bad)?,out.get_mut(..c.outputs).ok_or_else(bad)?,b)?;channels=c.outputs;},
-  Stage::Clamp01=>(),_=>if channels!=3{return Err(bad());}
- }}if channels!=outputs{return Err(bad());}Ok(())
+fn controlled_curve(curve: &Curve, monotonic: bool, b: &mut crate::control::Budget<'_>) -> crate::control::Result<()> {
+    use crate::control::invalid;
+    b.poll()?;
+    let valid = match curve {
+        Curve::Identity => true,
+        Curve::Gamma(g) => g.is_finite() && *g > 0.,
+        Curve::Table(t) => {
+            if !(2..=1 << 20).contains(&t.len()) {
+                false
+            } else {
+                let mut prior = None;
+                for &v in t {
+                    b.work(1)?;
+                    if !v.is_finite() || monotonic && prior.is_some_and(|p| p > v) {
+                        return Err(invalid("invalid XCF tone curve"));
+                    }
+                    prior = Some(v);
+                }
+                true
+            }
+        }
+        Curve::Table64(t) => {
+            if !(2..=1 << 20).contains(&t.len()) {
+                false
+            } else {
+                let mut prior = None;
+                for &v in t {
+                    b.work(1)?;
+                    if !v.is_finite() || monotonic && prior.is_some_and(|p| p > v) {
+                        return Err(invalid("invalid XCF tone curve"));
+                    }
+                    prior = Some(v);
+                }
+                true
+            }
+        }
+        Curve::Parametric { kind, p } => *kind <= 4 && p.iter().all(|v| v.is_finite()) && p[0] > 0. && (*kind == 0 || p[1] > 0.) && (*kind < 3 || p[3] >= 0.),
+    };
+    if !valid {
+        return Err(invalid("invalid XCF tone curve"));
+    }
+    b.work(128)?;
+    let mut previous = curve.eval64(0.);
+    if !previous.is_finite() {
+        return Err(invalid("nonfinite XCF tone-curve endpoint"));
+    }
+    for i in 1..=256 {
+        b.work(128)?;
+        let value = curve.eval64(f64::from(i) / 256.);
+        if !value.is_finite() || (monotonic && value + 0.0001 < previous) {
+            return Err(invalid("nonmonotonic XCF tone curve"));
+        }
+        previous = value;
+    }
+    Ok(())
 }
-fn controlled_validate(p:&Profile,b:&mut crate::control::Budget<'_>)->crate::control::Result<()> {
- use crate::control::invalid;b.poll()?;
- if !matches!(p.color_space,ColorSpace::Rgb|ColorSpace::Gray){return Err(CmsError::Unsupported("XCF color model".into()).into());}
- if p.white_point.iter().any(|v|!v.is_finite())||p.black_point.is_some_and(|v|v.iter().any(|v|!v.is_finite()))||p.chad.as_ref().is_some_and(|m|m.iter().flatten().any(|v|!v.is_finite())||crate::math::invert(m).is_none()){return Err(invalid("nonfinite XCF profile point or noninvertible chromatic adaptation"));}
- if p.a2b.iter().any(Option::is_some)||p.b2a.iter().any(Option::is_some){for lut in p.a2b.iter().flatten(){controlled_lut(lut,p.channels(),3,b)?;}for lut in p.b2a.iter().flatten(){controlled_lut(lut,3,p.channels(),b)?;}return Ok(());}
- match p.color_space{ColorSpace::Rgb=>{let m=p.matrix.as_ref().ok_or_else(||invalid("missing XCF RGB colorants"))?;if m.iter().flatten().any(|v|!v.is_finite())||crate::math::invert(m).is_none(){return Err(invalid("nonfinite or singular XCF colorant matrix"));}let cs=p.trc.as_ref().ok_or_else(||invalid("missing XCF RGB curves"))?;for c in cs{controlled_curve(c,true,b)?;}},ColorSpace::Gray=>controlled_curve(p.gray_trc.as_ref().ok_or_else(||invalid("missing XCF gray curve"))?,true,b)?,_=>return Err(CmsError::Unsupported("XCF color model".into()).into())}b.poll()?;Ok(())
+fn controlled_lut(lut: &crate::profile::Lut, inputs: usize, outputs: usize, b: &mut crate::control::Budget<'_>) -> crate::control::Result<()> {
+    use crate::{
+        control::{Error, invalid},
+        pipeline::Stage,
+    };
+    let bad = || invalid("invalid XCF ICC LUT dimensions, curves or nodes");
+    if lut.inputs != inputs || lut.outputs != outputs {
+        return Err(bad());
+    }
+    if lut.stages.len() > 4096 {
+        return Err(Error::Limit("XCF ICC LUT stages"));
+    }
+    let mut channels = inputs;
+    for stage in &lut.stages {
+        b.work(1)?;
+        match stage {
+            Stage::Curves(cs) | Stage::InvCurves(cs) => {
+                if cs.len() != channels {
+                    return Err(bad());
+                }
+                for c in cs {
+                    controlled_curve(c, matches!(stage, Stage::InvCurves(_)), b)?;
+                }
+            }
+            Stage::Matrix { rows, cols, m, offset } => {
+                if *cols != channels || !(1..=15).contains(rows) || m.len() != rows.checked_mul(*cols).ok_or_else(bad)? || offset.len() != *rows {
+                    return Err(bad());
+                }
+                for v in m.iter().chain(offset) {
+                    b.work(1)?;
+                    if !v.is_finite() {
+                        return Err(bad());
+                    }
+                }
+                channels = *rows;
+            }
+            Stage::Clut(c) => {
+                if c.inputs != channels || !(1..=15).contains(&c.outputs) {
+                    return Err(bad());
+                }
+                for v in &c.data {
+                    b.work(1)?;
+                    if !v.is_finite() {
+                        return Err(bad());
+                    }
+                }
+                let mut out = [0.; 15];
+                let input = [0.5; 15];
+                c.eval_f64_controlled(input.get(..channels).ok_or_else(bad)?, out.get_mut(..c.outputs).ok_or_else(bad)?, b)?;
+                channels = c.outputs;
+            }
+            Stage::Clamp01 => (),
+            _ => {
+                if channels != 3 {
+                    return Err(bad());
+                }
+            }
+        }
+    }
+    if channels != outputs {
+        return Err(bad());
+    }
+    Ok(())
+}
+fn controlled_validate(p: &Profile, b: &mut crate::control::Budget<'_>) -> crate::control::Result<()> {
+    use crate::control::invalid;
+    b.poll()?;
+    if !matches!(p.color_space, ColorSpace::Rgb | ColorSpace::Gray) {
+        return Err(CmsError::Unsupported("XCF color model".into()).into());
+    }
+    if p.white_point.iter().any(|v| !v.is_finite())
+        || p.black_point.is_some_and(|v| v.iter().any(|v| !v.is_finite()))
+        || p.chad.as_ref().is_some_and(|m| m.iter().flatten().any(|v| !v.is_finite()) || crate::math::invert(m).is_none())
+    {
+        return Err(invalid("nonfinite XCF profile point or noninvertible chromatic adaptation"));
+    }
+    if p.a2b.iter().any(Option::is_some) || p.b2a.iter().any(Option::is_some) {
+        for lut in p.a2b.iter().flatten() {
+            controlled_lut(lut, p.channels(), 3, b)?;
+        }
+        for lut in p.b2a.iter().flatten() {
+            controlled_lut(lut, 3, p.channels(), b)?;
+        }
+        return Ok(());
+    }
+    match p.color_space {
+        ColorSpace::Rgb => {
+            let m = p.matrix.as_ref().ok_or_else(|| invalid("missing XCF RGB colorants"))?;
+            if m.iter().flatten().any(|v| !v.is_finite()) || crate::math::invert(m).is_none() {
+                return Err(invalid("nonfinite or singular XCF colorant matrix"));
+            }
+            let cs = p.trc.as_ref().ok_or_else(|| invalid("missing XCF RGB curves"))?;
+            for c in cs {
+                controlled_curve(c, true, b)?;
+            }
+        }
+        ColorSpace::Gray => controlled_curve(p.gray_trc.as_ref().ok_or_else(|| invalid("missing XCF gray curve"))?, true, b)?,
+        _ => return Err(CmsError::Unsupported("XCF color model".into()).into()),
+    }
+    b.poll()?;
+    Ok(())
 }
 /// Cooperative equivalent of the existing validation policy, not a new profile class.
-pub fn validate_profile_with_control(profile:&Profile,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<()> {
- let mut b=crate::control::Budget::new(limits,cancelled)?;b.retained(profile.controlled_retained_bytes(&b)?)?;controlled_validate(profile,&mut b)
+pub fn validate_profile_with_control(profile: &Profile, limits: crate::control::Limits, cancelled: &dyn Fn() -> bool) -> crate::control::Result<()> {
+    let mut b = crate::control::Budget::new(limits, cancelled)?;
+    b.retained(profile.controlled_retained_bytes(&b)?)?;
+    controlled_validate(profile, &mut b)
 }
-pub(crate) fn transfer_recipe(encoding:Encoding)->Option<(&'static str,Curve)>{match encoding{Encoding::NonlinearProfile=>None,Encoding::Linear=>Some((" (XCF Linear samples)",Curve::Identity)),Encoding::Perceptual=>Some((" (XCF Perceptual samples)",crate::curve::srgb_trc()))}}
+pub(crate) fn transfer_recipe(encoding: Encoding) -> Option<(&'static str, Curve)> {
+    match encoding {
+        Encoding::NonlinearProfile => None,
+        Encoding::Linear => Some((" (XCF Linear samples)", Curve::Identity)),
+        Encoding::Perceptual => Some((" (XCF Perceptual samples)", crate::curve::srgb_trc())),
+    }
+}
 /// Borrowed admission before cloning, description append or ICC output allocation.
-pub fn effective_profile_requirements_with_control(profile:&Profile,encoding:Encoding,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<EffectiveProfileRequirements> {
- use crate::control::{Budget,Error};let mut b=Budget::new(limits,cancelled)?;let retained=profile.controlled_retained_bytes(&b)?;b.retained(retained)?;controlled_validate(profile,&mut b)?;
- if (profile.a2b.iter().any(Option::is_some)||profile.b2a.iter().any(Option::is_some))&&encoding!=Encoding::NonlinearProfile{return Err(CmsError::Unsupported("XCF ICC LUT transfer override has no separable tone curves; retain profile-defined nonlinear encoding".into()).into());}
- let clone=profile.clone_requirements_with_control(limits,cancelled)?;let mut peak=retained.checked_add(clone.cloned_model_bytes).ok_or(Error::Limit("effective profile model"))?;
- // Validation is repeated by callers; charge a conservative per retained byte
- // plus fixed evaluation schedule for every bounded curve/stage in the model.
- let mut work=implicit_planner::base_effective_work(retained)?;
- for l in profile.a2b.iter().chain(&profile.b2a).flatten(){for stage in &l.stages{b.poll()?;let extra=match stage{crate::pipeline::Stage::Curves(c)|crate::pipeline::Stage::InvCurves(c)=>(c.len() as u64)*32_896,crate::pipeline::Stage::Clut(c)=>c.interpolation_taps()?.checked_mul((c.inputs+c.outputs+1) as u64).ok_or(Error::Limit("ICC eval work"))?,_=>128};work=work.checked_add(extra).ok_or(Error::Limit("ICC validation work"))?;}}
- if let Some((suffix,curve))=transfer_recipe(encoding){let text=profile.description.len().checked_add(suffix.len()).ok_or(Error::Limit("ICC description"))?;let writer=crate::write::controlled::transfer_requirements(profile,suffix,&curve,limits,cancelled)?;peak=peak.checked_add(text).and_then(|v|v.checked_add(256)).and_then(|v|v.checked_add(writer.peak_resident_bytes.checked_sub(writer.retained_bytes)?)).ok_or(Error::Limit("effective ICC peak"))?;work=work.checked_add(writer.work_units).and_then(|v|v.checked_add(text as u64)).ok_or(Error::Limit("effective ICC work"))?;}
- let check=Budget::new(limits,cancelled)?;check.admit(peak,work)?;Ok(EffectiveProfileRequirements{retained_bytes:retained,peak_resident_bytes:peak,work_units:work})
+pub fn effective_profile_requirements_with_control(
+    profile: &Profile,
+    encoding: Encoding,
+    limits: crate::control::Limits,
+    cancelled: &dyn Fn() -> bool,
+) -> crate::control::Result<EffectiveProfileRequirements> {
+    use crate::control::{Budget, Error};
+    let mut b = Budget::new(limits, cancelled)?;
+    let retained = profile.controlled_retained_bytes(&b)?;
+    b.retained(retained)?;
+    controlled_validate(profile, &mut b)?;
+    if (profile.a2b.iter().any(Option::is_some) || profile.b2a.iter().any(Option::is_some)) && encoding != Encoding::NonlinearProfile {
+        return Err(
+            CmsError::Unsupported("XCF ICC LUT transfer override has no separable tone curves; retain profile-defined nonlinear encoding".into()).into()
+        );
+    }
+    let clone = profile.clone_requirements_with_control(limits, cancelled)?;
+    let mut peak = retained.checked_add(clone.cloned_model_bytes).ok_or(Error::Limit("effective profile model"))?;
+    // Validation is repeated by callers; charge a conservative per retained byte
+    // plus fixed evaluation schedule for every bounded curve/stage in the model.
+    let mut work = implicit_planner::base_effective_work(retained)?;
+    for l in profile.a2b.iter().chain(&profile.b2a).flatten() {
+        for stage in &l.stages {
+            b.poll()?;
+            let extra = match stage {
+                crate::pipeline::Stage::Curves(c) | crate::pipeline::Stage::InvCurves(c) => (c.len() as u64) * 32_896,
+                crate::pipeline::Stage::Clut(c) => {
+                    c.interpolation_taps()?.checked_mul((c.inputs + c.outputs + 1) as u64).ok_or(Error::Limit("ICC eval work"))?
+                }
+                _ => 128,
+            };
+            work = work.checked_add(extra).ok_or(Error::Limit("ICC validation work"))?;
+        }
+    }
+    if let Some((suffix, curve)) = transfer_recipe(encoding) {
+        let text = profile.description.len().checked_add(suffix.len()).ok_or(Error::Limit("ICC description"))?;
+        let writer = crate::write::controlled::transfer_requirements(profile, suffix, &curve, limits, cancelled)?;
+        peak = peak
+            .checked_add(text)
+            .and_then(|v| v.checked_add(256))
+            .and_then(|v| v.checked_add(writer.peak_resident_bytes.checked_sub(writer.retained_bytes)?))
+            .ok_or(Error::Limit("effective ICC peak"))?;
+        work = work.checked_add(writer.work_units).and_then(|v| v.checked_add(text as u64)).ok_or(Error::Limit("effective ICC work"))?;
+    }
+    let check = Budget::new(limits, cancelled)?;
+    check.admit(peak, work)?;
+    Ok(EffectiveProfileRequirements { retained_bytes: retained, peak_resident_bytes: peak, work_units: work })
 }
 /// Exact current interpretation reconstruction. Nonlinear keeps cached original
 /// ICC/hash; transfer overrides reproduce legacy encoded bytes and reset hash.
-pub fn effective_profile_from_definition_with_control(profile:&Profile,encoding:Encoding,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<Profile> {
- use crate::control::{Budget,Error};let _=effective_profile_requirements_with_control(profile,encoding,limits,cancelled)?;let mut p=profile.try_clone_with_control(limits,cancelled)?;
- if let Some((suffix,c))=transfer_recipe(encoding){let mut b=Budget::new(limits,cancelled)?;let n=p.description.len().checked_add(suffix.len()).ok_or(Error::Limit("ICC description"))?;let mut text=b.reserve(n)?;for chunk in p.description.as_bytes().chunks(1024){b.work(chunk.len() as u64)?;text.extend_from_slice(chunk);}text.extend_from_slice(suffix.as_bytes());p.description=String::from_utf8(text).map_err(|_|crate::control::invalid("ICC description UTF-8"))?;if p.color_space==ColorSpace::Rgb{p.trc=Some([c.clone(),c.clone(),c]);}else{p.gray_trc=Some(c);}p=p.with_encoded_bytes_with_control(limits,cancelled)?;}if cancelled(){return Err(Error::Cancelled)}Ok(p)
+pub fn effective_profile_from_definition_with_control(
+    profile: &Profile,
+    encoding: Encoding,
+    limits: crate::control::Limits,
+    cancelled: &dyn Fn() -> bool,
+) -> crate::control::Result<Profile> {
+    use crate::control::{Budget, Error};
+    let _ = effective_profile_requirements_with_control(profile, encoding, limits, cancelled)?;
+    let mut p = profile.try_clone_with_control(limits, cancelled)?;
+    if let Some((suffix, c)) = transfer_recipe(encoding) {
+        let mut b = Budget::new(limits, cancelled)?;
+        let n = p.description.len().checked_add(suffix.len()).ok_or(Error::Limit("ICC description"))?;
+        let mut text = b.reserve(n)?;
+        for chunk in p.description.as_bytes().chunks(1024) {
+            b.work(chunk.len() as u64)?;
+            text.extend_from_slice(chunk);
+        }
+        text.extend_from_slice(suffix.as_bytes());
+        p.description = String::from_utf8(text).map_err(|_| crate::control::invalid("ICC description UTF-8"))?;
+        if p.color_space == ColorSpace::Rgb {
+            p.trc = Some([c.clone(), c.clone(), c]);
+        } else {
+            p.gray_trc = Some(c);
+        }
+        p = p.with_encoded_bytes_with_control(limits, cancelled)?;
+    }
+    if cancelled() {
+        return Err(Error::Cancelled);
+    }
+    Ok(p)
 }
 /// Borrowed prospective admission for the exact current implicit RGB/Gray binding.
 /// Does not verify equality until construction generates the analytical ICC.
 /// Builtin OnceLock initialization remains a provider boundary with outer polls.
-pub fn effective_implicit_profile_requirements_with_control(bound:&[u8],space:ColorSpace,encoding:Encoding,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<EffectiveProfileRequirements> {
- use crate::control::{Budget,Error,invalid};let b=Budget::new(limits,cancelled)?;if bound.len()>16<<20{return Err(invalid("XCF implicit ICC exceeds 16 MiB"));}b.admit(bound.len(),bound.len() as u64)?;
- let original=match space{ColorSpace::Rgb=>Builtin::Srgb.profile(),ColorSpace::Gray=>Builtin::SGray.profile(),_=>return Err(CmsError::Unsupported("XCF implicit color model".into()).into())};b.poll()?;
- let r=effective_profile_requirements_with_control(original,encoding,limits,cancelled)?;
- let required=EffectiveProfileRequirements {
-  retained_bytes:r.retained_bytes.checked_add(bound.len()).ok_or(Error::Limit("implicit ICC retained"))?,
-  peak_resident_bytes:r.peak_resident_bytes.checked_add(bound.len()).ok_or(Error::Limit("implicit ICC peak"))?,
-  work_units:r.work_units.checked_add(bound.len() as u64).ok_or(Error::Limit("implicit ICC work"))?,
- };
- b.admit(required.peak_resident_bytes,required.work_units)?;b.poll()?;Ok(required)
+pub fn effective_implicit_profile_requirements_with_control(
+    bound: &[u8],
+    space: ColorSpace,
+    encoding: Encoding,
+    limits: crate::control::Limits,
+    cancelled: &dyn Fn() -> bool,
+) -> crate::control::Result<EffectiveProfileRequirements> {
+    use crate::control::{Budget, Error, invalid};
+    let b = Budget::new(limits, cancelled)?;
+    if bound.len() > 16 << 20 {
+        return Err(invalid("XCF implicit ICC exceeds 16 MiB"));
+    }
+    b.admit(bound.len(), bound.len() as u64)?;
+    let original = match space {
+        ColorSpace::Rgb => Builtin::Srgb.profile(),
+        ColorSpace::Gray => Builtin::SGray.profile(),
+        _ => return Err(CmsError::Unsupported("XCF implicit color model".into()).into()),
+    };
+    b.poll()?;
+    let r = effective_profile_requirements_with_control(original, encoding, limits, cancelled)?;
+    let required = EffectiveProfileRequirements {
+        retained_bytes: r.retained_bytes.checked_add(bound.len()).ok_or(Error::Limit("implicit ICC retained"))?,
+        peak_resident_bytes: r.peak_resident_bytes.checked_add(bound.len()).ok_or(Error::Limit("implicit ICC peak"))?,
+        work_units: r.work_units.checked_add(bound.len() as u64).ok_or(Error::Limit("implicit ICC work"))?,
+    };
+    b.admit(required.peak_resident_bytes, required.work_units)?;
+    b.poll()?;
+    Ok(required)
 }
 /// Verify the actual generated implicit ICC against the caller's binding.
 /// Builtin OnceLock initialization remains a provider boundary with outer polls.
-pub fn effective_implicit_profile_with_control(bound:&[u8],space:ColorSpace,encoding:Encoding,limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<Profile> {
- use crate::control::{Budget,invalid};
- let required=effective_implicit_profile_requirements_with_control(bound,space,encoding,limits,cancelled)?;
- let original=match space{ColorSpace::Rgb=>Builtin::Srgb.profile(),ColorSpace::Gray=>Builtin::SGray.profile(),_=>return Err(CmsError::Unsupported("XCF implicit color model".into()).into())};
- let mut check=Budget::new(limits,cancelled)?;check.admit(required.peak_resident_bytes,required.work_units)?;
- let effective=effective_profile_from_definition_with_control(original,encoding,limits,cancelled)?;let actual=effective.encoded_bytes().ok_or_else(||invalid("implicit ICC encoding missing"))?;
- if actual.len()!=bound.len(){return Err(invalid("active implicit profile ICC does not match its analytical interpretation"));}for(a,b)in actual.chunks(1024).zip(bound.chunks(1024)){check.work(a.len() as u64)?;if a!=b{return Err(invalid("active implicit profile ICC does not match its analytical interpretation"));}}check.poll()?;Ok(effective)
+pub fn effective_implicit_profile_with_control(
+    bound: &[u8],
+    space: ColorSpace,
+    encoding: Encoding,
+    limits: crate::control::Limits,
+    cancelled: &dyn Fn() -> bool,
+) -> crate::control::Result<Profile> {
+    use crate::control::{Budget, invalid};
+    let required = effective_implicit_profile_requirements_with_control(bound, space, encoding, limits, cancelled)?;
+    let original = match space {
+        ColorSpace::Rgb => Builtin::Srgb.profile(),
+        ColorSpace::Gray => Builtin::SGray.profile(),
+        _ => return Err(CmsError::Unsupported("XCF implicit color model".into()).into()),
+    };
+    let mut check = Budget::new(limits, cancelled)?;
+    check.admit(required.peak_resident_bytes, required.work_units)?;
+    let effective = effective_profile_from_definition_with_control(original, encoding, limits, cancelled)?;
+    let actual = effective.encoded_bytes().ok_or_else(|| invalid("implicit ICC encoding missing"))?;
+    if actual.len() != bound.len() {
+        return Err(invalid("active implicit profile ICC does not match its analytical interpretation"));
+    }
+    for (a, b) in actual.chunks(1024).zip(bound.chunks(1024)) {
+        check.work(a.len() as u64)?;
+        if a != b {
+            return Err(invalid("active implicit profile ICC does not match its analytical interpretation"));
+        }
+    }
+    check.poll()?;
+    Ok(effective)
 }
 
 #[cfg(test)]
 mod controlled_effective_tests {
- use super::*;
- use crate::control::{Limits,Error};
- use std::cell::Cell;
- #[test]
- fn exact_transfer_override_and_nonlinear_source_binding() {
-  for b in [Builtin::Srgb,Builtin::SGray,Builtin::DisplayP3] {let source=b.profile();let bytes=source.to_bytes();let hash=source.content_hash();
-   for encoding in [Encoding::Linear,Encoding::Perceptual,Encoding::NonlinearProfile] {let actual=effective_profile_from_definition_with_control(source,encoding,Limits::default(),&||false).unwrap();let old=effective_profile_from_definition(source,encoding).unwrap();assert_eq!(actual.to_bytes(),old.to_bytes());assert_eq!(actual.description,old.description);if encoding==Encoding::NonlinearProfile{assert!(Arc::ptr_eq(&actual.to_bytes(),&bytes));assert_eq!(actual.content_hash(),hash);}}
-   assert_eq!(source.to_bytes(),bytes);assert_eq!(source.content_hash(),hash);
-  }
- }
- #[test]
- fn bound_implicit_bytes_checked_and_source_unmodified_on_cancel() {
-  let expected=effective_profile(None,ColorSpace::Rgb,Encoding::Linear).unwrap().to_bytes();assert!(effective_implicit_profile_with_control(&expected,ColorSpace::Rgb,Encoding::Linear,Limits::default(),&||false).is_ok());let mut wrong=expected.as_ref().clone();*wrong.last_mut().unwrap()^=1;assert!(effective_implicit_profile_with_control(&wrong,ColorSpace::Rgb,Encoding::Linear,Limits::default(),&||false).is_err());
-  let p=Builtin::Srgb.profile();let bytes=p.to_bytes();let calls=Cell::new(0);assert!(matches!(effective_profile_from_definition_with_control(p,Encoding::Perceptual,Limits::default(),&||{calls.set(calls.get()+1);calls.get()>100}),Err(Error::Cancelled)));assert!(Arc::ptr_eq(&bytes,&p.to_bytes()));
- }
- #[test]
- fn invalid_curve_and_tiny_budget_refuse_before_copy() {
-  let mut p=Builtin::SGray.profile().clone();p.gray_trc=Some(Curve::Table64(vec![0.,1.,0.]));assert!(validate_profile_with_control(&p,Limits::default(),&||false).is_err());
-  assert!(matches!(effective_profile_from_definition_with_control(Builtin::Srgb.profile(),Encoding::Linear,Limits{resident_bytes:1,work_units:1},&||false),Err(Error::Limit(_))));
- }
+    use super::*;
+    use crate::control::{Error, Limits};
+    use std::cell::Cell;
+    #[test]
+    fn exact_transfer_override_and_nonlinear_source_binding() {
+        for b in [Builtin::Srgb, Builtin::SGray, Builtin::DisplayP3] {
+            let source = b.profile();
+            let bytes = source.to_bytes();
+            let hash = source.content_hash();
+            for encoding in [Encoding::Linear, Encoding::Perceptual, Encoding::NonlinearProfile] {
+                let actual = effective_profile_from_definition_with_control(source, encoding, Limits::default(), &|| false).unwrap();
+                let old = effective_profile_from_definition(source, encoding).unwrap();
+                assert_eq!(actual.to_bytes(), old.to_bytes());
+                assert_eq!(actual.description, old.description);
+                if encoding == Encoding::NonlinearProfile {
+                    assert!(Arc::ptr_eq(&actual.to_bytes(), &bytes));
+                    assert_eq!(actual.content_hash(), hash);
+                }
+            }
+            assert_eq!(source.to_bytes(), bytes);
+            assert_eq!(source.content_hash(), hash);
+        }
+    }
+    #[test]
+    fn bound_implicit_bytes_checked_and_source_unmodified_on_cancel() {
+        let expected = effective_profile(None, ColorSpace::Rgb, Encoding::Linear).unwrap().to_bytes();
+        assert!(effective_implicit_profile_with_control(&expected, ColorSpace::Rgb, Encoding::Linear, Limits::default(), &|| false).is_ok());
+        let mut wrong = expected.as_ref().clone();
+        *wrong.last_mut().unwrap() ^= 1;
+        assert!(effective_implicit_profile_with_control(&wrong, ColorSpace::Rgb, Encoding::Linear, Limits::default(), &|| false).is_err());
+        let p = Builtin::Srgb.profile();
+        let bytes = p.to_bytes();
+        let calls = Cell::new(0);
+        assert!(matches!(
+            effective_profile_from_definition_with_control(p, Encoding::Perceptual, Limits::default(), &|| {
+                calls.set(calls.get() + 1);
+                calls.get() > 100
+            }),
+            Err(Error::Cancelled)
+        ));
+        assert!(Arc::ptr_eq(&bytes, &p.to_bytes()));
+    }
+    #[test]
+    fn invalid_curve_and_tiny_budget_refuse_before_copy() {
+        let mut p = Builtin::SGray.profile().clone();
+        p.gray_trc = Some(Curve::Table64(vec![0., 1., 0.]));
+        assert!(validate_profile_with_control(&p, Limits::default(), &|| false).is_err());
+        assert!(matches!(
+            effective_profile_from_definition_with_control(Builtin::Srgb.profile(), Encoding::Linear, Limits { resident_bytes: 1, work_units: 1 }, &|| false),
+            Err(Error::Limit(_))
+        ));
+    }
 }
 
 /// Borrowed strict-header gate cost. This does not parse or qualify a profile.
-#[derive(Clone,Copy,Debug)]
-pub struct EncodedProfileGateRequirements {pub retained_bytes:usize,pub work_units:u64}
-fn encoded_gate_header(bytes:&[u8])->crate::control::Result<(usize,usize,usize)> {
- use crate::control::invalid;
- if bytes.len()>16<<20{return Err(invalid("XCF ICC exceeds 16 MiB"));}
- let declared=usize::try_from(encoded_gate_u32(bytes,0)?).map_err(|_|CmsError::Truncated)?;
- if declared<132||declared>bytes.len(){return Err(invalid("invalid XCF ICC declared size"));}
- if !matches!(bytes.get(8),Some(2|4))||!matches!(bytes.get(20..24),Some(b"XYZ "|b"Lab ")){return Err(CmsError::Unsupported("XCF ICC version or PCS".into()).into());}
- if encoded_gate_u32(bytes,64)?>3{return Err(invalid("invalid XCF ICC rendering intent"));}
- let count=usize::try_from(encoded_gate_u32(bytes,128)?).map_err(|_|CmsError::Truncated)?;
- if count>1024{return Err(invalid("too many XCF ICC tags"));}
- let end=132usize.checked_add(count.checked_mul(12).ok_or(CmsError::Truncated)?).ok_or(CmsError::Truncated)?;
- if end>declared{return Err(CmsError::Truncated.into());}Ok((declared,count,end))
+#[derive(Clone, Copy, Debug)]
+pub struct EncodedProfileGateRequirements {
+    pub retained_bytes: usize,
+    pub work_units: u64,
 }
-fn encoded_gate_u32(bytes:&[u8],offset:usize)->crate::control::Result<u32>{
- let end=offset.checked_add(4).ok_or(CmsError::Truncated)?;let word:[u8;4]=bytes.get(offset..end).ok_or(CmsError::Truncated)?.try_into().map_err(|_|CmsError::Truncated)?;Ok(u32::from_be_bytes(word))
+fn encoded_gate_header(bytes: &[u8]) -> crate::control::Result<(usize, usize, usize)> {
+    use crate::control::invalid;
+    if bytes.len() > 16 << 20 {
+        return Err(invalid("XCF ICC exceeds 16 MiB"));
+    }
+    let declared = usize::try_from(encoded_gate_u32(bytes, 0)?).map_err(|_| CmsError::Truncated)?;
+    if declared < 132 || declared > bytes.len() {
+        return Err(invalid("invalid XCF ICC declared size"));
+    }
+    if !matches!(bytes.get(8), Some(2 | 4)) || !matches!(bytes.get(20..24), Some(b"XYZ " | b"Lab ")) {
+        return Err(CmsError::Unsupported("XCF ICC version or PCS".into()).into());
+    }
+    if encoded_gate_u32(bytes, 64)? > 3 {
+        return Err(invalid("invalid XCF ICC rendering intent"));
+    }
+    let count = usize::try_from(encoded_gate_u32(bytes, 128)?).map_err(|_| CmsError::Truncated)?;
+    if count > 1024 {
+        return Err(invalid("too many XCF ICC tags"));
+    }
+    let end = 132usize.checked_add(count.checked_mul(12).ok_or(CmsError::Truncated)?).ok_or(CmsError::Truncated)?;
+    if end > declared {
+        return Err(CmsError::Truncated.into());
+    }
+    Ok((declared, count, end))
 }
-fn encoded_gate_record(bytes:&[u8],index:usize)->crate::control::Result<(u32,usize,usize,usize)>{
- let offset=132usize.checked_add(index.checked_mul(12).ok_or(CmsError::Truncated)?).ok_or(CmsError::Truncated)?;
- let signature=encoded_gate_u32(bytes,offset)?;let start=usize::try_from(encoded_gate_u32(bytes,offset.checked_add(4).ok_or(CmsError::Truncated)?)?).map_err(|_|CmsError::Truncated)?;
- let size=usize::try_from(encoded_gate_u32(bytes,offset.checked_add(8).ok_or(CmsError::Truncated)?)?).map_err(|_|CmsError::Truncated)?;let end=start.checked_add(size).ok_or(CmsError::Truncated)?;Ok((signature,start,size,end))
+fn encoded_gate_u32(bytes: &[u8], offset: usize) -> crate::control::Result<u32> {
+    let end = offset.checked_add(4).ok_or(CmsError::Truncated)?;
+    let word: [u8; 4] = bytes.get(offset..end).ok_or(CmsError::Truncated)?.try_into().map_err(|_| CmsError::Truncated)?;
+    Ok(u32::from_be_bytes(word))
+}
+fn encoded_gate_record(bytes: &[u8], index: usize) -> crate::control::Result<(u32, usize, usize, usize)> {
+    let offset = 132usize.checked_add(index.checked_mul(12).ok_or(CmsError::Truncated)?).ok_or(CmsError::Truncated)?;
+    let signature = encoded_gate_u32(bytes, offset)?;
+    let start = usize::try_from(encoded_gate_u32(bytes, offset.checked_add(4).ok_or(CmsError::Truncated)?)?).map_err(|_| CmsError::Truncated)?;
+    let size = usize::try_from(encoded_gate_u32(bytes, offset.checked_add(8).ok_or(CmsError::Truncated)?)?).map_err(|_| CmsError::Truncated)?;
+    let end = start.checked_add(size).ok_or(CmsError::Truncated)?;
+    Ok((signature, start, size, end))
 }
 /// Checks the same bounded header as parse_bounded_profile and admits the
 /// complete prospective duplicate/overlap work before visiting tag pairs.
-pub fn encoded_profile_gate_requirements_with_control(bytes:&[u8],limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<EncodedProfileGateRequirements>{
- use crate::control::{Budget,Error};let budget=Budget::new(limits,cancelled)?;let(_,count,_)=encoded_gate_header(bytes)?;
- let pairs=count.checked_mul(count.saturating_sub(1)).and_then(|v|v.checked_div(2)).ok_or(Error::Limit("ICC gate pair work"))?;
- let work=count.checked_add(pairs).and_then(|v|v.checked_mul(64)).and_then(|v|v.checked_add(128)).ok_or(Error::Limit("ICC gate work"))? as u64;
- budget.admit(bytes.len(),work)?;Ok(EncodedProfileGateRequirements{retained_bytes:bytes.len(),work_units:work})
+pub fn encoded_profile_gate_requirements_with_control(
+    bytes: &[u8],
+    limits: crate::control::Limits,
+    cancelled: &dyn Fn() -> bool,
+) -> crate::control::Result<EncodedProfileGateRequirements> {
+    use crate::control::{Budget, Error};
+    let budget = Budget::new(limits, cancelled)?;
+    let (_, count, _) = encoded_gate_header(bytes)?;
+    let pairs = count.checked_mul(count.saturating_sub(1)).and_then(|v| v.checked_div(2)).ok_or(Error::Limit("ICC gate pair work"))?;
+    let work = count.checked_add(pairs).and_then(|v| v.checked_mul(64)).and_then(|v| v.checked_add(128)).ok_or(Error::Limit("ICC gate work"))? as u64;
+    budget.admit(bytes.len(), work)?;
+    Ok(EncodedProfileGateRequirements { retained_bytes: bytes.len(), work_units: work })
 }
 /// Exact borrowed companion to the pre-parse gate in parse_bounded_profile.
 /// Preserves declaration tolerance, tag order, shared complete payloads and
 /// optional-tag rejection. General parsing and profile validation remain separate.
-pub fn validate_encoded_profile_with_control(bytes:&[u8],limits:crate::control::Limits,cancelled:&dyn Fn()->bool)->crate::control::Result<()> {
- use crate::control::{Budget,invalid};let required=encoded_profile_gate_requirements_with_control(bytes,limits,cancelled)?;let mut budget=Budget::new(limits,cancelled)?;budget.retained(required.retained_bytes)?;budget.work(128)?;let(declared,count,table_end)=encoded_gate_header(bytes)?;
- for i in 0..count{budget.work(64)?;let(signature,start,size,end)=encoded_gate_record(bytes,i)?;
-  if start<table_end||end>declared{return Err(invalid("XCF ICC tag lies outside profile data"));}
-  for previous in 0..i{budget.work(64)?;let(ps,begin,length,finish)=encoded_gate_record(bytes,previous)?;
-   if signature==ps{return Err(invalid("duplicate XCF ICC tag definition"));}
-   if start<finish&&begin<end&&(start!=begin||size!=length){return Err(invalid("partially overlapping XCF ICC tag data"));}
-  }
-  let data=bytes.get(start..end).ok_or(CmsError::Truncated)?;
-  if signature==u32::from_be_bytes(*b"bkpt")&&(size!=20||data.get(..4)!=Some(b"XYZ ".as_slice())){return Err(invalid("invalid XCF ICC black-point tag"));}
-  if signature==u32::from_be_bytes(*b"chad")&&(size!=44||data.get(..4)!=Some(b"sf32".as_slice())){return Err(invalid("invalid XCF ICC chromatic-adaptation tag"));}
- }budget.poll()?;Ok(())
+pub fn validate_encoded_profile_with_control(bytes: &[u8], limits: crate::control::Limits, cancelled: &dyn Fn() -> bool) -> crate::control::Result<()> {
+    use crate::control::{Budget, invalid};
+    let required = encoded_profile_gate_requirements_with_control(bytes, limits, cancelled)?;
+    let mut budget = Budget::new(limits, cancelled)?;
+    budget.retained(required.retained_bytes)?;
+    budget.work(128)?;
+    let (declared, count, table_end) = encoded_gate_header(bytes)?;
+    for i in 0..count {
+        budget.work(64)?;
+        let (signature, start, size, end) = encoded_gate_record(bytes, i)?;
+        if start < table_end || end > declared {
+            return Err(invalid("XCF ICC tag lies outside profile data"));
+        }
+        for previous in 0..i {
+            budget.work(64)?;
+            let (ps, begin, length, finish) = encoded_gate_record(bytes, previous)?;
+            if signature == ps {
+                return Err(invalid("duplicate XCF ICC tag definition"));
+            }
+            if start < finish && begin < end && (start != begin || size != length) {
+                return Err(invalid("partially overlapping XCF ICC tag data"));
+            }
+        }
+        let data = bytes.get(start..end).ok_or(CmsError::Truncated)?;
+        if signature == u32::from_be_bytes(*b"bkpt") && (size != 20 || data.get(..4) != Some(b"XYZ ".as_slice())) {
+            return Err(invalid("invalid XCF ICC black-point tag"));
+        }
+        if signature == u32::from_be_bytes(*b"chad") && (size != 44 || data.get(..4) != Some(b"sf32".as_slice())) {
+            return Err(invalid("invalid XCF ICC chromatic-adaptation tag"));
+        }
+    }
+    budget.poll()?;
+    Ok(())
 }
 #[cfg(test)]
 mod controlled_encoded_gate_tests {
- use super::*;
- use crate::control::{Limits,Error};
- use std::cell::Cell;
- #[test]
- fn strict_intent_gate_preserves_compatibility_fallback() {
-  let mut bytes=Builtin::Srgb.profile().to_bytes().as_ref().clone();bytes.get_mut(64..68).unwrap().copy_from_slice(&5u32.to_be_bytes());
-  assert!(Profile::parse(&bytes).is_ok());assert!(parse_bounded_profile(&bytes,ColorSpace::Rgb).is_err());assert!(matches!(validate_encoded_profile_with_control(&bytes,Limits::default(),&||false),Err(Error::Cms(_))));
- }
- #[test]
- fn exact_shared_payloads_duplicate_and_partial_overlap() {
-  let bytes=Builtin::Srgb.profile().to_bytes();validate_encoded_profile_with_control(&bytes,Limits::default(),&||false).unwrap();assert!(parse_bounded_profile(&bytes,ColorSpace::Rgb).is_ok());
-  let mut duplicate=bytes.as_ref().clone();let sig:Vec<u8>=duplicate.get(132..136).unwrap().into();duplicate.get_mut(144..148).unwrap().copy_from_slice(&sig);assert!(parse_bounded_profile(&duplicate,ColorSpace::Rgb).is_err());assert!(validate_encoded_profile_with_control(&duplicate,Limits::default(),&||false).is_err());
-  let mut overlap=bytes.as_ref().clone();let first=encoded_gate_u32(&overlap,136).unwrap();overlap.get_mut(148..152).unwrap().copy_from_slice(&(first+1).to_be_bytes());assert!(parse_bounded_profile(&overlap,ColorSpace::Rgb).is_err());assert!(validate_encoded_profile_with_control(&overlap,Limits::default(),&||false).is_err());
- }
- #[test]
- fn borrowed_gate_cancel_resource_and_raw_tail_unchanged() {
-  let mut bytes=Builtin::DisplayP3.profile().to_bytes().as_ref().clone();bytes.extend_from_slice(b"retained undeclared tail");let before=bytes.clone();validate_encoded_profile_with_control(&bytes,Limits::default(),&||false).unwrap();assert!(parse_bounded_profile(&bytes,ColorSpace::Rgb).is_ok());
-  assert!(matches!(validate_encoded_profile_with_control(&bytes,Limits{resident_bytes:1,work_units:1},&||false),Err(Error::Limit(_))));let visits=Cell::new(0);assert!(matches!(validate_encoded_profile_with_control(&bytes,Limits::default(),&||{visits.set(visits.get()+1);visits.get()>12}),Err(Error::Cancelled)));assert_eq!(bytes,before);
- }
+    use super::*;
+    use crate::control::{Error, Limits};
+    use std::cell::Cell;
+    #[test]
+    fn strict_intent_gate_preserves_compatibility_fallback() {
+        let mut bytes = Builtin::Srgb.profile().to_bytes().as_ref().clone();
+        bytes.get_mut(64..68).unwrap().copy_from_slice(&5u32.to_be_bytes());
+        assert!(Profile::parse(&bytes).is_ok());
+        assert!(parse_bounded_profile(&bytes, ColorSpace::Rgb).is_err());
+        assert!(matches!(validate_encoded_profile_with_control(&bytes, Limits::default(), &|| false), Err(Error::Cms(_))));
+    }
+    #[test]
+    fn exact_shared_payloads_duplicate_and_partial_overlap() {
+        let bytes = Builtin::Srgb.profile().to_bytes();
+        validate_encoded_profile_with_control(&bytes, Limits::default(), &|| false).unwrap();
+        assert!(parse_bounded_profile(&bytes, ColorSpace::Rgb).is_ok());
+        let mut duplicate = bytes.as_ref().clone();
+        let sig: Vec<u8> = duplicate.get(132..136).unwrap().into();
+        duplicate.get_mut(144..148).unwrap().copy_from_slice(&sig);
+        assert!(parse_bounded_profile(&duplicate, ColorSpace::Rgb).is_err());
+        assert!(validate_encoded_profile_with_control(&duplicate, Limits::default(), &|| false).is_err());
+        let mut overlap = bytes.as_ref().clone();
+        let first = encoded_gate_u32(&overlap, 136).unwrap();
+        overlap.get_mut(148..152).unwrap().copy_from_slice(&(first + 1).to_be_bytes());
+        assert!(parse_bounded_profile(&overlap, ColorSpace::Rgb).is_err());
+        assert!(validate_encoded_profile_with_control(&overlap, Limits::default(), &|| false).is_err());
+    }
+    #[test]
+    fn borrowed_gate_cancel_resource_and_raw_tail_unchanged() {
+        let mut bytes = Builtin::DisplayP3.profile().to_bytes().as_ref().clone();
+        bytes.extend_from_slice(b"retained undeclared tail");
+        let before = bytes.clone();
+        validate_encoded_profile_with_control(&bytes, Limits::default(), &|| false).unwrap();
+        assert!(parse_bounded_profile(&bytes, ColorSpace::Rgb).is_ok());
+        assert!(matches!(validate_encoded_profile_with_control(&bytes, Limits { resident_bytes: 1, work_units: 1 }, &|| false), Err(Error::Limit(_))));
+        let visits = Cell::new(0);
+        assert!(matches!(
+            validate_encoded_profile_with_control(&bytes, Limits::default(), &|| {
+                visits.set(visits.get() + 1);
+                visits.get() > 12
+            }),
+            Err(Error::Cancelled)
+        ));
+        assert_eq!(bytes, before);
+    }
 }
 
 #[cfg(test)]
 mod implicit_requirements_tests {
- use super::*;
- use crate::control::{Limits,Error};
- #[test]
- fn implicit_requirements_match_existing_envelope_and_constructor() {
-  for space in [ColorSpace::Rgb,ColorSpace::Gray] {
-   let base=match space {ColorSpace::Rgb=>Builtin::Srgb.profile(),_=>Builtin::SGray.profile()};
-   for encoding in [Encoding::NonlinearProfile,Encoding::Linear,Encoding::Perceptual] {
-    let bound=effective_profile_from_definition(base,encoding).unwrap().to_bytes();
-    let r=effective_profile_requirements_with_control(base,encoding,Limits::default(),&||false).unwrap();
-    let got=effective_implicit_profile_requirements_with_control(&bound,space,encoding,Limits::default(),&||false).unwrap();
-    assert_eq!(got.retained_bytes,r.retained_bytes+bound.len());
-    assert_eq!(got.peak_resident_bytes,r.peak_resident_bytes+bound.len());
-    assert_eq!(got.work_units,r.work_units+bound.len() as u64);
-    let actual=effective_implicit_profile_with_control(&bound,space,encoding,Limits::default(),&||false).unwrap();
-    assert_eq!(actual.to_bytes(),bound);
-    assert!(effective_implicit_profile_requirements_with_control(&bound,space,encoding,Limits{resident_bytes:got.peak_resident_bytes-1,work_units:got.work_units},&||false).is_err());
-    assert!(effective_implicit_profile_requirements_with_control(&bound,space,encoding,Limits{resident_bytes:got.peak_resident_bytes,work_units:got.work_units-1},&||false).is_err());
-   }
-  }
- }
- #[test]
- fn implicit_requirements_do_not_claim_equality_or_admit_wrong_space_cancel() {
-  let bound=effective_profile(None,ColorSpace::Rgb,Encoding::Linear).unwrap().to_bytes();
-  assert!(matches!(effective_implicit_profile_requirements_with_control(&bound,ColorSpace::Rgb,Encoding::Linear,Limits::default(),&||true),Err(Error::Cancelled)));
-  assert!(effective_implicit_profile_requirements_with_control(&bound,ColorSpace::Cmyk,Encoding::Linear,Limits::default(),&||false).is_err());
-  let mut wrong=bound.as_ref().clone();*wrong.last_mut().unwrap()^=1;
-  assert!(effective_implicit_profile_requirements_with_control(&wrong,ColorSpace::Rgb,Encoding::Linear,Limits::default(),&||false).is_ok());
-  assert!(effective_implicit_profile_with_control(&wrong,ColorSpace::Rgb,Encoding::Linear,Limits::default(),&||false).is_err());
-  assert_eq!(bound,effective_profile(None,ColorSpace::Rgb,Encoding::Linear).unwrap().to_bytes());
- }
+    use super::*;
+    use crate::control::{Error, Limits};
+    #[test]
+    fn implicit_requirements_match_existing_envelope_and_constructor() {
+        for space in [ColorSpace::Rgb, ColorSpace::Gray] {
+            let base = match space {
+                ColorSpace::Rgb => Builtin::Srgb.profile(),
+                _ => Builtin::SGray.profile(),
+            };
+            for encoding in [Encoding::NonlinearProfile, Encoding::Linear, Encoding::Perceptual] {
+                let bound = effective_profile_from_definition(base, encoding).unwrap().to_bytes();
+                let r = effective_profile_requirements_with_control(base, encoding, Limits::default(), &|| false).unwrap();
+                let got = effective_implicit_profile_requirements_with_control(&bound, space, encoding, Limits::default(), &|| false).unwrap();
+                assert_eq!(got.retained_bytes, r.retained_bytes + bound.len());
+                assert_eq!(got.peak_resident_bytes, r.peak_resident_bytes + bound.len());
+                assert_eq!(got.work_units, r.work_units + bound.len() as u64);
+                let actual = effective_implicit_profile_with_control(&bound, space, encoding, Limits::default(), &|| false).unwrap();
+                assert_eq!(actual.to_bytes(), bound);
+                assert!(
+                    effective_implicit_profile_requirements_with_control(
+                        &bound,
+                        space,
+                        encoding,
+                        Limits { resident_bytes: got.peak_resident_bytes - 1, work_units: got.work_units },
+                        &|| false
+                    )
+                    .is_err()
+                );
+                assert!(
+                    effective_implicit_profile_requirements_with_control(
+                        &bound,
+                        space,
+                        encoding,
+                        Limits { resident_bytes: got.peak_resident_bytes, work_units: got.work_units - 1 },
+                        &|| false
+                    )
+                    .is_err()
+                );
+            }
+        }
+    }
+    #[test]
+    fn implicit_requirements_do_not_claim_equality_or_admit_wrong_space_cancel() {
+        let bound = effective_profile(None, ColorSpace::Rgb, Encoding::Linear).unwrap().to_bytes();
+        assert!(matches!(
+            effective_implicit_profile_requirements_with_control(&bound, ColorSpace::Rgb, Encoding::Linear, Limits::default(), &|| true),
+            Err(Error::Cancelled)
+        ));
+        assert!(effective_implicit_profile_requirements_with_control(&bound, ColorSpace::Cmyk, Encoding::Linear, Limits::default(), &|| false).is_err());
+        let mut wrong = bound.as_ref().clone();
+        *wrong.last_mut().unwrap() ^= 1;
+        assert!(effective_implicit_profile_requirements_with_control(&wrong, ColorSpace::Rgb, Encoding::Linear, Limits::default(), &|| false).is_ok());
+        assert!(effective_implicit_profile_with_control(&wrong, ColorSpace::Rgb, Encoding::Linear, Limits::default(), &|| false).is_err());
+        assert_eq!(bound, effective_profile(None, ColorSpace::Rgb, Encoding::Linear).unwrap().to_bytes());
+    }
 }

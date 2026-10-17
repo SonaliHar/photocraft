@@ -141,7 +141,8 @@ fn validation_and_cancellation_never_partially_publish_output() {
 #[ignore = "UNRUN: exact/lowered/raised component and scratch/work limits plus unsupported models fail closed without arbitrary profile API"]
 fn prospective_limits_are_component_aware_and_lower_only() {
     // The type accepts a fixed model identity, not a caller Profile/ICC/LUT.
-    let _: fn(ColorSpace, Encoding, Encoding, Limits, &dyn Fn() -> bool) -> crate::control::Result<PreparedImplicitTransfer> = construct_with_control;
+    type Constructor = fn(ColorSpace, Encoding, Encoding, Limits, &dyn Fn() -> bool) -> crate::control::Result<PreparedImplicitTransfer>;
+    let _: Constructor = construct_with_control;
     assert!(planning_work_ceiling() > 0);
     for space in SPACES {
         let _warm_builtin_bytes = basis(space).to_bytes();
@@ -157,12 +158,11 @@ fn prospective_limits_are_component_aware_and_lower_only() {
         assert_eq!(again.component_resident_bytes, r.component_resident_bytes);
         let token = construct_with_control(space, Encoding::Linear, Encoding::NonlinearProfile, exact, &|| false).unwrap();
         let polls = Cell::new(0usize);
-        let complete = construct_with_control(space, Encoding::Linear, Encoding::NonlinearProfile, exact, &|| {
+        let _complete = construct_with_control(space, Encoding::Linear, Encoding::NonlinearProfile, exact, &|| {
             polls.set(polls.get() + 1);
             false
         })
         .unwrap();
-        drop(complete);
         let total = polls.get();
         assert!(total > 2);
         for allowed in [1, total / 2, total - 1] {
