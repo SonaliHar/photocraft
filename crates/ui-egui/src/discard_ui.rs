@@ -309,7 +309,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let modal = egui::Modal::new(egui::Id::new("discard-prompt")).show(ctx, |ui| {
         ui.set_min_width(400.0);
         ui.set_max_width(450.0);
-        ui.label(egui::RichText::new(tl!(&title)).font(crate::theme::semibold(15.0)));
+        let title_label = egui::Label::new(egui::RichText::new(tl!(&title)).font(crate::theme::semibold(15.0))).selectable(false);
+        let title_rect = ui.add(title_label).rect;
+        if !mac && crate::dialogs::CLOSE_BOX {
+            let close_r = crate::dialogs::close_box_rect(ui.max_rect().right(), title_rect.center().y);
+            if crate::dialogs::close_box(ui, close_r) {
+                answer = Some(Answer::Cancel);
+            }
+        }
         ui.add_space(6.0);
         crate::widgets::hairline(ui);
         ui.add_space(14.0);
