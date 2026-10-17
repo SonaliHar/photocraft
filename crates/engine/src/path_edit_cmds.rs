@@ -20,8 +20,8 @@ use crate::{Result, Session};
 mod controlled;
 
 /// Called before normalization and parameter copying for the four controlled edits.
-pub(crate) fn dispatch_preflight(s:&Session,command:&str,p:&Value,background:bool)->Result<()> {
-    controlled::dispatch_preflight(s,command,p,background)
+pub(crate) fn dispatch_preflight(s: &Session, command: &str, p: &Value, background: bool) -> Result<()> {
+    controlled::dispatch_preflight(s, command, p, background)
 }
 
 fn index(cmd: &str, p: &Value, key: &str) -> Result<usize> {
@@ -71,53 +71,16 @@ fn edit_path(s: &mut Session, cmd: &str, p: &Value, label: &str, f: impl FnOnce(
 }
 
 fn move_anchors(s: &mut Session, p: &Value) -> Result<Value> {
-    const CMD: &str = "path.moveAnchors";
-    let anchors: Vec<[usize; 2]> = p
-        .get("anchors")
-        .and_then(Value::as_array)
-        .filter(|a| !a.is_empty())
-        .ok_or_else(|| bad(CMD, "`anchors` must list [subpath, knot] pairs"))?
-        .iter()
-        .map(|a| {
-            let n = |i: usize| a.get(i).and_then(Value::as_u64).and_then(|v| usize::try_from(v).ok());
-            n(0).zip(n(1)).map(|(s, k)| [s, k]).ok_or_else(|| bad(CMD, "each anchor is [subpath, knot]"))
-        })
-        .collect::<Result<_>>()?;
-    let d = offset(CMD, p)?;
-    if p.get("curvature").and_then(Value::as_bool).unwrap_or(false) {
-        return edit_path(s, CMD, p, "Drag Anchor Points", |path| edit::move_anchors_curvature(path, &anchors, d));
-    }
-    edit_path(s, CMD, p, "Drag Anchor Points", |path| edit::move_anchors(path, &anchors, d))
+    controlled::run(s, "path.moveAnchors", p)
 }
-
 fn move_handle(s: &mut Session, p: &Value) -> Result<Value> {
-    const CMD: &str = "path.moveHandle";
-    let k = knot(CMD, p)?;
-    let h = p.get("handle").and_then(Value::as_str).and_then(Handle::parse).ok_or_else(|| bad(CMD, "`handle` must be \"in\" or \"out\""))?;
-    let to = point(CMD, p, "to")?.ok_or_else(|| bad(CMD, "missing `to`"))?;
-    let independent = p.get("independent").and_then(Value::as_bool).unwrap_or(false);
-    edit_path(s, CMD, p, "Drag Direction Point", |path| edit::move_handle(path, k, h, to, independent))
+    controlled::run(s, "path.moveHandle", p)
 }
-
 fn bend_segment(s: &mut Session, p: &Value) -> Result<Value> {
-    const CMD: &str = "path.bendSegment";
-    let k = knot(CMD, p)?;
-    let t = match p.get("t") {
-        Some(v) => v.as_f64().filter(|t| (0.0..=1.0).contains(t)).ok_or_else(|| bad(CMD, "`t` must be between 0 and 1"))?,
-        None => 0.5,
-    };
-    let d = offset(CMD, p)?;
-    edit_path(s, CMD, p, "Drag Segment", |path| edit::bend_segment(path, k, t, d))
+    controlled::run(s, "path.bendSegment", p)
 }
-
 fn convert_point(s: &mut Session, p: &Value) -> Result<Value> {
-    const CMD: &str = "path.convertPoint";
-    let k = knot(CMD, p)?;
-    if p.get("curvature").and_then(Value::as_bool).unwrap_or(false) {
-        return edit_path(s, CMD, p, "Convert Point", |path| edit::toggle_curvature_point(path, k));
-    }
-    let out = point(CMD, p, "out")?;
-    edit_path(s, CMD, p, "Convert Point", |path| edit::convert_point(path, k, out))
+    controlled::run(s, "path.convertPoint", p)
 }
 
 fn add_anchor(s: &mut Session, p: &Value) -> Result<Value> {
@@ -311,11 +274,31 @@ mod tests {
             assert_eq!(cache.as_ref().unwrap().content_bounds().x1, 80, "depth {depth}: re-rendered");
         }
         let mut s = session();
+        // Background has a real position lock. Keep this positive vector-mask
+        // geometry case on an actual ordinary unlocked pixel layer.
+        s.execute("layer.new.layer", json!({"name":"Own unlocked mask owner"})).unwrap();
         let id = s.active().unwrap().active_layer.unwrap().0;
         s.execute("layer.vectorMask.add", json!({"layer": id, "path": square()})).unwrap();
         s.execute("path.moveAnchors", json!({"name": "layer", "layer": id, "anchors": [[0, 0]], "move": [-5, -5]})).unwrap();
         let vm = s.active().unwrap().doc.layer(LayerId(id)).unwrap().vector_mask.clone().unwrap();
         assert_eq!(vm.path.subpaths[0].knots[0].anchor, photocraft_geom::Point::new(5.0, 5.0));
+    }
+
+    #[test]
+    fn position_locked_background_vector_mask_point_edit_is_atomic() {
+        let mut s = session();
+        let id = s.active().unwrap().active_layer.unwrap();
+        assert!(s.active().unwrap().doc.effective_locks(id).position);
+        s.execute("layer.vectorMask.add", json!({"layer":id.0,"path":square()})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let revision = s.active().unwrap().revision;
+        let past = s.active().unwrap().history.past_len();
+        let result = s.execute("path.moveAnchors", json!({"name":"layer","layer":id.0,"anchors":[[0,0]],"move":[-5,-5]}));
+        assert!(result.unwrap_err().to_string().contains("vector owner is locked"));
+        assert!(s.active().unwrap().doc.shares_state(&before));
+        assert_eq!(s.active().unwrap().doc, before);
+        assert_eq!(s.active().unwrap().revision, revision);
+        assert_eq!(s.active().unwrap().history.past_len(), past);
     }
 
     fn curve() -> serde_json::Value {
@@ -335,10 +318,10 @@ mod tests {
         let mut s = session();
         s.execute("path.set", json!({"path": curve()})).unwrap();
         let before = work(&s);
-        let steps = s.active().unwrap().history.entries().len();
+        let steps = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
         let r = s.execute("path.addAnchor", json!({"subpath": 0, "knot": 0, "t": 0.5})).unwrap();
         assert_eq!(r["anchor"], json!({"subpath": 0, "knot": 1}));
-        assert_eq!((knots(&s), s.active().unwrap().history.entries().len()), (4, steps + 1));
+        assert_eq!((knots(&s), s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len()), (4, steps + 1));
         assert_eq!(s.active().unwrap().history.undo_label(), Some("Add Anchor Point"));
         assert!(work(&s).subpaths[0].knots[1].smooth);
         let added = work(&s);
@@ -393,10 +376,10 @@ mod tests {
         let one = json!({"subpaths": [{"closed": false, "knots": [[10, 10], [50, 10]]}]});
         let id = s.execute("shape.create", json!({"kind": "path", "path": one, "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
         s.execute("path.deleteAnchor", json!({"name": "layer", "layer": id, "subpath": 0, "knot": 0})).unwrap();
-        let steps = s.active().unwrap().history.entries().len();
+        let steps = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
         let e = s.execute("path.deleteAnchor", json!({"name": "layer", "layer": id, "subpath": 0, "knot": 0})).unwrap_err();
         assert!(e.to_string().contains("only anchor"), "{e}");
-        assert_eq!(s.active().unwrap().history.entries().len(), steps);
+        assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), steps);
     }
 
     #[test]

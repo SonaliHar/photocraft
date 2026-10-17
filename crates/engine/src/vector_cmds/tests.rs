@@ -601,19 +601,34 @@ fn copy_and_paste_shape_fill_and_stroke() {
 fn path_fill_handles_extreme_coordinates_and_feather() {
     let mut s = session(48, 32, 8);
     s.execute("layer.new.layer", json!({})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let revision = s.active().unwrap().revision;
+    assert!(
+        s.execute(
+            "path.set",
+            json!({"name":"P", "path":{"subpaths":[{
+                "closed":true,"knots":[[0.,0.],[3.0e9,0.],[3.0e9,1.0e9]]
+            }]}})
+        )
+        .is_err()
+    );
+    assert_eq!(s.active().unwrap().doc, before);
+    assert_eq!(s.active().unwrap().revision, revision);
+    // Still extreme relative to the canvas, within the existing checked path domain.
     s.execute(
         "path.set",
-        json!({
-            "name": "P",
-            "path": {"subpaths": [{
-                "closed": true,
-                "knots": [[0.0, 0.0], [3.0e9, 0.0], [3.0e9, 1.0e9]]
-            }]}
-        }),
+        json!({"name":"P", "path":{"subpaths":[{
+            "closed":true,"knots":[[0.,0.],[1.0e6,0.],[1.0e6,1.0e6]]
+        }]}}),
     )
     .unwrap();
-    s.execute("path.fill", json!({"name": "P", "color": "#ff0000"})).unwrap();
-    s.execute("path.fill", json!({"name": "P", "color": "#ff0000", "feather": 1_073_741_824.0})).unwrap();
+    s.execute("path.fill", json!({"name":"P","color":"#ff0000"})).unwrap();
+    let before_feather = s.active().unwrap().doc.clone();
+    let revision = s.active().unwrap().revision;
+    assert!(s.execute("path.fill", json!({"name":"P","color":"#ff0000","feather":1_073_741_824.0})).is_err());
+    assert_eq!(s.active().unwrap().doc, before_feather);
+    assert_eq!(s.active().unwrap().revision, revision);
+    s.execute("path.fill", json!({"name":"P","color":"#ff0000","feather":1.0})).unwrap();
 
     let layer = doc(&s).layer(s.active().unwrap().active_layer.unwrap()).unwrap();
     assert_eq!(layer.surface().unwrap().tile_count(), 1);
@@ -656,7 +671,7 @@ fn rasterizing_a_vector_mask_keeps_what_the_masks_show() {
             s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[16, 16], [48, 16], [48, 48], [16, 48]]}]}})).unwrap();
             s.execute("layer.vectorMask.currentPath", json!({})).unwrap();
             s.execute("layer.vectorMask.edit", json!({"feather": vf, "enabled": enabled})).unwrap();
-            let before = photocraft_compose::flatten(doc(&s));
+            let before = photocraft_compose::flatten(doc(&s)).unwrap();
             let steps = s.active().unwrap().history.past_len();
             s.execute("layer.rasterize.vectorMask", json!({})).unwrap();
             let l = doc(&s).layer(id).unwrap();
@@ -667,7 +682,7 @@ fn rasterizing_a_vector_mask_keeps_what_the_masks_show() {
                 _ => 1e-3,
             };
             assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{what}: one history step");
-            let after = photocraft_compose::flatten(doc(&s));
+            let after = photocraft_compose::flatten(doc(&s)).unwrap();
             let worst = before.px.iter().zip(&after.px).flat_map(|(a, b)| (0..4).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
             assert!(worst <= tol, "{what}: the composite changed by {worst}");
             s.undo();
@@ -827,16 +842,36 @@ fn saved_path_ids_target_duplicate_names_and_survive_native_undo() {
     assert_eq!(listed["paths"][1]["pathId"], second.0);
     let back = photocraft_format::load_from_bytes(&photocraft_format::save_to_bytes(doc(&s), &Default::default()).unwrap()).unwrap();
     assert_eq!(back, *doc(&s));
+    let before_delete = doc(&s).clone();
+    let past = s.active().unwrap().history.past_len();
     s.execute("path.delete", json!({"pathId":first.0})).unwrap();
     assert_eq!(doc(&s).paths[0].id, second);
+    let mut expected = before_delete.clone();
+    expected.paths.retain(|path| path.id != first);
+    expected.xcf_state.as_mut().unwrap().items.retain(|item| item.item != photocraft_doc::item_identity::ItemRef::Path(first));
+    assert_eq!(doc(&s), &expected, "only the actual ordinary path and its self-row are removed");
+    assert_eq!(s.active().unwrap().history.past_len(), past + 1);
+    let deleted = doc(&s).clone();
+    let reopened = photocraft_format::load_from_bytes_with(
+        &photocraft_format::save_to_bytes(&deleted, &Default::default()).unwrap(),
+        &photocraft_format::LoadOptions { preserve_ids: true, ..Default::default() },
+    )
+    .unwrap();
+    assert_eq!(reopened, deleted);
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(doc(&s).paths[0].id, first);
+    assert_eq!(doc(&s), &before_delete);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(doc(&s), &deleted);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(doc(&s), &before_delete);
     for id in [json!(0), json!("wrong"), json!(u64::MAX)] {
         let before = doc(&s).clone();
         assert!(s.execute("path.delete", json!({"pathId":id})).is_err());
         assert_eq!(doc(&s), &before);
     }
 }
+#[test]
 fn shape_info_bounds_of_curved_shapes_are_exact() {
     // Issue #2537: an exact 600×600 ellipse reported width 601.
     for depth in [8, 16, 32] {
@@ -887,7 +922,7 @@ fn two_selected_rects(depth: u32) -> (Session, u64, u64) {
     let b = s.execute("shape.create", json!({"rect": [30, 30, 40, 40], "fill": "#808080"})).unwrap()["layer"].as_u64().unwrap();
     s.execute("layer.select", json!({"layer": a})).unwrap();
     s.execute("layer.select", json!({"layer": b, "mode": "add"})).unwrap();
-    assert_eq!(s.active().unwrap().selected_layers(), [LayerId(a), LayerId(b)]);
+    assert_eq!(s.active().unwrap().selected_layers().unwrap(), [LayerId(a), LayerId(b)]);
     (s, a, b)
 }
 
@@ -916,7 +951,7 @@ fn combine_shapes_merges_the_selected_shape_layers_into_the_top_one() {
             assert!((alpha_sum(&sh) - area).abs() < 2.0, "{cmd} at {depth} bits: covers {} px, not {area}", alpha_sum(&sh));
             assert_eq!(sh.fill, top_fill, "{cmd}: the top layer's fill");
             assert_eq!(s.active().unwrap().active_layer, Some(LayerId(b)));
-            assert_eq!(s.active().unwrap().selected_layers(), [LayerId(b)]);
+            assert_eq!(s.active().unwrap().selected_layers().unwrap(), [LayerId(b)]);
             assert_eq!(s.active().unwrap().history.past_len(), history + 1, "{cmd}: one history step");
             s.execute("edit.undo", json!({})).unwrap();
             assert_eq!(*doc(&s), before, "{cmd}: undo restores both layers");
@@ -946,7 +981,7 @@ fn combine_shapes_ignores_selected_non_shape_layers() {
     let (mut s, a, b) = two_selected_rects(8);
     let bg = doc(&s).walk()[0].2.id;
     s.execute("layer.select", json!({"layer": bg.0, "mode": "add"})).unwrap();
-    assert_eq!(s.active().unwrap().selected_layers().len(), 3);
+    assert_eq!(s.active().unwrap().selected_layers().unwrap().len(), 3);
     s.execute("layer.combineShapes.unite", json!({})).unwrap();
     let d = doc(&s);
     assert!(d.layer(bg).is_some(), "the Background is left alone");

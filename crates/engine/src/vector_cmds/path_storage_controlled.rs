@@ -75,6 +75,66 @@ fn metadata_shape(doc: &Document, command: &str, control: &Interrupt<'_>) -> Res
     }
     poll(control)
 }
+// A locally reconciled path self-row has no imported semantics to preserve.
+// This is only a restrictive deletion discriminator, never Source authority.
+// The actual path is removed privately by the existing job; the existing
+// edit_validation -> reconcile_layers_with_interrupt transaction removes its
+// exact missing-path row and validates the complete staged model before publish.
+fn same_path_name(a: &str, b: &str, control: &Interrupt<'_>) -> Result<bool> {
+    poll(control)?;
+    if a.len() != b.len() {
+        return Ok(false);
+    }
+    for (left, right) in a.as_bytes().chunks(32 << 10).zip(b.as_bytes().chunks(32 << 10)) {
+        poll(control)?;
+        if left != right {
+            return Ok(false);
+        }
+    }
+    poll(control)?;
+    Ok(true)
+}
+fn ordinary_current_path_row(doc: &Document, path: &NamedPath, control: &Interrupt<'_>) -> Result<Option<usize>> {
+    let Some(state) = &doc.xcf_state else { return Ok(None) };
+    if doc.source_color_context.is_some()
+        || state.provenance != Default::default()
+        || !state.source_items.is_empty()
+        || !state.resources.is_empty()
+        || !state.opaque.is_empty()
+        || !state.filter_stacks.is_empty()
+        || !state.filter_masks.is_empty()
+        || !state.editable_indexed.is_empty()
+        || state.floating.is_some()
+    {
+        return Ok(None);
+    }
+    let reference = ItemRef::Path(path.id);
+    let mut found = None;
+    for (index, item) in state.items.iter().enumerate() {
+        poll(control)?;
+        if item.parent == Some(reference) || item.mask.as_ref().is_some_and(|mask| mask.owner == reference) {
+            return Ok(None);
+        }
+        if item.item == reference {
+            if found.is_some()
+                || !same_path_name(&item.name, &path.name, control)?
+                || !item.custom_name
+                || item.visible
+                || item.locks != Default::default()
+                || item.parent.is_some()
+                || item.raster_bounds.is_some()
+                || item.mask.is_some()
+                || item.composition.is_some()
+                || item.source_tattoo.is_some()
+                || item.source_flags != 0
+            {
+                return Ok(None);
+            }
+            found = Some(index);
+        }
+    }
+    Ok(found)
+}
 fn target_policy(doc: &Document, selector: Selector<'_>, delete: bool, command: &str, control: &Interrupt<'_>) -> Result<()> {
     poll(control)?;
     metadata_shape(doc, command, control)?;
@@ -102,11 +162,17 @@ fn target_policy(doc: &Document, selector: Selector<'_>, delete: bool, command: 
             let reference = ItemRef::Path(path.id);
             if state.items.iter().any(|item| item.item == reference) {
                 if delete {
-                    return Err(bad(command, "imported canonical path deletion requires dependency management"));
+                    // The admitted self-row has default locks and no parent or
+                    // live owner. Do not allocate a general lock index for this
+                    // new preflight lane; imported rows still refuse outright.
+                    if ordinary_current_path_row(doc, path, control)?.is_none() {
+                        return Err(bad(command, "imported canonical path deletion requires dependency management"));
+                    }
+                } else {
+                    let locks = crate::xcf_item_locks::effective_item_locks(doc, reference)?;
+                    locks.require(crate::xcf_item_locks::EditKind::Content)?;
+                    locks.require(crate::xcf_item_locks::EditKind::Position)?;
                 }
-                let locks = crate::xcf_item_locks::effective_item_locks(doc, reference)?;
-                locks.require(crate::xcf_item_locks::EditKind::Content)?;
-                locks.require(crate::xcf_item_locks::EditKind::Position)?;
             }
             for source in &state.source_items {
                 poll(control)?;
@@ -123,6 +189,7 @@ fn target_policy(doc: &Document, selector: Selector<'_>, delete: bool, command: 
                 && (state.selection.selected.contains(&reference)
                     || state.selection.active == Some(reference)
                     || state.selection.selected_paths.contains(&reference)
+                    || state.selection.mask_target == Some(reference)
                     || state.item_sets.iter().any(|set| set.members.contains(&reference))
                     || state.opaque.iter().any(|record| record.owner == Some(reference)))
             {
@@ -157,10 +224,10 @@ pub(super) fn dispatch_preflight(session: &Session, command: &str, params: &Valu
             return Err(bad(command, "unknown path storage parameter"));
         }
     }
-    if let Some(value) = params.get("name") {
-        if !value.as_str().is_some_and(|name| name.len() <= NAME_LIMIT && !name.contains('\0')) {
-            return Err(bad(command, "bounded UTF-8 path name required"));
-        }
+    if let Some(value) = params.get("name")
+        && !value.as_str().is_some_and(|name| name.len() <= NAME_LIMIT && !name.contains('\0'))
+    {
+        return Err(bad(command, "bounded UTF-8 path name required"));
     }
     if command == "path.set" {
         preflight_path_value(params.get("path").ok_or_else(|| bad(command, "missing path"))?).map_err(|e| bad(command, e))?;
@@ -540,11 +607,24 @@ mod tests {
         assert_eq!(current.paths[0].name, "Stored");
         assert_eq!(current.work_path, before.work_path);
         let reopened = photocraft_format::load_from_bytes(&photocraft_format::save_to_bytes(current, &Default::default()).unwrap()).unwrap();
-        assert_eq!(reopened.paths, current.paths);
+        // MAX cannot reserve a future runtime identity; native loading rekeys the
+        // complete identity set. Compare every persisted path field under its bijection.
+        let current_paths = current.paths.clone();
+        assert_eq!(reopened.paths.len(), current_paths.len());
+        assert_eq!(reopened.work_path, current.work_path);
+        let mut remapped_paths = reopened.paths.clone();
+        let mut loaded_ids = std::collections::BTreeSet::new();
+        for (loaded, original) in remapped_paths.iter_mut().zip(&current_paths) {
+            assert_ne!(loaded.id.0, 0);
+            assert_ne!(loaded.id, PathId(u64::MAX));
+            assert!(loaded_ids.insert(loaded.id.0));
+            loaded.id = original.id;
+        }
+        assert_eq!(remapped_paths, current_paths);
         session.execute("edit.undo", Value::Null).unwrap();
         assert_eq!(session.active().unwrap().doc.paths, before.paths);
         session.execute("edit.redo", Value::Null).unwrap();
-        assert_eq!(session.active().unwrap().doc.paths, reopened.paths);
+        assert_eq!(session.active().unwrap().doc.paths, current_paths);
     }
     #[test]
     fn append_retains_old_path_metadata_and_overrides_only_appended_subpath_op() {
@@ -606,6 +686,45 @@ mod tests {
         assert!(run(&mut session, "path.delete", &json!({"pathId":path_id.0.to_string()})).is_err());
         assert!(session.active().unwrap().doc.shares_state(&before));
         assert_eq!(session.active().unwrap().doc.xcf_state, before.xcf_state);
+    }
+    #[test]
+    fn ordinary_self_row_delete_never_grants_source_locked_or_referenced_path_deletion() {
+        for defect in 0..5 {
+            let mut session = fixture();
+            session
+                .edit("Ordinary current canonical paths", |doc, _| {
+                    // MAX rekey is covered separately; this test isolates row authority.
+                    doc.paths[0].id = PathId::fresh();
+                    doc.xcf_state = Some(XcfState::default());
+                    Ok(())
+                })
+                .unwrap();
+            let id = session.active().unwrap().doc.paths[0].id;
+            session
+                .edit("Retained row obligation", |doc, _| {
+                    let state = doc.xcf_state.as_mut().unwrap();
+                    let item = state.items.iter_mut().find(|item| item.item == ItemRef::Path(id)).unwrap();
+                    match defect {
+                        0 => state.provenance.format = "xcf".into(),
+                        1 => item.source_tattoo = Some(42),
+                        2 => item.locks.position = true,
+                        3 => state.selection.selected_paths.push(ItemRef::Path(id)),
+                        _ => {
+                            item.source_flags = 1;
+                        }
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            let before = session.active().unwrap().doc.clone();
+            let revision = session.active().unwrap().revision;
+            let past = session.active().unwrap().history.past_len();
+            assert!(run(&mut session, "path.delete", &json!({"pathId":id.0.to_string()})).is_err(), "defect={defect}");
+            assert!(session.active().unwrap().doc.shares_state(&before));
+            assert_eq!(session.active().unwrap().doc, before);
+            assert_eq!(session.active().unwrap().revision, revision);
+            assert_eq!(session.active().unwrap().history.past_len(), past);
+        }
     }
     #[test]
     fn stale_bad_input_and_late_private_copy_cancel_preserve_real_redo() {

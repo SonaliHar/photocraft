@@ -3,7 +3,7 @@ use crate::{EngineError, Result, Session};
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, Path, item_identity::ItemRef};
 use photocraft_geom::Rect;
-use photocraft_paint::{BrushSettings, DualBrush, GrayTile, StoredTile, Pattern, StrokePoint, Texture, TipShape};
+use photocraft_paint::{BrushSettings, DualBrush, GrayTile, Pattern, StoredTile, StrokePoint, Texture, TipShape};
 use photocraft_raster::{Interrupt, MAX_CHECKED_RASTER_BYTES, Surface};
 use serde_json::{Value, json};
 const ID: &str = "path.stroke";
@@ -123,14 +123,26 @@ fn tile_bytes(tile: &GrayTile) -> Result<u64> {
         .checked_mul(u64::from(tile.height))
         .filter(|count| *count > 0 && *count == tile.data.len() as u64)
         .ok_or_else(|| error("invalid sampled brush bitmap"))?;
-    count.checked_mul(2).and_then(|bytes|bytes.checked_add(32)).filter(|bytes| *bytes <= MAX_CHECKED_RASTER_BYTES).ok_or_else(|| error("sampled brush capacity limit"))
+    count
+        .checked_mul(2)
+        .and_then(|bytes| bytes.checked_add(32))
+        .filter(|bytes| *bytes <= MAX_CHECKED_RASTER_BYTES)
+        .ok_or_else(|| error("sampled brush capacity limit"))
 }
 // Stored payloads stay owned by their upstream cache; only the bounded key is copied.
 fn stored_bytes(tile: &StoredTile) -> Result<u64> {
-    if tile.key.len() > 4096 || tile.width == 0 || tile.height == 0 { return Err(error("invalid stored brush metadata")); }
-    let full = match &tile.full { Some(full) => tile_bytes(full)?, None => 0 };
-    tile_bytes(&tile.preview)?.checked_add(full).and_then(|n| n.checked_add(tile.key.capacity() as u64))
-        .filter(|n| *n <= MAX_CHECKED_RASTER_BYTES).ok_or_else(|| error("stored brush capacity limit"))
+    if tile.key.len() > 4096 || tile.width == 0 || tile.height == 0 {
+        return Err(error("invalid stored brush metadata"));
+    }
+    let full = match &tile.full {
+        Some(full) => tile_bytes(full)?,
+        None => 0,
+    };
+    tile_bytes(&tile.preview)?
+        .checked_add(full)
+        .and_then(|n| n.checked_add(tile.key.capacity() as u64))
+        .filter(|n| *n <= MAX_CHECKED_RASTER_BYTES)
+        .ok_or_else(|| error("stored brush capacity limit"))
 }
 fn stored_copy(tile: &StoredTile, control: &Interrupt<'_>) -> Result<StoredTile> {
     poll(control)?;
@@ -162,10 +174,12 @@ pub(super) fn brush_bytes(brush: &BrushSettings) -> Result<u64> {
         .ok_or_else(|| error("brush/tip/texture residency limit"))
 }
 fn tile_copy(tile: &GrayTile, control: &Interrupt<'_>) -> Result<GrayTile> {
-    poll(control)?;tile_bytes(tile)?;
+    poll(control)?;
+    tile_bytes(tile)?;
     // Upstream immutable shared samples are retained, not reconstructed.
-    let data=std::sync::Arc::clone(&tile.data);
-    poll(control)?;Ok(GrayTile { width: tile.width, height: tile.height, data })
+    let data = std::sync::Arc::clone(&tile.data);
+    poll(control)?;
+    Ok(GrayTile { width: tile.width, height: tile.height, data })
 }
 
 fn tip_copy(tip: &TipShape, control: &Interrupt<'_>) -> Result<TipShape> {
@@ -179,7 +193,7 @@ fn brush_copy(b: &BrushSettings, control: &Interrupt<'_>) -> Result<BrushSetting
     poll(control)?;
     brush_bytes(b)?;
     let pattern = match &b.texture.pattern {
-        Pattern::Procedural { style, size, seed } => Pattern::Procedural { style: style.clone(), size: *size, seed: *seed },
+        Pattern::Procedural { style, size, seed } => Pattern::Procedural { style: *style, size: *size, seed: *seed },
         Pattern::Tile(tile) => Pattern::Tile(tile_copy(tile, control)?),
         Pattern::Stored(tile) => Pattern::Stored(stored_copy(tile, control)?),
     };
@@ -217,7 +231,7 @@ fn brush_copy(b: &BrushSettings, control: &Interrupt<'_>) -> Result<BrushSetting
             each_tip: b.texture.each_tip,
             mode: b.texture.mode,
             depth: b.texture.depth,
-            depth_jitter: b.texture.depth_jitter.clone(),
+            depth_jitter: b.texture.depth_jitter,
         },
         dual_brush: DualBrush {
             enabled: b.dual_brush.enabled,
@@ -292,10 +306,10 @@ fn source_policy(document: &Document, active: Option<LayerId>, target: LayerId, 
     {
         return Err(error("wide/indexed/backed/source-semantic target stroke arithmetic is not qualified"));
     }
-    if let Some(selection) = &document.selection {
-        if matches!(selection.format().sample, SampleType::U32 | SampleType::F64) {
-            return Err(error("wide selection stroke coverage is not qualified"));
-        }
+    if let Some(selection) = &document.selection
+        && matches!(selection.format().sample, SampleType::U32 | SampleType::F64)
+    {
+        return Err(error("wide selection stroke coverage is not qualified"));
     }
     if let Some(state) = &document.xcf_state {
         if state.items.len() > 10_000 || state.source_items.len() > 10_000 || state.filter_stacks.len() > 10_000 {
@@ -456,10 +470,10 @@ pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
                         poll(control)?;
                         points.push(StrokePoint::new(x, y, 1.));
                     }
-                    if line.closed {
-                        if let Some(first) = points.first().copied() {
-                            points.push(first);
-                        }
+                    if line.closed
+                        && let Some(first) = points.first().copied()
+                    {
+                        points.push(first);
                     }
                     if points.is_empty() {
                         continue;
@@ -557,10 +571,10 @@ mod tests {
                 let mut damage = Rect::EMPTY;
                 for line in photocraft_vector::flatten_path(before.work_path.as_ref().unwrap(), 0.1) {
                     let mut points: Vec<StrokePoint> = line.pts.iter().map(|&(x, y)| StrokePoint::new(x, y, 1.)).collect();
-                    if line.closed {
-                        if let Some(first) = points.first().copied() {
-                            points.push(first);
-                        }
+                    if line.closed
+                        && let Some(first) = points.first().copied()
+                    {
+                        points.push(first);
                     }
                     if points.is_empty() {
                         continue;
@@ -606,8 +620,7 @@ mod tests {
     }
     #[test]
     fn sampled_brush_snapshot_is_fallible_owned_and_bounded() {
-        let mut brush = BrushSettings::default();
-        brush.tip = TipShape::Sampled(GrayTile { width: 2, height: 2, data: vec![0, 1, 32768, 65535].into() });
+        let mut brush = BrushSettings { tip: TipShape::Sampled(GrayTile { width: 2, height: 2, data: vec![0, 1, 32768, 65535].into() }), ..Default::default() };
         brush.texture.pattern = Pattern::Tile(GrayTile { width: 2, height: 2, data: vec![65535, 32768, 1, 0].into() });
         let snapshot = brush_snapshot(&brush, MAX_CHECKED_RASTER_BYTES, &Interrupt::NONE).unwrap();
         assert_eq!(snapshot, brush);

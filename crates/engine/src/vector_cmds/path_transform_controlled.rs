@@ -127,10 +127,10 @@ fn request<'a>(session: &Session, params: &'a Value) -> Result<Request<'a>> {
         return Err(bad(CMD, "finish jobs or gestures before path transform"));
     }
     photocraft_doc::resident_structure::visit_layers_with(&state.doc, &Interrupt::NONE, |_| Ok(true))?;
-    if let Some(imported) = &state.doc.xcf_state {
-        if imported.items.len() > 10000 || imported.source_items.len() > 10000 {
-            return Err(bad(CMD, "source path metadata limit"));
-        }
+    if let Some(imported) = &state.doc.xcf_state
+        && (imported.items.len() > 10000 || imported.source_items.len() > 10000)
+    {
+        return Err(bad(CMD, "source path metadata limit"));
     }
     let id = saved_path_id(params)?;
     if params.get("layer").is_some() {
@@ -174,10 +174,10 @@ fn request<'a>(session: &Session, params: &'a Value) -> Result<Request<'a>> {
         finite_live(shape.live.as_ref())?;
     }
     if let Target::Layer(id) = target {
-        if let Some(imported) = &state.doc.xcf_state {
-            if imported.source_items.iter().any(|source| source.owner == ItemRef::Layer(id)) {
-                return Err(bad(CMD, "source-owned layer path transform is not qualified"));
-            }
+        if let Some(imported) = &state.doc.xcf_state
+            && imported.source_items.iter().any(|source| source.owner == ItemRef::Layer(id))
+        {
+            return Err(bad(CMD, "source-owned layer path transform is not qualified"));
         }
         crate::xcf_item_locks::effective_layer_locks(&state.doc, id)?.require(crate::xcf_item_locks::EditKind::Content)?;
         crate::xcf_item_locks::effective_layer_locks(&state.doc, id)?.require(crate::xcf_item_locks::EditKind::Position)?;
@@ -198,15 +198,9 @@ fn request<'a>(session: &Session, params: &'a Value) -> Result<Request<'a>> {
         if !["translateX", "translateY", "scaleX", "scaleY", "angle"].iter().any(|key| params.get(*key).is_some()) {
             return Err(bad(CMD, "pass matrix or translate/scale/angle parameters"));
         }
-        // Preserve resolve_path_params centering: explicit layer selects mutation,
-        // while the legacy component route centers on the active layer's path.
-        let center = if id.is_some() {
-            source
-        } else if name == "layer" {
-            layer_path(&state.doc, state.active_layer.ok_or_else(|| bad(CMD, "no active layer path"))?)?
-        } else {
-            source
-        };
+        // Numeric components pivot on the same resolved path that will be mutated.
+        // An explicit layer target must not borrow another active layer's center.
+        let center = source;
         retained_path(center, &Interrupt::NONE)?;
         let (x0, y0, x1, y1) = center.control_bounds().ok_or_else(|| bad(CMD, "path has no points to transform"))?;
         let (cx, cy) = ((x0 + x1) * 0.5, (y0 + y1) * 0.5);
@@ -385,11 +379,24 @@ mod tests {
         assert_eq!(current.work_path, before.work_path);
         assert_eq!(current.paths[0].id, PathId(u64::MAX));
         let reopened = photocraft_format::load_from_bytes(&photocraft_format::save_to_bytes(current, &Default::default()).unwrap()).unwrap();
-        assert_eq!(reopened.paths, current.paths);
+        // MAX cannot reserve a future runtime identity; native loading rekeys the
+        // complete identity set. Compare every persisted path field under its bijection.
+        let current_paths = current.paths.clone();
+        assert_eq!(reopened.paths.len(), current_paths.len());
+        assert_eq!(reopened.work_path, current.work_path);
+        let mut remapped_paths = reopened.paths.clone();
+        let mut loaded_ids = std::collections::BTreeSet::new();
+        for (loaded, original) in remapped_paths.iter_mut().zip(&current_paths) {
+            assert_ne!(loaded.id.0, 0);
+            assert_ne!(loaded.id, PathId(u64::MAX));
+            assert!(loaded_ids.insert(loaded.id.0));
+            loaded.id = original.id;
+        }
+        assert_eq!(remapped_paths, current_paths);
         session.execute("edit.undo", Value::Null).unwrap();
         assert_eq!(session.active().unwrap().doc.paths, before.paths);
         session.execute("edit.redo", Value::Null).unwrap();
-        assert_eq!(session.active().unwrap().doc.paths, reopened.paths);
+        assert_eq!(session.active().unwrap().doc.paths, current_paths);
     }
     #[test]
     fn centered_components_preserve_existing_order_and_closed_handle_metadata() {

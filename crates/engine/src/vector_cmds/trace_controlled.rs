@@ -227,10 +227,10 @@ pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
             }
             ctx.stage(0.95, 1., "Make Work Path", |control| {
                 poll(control)?;
-                if let Some(prior) = &baseline.work_path {
-                    if same_path(prior, &path, control)? {
-                        return Ok(response);
-                    }
+                if let Some(prior) = &baseline.work_path
+                    && same_path(prior, &path, control)?
+                {
+                    return Ok(response);
                 }
                 session.edit_with_interrupt("Make Work Path", control, move |document, _| {
                     document.work_path = Some(path);
