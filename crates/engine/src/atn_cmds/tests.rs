@@ -321,6 +321,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("image.mode.bitmap", json!({"method": "threshold"})),
         ("image.imageSize", json!({"resolution": 1200, "resample": "preserveDetails", "keepPrintSize": true})),
         ("layer.new.layerFromBackground", json!({"ifPresent": true, "select": false})),
+        ("file.automate.batch", json!({"input": "/input", "output": "/output", "action": "Make icon", "set": "S", "naming": "{name}Raw", "startingSerial": 1})),
     ];
     for (id, params) in &cases {
         let item = export_item(id, params, "S").unwrap_or_else(|| panic!("{id} does not export"));
@@ -336,7 +337,7 @@ fn every_mapped_command_exports_and_imports_back() {
                 assert_eq!(steps[0].0, *id, "{id} came back as another command");
                 let mut back = steps[0].1.clone();
                 normalise(&mut back);
-                if *id == "actions.play" || *id == "actions.conditional" {
+                if *id == "actions.play" || *id == "actions.conditional" || *id == "file.automate.batch" {
                     back["set"] = json!("S");
                 }
                 assert_eq!(back, *params, "{id}");
@@ -956,3 +957,72 @@ fn remove_white_clears_the_targeted_layer_not_the_converted_background() {
     assert!(!st.doc.is_background(bottom.id), "the Background became a normal layer");
     assert!(bottom.surface().unwrap().sample_channel(2, 2, 1) > 0.99, "and kept its pixels");
 }
+
+#[test]
+fn batch_step_imports_plays_and_round_trips() {
+    let mut s = Session::new();
+    s.actions.list.push(Action {
+        name: "Make Icon".into(),
+        steps: vec![("image.imageSize".into(), json!({"width": 16, "height": 16}))],
+        disabled: Default::default(),
+        dialogs: Default::default(),
+        set: Some("Icons".into()),
+        color: String::new(),
+    });
+
+    let naming_rules = desc("fileNamingRules").with(
+        "fileNamingComponents",
+        D::List(vec![
+            D::Descriptor(desc("fileNamingComponent").with("component", enm("fileNamingComponent", "Nm"))),
+            D::Descriptor(desc("fileNamingComponent").with("Txt ", text("Raw"))),
+            D::Descriptor(desc("fileNamingComponent").with("component", enm("fileNamingComponent", "lowerCaseExtension"))),
+        ]),
+    );
+    let btch_desc = desc("Btch")
+        .with("null", path_value("/test/input"))
+        .with(
+            "Usng",
+            D::Reference(vec![
+                ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul("Make Icon") },
+                ReferenceItem::Name { class: class("ASet"), name: UnicodeString::new_nul("Icons") },
+            ]),
+        )
+        .with("T   ", path_value("/test/output"))
+        .with("Ovrd", D::Boolean(true))
+        .with("fileNamingRules", D::Descriptor(naming_rules))
+        .with("Strt", D::Integer(1));
+
+    let file = AtnFile {
+        name: UnicodeString::new_nul("Icons"),
+        expanded: true,
+        actions: vec![AtnAction {
+            name: UnicodeString::new_nul("Batch Driver"),
+            items: vec![item("Btch", "Batch", Some(btch_desc))],
+            ..Default::default()
+        }],
+        warnings: Vec::new(),
+    };
+    let data = b64(&atn::write(&file).unwrap());
+    let loaded = s.execute("actions.load", json!({"data": data})).unwrap();
+    assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
+
+    let driver = s.actions.list.iter().find(|a| a.name == "Batch Driver").expect("Batch Driver imported");
+    assert_eq!(driver.steps.len(), 1);
+    assert_eq!(driver.steps[0].0, "file.automate.batch");
+    assert_eq!(driver.steps[0].1["input"], "/test/input");
+    assert_eq!(driver.steps[0].1["output"], "/test/output");
+    assert_eq!(driver.steps[0].1["action"], "Make Icon");
+    assert_eq!(driver.steps[0].1["set"], "Icons");
+    assert_eq!(driver.steps[0].1["naming"], "{name}Raw");
+    assert_eq!(driver.steps[0].1["startingSerial"], 1);
+
+    let saved = s.execute("actions.save", json!({"action": "Batch Driver"})).unwrap();
+    let saved_bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+    let parsed = atn::parse(&saved_bytes).unwrap();
+    assert_eq!(parsed.actions[0].items[0].event.id(), "Btch");
+    let d = parsed.actions[0].items[0].descriptor.as_ref().unwrap();
+    assert_eq!(d.get("null").and_then(path_text), Some("/test/input".into()));
+    assert_eq!(d.get("T   ").and_then(path_text), Some("/test/output".into()));
+    assert_eq!(get_num(d, "Strt"), Some(1.0));
+}
+

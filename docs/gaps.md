@@ -90,6 +90,10 @@ what an agent can't finish alone.
 - **Estimate:** 120–200 h.
 
 ### G11. Actions and scripting
+- **Done 2026-10-18 (#7104):** `.atn` Batch steps (`Btch`) import as `file.automate.batch` and
+  export to the same event. Input/output paths, action references, starting serial and file
+  naming rules (`{name}`, `{serial}`, `{date}`, literals) are preserved. Batch can resolve
+  called actions by name from the session or droplet list. AUTO-219-2 remains partial.
 - **2026-10-13 evidence:** Batch supports [output naming templates](batch-naming.md) using
   `{name}`, `{serial}` and a captured UTC `{date}`, with a starting serial number. Colliding
   names remain errors; custom output names cannot replace inputs. AUTO-219-5 stays partial.
@@ -270,6 +274,7 @@ what an agent can't finish alone.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | minor | G11: `.atn` Batch (`Btch`) steps map to `file.automate.batch` and export back (#7104) |
 | 2026-10-14 | minor | G1: a PSD smart object's filter mask shows when the file opens (Photoshop stores the filtered pixels unmasked); export stores them that way too; Photoshop-oracle floor 185 → 188 of 258 |
 | 2026-10-13 | minor | G14: D90 image area measured (4288 × 2848 at (10, 10)); gap remains open |
 | 2026-10-14 | minor | Corpus floors raised to the measured results of the CMYK, Lab, 32-bit, Levels, Threshold, Posterize, feather and pass-through fixes landed together: Photoshop-authored 165 → 185 of 258, io 146 → 148 of 170, psd-tools 242 → 249 of 309 |

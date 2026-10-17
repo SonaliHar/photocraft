@@ -157,7 +157,7 @@ pub fn playback_plan(s: &Session, p: &Value) -> Result<(Action, usize)> {
 /// that doesn't resolve is left alone: it fails at playback, as it would have before.
 pub fn called_actions(list: &[Action], steps: &mut [(String, Value)]) -> Vec<Action> {
     fn targets(list: &[Action], steps: &mut [(String, Value)], depth: usize, queue: &mut Vec<(usize, usize)>) {
-        for (_, params) in steps.iter_mut().filter(|(id, _)| id == "actions.play") {
+        for (_, params) in steps.iter_mut().filter(|(id, _)| id == "actions.play" || id == "file.automate.batch") {
             let Ok(i) = resolve(list, params, "actions.play") else { continue };
             if let (Some(action), Some(obj)) = (list.get(i), params.as_object_mut()) {
                 obj.insert("action".into(), json!(action.name));

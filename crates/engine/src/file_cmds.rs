@@ -1133,18 +1133,6 @@ impl OutputClaims {
 
 fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
-    let mut steps =
-        parse_steps(p.get("steps").or_else(|| p.get("action")).ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: "missing \"steps\"".into() })?)?;
-    // Each result goes to the destination folder, which overrides the action's recorded Save /
-    // Save As steps (Photoshop's "Override Action 'Save As' Commands"). Recorded view steps
-    // (zoom, fit) don't change the output, so they are skipped (#2752).
-    steps.retain(|(id, _)| !crate::actions_cmds::shell_save_command(id) && !crate::actions_cmds::shell_view_command(id) && id != "file.export.quickExport");
-    if let Some((id, _)) = steps.iter().find(|(id, _)| crate::commands::find(id).is_none()) {
-        return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("unknown command `{id}` in the action") });
-    }
-    let output = str_param(p, "output", cmd)?.to_string();
-    let inputs = batch_inputs_tree(p, cmd, &output)?;
-    let format = p.get("format").and_then(Value::as_str).unwrap_or("same").to_string();
     // Steps that call another action play it from the caller's actions; the playback stack comes
     // along so an action that batches itself is caught as a recursive call.
     let list = match p.get("calledActions") {
@@ -1159,7 +1147,49 @@ fn batch(s: &mut Session, p: &Value) -> Result<Value> {
             list
         }
     };
-    let actions = crate::actions_cmds::ActionState { list, playing: s.actions.playing, playback_stack: s.actions.playback_stack.clone(), ..Default::default() };
+    let mut called_name = None;
+    let mut steps = if let Some(st) = p.get("steps") {
+        parse_steps(st)?
+    } else if let Some(act) = p.get("action") {
+        if act.is_array() {
+            parse_steps(act)?
+        } else {
+            let action = if let (Some(set), Some(name)) = (p.get("set").and_then(Value::as_str), act.as_str()) {
+                list.iter().find(|a| a.name == name && a.set.as_deref() == Some(set))
+            } else {
+                None
+            };
+            let action = match action {
+                Some(a) => a,
+                None => {
+                    let idx = crate::actions_cmds::resolve(&list, p, cmd)?;
+                    &list[idx]
+                }
+            };
+            if s.actions.playback_stack.iter().any(|n| n == &action.name) {
+                return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("recursive action call to `{}`", action.name) });
+            }
+            called_name = Some(action.name.clone());
+            action.enabled_steps().map(|(_, (id, pr))| (id.clone(), pr.clone())).collect()
+        }
+    } else {
+        return Err(EngineError::BadParams { cmd: cmd.into(), msg: "missing \"steps\"".into() });
+    };
+    // Each result goes to the destination folder, which overrides the action's recorded Save /
+    // Save As steps (Photoshop's "Override Action 'Save As' Commands"). Recorded view steps
+    // (zoom, fit) don't change the output, so they are skipped (#2752).
+    steps.retain(|(id, _)| !crate::actions_cmds::shell_save_command(id) && !crate::actions_cmds::shell_view_command(id) && id != "file.export.quickExport");
+    if let Some((id, _)) = steps.iter().find(|(id, _)| crate::commands::find(id).is_none()) {
+        return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("unknown command `{id}` in the action") });
+    }
+    let output = str_param(p, "output", cmd)?.to_string();
+    let inputs = batch_inputs_tree(p, cmd, &output)?;
+    let format = p.get("format").and_then(Value::as_str).unwrap_or("same").to_string();
+    let mut playback_stack = s.actions.playback_stack.clone();
+    if let Some(name) = called_name {
+        playback_stack.push(name);
+    }
+    let actions = crate::actions_cmds::ActionState { list, playing: s.actions.playing, playback_stack, ..Default::default() };
     let names = batch_naming::plan(&inputs, &output, &format, p)?;
     let save = SaveOpts::from_params(s, p, cmd)?;
     let run = |scratch: &mut Session| {
@@ -1691,7 +1721,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Batch…",
             &["File", "Automate"],
             None,
-            r##"{"steps":[[commandId,params]|{"command":id,"params":{}}…] (a recorded action),"input":folder|[paths],"includeSubfolders":bool=false (a folder input also takes the images in its subfolders, up to 32 levels and 100000 files; each result keeps its subfolder under output),"output":folder,"format":"same|png|jpg|psd|tiff|…"="same","quality":0..12?,"naming":string? (blank keeps source names; {name}, {serial} padded to 3 digits, {date} as YYYY-MM-DD UTC; extension added automatically),"startingSerial":1..4294967295=1 (input position, including failed inputs),"tiffLayers":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"calledActions":[{"name","steps"}…]? (the actions Play Action steps call; default: the session's)} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
+            r##"{"steps":[[commandId,params]|{"command":id,"params":{}}…] (a recorded action)|"action":string (action name in the session or calledActions; optional "set":string),"input":folder|[paths],"includeSubfolders":bool=false (a folder input also takes the images in its subfolders, up to 32 levels and 100000 files; each result keeps its subfolder under output),"output":folder,"format":"same|png|jpg|psd|tiff|…"="same","quality":0..12?,"naming":string? (blank keeps source names; {name}, {serial} padded to 3 digits, {date} as YYYY-MM-DD UTC; extension added automatically),"startingSerial":1..4294967295=1 (input position, including failed inputs),"tiffLayers":bool=false,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"calledActions":[{"name","steps"}…]? (the actions Play Action steps call; default: the session's)} → {files, errors} (an input whose output name was already written in the run goes to errors)"##,
             native,
             batch
         ),

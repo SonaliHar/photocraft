@@ -1248,3 +1248,60 @@ fn batch_naming_rejects_outputs_that_replace_inputs_before_processing() {
     assert_eq!(std::fs::read(&first).unwrap(), before[0]);
     assert_eq!(std::fs::read(&second).unwrap(), before[1]);
 }
+
+#[test]
+fn batch_resolves_action_by_name_and_detects_recursion() {
+    let dir = tmp("batch-action-name");
+    let input = png(&dir, "in.png", 8, 8, "#ff0000");
+    let out = join(&dir, "out");
+    std::fs::create_dir_all(&out).unwrap();
+
+    let mut s = Session::new();
+    s.actions.list.push(crate::actions_cmds::Action {
+        name: "Scale".into(),
+        steps: vec![("image.imageSize".into(), json!({"width": 16, "height": 16}))],
+        disabled: Default::default(),
+        dialogs: Default::default(),
+        set: Some("Ops".into()),
+        color: String::new(),
+    });
+
+    let res = s
+        .execute(
+            "file.automate.batch",
+            json!({
+                "action": "Scale",
+                "set": "Ops",
+                "input": [input.clone()],
+                "output": out,
+            }),
+        )
+        .unwrap();
+    assert_eq!(res["files"].as_array().unwrap().len(), 1, "{res}");
+
+    let err = s
+        .execute(
+            "file.automate.batch",
+            json!({
+                "action": "Nonexistent",
+                "input": [input.clone()],
+                "output": out,
+            }),
+        )
+        .unwrap_err();
+    assert!(err.to_string().contains("no action named `Nonexistent`"), "{err}");
+
+    s.actions.playback_stack.push("Scale".into());
+    let cyc_err = s
+        .execute(
+            "file.automate.batch",
+            json!({
+                "action": "Scale",
+                "input": [input],
+                "output": out,
+            }),
+        )
+        .unwrap_err();
+    assert!(cyc_err.to_string().contains("recursive action call to `Scale`"), "{cyc_err}");
+}
+
