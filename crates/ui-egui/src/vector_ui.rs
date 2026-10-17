@@ -14,17 +14,6 @@ use crate::canvas::ViewXform;
 use crate::state::{Tool, ToolOptions};
 use crate::theme::Tokens;
 
-/// An open path the Pen is continuing: commit replaces this subpath instead of writing a new path.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct PenResume {
-    /// `"work"` or `"layer"`.
-    pub name: String,
-    pub layer: Option<u64>,
-    pub subpath: usize,
-    /// Anchors already on the path. Undo will not drop below this.
-    pub kept: usize,
-}
-
 /// Pen tool path under construction: knots as [anchor, in, out] (document px).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct PenPath {
@@ -32,9 +21,6 @@ pub struct PenPath {
     /// Indices of cusp knots whose incoming and outgoing handles are not linked.
     #[serde(default)]
     pub unlinked: Vec<usize>,
-    /// Set while the next commit continues an existing open subpath.
-    #[serde(default)]
-    pub resume: Option<PenResume>,
     #[serde(skip)]
     pub dragging: bool,
     /// Re-dragging the final anchor changes its outgoing control only; the incoming curve stays put.
@@ -116,6 +102,19 @@ fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], m
             _ => json!({"kind": "polygon", "rect": rect, "sides": o.polygon_sides.max(3)}),
         }
     })
+}
+
+/// The box `[x0, y0, x1, y1]` a Shape-tool drag draws (a line's: its ends'), which snaps while
+/// Space repositions it (`snap_ui`). None when too small to draw.
+pub fn shape_bounds(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<[f64; 4]> {
+    let g = shape_geometry(o, tool, start, end, mods)?;
+    if tool == Tool::Line {
+        let a: [f64; 2] = serde_json::from_value(g["from"].clone()).ok()?;
+        let b: [f64; 2] = serde_json::from_value(g["to"].clone()).ok()?;
+        return Some([a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1])]);
+    }
+    let [x, y, w, h]: [f64; 4] = serde_json::from_value(g["rect"].clone()).ok()?;
+    Some([x, y, x + w, y + h])
 }
 
 /// Finish a Shape-tool drag: ⇧ constrains proportions, ⌥ draws from the centre.
@@ -201,23 +200,32 @@ fn pen_to_json(pen: &PenPath, closed: bool) -> Value {
     json!({"subpaths": [{"closed": closed, "knots": pen.knots.iter().enumerate().map(|(i, k)| json!({"anchor": k[0], "in": k[1], "out": k[2], "smooth": !pen.unlinked.contains(&i) && (k[1] != k[0] || k[2] != k[0])})).collect::<Vec<_>>()}]})
 }
 
-/// ⇧ locks a Pen point onto the nearest 45° line through `from` (document space).
-/// A pointer left or right of the last anchor stays on that horizontal, at the pointer's
-/// position along the line; the same rule picks vertical and the diagonals.
-pub(crate) fn shift_locked_point(from: [f64; 2], point: [f64; 2], shift: bool) -> [f64; 2] {
-    if shift { crate::stroke_constraint::snap45(from, point) } else { point }
+/// Is `(x, y)` on the first anchor of a Pen path that a click there would close (two anchors or
+/// more)? `tol` is the anchors' hit radius in document pixels.
+fn on_closing_anchor(pen: &PenPath, x: f64, y: f64, tol: f64) -> bool {
+    pen.knots.len() >= 2 && pen.knots.first().is_some_and(|k| (k[0][0] - x).hypot(k[0][1] - y) < tol)
+}
+
+/// Would a click at `(x, y)` with `tool` close the path being drawn: the Pen over the first
+/// anchor, or the Curvature Pen over the first of three anchors or more? The canvas shows the
+/// close-path pointer there, as Photoshop does (#4596).
+pub fn closes_path_at(app: &PhotocraftApp, tool: Tool, x: f64, y: f64) -> bool {
+    let Some(pen) = app.ui.pen.as_ref().filter(|p| !p.dragging && p.moving.is_none()) else { return false };
+    match tool {
+        Tool::Pen => !pen.curvature && on_closing_anchor(pen, x, y, 6.0 / app.point_zoom().max(0.01) as f64),
+        Tool::CurvaturePen => pen.curvature && pen.knots.len() >= 3 && curvature_hit(app, x, y) == Some(0),
+        _ => false,
+    }
 }
 
 /// Pen press: close on the first anchor, reshape the last anchor's outgoing handle,
-/// or add a new anchor (dragging a new anchor pulls symmetrical handles).
-/// ⇧ constrains a new anchor to 45° from the previous one. Closing and re-clicking the
-/// last anchor still use the raw pointer, so ⇧ does not slide those hits off the anchor.
+/// or add a new anchor (dragging a new anchor pulls symmetrical handles). With ⇧ a new anchor
+/// lands on the nearest 45° ray from the previous one, at the pointer's projection onto it.
 pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) {
     let tol = 6.0 / app.point_zoom().max(0.01) as f64;
     let pen = app.ui.pen.get_or_insert_with(PenPath::default);
     if let Some(first) = pen.knots.first().map(|k| k[0])
-        && pen.knots.len() >= 2
-        && (first[0] - x).hypot(first[1] - y) < tol
+        && on_closing_anchor(pen, x, y, tol)
     {
         // Pressing the first anchor closes the path on release. Until then a stand-in for it
         // takes the drag, which pulls out that anchor's handles (close-drag, #3306).
@@ -240,38 +248,36 @@ pub fn pen_down(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) {
         pen.adjusting_last = true;
         return;
     }
-    let [x, y] = pen.knots.last().map(|k| shift_locked_point(k[0], [x, y], shift)).unwrap_or([x, y]);
-    pen.knots.push([[x, y]; 3]);
+    let p = match pen.knots.last() {
+        Some(prev) => shift_45(prev[0], [x, y], shift),
+        None => [x, y],
+    };
+    pen.knots.push([p; 3]);
     pen.dragging = true;
     pen.adjusting_last = false;
 }
 
+/// Pen drag: pull out the handles of the anchor just placed. ⇧ (read live, as it is held)
+/// turns the handle to the nearest 45° direction from its anchor.
 pub fn pen_move(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) {
     if let Some(pen) = app.ui.pen.as_mut()
         && pen.dragging
     {
         let adjusting_last = pen.adjusting_last;
-        let last_i = pen.knots.len().saturating_sub(1);
-        let unlinked = pen.unlinked.contains(&last_i);
-        let mut mark_corner = false;
         if let Some(k) = pen.knots.last_mut() {
             let a = k[0];
-            let [x, y] = shift_locked_point(a, [x, y], shift);
-            // A smooth endpoint keeps its handles collinear. A corner (or a cusp made by
-            // re-clicking the last anchor) only moves the outgoing handle, so the previous
-            // segment stays put.
-            let was_smooth = !unlinked && (k[1] != a || k[2] != a);
+            let [x, y] = shift_45(a, [x, y], shift);
             k[2] = [x, y];
-            if !adjusting_last || was_smooth {
+            if !adjusting_last {
                 k[1] = [2.0 * a[0] - x, 2.0 * a[1] - y];
-            } else {
-                mark_corner = true;
             }
         }
-        if mark_corner && !pen.unlinked.contains(&last_i) {
-            pen.unlinked.push(last_i);
-        }
     }
+}
+
+/// `p`, or with ⇧ `p` projected onto the nearest 45° ray from `origin` (Pen tool constraint).
+fn shift_45(origin: [f64; 2], p: [f64; 2], shift: bool) -> [f64; 2] {
+    if shift { crate::stroke_constraint::snap45(origin, p) } else { p }
 }
 
 /// Undo the most recently placed Pen anchor while its path is still in progress.
@@ -280,11 +286,15 @@ pub fn pen_move(app: &mut PhotocraftApp, x: f64, y: f64, shift: bool) {
 /// knot rather than undoing an unrelated, already committed document operation.
 pub fn pen_undo_last_point(app: &mut PhotocraftApp) -> bool {
     let Some(pen) = app.ui.pen.as_mut() else { return false };
-    if pen.resume.as_ref().is_some_and(|r| pen.knots.len() <= r.kept) {
-        return false;
-    }
     if pen.knots.pop().is_none() {
         return false;
+    }
+    let n = pen.knots.len();
+    let ds = &mut app.ui.direct_selection;
+    if ds.target == Some(crate::direct_select::PathRef::Pen) {
+        // A ⌘/Ctrl selection on the path being drawn loses the removed anchor.
+        ds.anchors.retain(|a| a[1] < n);
+        ds.segment = ds.segment.filter(|s| s[1] + 1 < n);
     }
     pen.unlinked.retain(|&i| i < pen.knots.len());
     if pen.curvature {
@@ -312,248 +322,6 @@ pub fn pen_up(app: &mut PhotocraftApp) {
             k[2] = k[0];
         }
         pen_commit(app, true);
-    }
-}
-
-/// Paths the idle Pen can continue or add a point to, front first: the active shape or targeted
-/// vector mask, then the work path.
-fn placed_paths(app: &PhotocraftApp) -> Vec<(String, Option<u64>, Path)> {
-    let layer = targeted_vector_mask(app).or_else(|| active_shape_path(app));
-    let work = app.session.active().and_then(|st| st.doc.work_path.clone());
-    layer.map(|(id, p)| ("layer".into(), Some(id), p)).into_iter().chain(work.map(|p| ("work".into(), None, p))).collect()
-}
-
-fn placed_path(app: &PhotocraftApp, name: &str, layer: Option<u64>) -> Option<Path> {
-    placed_paths(app).into_iter().find(|(n, id, _)| n == name && *id == layer).map(|(_, _, p)| p)
-}
-
-/// Knots of an existing subpath, as the Pen stores them. Continuing from the first anchor
-/// reverses the subpath so new points extend from that end.
-fn load_knots(knots: &[photocraft_doc::Knot], from_start: bool) -> (Vec<[[f64; 2]; 3]>, Vec<usize>) {
-    let mut ks = knots.to_vec();
-    if from_start && ks.len() > 1 {
-        for k in &mut ks {
-            std::mem::swap(&mut k.in_ctrl, &mut k.out_ctrl);
-        }
-        ks.reverse();
-    }
-    let mut unlinked = Vec::new();
-    let triples = ks
-        .iter()
-        .enumerate()
-        .map(|(i, k)| {
-            let on = |p: photocraft_geom::Point| (p.x - k.anchor.x).abs() < 1e-9 && (p.y - k.anchor.y).abs() < 1e-9;
-            if !k.smooth && !(on(k.in_ctrl) && on(k.out_ctrl)) {
-                unlinked.push(i);
-            }
-            [[k.anchor.x, k.anchor.y], [k.in_ctrl.x, k.in_ctrl.y], [k.out_ctrl.x, k.out_ctrl.y]]
-        })
-        .collect();
-    (triples, unlinked)
-}
-
-fn run_path_edit(app: &mut PhotocraftApp, id: &str, mut params: Value, name: &str, layer: Option<u64>) -> Result<Value, String> {
-    if let (Some(obj), Some(id_layer)) = (params.as_object_mut(), layer) {
-        obj.insert("name".into(), json!(name));
-        obj.insert("layer".into(), json!(id_layer));
-    } else if let Some(obj) = params.as_object_mut() {
-        obj.insert("name".into(), json!(name));
-    }
-    app.run(id, params)
-}
-
-/// `path.addAnchor` returns `anchor` and `path.deleteAnchor` returns `subpathRemoved`. Either way
-/// the knot indices on that path moved, so a Direct Selection of it would point at the wrong ones.
-fn note_anchor_result(app: &mut PhotocraftApp, result: &Value, name: &str, layer: Option<u64>) {
-    if result.get("anchor").is_none() && result.get("subpathRemoved").is_none() {
-        return;
-    }
-    let target = match (name, layer) {
-        ("work", _) => Some(crate::direct_select::PathRef::Work),
-        ("layer", Some(id)) => Some(crate::direct_select::PathRef::Layer(id)),
-        _ => None,
-    };
-    if app.ui.direct_selection.target == target {
-        app.ui.direct_selection = crate::direct_select::DirectSelection { target, ..Default::default() };
-    }
-}
-
-fn edit_placed(app: &mut PhotocraftApp, id: &str, params: Value, name: &str, layer: Option<u64>) {
-    match run_path_edit(app, id, params, name, layer) {
-        Ok(r) => note_anchor_result(app, &r, name, layer),
-        Err(e) => {
-            app.ui.status = e;
-            app.ui.status_error = true;
-        }
-    }
-}
-
-/// Idle Pen on a path that is already placed: click an open end to continue it, click a segment
-/// to add an anchor there, click any other anchor to remove it. False when the click missed
-/// every placed path, so the caller starts a new one.
-pub fn pen_edit_existing(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
-    if app.ui.pen.is_some() || !x.is_finite() || !y.is_finite() {
-        return false;
-    }
-    let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
-    let found = placed_paths(app)
-        .into_iter()
-        .find_map(|(name, layer, path)| photocraft_vector::edit::hit(&path, photocraft_geom::Point::new(x, y), tol, &[]).map(|h| (name, layer, path, h)));
-    let Some((name, layer, path, hit)) = found else { return false };
-    match hit {
-        photocraft_vector::edit::Hit::Anchor([s, k]) if photocraft_vector::edit::is_endpoint(&path, [s, k]) => {
-            let Some(sp) = path.subpaths.get(s) else { return false };
-            let (knots, unlinked) = load_knots(&sp.knots, k == 0 && sp.knots.len() > 1);
-            let kept = knots.len();
-            app.ui.pen = Some(PenPath {
-                knots,
-                unlinked,
-                resume: Some(PenResume { name, layer, subpath: s, kept }),
-                dragging: true,
-                adjusting_last: true,
-                ..Default::default()
-            });
-            true
-        }
-        photocraft_vector::edit::Hit::Anchor([s, k]) => {
-            // Delete Anchor Point (#2756). The result's `subpathRemoved` says the subpath went with its last anchor.
-            edit_placed(app, "path.deleteAnchor", json!({"subpath": s, "knot": k}), &name, layer);
-            true
-        }
-        photocraft_vector::edit::Hit::Segment([s, k], t) => {
-            // Add Anchor Point (#2756). `t` is where the click landed; omitting it inserts at the command's default, 0.5.
-            // The result's `anchor` is the new knot.
-            edit_placed(app, "path.addAnchor", json!({"subpath": s, "knot": k, "t": t}), &name, layer);
-            true
-        }
-        photocraft_vector::edit::Hit::Handle(..) => true,
-    }
-}
-
-/// The mark drawn beside the pointer while a path tool hovers something a press would edit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PathCursor {
-    /// Open end: continue the path. First anchor of a path being drawn: close it.
-    Continue,
-    /// An anchor that is not an end: delete it.
-    Remove,
-    /// A segment: insert an anchor.
-    Add,
-    /// A handle, a convert-point press, or the last anchor of a path being drawn: curve it.
-    Curve,
-    /// An anchor (or a whole path) that a press would move.
-    Move,
-}
-
-impl PathCursor {
-    /// Icon name for [`crate::icons::cursor_badge`].
-    pub fn icon(self) -> &'static str {
-        match self {
-            PathCursor::Continue => "circle",
-            PathCursor::Remove => "minus",
-            PathCursor::Add => "plus",
-            PathCursor::Curve => "pen-curve",
-            PathCursor::Move => "move",
-        }
-    }
-}
-
-/// Hover cursor for the Pen, Direct Selection and Path Selection. `None` over empty canvas.
-pub fn path_cursor(app: &PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> Option<PathCursor> {
-    if !p[0].is_finite() || !p[1].is_finite() {
-        return None;
-    }
-    let tool = app.ui.tool;
-    let pen = tool == Tool::Pen;
-    let direct = tool == Tool::DirectSelection || (pen && mods.command);
-    let selecting = tool == Tool::PathSelection;
-    if !pen && !direct && !selecting {
-        return None;
-    }
-    let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
-    if direct || selecting {
-        if let Some(hit) = crate::direct_select::cursor_hit(app, p) {
-            return Some(match hit {
-                photocraft_vector::edit::Hit::Handle(..) => PathCursor::Curve,
-                photocraft_vector::edit::Hit::Anchor(_) => PathCursor::Move,
-                photocraft_vector::edit::Hit::Segment(..) if selecting && !direct => PathCursor::Move,
-                photocraft_vector::edit::Hit::Segment(..) => PathCursor::Curve,
-            });
-        }
-        if pen && mods.command {
-            return pen_anchor_at(app.ui.pen.as_ref()?, p, tol).map(|_| PathCursor::Move);
-        }
-        return None;
-    }
-    if let Some(pen_path) = app.ui.pen.as_ref() {
-        let i = pen_anchor_at(pen_path, p, tol)?;
-        let n = pen_path.knots.len();
-        if i + 1 == n {
-            return Some(PathCursor::Curve);
-        }
-        if i == 0 && n >= 2 {
-            return Some(PathCursor::Continue);
-        }
-        return None;
-    }
-    let found = placed_paths(app)
-        .into_iter()
-        .find_map(|(_, _, path)| photocraft_vector::edit::hit(&path, photocraft_geom::Point::new(p[0], p[1]), tol, &[]).map(|h| (path, h)));
-    let Some((path, hit)) = found else { return None };
-    let convert = mods.alt && !mods.command;
-    match hit {
-        photocraft_vector::edit::Hit::Anchor(_) if convert => Some(PathCursor::Curve),
-        photocraft_vector::edit::Hit::Anchor(k) if photocraft_vector::edit::is_endpoint(&path, k) => Some(PathCursor::Continue),
-        photocraft_vector::edit::Hit::Anchor(_) => Some(PathCursor::Remove),
-        photocraft_vector::edit::Hit::Segment(..) if convert => None,
-        photocraft_vector::edit::Hit::Segment(..) => Some(PathCursor::Add),
-        photocraft_vector::edit::Hit::Handle(..) => None,
-    }
-}
-
-/// Index of the in-progress anchor nearest `p`, within `tol`.
-fn pen_anchor_at(pen: &PenPath, p: [f64; 2], tol: f64) -> Option<usize> {
-    let mut best: Option<(usize, f64)> = None;
-    for (i, k) in pen.knots.iter().enumerate() {
-        let d = (k[0][0] - p[0]).hypot(k[0][1] - p[1]);
-        if d <= tol && best.is_none_or(|(_, bd)| d < bd) {
-            best = Some((i, d));
-        }
-    }
-    best.map(|(i, _)| i)
-}
-
-fn near_point(p: photocraft_geom::Point, q: [f64; 2]) -> bool {
-    (p.x - q[0]).abs() < 1e-6 && (p.y - q[1]).abs() < 1e-6
-}
-
-/// True when continuing did not move a handle or add a point, so commit must not record a step.
-/// Continuing from the first anchor reverses the stored order; that alone is not a change.
-fn resume_unchanged(sp: &photocraft_doc::Subpath, pen: &PenPath, closed: bool) -> bool {
-    if sp.closed != closed || sp.knots.len() != pen.knots.len() || sp.knots.is_empty() {
-        return false;
-    }
-    let from_start = sp.knots.len() > 1
-        && pen.knots.last().is_some_and(|k| near_point(sp.knots[0].anchor, k[0]))
-        && pen.knots.first().is_some_and(|k| sp.knots.last().is_some_and(|end| near_point(end.anchor, k[0])));
-    let (loaded, unlinked) = load_knots(&sp.knots, from_start);
-    pen.knots == loaded && pen.unlinked == unlinked
-}
-
-fn commit_resumed(app: &mut PhotocraftApp, pen: PenPath, closed: bool) {
-    let Some(resume) = pen.resume.clone() else { return };
-    if placed_path(app, &resume.name, resume.layer).and_then(|p| p.subpaths.get(resume.subpath).cloned()).is_some_and(|sp| resume_unchanged(&sp, &pen, closed))
-    {
-        return;
-    }
-    let knots = pen_to_json(&pen, closed)["subpaths"][0]["knots"].clone();
-    if let Err(e) = run_path_edit(app, "path.replaceSubpath", json!({"subpath": resume.subpath, "closed": closed, "knots": knots}), &resume.name, resume.layer)
-    {
-        app.ui.pen = Some(pen);
-        app.ui.status = e;
-        app.ui.status_error = true;
-    } else if resume.name == "work" {
-        app.ui.selected_path = Some("work".into());
     }
 }
 
@@ -586,6 +354,12 @@ pub fn pen_grab_handle(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     true
 }
 
+/// Would a press at `at` close the Pen path: is the pointer on the first anchor of a path that
+/// already has a segment, and no drag is under way? The canvas then shows the close cue (#4193).
+pub(crate) fn over_first_anchor(pen: &PenPath, at: [f64; 2], tol: f64) -> bool {
+    !pen.dragging && pen.moving.is_none() && pen.knots.len() >= 2 && pen.knots.first().is_some_and(|k| (k[0][0] - at[0]).hypot(k[0][1] - at[1]) < tol)
+}
+
 /// Is a close-drag in progress: does the path end in the stand-in for its first anchor?
 fn closing(pen: &PenPath) -> bool {
     pen.knots.len() >= 3 && pen.knots.first().map(|k| k[0]) == pen.knots.last().map(|k| k[0])
@@ -613,10 +387,49 @@ fn fold_close(pen: &PenPath) -> Option<PenPath> {
     Some(p)
 }
 
+/// The Pen path being drawn as a document path (one open subpath), so ⌘/Ctrl (Direct Selection)
+/// can edit it in place while drawing (#4022).
+pub(crate) fn pen_path(pen: &PenPath) -> Path {
+    let pt = |q: [f64; 2]| photocraft_geom::Point::new(q[0], q[1]);
+    let knots = pen
+        .knots
+        .iter()
+        .enumerate()
+        .map(|(i, k)| photocraft_doc::Knot {
+            anchor: pt(k[0]),
+            in_ctrl: pt(k[1]),
+            out_ctrl: pt(k[2]),
+            smooth: !pen.unlinked.contains(&i) && (k[1] != k[0] || k[2] != k[0]),
+        })
+        .collect();
+    Path::new(vec![photocraft_doc::vector::Subpath { closed: false, knots, op: Default::default() }])
+}
+
+/// The Pen path being drawn becomes `path`'s first subpath, edited with ⌘/Ctrl (Direct Selection);
+/// drawing carries on from its last anchor. A Curvature Pen path keeps following its anchors.
+pub(crate) fn pen_replace(app: &mut PhotocraftApp, path: &Path) {
+    let Some(pen) = app.ui.pen.as_mut() else { return };
+    let knots = path.subpaths.first().map(|s| s.knots.as_slice()).unwrap_or_default();
+    pen.knots = knots.iter().map(knot_points).collect();
+    pen.unlinked = knots.iter().enumerate().filter(|(_, k)| !k.smooth).map(|(i, _)| i).collect();
+    pen.dragging = false;
+    pen.adjusting_last = false;
+    pen.moving = None;
+    if pen.curvature {
+        curvature_refresh(pen, false);
+    }
+    if pen.knots.is_empty() {
+        app.ui.pen = None;
+    }
+}
+
 /// Finish the pen path: a work path (Path mode) or a new shape layer (Shape mode).
-/// A path continued from an existing open end is written back into that subpath.
 pub fn pen_commit(app: &mut PhotocraftApp, closed: bool) {
     let Some(mut pen) = app.ui.pen.take() else { return };
+    if app.ui.direct_selection.target == Some(crate::direct_select::PathRef::Pen) {
+        // Its anchors are no longer the Pen's: the committed path is another path.
+        app.ui.direct_selection = Default::default();
+    }
     if pen.curvature {
         curvature_refresh(&mut pen, closed);
     }
@@ -627,10 +440,6 @@ pub fn pen_commit(app: &mut PhotocraftApp, closed: bool) {
 /// layer (Shape mode), else a subpath of the targeted vector mask, else the work path.
 fn commit_path(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) {
     if pen.knots.len() < 2 {
-        return;
-    }
-    if pen.resume.is_some() {
-        commit_resumed(app, pen.clone(), closed);
         return;
     }
     let path = pen_to_json(pen, closed);
@@ -653,8 +462,16 @@ fn commit_path(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) {
         }
         app.run("layer.vectorMask.edit", json!({"layer": id, "path": p}))
     } else {
-        // The drawn work path is selected in the Paths panel, as in Photoshop.
-        app.run("path.set", json!({"name": "work", "path": path})).inspect(|_| app.ui.selected_path = Some("work".into()))
+        // Photoshop adds the new subpath to the path selected in the Paths panel, which is the
+        // Work Path right after drawing one, so path after path builds up there (#4721). With no
+        // path selected, a new Work Path replaces the old one. The drawn path ends up selected.
+        let target = app.ui.selected_path.clone().filter(|n| app.session.active().is_some_and(|st| path_exists(&st.doc, n)));
+        let name = target.clone().unwrap_or_else(|| "work".into());
+        let mut params = json!({"name": name, "path": path});
+        if target.is_some() {
+            params["op"] = json!("combine");
+        }
+        app.run("path.set", params).inspect(|_| app.ui.selected_path = Some(name))
     };
     if let Err(e) = r {
         app.ui.status = e;
@@ -662,21 +479,89 @@ fn commit_path(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) {
     }
 }
 
+/// Does `doc` have the path the Paths panel calls `name`: "work", or a saved path's name?
+fn path_exists(doc: &Document, name: &str) -> bool {
+    if name == "work" { doc.work_path.is_some() } else { doc.paths.iter().any(|p| p.name == name) }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Freeform Pen and Curvature Pen
 
 /// Freeform Pen release: fit the drag's trace within the options bar's Curve Fit and commit it
-/// as the Pen does. Releasing on the start point closes the path; a click draws nothing.
-pub fn freeform_finish(app: &mut PhotocraftApp, points: &[[f64; 3]]) {
+/// as the Pen does. Releasing on the start point closes the path; a click draws nothing. The
+/// points at indices `straight` were ⌥-clicked: the segment into each one stays straight.
+pub fn freeform_finish(app: &mut PhotocraftApp, points: &[[f64; 3]], straight: &[usize]) {
     let trace: Vec<[f64; 2]> = points.iter().map(|p| [p[0], p[1]]).collect();
     let (Some(first), Some(last)) = (trace.first(), trace.last()) else { return };
     let tol = 6.0 / app.point_zoom().max(0.01) as f64;
     let length: f64 = trace.windows(2).map(|w| (w[1][0] - w[0][0]).hypot(w[1][1] - w[0][1])).sum();
     let closed = (first[0] - last[0]).hypot(first[1] - last[1]) < tol && length > 4.0 * tol;
-    let Some(sub) = photocraft_vector::trace::fit_trace(&trace, f64::from(app.ui.tool_options.curve_fit), closed) else { return };
-    let knots = sub.knots.iter().map(|k| [[k.anchor.x, k.anchor.y], [k.in_ctrl.x, k.in_ctrl.y], [k.out_ctrl.x, k.out_ctrl.y]]).collect();
-    let unlinked = sub.knots.iter().enumerate().filter(|(_, k)| !k.smooth).map(|(i, _)| i).collect();
-    commit_path(app, &PenPath { knots, unlinked, ..Default::default() }, sub.closed);
+    let fit = f64::from(app.ui.tool_options.curve_fit);
+    let pen = if straight.is_empty() {
+        let Some(sub) = photocraft_vector::trace::fit_trace(&trace, fit, closed) else { return };
+        let knots = sub.knots.iter().map(knot_points).collect();
+        let unlinked = sub.knots.iter().enumerate().filter(|(_, k)| !k.smooth).map(|(i, _)| i).collect();
+        (PenPath { knots, unlinked, ..Default::default() }, sub.closed)
+    } else {
+        fit_with_straight_segments(&trace, straight, fit, closed.then_some(tol))
+    };
+    commit_path(app, &pen.0, pen.1);
+}
+
+fn knot_points(k: &photocraft_doc::Knot) -> [[f64; 2]; 3] {
+    [[k.anchor.x, k.anchor.y], [k.in_ctrl.x, k.in_ctrl.y], [k.out_ctrl.x, k.out_ctrl.y]]
+}
+
+/// A Freeform Pen trace with ⌥-clicked straight segments (into the points at `straight`): each
+/// freehand run between them is fitted on its own, and the runs are joined by straight lines
+/// between corner anchors. `close` (a reach) closes the path when it ends on its start point.
+fn fit_with_straight_segments(trace: &[[f64; 2]], straight: &[usize], fit: f64, close: Option<f64>) -> (PenPath, bool) {
+    let mut cuts: Vec<usize> = straight.iter().copied().filter(|&i| i > 0 && i < trace.len()).collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    cuts.push(trace.len());
+    let (mut knots, mut corners): (Vec<[[f64; 2]; 3]>, Vec<usize>) = (Vec::new(), Vec::new());
+    let mut start = 0;
+    for end in cuts {
+        let run = trace.get(start..end).unwrap_or_default();
+        let first = knots.len();
+        match photocraft_vector::trace::fit_trace(run, fit, false) {
+            Some(sub) => {
+                corners.extend(sub.knots.iter().enumerate().filter(|(_, k)| !k.smooth).map(|(i, _)| first + i));
+                knots.extend(sub.knots.iter().map(knot_points));
+            }
+            // A single click (or a run that never moved): one corner anchor.
+            None => knots.extend(run.first().map(|p| [*p; 3])),
+        }
+        // Where a straight segment meets the run: a corner with no handle on that side.
+        if let Some(k) = knots.get_mut(first).filter(|_| first > 0) {
+            k[1] = k[0];
+            corners.push(first);
+        }
+        if end < trace.len()
+            && let Some(k) = knots.last_mut()
+        {
+            k[2] = k[0];
+            corners.push(knots.len() - 1);
+        }
+        start = end;
+    }
+    // Ended on the start point: the last anchor is the first one.
+    let ends_on_start = |k: &[[[f64; 2]; 3]], reach: f64| match (k.first(), k.last()) {
+        (Some(a), Some(b)) => k.len() > 3 && (a[0][0] - b[0][0]).hypot(a[0][1] - b[0][1]) < reach,
+        _ => false,
+    };
+    let closed = close.is_some_and(|reach| ends_on_start(&knots, reach));
+    if closed && let Some(last) = knots.pop() {
+        if let Some(k) = knots.first_mut() {
+            k[1] = [last[1][0] - last[0][0] + k[0][0], last[1][1] - last[0][1] + k[0][1]];
+        }
+        corners.retain(|&i| i < knots.len());
+        corners.push(0);
+    }
+    corners.sort_unstable();
+    corners.dedup();
+    (PenPath { knots, unlinked: corners, ..Default::default() }, closed)
 }
 
 /// Recompute a Curvature Pen path's handles from its anchors and corner points.
@@ -684,6 +569,11 @@ fn curvature_refresh(pen: &mut PenPath, closed: bool) {
     let anchors: Vec<[f64; 2]> = pen.knots.iter().map(|k| k[0]).collect();
     let corners: Vec<bool> = (0..anchors.len()).map(|i| pen.unlinked.contains(&i)).collect();
     pen.knots = photocraft_vector::edit::curvature_knots(&anchors, &corners, closed);
+}
+
+/// The anchor of the Curvature Pen path being drawn under (x, y), for the cursor.
+pub(crate) fn curvature_anchor_at(app: &PhotocraftApp, x: f64, y: f64) -> Option<usize> {
+    curvature_hit(app, x, y)
 }
 
 /// The Curvature Pen's anchor within a few screen pixels of (x, y).
@@ -734,8 +624,14 @@ pub fn curvature_up(app: &mut PhotocraftApp) {
 }
 
 /// Curvature Pen double-click: toggle the anchor under the pointer between smooth and corner
-/// (double-clicking empty canvas therefore places a corner point, as in Photoshop).
+/// (double-clicking empty canvas therefore places a corner point, as in Photoshop). With no path
+/// being drawn, an anchor of the active path toggles the same way and its subpath reflows
+/// (`path.convertPoint` with `curvature`), so a Pen-drawn corner rounds off.
 pub fn curvature_toggle(app: &mut PhotocraftApp, x: f64, y: f64) {
+    if app.ui.pen.as_ref().is_none_or(|p| p.knots.is_empty()) {
+        crate::direct_select::curvature_toggle_active(app, [x, y]);
+        return;
+    }
     let Some(i) = curvature_hit(app, x, y) else { return };
     let Some(pen) = app.ui.pen.as_mut() else { return };
     if let Some(at) = pen.unlinked.iter().position(|&c| c == i) {
@@ -765,6 +661,18 @@ pub fn takes_path_mask(id: &str) -> bool {
     id.starts_with("layer.newFillLayer.") || id.starts_with("layer.newAdjustmentLayer.")
 }
 
+/// The work or saved path explicitly selected in the Paths panel (not a layer's own path).
+pub fn selected_document_path(app: &PhotocraftApp) -> Option<String> {
+    let st = app.session.active()?;
+    let sel = app.ui.selected_path.as_deref()?;
+    let listed = path_rows(&st.doc, st.active_layer).iter().any(|r| match r.kind {
+        PathRow::Work => sel == "work",
+        PathRow::Saved => r.name == sel,
+        PathRow::Layer => false,
+    });
+    listed.then(|| sel.to_string())
+}
+
 /// New fill and adjustment layers take the path selected in the Paths panel as their vector mask,
 /// as in Photoshop (#1419): the command gets it as `"path"` unless the caller set one (`null`
 /// opts out). Only an explicitly selected work or saved path counts; deselect it by clicking the
@@ -773,16 +681,7 @@ pub fn with_active_path(app: &PhotocraftApp, id: &str, params: Value) -> Value {
     if !takes_path_mask(id) || params.get("path").is_some() {
         return params;
     }
-    let Some(st) = app.session.active() else { return params };
-    let Some(sel) = app.ui.selected_path.as_deref() else { return params };
-    let listed = path_rows(&st.doc, st.active_layer).iter().any(|r| match r.kind {
-        PathRow::Work => sel == "work",
-        PathRow::Saved => r.name == sel,
-        PathRow::Layer => false,
-    });
-    if !listed {
-        return params;
-    }
+    let Some(sel) = selected_document_path(app) else { return params };
     match params {
         Value::Object(mut m) => {
             m.insert("path".into(), json!(sel));
@@ -839,6 +738,19 @@ pub(crate) fn active_shape_path(app: &PhotocraftApp) -> Option<(u64, Path)> {
     }
 }
 
+/// Does ⌫ / Delete delete the work path? With the Pen, Freeform Pen or Path Selection tool, no
+/// path being drawn and the work path the one these tools show and edit (no shape layer or
+/// targeted vector mask in front of it), as in Photoshop (#5702). It was drawn whenever one of
+/// these tools was active, but the key reached Edit › Clear, so it looked impossible to delete.
+/// Direct Selection and the Curvature Pen delete selected anchors in Photoshop, not the path.
+pub(crate) fn delete_key_deletes_work_path(app: &PhotocraftApp) -> bool {
+    matches!(app.ui.tool, Tool::Pen | Tool::FreeformPen | Tool::PathSelection)
+        && app.ui.pen.is_none()
+        && app.ui.transform.is_none()
+        && app.ui.view.shows(app.ui.view.show.target_path)
+        && matches!(target_path(app), Some((PathTarget::Work, _)))
+}
+
 /// The path Path Selection edits: the targeted vector mask, the active shape layer's path, else
 /// the work path.
 fn target_path(app: &PhotocraftApp) -> Option<(PathTarget, Path)> {
@@ -866,10 +778,97 @@ pub(crate) fn free_transform_path(app: &PhotocraftApp) -> Option<(Value, Path)> 
     Some((params, path))
 }
 
+fn point_in_subpath(sp: &photocraft_doc::vector::Subpath, pt: [f64; 2]) -> bool {
+    if !sp.closed || sp.knots.len() < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let n = sp.knots.len();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        let xi = sp.knots[i].anchor.x;
+        let yi = sp.knots[i].anchor.y;
+        let xj = sp.knots[j].anchor.x;
+        let yj = sp.knots[j].anchor.y;
+        let intersect = ((yi > pt[1]) != (yj > pt[1])) && (pt[0] < (xj - xi) * (pt[1] - yi) / (yj - yi) + xi);
+        if intersect {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// The topmost visible shape layer under `at` (document coordinates):
+/// hits the shape path or anchor within `tol`, or any non-transparent pixel of the shape's raster surface,
+/// or point inside the shape's filled geometry.
+pub fn pick_shape_at(doc: &Document, at: [f64; 2], tol: f64) -> Option<photocraft_doc::LayerId> {
+    let (x, y) = (at[0].floor() as i32, at[1].floor() as i32);
+    for (path, _, l) in doc.walk().iter().rev() {
+        if !l.visible || !(1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible)) {
+            continue;
+        }
+        let board = path.first().and_then(|i| doc.layers.get(*i)).and_then(|t| t.artboard());
+        if board.is_some_and(|a| !a.rect.contains(x, y)) {
+            continue;
+        }
+        if let LayerContent::Shape(sh) = &l.content {
+            if photocraft_vector::edit::hit(&sh.path, photocraft_geom::Point::new(at[0], at[1]), tol, &[]).is_some() {
+                return Some(l.id);
+            }
+            if sh.fill.is_some() {
+                if let Some(surf) = l.surface() {
+                    let mut px = [[0.0f32; 4]; 1];
+                    surf.read_rgba_into(photocraft_doc::Rect::from_xywh(x, y, 1, 1), &mut px);
+                    if px[0][3] > 0.0 {
+                        return Some(l.id);
+                    }
+                }
+                if let Some(photocraft_doc::LiveShape::Rect { rect, .. }) = &sh.live {
+                    let x0 = rect[0].min(rect[0] + rect[2]);
+                    let x1 = rect[0].max(rect[0] + rect[2]);
+                    let y0 = rect[1].min(rect[1] + rect[3]);
+                    let y1 = rect[1].max(rect[1] + rect[3]);
+                    if at[0] >= x0 && at[0] <= x1 && at[1] >= y0 && at[1] <= y1 {
+                        return Some(l.id);
+                    }
+                }
+                if let Some(photocraft_doc::LiveShape::Ellipse { rect }) = &sh.live {
+                    let rx = rect[2].abs() / 2.0;
+                    let ry = rect[3].abs() / 2.0;
+                    if rx > 1e-6 && ry > 1e-6 {
+                        let cx = rect[0] + rect[2] / 2.0;
+                        let cy = rect[1] + rect[3] / 2.0;
+                        let dx = (at[0] - cx) / rx;
+                        let dy = (at[1] - cy) / ry;
+                        if dx * dx + dy * dy <= 1.0 {
+                            return Some(l.id);
+                        }
+                    }
+                }
+                if sh.path.subpaths.iter().any(|sp| point_in_subpath(sp, at)) {
+                    return Some(l.id);
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     let (dx, dy) = (end[0] - start[0], end[1] - start[1]);
+    let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
     if dx.abs() + dy.abs() < 0.5 {
+        let Some(st) = app.session.active() else { return };
+        if let Some(id) = pick_shape_at(&st.doc, start, tol) {
+            let _ = app.run("layer.select", json!({"layer": id.0}));
+        }
         return;
+    }
+    if target_path(app).is_none() {
+        let Some(st) = app.session.active() else { return };
+        if let Some(id) = pick_shape_at(&st.doc, start, tol) {
+            let _ = app.run("layer.select", json!({"layer": id.0}));
+        }
     }
     let Some((target, path)) = target_path(app) else { return };
     let _ = match target {
@@ -894,6 +893,45 @@ fn bezier(p0: [f64; 2], c0: [f64; 2], c1: [f64; 2], p1: [f64; 2], t: f64) -> [f6
     [f(p0[0], c0[0], c1[0], p1[0]), f(p0[1], c0[1], c1[1], p1[1])]
 }
 
+/// `q` lies on the chord from `a` to `d` (within a thousandth of a pixel).
+fn on_chord(a: [f64; 2], q: [f64; 2], d: [f64; 2]) -> bool {
+    let (dx, dy, vx, vy) = (d[0] - a[0], d[1] - a[1], q[0] - a[0], q[1] - a[1]);
+    let len = dx.hypot(dy);
+    if len < 1e-9 {
+        return vx.hypot(vy) < 1e-3;
+    }
+    let t = (vx * dx + vy * dy) / (len * len);
+    (vx * dy - vy * dx).abs() / len < 1e-3 && (-1e-9..=1.0 + 1e-9).contains(&t)
+}
+
+/// How far (in screen pixels) a drawn chord may stray from the true curve.
+const CURVE_TOLERANCE: f64 = 0.3;
+/// Pieces per segment at most: 0.3 px holds for curves bending up to about 1.4 million px on screen.
+const MAX_CURVE_PIECES: usize = 1024;
+
+/// Screen points along one cubic segment (both ends included). The control points are mapped to
+/// the screen first (`xf` is affine, so the curve maps exactly), and the number of chords follows
+/// how much the curve bends there: a straight segment is one chord, and a curve zoomed in stays
+/// smooth instead of showing a fixed 16 chords (#4084). Uses the bound
+/// `max|B''| / 8n² <= tol` with `max|B''| <= 6·max(|p0−2c0+c1|, |c0−2c1+p1|)`.
+pub(crate) fn curve_points(p0: [f64; 2], c0: [f64; 2], c1: [f64; 2], p1: [f64; 2], xf: &dyn Fn([f64; 2]) -> Pos2) -> Vec<Pos2> {
+    let [a, b, c, d] = [p0, c0, c1, p1].map(|q| {
+        let s = xf(q);
+        [f64::from(s.x), f64::from(s.y)]
+    });
+    let second = |p: [f64; 2], q: [f64; 2], r: [f64; 2]| (p[0] - 2.0 * q[0] + r[0]).hypot(p[1] - 2.0 * q[1] + r[1]);
+    let n = (0.75 * second(a, b, c).max(second(b, c, d)) / CURVE_TOLERANCE).sqrt().ceil();
+    // A straight segment (controls on the chord, like the Pen's retracted handles) is one chord;
+    // NaN (a non-finite point) falls back to one too.
+    let n = if n.is_finite() && !(on_chord(a, b, d) && on_chord(a, c, d)) { (n as usize).clamp(1, MAX_CURVE_PIECES) } else { 1 };
+    (0..=n)
+        .map(|k| {
+            let q = bezier(a, b, c, d, k as f64 / n as f64);
+            pos2(q[0] as f32, q[1] as f32)
+        })
+        .collect()
+}
+
 /// Screen polylines for a path (one per subpath).
 pub(crate) fn path_lines(path: &Path, xf: &dyn Fn([f64; 2]) -> Pos2) -> Vec<(Vec<Pos2>, bool)> {
     path.subpaths
@@ -904,11 +942,7 @@ pub(crate) fn path_lines(path: &Path, xf: &dyn Fn([f64; 2]) -> Pos2) -> Vec<(Vec
             let segs = if s.closed { n } else { n.saturating_sub(1) };
             for i in 0..segs {
                 let (a, b) = (&s.knots[i], &s.knots[(i + 1) % n]);
-                for k in 0..=16 {
-                    let q =
-                        bezier([a.anchor.x, a.anchor.y], [a.out_ctrl.x, a.out_ctrl.y], [b.in_ctrl.x, b.in_ctrl.y], [b.anchor.x, b.anchor.y], k as f64 / 16.0);
-                    pts.push(xf(q));
-                }
+                pts.extend(curve_points([a.anchor.x, a.anchor.y], [a.out_ctrl.x, a.out_ctrl.y], [b.in_ctrl.x, b.in_ctrl.y], [b.anchor.x, b.anchor.y], xf));
             }
             if pts.is_empty()
                 && let Some(k) = s.knots.first()
@@ -947,24 +981,9 @@ pub(crate) fn draw_handle(painter: &egui::Painter, anchor: Pos2, handle: Pos2, a
 /// Work path / active shape path outlines, anchors, and the pen path in progress.
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let tool = app.ui.tool;
-    let vector_tool = matches!(tool, Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen | Tool::PathSelection) || is_shape_tool(tool);
     let accent = Tokens::get(painter.ctx()).accent;
     let to_scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
-    let draw_path = |p: &Path, anchors: bool, name: &str, layer: Option<u64>| {
-        let hidden = app.ui.pen.as_ref().and_then(|pen| pen.resume.as_ref()).filter(|r| r.name == name && r.layer == layer).map(|r| r.subpath);
-        let owned;
-        let p = if let Some(i) = hidden {
-            owned = {
-                let mut q = p.clone();
-                if let Some(sp) = q.subpaths.get_mut(i) {
-                    sp.knots.clear();
-                }
-                q
-            };
-            &owned
-        } else {
-            p
-        };
+    let draw_path = |p: &Path, anchors: bool| {
         draw_outline(painter, p, &to_scr, accent);
         if anchors {
             for k in p.subpaths.iter().flat_map(|s| &s.knots) {
@@ -982,26 +1001,27 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             crate::anchor_tools::draw_hover(app, painter, &to_scr, accent, painter.ctx().input(|i| i.modifiers));
         }
     } else if paths {
-        if vector_tool {
-            // The Pen shows anchors too: an inserted point on a straight side does not move the outline.
-            let anchors = matches!(tool, Tool::Pen | Tool::PathSelection);
-            if let Some(wp) = &doc.work_path {
-                draw_path(wp, anchors, "work", None);
-            }
-            let st = app.session.active();
-            if let Some(l) = st.and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id)))
-                && let LayerContent::Shape(sh) = &l.content
-            {
-                draw_path(&sh.path, anchors, "layer", Some(l.id.0));
-            }
+        // Paths remain visible as outlines with any tool. Path Selection adds anchor squares; Direct
+        // Selection has its own overlay above.
+        if let Some(wp) = &doc.work_path {
+            draw_path(wp, tool == Tool::PathSelection);
+        }
+        let st = app.session.active();
+        if let Some(l) = st.and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id)))
+            && let LayerContent::Shape(sh) = &l.content
+        {
+            draw_path(&sh.path, tool == Tool::PathSelection);
         }
         // A targeted vector mask shows its path with any tool (#196).
-        if let Some((id, p)) = targeted_vector_mask(app) {
-            draw_path(&p, matches!(tool, Tool::Pen | Tool::PathSelection), "layer", Some(id));
+        if let Some((_, p)) = targeted_vector_mask(app) {
+            draw_path(&p, tool == Tool::PathSelection);
         }
+        crate::corner_radius::draw(app, painter, &to_scr, accent);
     }
-    // Pen path in progress, with handles of the last knot and a rubber band to the pointer.
-    if let Some(pen) = &app.ui.pen {
+    // Pen path in progress, with handles of the last knot and a rubber band to the pointer. While
+    // ⌘/Ctrl drags it, Direct Selection draws its preview instead.
+    let edited = matches!(&app.ui.direct_selection.drag, Some(crate::direct_select::Drag::Edit { target: crate::direct_select::PathRef::Pen, .. }));
+    if let Some(pen) = app.ui.pen.as_ref().filter(|_| !edited) {
         let mut pts = Vec::new();
         // A close-drag shows the first segment bending with the handle being pulled out.
         let mut knots = pen.knots.clone();
@@ -1013,14 +1033,15 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             first[2] = out;
         }
         for w in knots.windows(2) {
-            for k in 0..=16 {
-                pts.push(to_scr(bezier(w[0][0], w[0][2], w[1][1], w[1][0], k as f64 / 16.0)));
-            }
+            pts.extend(curve_points(w[0][0], w[0][2], w[1][1], w[1][0], &to_scr));
         }
         painter.add(egui::Shape::line(pts, Stroke::new(1.5, accent)));
+        // No rubber band where a click adds or deletes an anchor of this path instead (#6140).
+        let auto = app.hover_doc.is_some_and(|h| crate::anchor_tools::pen_auto(app, tool, painter.ctx().input(|i| i.modifiers), h).is_some());
         if let (Some(last), Some(h)) = (pen.knots.last(), app.hover_doc)
             && !pen.dragging
             && pen.moving.is_none()
+            && !auto
         {
             if pen.curvature && pen.knots.len() >= 2 {
                 // The Curvature Pen previews the curve the next click makes through the pointer.
@@ -1028,13 +1049,14 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
                 next.knots.push([h; 3]);
                 curvature_refresh(&mut next, false);
                 if let [.., a, b] = next.knots.as_slice() {
-                    let pts: Vec<Pos2> = (0..=24).map(|k| to_scr(bezier(a[0], a[2], b[1], b[0], k as f64 / 24.0))).collect();
+                    let pts = curve_points(a[0], a[2], b[1], b[0], &to_scr);
                     painter.add(egui::Shape::dashed_line(&pts, Stroke::new(1.0, accent), 4.0, 3.0));
                 }
             } else {
+                // The rubber band ends where a ⇧-click would put the next anchor.
                 let shift = painter.ctx().input(|i| i.modifiers.shift);
-                let end = shift_locked_point(last[0], h, shift);
-                painter.add(egui::Shape::dashed_line(&[to_scr(last[0]), to_scr(end)], Stroke::new(1.0, accent), 4.0, 3.0));
+                let h = if pen.curvature { h } else { shift_45(last[0], h, shift) };
+                painter.add(egui::Shape::dashed_line(&[to_scr(last[0]), to_scr(h)], Stroke::new(1.0, accent), 4.0, 3.0));
             }
         }
         for (i, k) in pen.knots.iter().enumerate() {
@@ -1047,6 +1069,21 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             }
             draw_anchor(painter, c, last, accent);
         }
+        // Hovering the first anchor: Photoshop's close cue, a small ring beside the pointer.
+        let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
+        if let Some(h) = app.hover_doc
+            && over_first_anchor(pen, h, tol)
+            && let Some(first) = pen.knots.first()
+        {
+            let c = to_scr(first[0]);
+            painter.rect_filled(Rect::from_center_size(c, vec2(8.0, 8.0)), 0.0, accent);
+            painter.circle_stroke(c + vec2(11.0, 11.0), 3.5, Stroke::new(1.5, accent));
+        }
+    }
+    // The segment the Pen's Auto Add/Delete would add an anchor to, or the anchor it would delete,
+    // over the path being drawn. While drawing, the other paths can be hidden: it edits none of them.
+    if paths || app.ui.pen.is_some() {
+        crate::anchor_tools::draw_pen_hover(app, painter, &to_scr, accent, painter.ctx().input(|i| i.modifiers));
     }
 }
 
@@ -1068,11 +1105,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         ui.label(egui::RichText::new(s).color(t.text_dim).size(12.0));
     };
     let o = &mut app.ui.tool_options;
-    if tool == Tool::PathSelection {
+    let target = selected_shape(&app.session);
+    if tool == Tool::PathSelection && target.is_none() {
         lbl(ui, if app.ui.vector_mask_target { "Drag to move the targeted vector mask" } else { tl!("Drag to move the active shape's path or the Work Path") });
         return true;
     }
-    if tool == Tool::DirectSelection {
+    if tool == Tool::DirectSelection && target.is_none() {
         let (shift, alt) = (crate::shortcuts::pretty("Shift"), crate::shortcuts::pretty("Alt"));
         lbl(
             ui,
@@ -1105,13 +1143,18 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 o.stroke_width = enabled_stroke_width(o.stroke_width);
             }
         }
+        if tool == Tool::Pen {
+            crate::widgets::vline(ui, 22.0);
+            crate::widgets::checkbox(ui, &mut o.pen_auto_add_delete, tl!("Auto Add/Delete"));
+        }
         let enter = crate::shortcuts::pretty("Enter");
         match tool {
             Tool::FreeformPen => {
                 crate::widgets::vline(ui, 22.0);
                 lbl(ui, tl!("Curve Fit:"));
                 crate::widgets::value_field(ui, &mut o.curve_fit, 0.5..=10.0, "px", 58.0);
-                lbl(ui, tl!("Drag: draw freehand · Release on the start point: close"));
+                let alt = crate::shortcuts::pretty("Alt");
+                lbl(ui, &crate::i18n::fmt(tl!("Drag: draw freehand · {alt}-click: straight segment · Release on the start point: close"), &[("alt", &alt)]));
             }
             Tool::CurvaturePen => lbl(
                 ui,
@@ -1120,12 +1163,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                     &[("key", &enter)],
                 ),
             ),
-            _ => {
-                // One literal so the translation scan sees it; rustfmt would otherwise split the string.
-                #[rustfmt::skip]
-                let hint = tl!("Click: corner · Drag: smooth · {shift}: 45° · {alt}-drag: break handle · Click end: continue · Click segment: add · Click or drag first point: close · {key} finish · Esc cancel");
-                lbl(ui, &crate::i18n::fmt(hint, &[("shift", &crate::shortcuts::pretty("Shift")), ("alt", &crate::shortcuts::pretty("Alt")), ("key", &enter)]))
-            }
+            _ => lbl(
+                ui,
+                &crate::i18n::fmt(
+                    tl!("Click: corner · Drag: smooth · {alt}-drag: break handle · Click or drag first point: close · {key} finish · Esc cancel"),
+                    &[("alt", &crate::shortcuts::pretty("Alt")), ("key", &enter)],
+                ),
+            ),
         }
         return true;
     }
@@ -1133,7 +1177,6 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     crate::widgets::dropdown(ui, "shape-mode", &mut mode, &[("shape".to_string(), tl!("Shape"))], 80.0);
     crate::widgets::vline(ui, 22.0);
     // Fill and Stroke edit the selected shape layer too (#3347), and still set the next shape's.
-    let target = selected_shape(&app.session);
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
     let (mut has_fill, fill, stroke) = match &target {
         Some(s) => (s.fill.is_some(), s.fill.clone(), s.stroke.clone()),
@@ -1176,7 +1219,15 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::Rectangle => {
             crate::widgets::vline(ui, 22.0);
             lbl(ui, tl!("Radius:"));
-            crate::widgets::value_field(ui, &mut o.corner_radius, 0.0..=10000.0, "px", 62.0);
+            let mut r = match target.as_ref().and_then(|s| s.live.as_ref()) {
+                Some(photocraft_doc::LiveShape::Rect { radii, .. }) => radii[0] as f32,
+                _ => o.corner_radius,
+            };
+            if crate::widgets::value_field(ui, &mut r, 0.0..=10000.0, "px", 62.0).changed() {
+                o.corner_radius = r;
+                let rf = r as f64;
+                edit = Some(json!({"radii": [rf, rf, rf, rf], "coalesce": key("radius")}));
+            }
         }
         Tool::Polygon => {
             crate::widgets::vline(ui, 22.0);
@@ -1194,6 +1245,18 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         Tool::CustomShape => {
             crate::widgets::vline(ui, 22.0);
             crate::preset_panels::shape_picker(app, ui);
+        }
+        _ if matches!(tool, Tool::PathSelection | Tool::DirectSelection) => {
+            if let Some(photocraft_doc::LiveShape::Rect { radii, .. }) = target.as_ref().and_then(|s| s.live.as_ref()) {
+                crate::widgets::vline(ui, 22.0);
+                lbl(ui, tl!("Radius:"));
+                let mut r = radii[0] as f32;
+                if crate::widgets::value_field(ui, &mut r, 0.0..=10000.0, "px", 62.0).changed() {
+                    o.corner_radius = r;
+                    let rf = r as f64;
+                    edit = Some(json!({"radii": [rf, rf, rf, rf], "coalesce": key("radius")}));
+                }
+            }
         }
         _ => {}
     }
@@ -1226,13 +1289,14 @@ struct SelectedShape {
     layer: photocraft_doc::LayerId,
     fill: Option<photocraft_doc::Fill>,
     stroke: Option<photocraft_doc::ShapeStroke>,
+    live: Option<photocraft_doc::LiveShape>,
 }
 
 fn selected_shape(session: &photocraft_engine::Session) -> Option<SelectedShape> {
     let st = session.active()?;
     let layer = st.active_layer?;
     match &st.doc.layer(layer)?.content {
-        LayerContent::Shape(sh) => Some(SelectedShape { doc: st.doc.id, layer, fill: sh.fill.clone(), stroke: sh.stroke.clone() }),
+        LayerContent::Shape(sh) => Some(SelectedShape { doc: st.doc.id, layer, fill: sh.fill.clone(), stroke: sh.stroke.clone(), live: sh.live.clone() }),
         _ => None,
     }
 }
@@ -1433,7 +1497,8 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     let gesture = paint_gesture(ui, gesture_key);
     let coalesce = |field: &str| format!("{}:{}:{gesture}", key(field), gesture_key.value());
     // The shared collapsible section headers (#155).
-    if crate::props_layout::section(ui, "appearance", tl!("Appearance")) {
+    // Prefs "Appearance" is theme chrome (Giao diện); shape fill/stroke is Diện mạo.
+    if crate::props_layout::section(ui, "appearance", crate::i18n::tr_ctx(crate::i18n::current(), "shape", "Appearance")) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(tl!("Fill")).color(t.text_dim).size(12.0));
             if let Some(change) = swatch(ui, sh.fill.as_ref(), app.session.tools.foreground, tl!("Set shape fill type")) {
@@ -1642,7 +1707,7 @@ fn path_context_actions(entry: &PathEntry, doc: &Document) -> Vec<(&'static str,
     let mut actions = vec![
         ("Make Selection", "path.toSelection", json!({"name": key})),
         ("Fill Path", "path.fill", json!({"name": key})),
-        ("Stroke Path", "path.stroke", json!({"name": key, "tool": "brush"})),
+        ("Stroke Path…", "path.stroke", json!({"name": key})),
     ];
     if entry.kind == PathRow::Work {
         let mut n = doc.paths.len().saturating_add(1);
@@ -1682,6 +1747,7 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let rows = path_rows(&doc, st.active_layer);
     let has_layer_path = rows.iter().any(|r| r.kind == PathRow::Layer);
     let mut action: Option<(&str, Value)> = None;
+    let mut stroke_dialog: Option<String> = None;
     // The buttons sit in a footer at the panel's bottom, like Photoshop's.
     let footer = crate::widgets::footer_height(ui) + ui.spacing().item_spacing.y;
     let fill = ui.available_height() > footer + 60.0;
@@ -1707,7 +1773,8 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 } else if resp.hovered() {
                     ui.painter().rect_filled(r, 0.0, t.hover.gamma_multiply(0.5));
                 }
-                thumb(ui, Rect::from_min_size(pos2(r.left() + 8.0, r.top() + 4.0), vec2(28.0, 28.0)), path, &doc);
+                let thumbnail = Rect::from_min_size(pos2(r.left() + 8.0, r.top() + 4.0), vec2(28.0, 28.0));
+                thumb(ui, thumbnail, path, &doc);
                 let mut job = egui::text::LayoutJob::default();
                 // Temporary paths (the work path, the selected layer's shape path or vector mask) are italic.
                 let italics = *kind != PathRow::Saved;
@@ -1718,11 +1785,20 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 );
                 let g = ui.painter().layout_job(job);
                 ui.painter().galley(pos2(r.left() + 46.0, r.center().y - g.size().y / 2.0), g, t.text);
-                if resp.clicked() {
+                // Ctrl/Cmd-click loads only the thumbnail's path, without changing the panel target.
+                let modifiers = ui.input(|i| i.modifiers);
+                let load = resp.clicked() && modifiers.command && resp.interact_pointer_pos().is_some_and(|p| thumbnail.contains(p));
+                if load {
+                    let mode = match crate::channels_panel::load_operation(modifiers) {
+                        "new" => "replace",
+                        mode => mode,
+                    };
+                    action = Some(("path.toSelection", json!({"name": key, "mode": mode})));
+                } else if resp.clicked() {
                     app.ui.selected_path = Some(key.clone());
                 }
                 // Double-clicking the Work Path saves it (Photoshop's "Save Path").
-                if resp.double_clicked() && *kind == PathRow::Work {
+                if !load && resp.double_clicked() && *kind == PathRow::Work {
                     let n = doc.paths.len() + 1;
                     action = Some(("path.rename", json!({"name": "work", "to": format!("Path {n}")})));
                 }
@@ -1734,7 +1810,12 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         for (label, cmd, params) in path_context_actions(&entry, &doc) {
                             let enabled = !matches!(cmd, "path.fill" | "path.stroke") || can_paint;
                             if ui.add_enabled(enabled, egui::Button::new(tl!(label))).clicked() {
-                                action = Some((cmd, params));
+                                if cmd == "path.stroke" {
+                                    // Stroke Path… asks for the tool first, as in Photoshop (#2978).
+                                    stroke_dialog = Some(params.get("name").and_then(Value::as_str).unwrap_or("work").to_string());
+                                } else {
+                                    action = Some((cmd, params));
+                                }
                                 ui.close();
                             }
                         }
@@ -1779,13 +1860,21 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let icon = if crate::icons::exists(icon) { icon } else { "square" };
             let b = crate::icons::button(ui, icon, 26.0, false, tip);
             if b.clicked() {
-                action = Some((cmd, p));
+                if cmd == "path.stroke" && ui.input(|i| i.modifiers.alt) {
+                    // Alt-click opens the Stroke Path dialog, as in Photoshop (#2978).
+                    stroke_dialog = Some(sel.clone());
+                } else {
+                    action = Some((cmd, p));
+                }
             }
             buttons = buttons.union(b.rect);
         }
         buttons
     });
     ctx_data_footer(ui.ctx(), buttons);
+    if let Some(name) = stroke_dialog {
+        crate::canvas_tool_menu::stroke_path_dialog(app, &name);
+    }
     if let Some((cmd, p)) = action
         && let Err(e) = app.run(cmd, p)
     {
@@ -1797,6 +1886,60 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #4084: zoomed in, a curve's chords stay within a fraction of a pixel of the true curve
+    /// (16 fixed chords showed corners), and a straight segment stays one chord.
+    #[test]
+    fn path_curves_stay_smooth_at_any_zoom() {
+        let (p0, c0, c1, p1) = ([0.0, 100.0], [20.0, -60.0], [80.0, -60.0], [100.0, 100.0]);
+        for zoom in [0.25, 1.0, 8.0, 64.0, 320.0] {
+            let xf = move |q: [f64; 2]| pos2((q[0] * zoom) as f32 + 10.0, (q[1] * zoom) as f32 - 5.0);
+            let pts = curve_points(p0, c0, c1, p1, &xf);
+            let n = pts.len() - 1;
+            assert_eq!((pts[0], pts[n]), (xf(p0), xf(p1)), "the ends are the anchors");
+            for (k, w) in pts.windows(2).enumerate() {
+                let curve = xf(bezier(p0, c0, c1, p1, (k as f64 + 0.5) / n as f64));
+                let chord = w[0] + (w[1] - w[0]) * 0.5;
+                assert!((chord - curve).length() <= 0.35, "zoom {zoom}: chord {k} of {n} is {} px off", (chord - curve).length());
+            }
+            // Zoomed out it stays cheap.
+            if zoom <= 1.0 {
+                assert!(n <= 32, "zoom {zoom}: {n} chords");
+            }
+        }
+        let xf = |q: [f64; 2]| pos2((q[0] * 320.0) as f32, (q[1] * 320.0) as f32);
+        // Retracted handles, and handles along the line: one chord.
+        assert_eq!(curve_points([0.0, 0.0], [0.0, 0.0], [50.0, 50.0], [50.0, 50.0], &xf).len(), 2);
+        assert_eq!(curve_points([0.0, 0.0], [10.0, 10.0], [40.0, 40.0], [50.0, 50.0], &xf).len(), 2);
+        // A handle past the end is a curve that doubles back, not a line.
+        assert!(curve_points([0.0, 0.0], [0.0, 0.0], [80.0, 80.0], [50.0, 50.0], &xf).len() > 2);
+        // Hostile coordinates: no panic, a bounded number of points.
+        for bad in [f64::NAN, f64::INFINITY, 1e300] {
+            assert!(curve_points([0.0, 0.0], [bad, 0.0], [0.0, bad], [1.0, 1.0], &xf).len() <= MAX_CURVE_PIECES + 1);
+        }
+        // Through path_lines too: a closed subpath of two curved segments.
+        let mut path = Path::default();
+        path.subpaths.push(photocraft_doc::vector::Subpath {
+            knots: vec![
+                photocraft_doc::vector::Knot {
+                    anchor: photocraft_geom::Point::new(0.0, 0.0),
+                    in_ctrl: photocraft_geom::Point::new(0.0, 40.0),
+                    out_ctrl: photocraft_geom::Point::new(0.0, -40.0),
+                    smooth: true,
+                },
+                photocraft_doc::vector::Knot {
+                    anchor: photocraft_geom::Point::new(60.0, 0.0),
+                    in_ctrl: photocraft_geom::Point::new(60.0, -40.0),
+                    out_ctrl: photocraft_geom::Point::new(60.0, 40.0),
+                    smooth: true,
+                },
+            ],
+            closed: true,
+            ..Default::default()
+        });
+        let lines = path_lines(&path, &xf);
+        assert!(lines[0].1 && lines[0].0.len() > 2 * 17, "zoomed in, more than the old 16 chords per segment: {}", lines[0].0.len());
+    }
 
     #[test]
     fn all_shape_tools_and_open_pen_use_the_complete_stroke_defaults() {
@@ -1989,6 +2132,21 @@ mod tests {
     }
 
     #[test]
+    fn pen_shows_the_close_cue_only_over_the_first_anchor_of_a_real_segment() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        pen_down(&mut app, 20.0, 20.0, false);
+        pen_up(&mut app);
+        let one = app.ui.pen.clone().unwrap();
+        assert!(!over_first_anchor(&one, [20.0, 20.0], 6.0), "a single anchor has nothing to close");
+        pen_down(&mut app, 120.0, 20.0, false);
+        pen_up(&mut app);
+        let two = app.ui.pen.clone().unwrap();
+        assert!(over_first_anchor(&two, [22.0, 21.0], 6.0));
+        assert!(!over_first_anchor(&two, [60.0, 60.0], 6.0));
+    }
+
+    #[test]
     fn pen_builds_and_closes_a_work_path() {
         let mut app = app();
         app.ui.tool = Tool::Pen;
@@ -1999,7 +2157,7 @@ mod tests {
         pen_down(&mut app, 120.0, 120.0, false);
         pen_move(&mut app, 140.0, 140.0, false); // smooth knot
         pen_up(&mut app);
-        pen_down(&mut app, 20.5, 20.5, false); // press the first anchor: close on release
+        pen_down(&mut app, 20.5, 20.5, false); // click the first anchor: close
         pen_up(&mut app);
         assert!(app.ui.pen.is_none());
         let wp = app.session.active().unwrap().doc.work_path.clone().unwrap();
@@ -2011,225 +2169,151 @@ mod tests {
         assert_eq!((wp.subpaths[0].knots[0].anchor.x, wp.subpaths[0].knots[0].anchor.y), (30.0, 25.0));
     }
 
-    /// ⇧ locks the next Pen anchor to the nearest 45° through the last one. A pointer to the
-    /// left or right stays on that horizontal, at the pointer's position along the line.
+    fn close(a: [f64; 2], b: [f64; 2]) -> bool {
+        (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9
+    }
+
     #[test]
-    fn shift_locks_the_next_pen_point_from_the_last_anchor() {
-        use crate::canvas::{ToolEvent, tool_event};
+    fn pen_shift_click_puts_the_next_anchor_on_a_45_degree_ray() {
         let mut app = app();
         app.ui.tool = Tool::Pen;
-        app.ui.extras.snap = false;
-        let shift = egui::Modifiers::SHIFT;
-        let none = egui::Modifiers::NONE;
-        let click = |app: &mut PhotocraftApp, x, y, mods| {
-            tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, mods);
-            tool_event(app, ToolEvent::Up { x, y }, mods);
-        };
-        let anchor = |app: &PhotocraftApp, i: usize| app.ui.pen.as_ref().unwrap().knots[i][0];
-        let near = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-6 && (a[1] - b[1]).abs() < 1e-6;
-
-        click(&mut app, 40.0, 50.0, none);
-        // Slightly below a point to the right: lock horizontal and keep the pointer's x.
-        click(&mut app, 110.0, 62.0, shift);
-        assert!(near(anchor(&app, 1), [110.0, 50.0]), "right: {:?}", anchor(&app, 1));
-        // Slightly above a point to the left of that anchor: lock left on the same horizontal.
-        click(&mut app, 20.0, 44.0, shift);
-        assert!(near(anchor(&app, 2), [20.0, 50.0]), "left: {:?}", anchor(&app, 2));
-        // Mostly above the last anchor: lock vertical, keeping the pointer's y.
-        click(&mut app, 28.0, 10.0, shift);
-        assert!(near(anchor(&app, 3), [20.0, 10.0]), "up: {:?}", anchor(&app, 3));
-        // A diagonal pointer locks to 45° and projects onto that line.
-        click(&mut app, 70.0, 55.0, shift);
-        let d = anchor(&app, 4);
-        assert!((d[0] - 20.0 - (d[1] - 10.0)).abs() < 1e-6 && d[0] > 60.0, "45°: {d:?}");
-        // Without ⇧ the pointer is the anchor.
-        click(&mut app, 30.0, 80.0, none);
-        assert!(near(anchor(&app, 5), [30.0, 80.0]), "free: {:?}", anchor(&app, 5));
-
-        // ⇧ while dragging a new anchor snaps the handle the same way, and releasing it frees the drag.
-        click(&mut app, 40.0, 90.0, none);
-        tool_event(&mut app, ToolEvent::Down { x: 40.0, y: 120.0, pressure: 1.0 }, shift);
-        tool_event(&mut app, ToolEvent::Move { x: 90.0, y: 128.0, pressure: 1.0 }, shift);
-        let handle = app.ui.pen.as_ref().unwrap().knots.last().unwrap()[2];
-        assert!(near(handle, [90.0, 120.0]), "handle: {handle:?}");
-        tool_event(&mut app, ToolEvent::Move { x: 95.0, y: 150.0, pressure: 1.0 }, none);
-        let handle = app.ui.pen.as_ref().unwrap().knots.last().unwrap()[2];
-        assert!(near(handle, [95.0, 150.0]), "released: {handle:?}");
-        tool_event(&mut app, ToolEvent::Up { x: 95.0, y: 150.0 }, none);
-
-        // ⇧-click on the first anchor still closes; the lock must not move the hit off it.
-        let before = app.ui.pen.as_ref().unwrap().knots.len();
-        click(&mut app, 40.0, 50.0, shift);
-        assert!(app.ui.pen.is_none(), "closed from {before} knots");
-
-        // The rubber band uses the same lock as the click.
-        pen_down(&mut app, 10.0, 10.0, false);
+        // The first anchor has nothing to constrain against: it lands where clicked.
+        pen_down(&mut app, 20.0, 20.0, true);
         pen_up(&mut app);
-        assert!(near(shift_locked_point([10.0, 10.0], [80.0, 18.0], true), [80.0, 10.0]));
-        assert!(near(shift_locked_point([10.0, 10.0], [12.0, 70.0], true), [10.0, 70.0]));
-        assert!(near(shift_locked_point([10.0, 10.0], [40.0, 25.0], false), [40.0, 25.0]));
-        assert!(shift_locked_point([10.0, 10.0], [f64::NAN, 4.0], true)[0].is_nan());
-    }
-
-    /// After a path is placed, the Pen continues from either open end and inserts an anchor on a
-    /// segment. A click on any other anchor removes it. None of these start a replacement path.
-    #[test]
-    fn pen_continues_an_open_end_and_adds_or_removes_a_placed_point() {
-        use crate::canvas::{ToolEvent, tool_event};
-        let mut app = app();
-        app.ui.tool = Tool::Pen;
-        app.ui.extras.snap = false;
-        let click = |app: &mut PhotocraftApp, x, y| {
-            let none = egui::Modifiers::NONE;
-            tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, none);
-            tool_event(app, ToolEvent::Up { x, y }, none);
-        };
-        app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [[20, 30], [80, 30], [80, 90]]}]}})).unwrap();
-        click(&mut app, 80.0, 90.0);
-        let pen = app.ui.pen.as_ref().unwrap();
-        assert_eq!(pen.knots.len(), 3);
-        assert_eq!(pen.knots[2][0], [80.0, 90.0]);
-        assert!(pen.resume.is_some());
-        assert!(!pen_undo_last_point(&mut app), "placed anchors are not undone as if they were new");
-        click(&mut app, 140.0, 90.0);
-        pen_commit(&mut app, false);
-        let wp = app.session.active().unwrap().doc.work_path.clone().unwrap();
-        assert_eq!(wp.subpaths[0].knots.len(), 4);
-        assert_eq!((wp.subpaths[0].knots[0].anchor.x, wp.subpaths[0].knots[3].anchor.x), (20.0, 140.0));
-
-        click(&mut app, 20.0, 30.0);
-        assert_eq!(app.ui.pen.as_ref().unwrap().knots.last().unwrap()[0], [20.0, 30.0]);
-        click(&mut app, 20.0, 80.0);
-        pen_commit(&mut app, false);
-        let wp = app.session.active().unwrap().doc.work_path.clone().unwrap();
-        let last = wp.subpaths[0].knots.last().unwrap().anchor;
-        assert_eq!((last.x, last.y), (20.0, 80.0));
-        assert!(wp.subpaths[0].knots.iter().any(|k| (k.anchor.x - 140.0).abs() < 1e-6));
-
-        app.run("path.set", json!({"path": {"subpaths": [{"closed": false, "knots": [[10, 40], [110, 40]]}]}})).unwrap();
-        click(&mut app, 60.0, 40.0);
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots[0][0], [20.0, 20.0]);
+        // ~30° below horizontal snaps to the 45° diagonal at the pointer's projection.
+        let (dx, dy) = (100.0 * 30f64.to_radians().cos(), 100.0 * 30f64.to_radians().sin());
+        pen_down(&mut app, 20.0 + dx, 20.0 + dy, true);
+        pen_up(&mut app);
+        let k = app.ui.pen.as_ref().unwrap().knots[1];
+        let t = 100.0 * 15f64.to_radians().cos() / std::f64::consts::SQRT_2;
+        assert!(close(k[0], [20.0 + t, 20.0 + t]), "{:?}", k[0]);
+        assert!(k[1] == k[0] && k[2] == k[0], "a click stays a corner");
+        // ~10° off vertical snaps to straight down from the previous anchor.
+        let prev = k[0];
+        pen_down(&mut app, prev[0] + 8.0, prev[1] + 50.0, true);
+        pen_up(&mut app);
+        assert!(close(app.ui.pen.as_ref().unwrap().knots[2][0], [prev[0], prev[1] + 50.0]));
+        // Without ⇧ the anchor stays at the pointer.
+        pen_down(&mut app, 200.0, 190.0, false);
+        pen_up(&mut app);
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots[3][0], [200.0, 190.0]);
+        // ⇧ does not stop a click on the first anchor from closing the path.
+        pen_down(&mut app, 20.5, 20.5, true);
+        pen_up(&mut app);
         assert!(app.ui.pen.is_none());
-        let wp = app.session.active().unwrap().doc.work_path.clone().unwrap();
-        assert_eq!(wp.subpaths[0].knots.len(), 3);
-        let mid = wp.subpaths[0].knots[1].anchor;
-        assert!((mid.x - 60.0).abs() < 2.0 && (mid.y - 40.0).abs() < 2.0, "{mid:?}");
-        click(&mut app, mid.x, mid.y);
-        assert_eq!(app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].knots.len(), 2);
-
-        app.run("path.set", json!({"path": {"subpaths": [{"closed": true, "knots": [[10, 10], [90, 10], [90, 80], [10, 80]]}]}})).unwrap();
-        click(&mut app, 50.0, 10.0);
-        assert_eq!(app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].knots.len(), 5);
-        click(&mut app, 90.0, 80.0);
-        let sp = &app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0];
-        assert_eq!(sp.knots.len(), 4);
-        assert!(sp.closed);
+        assert!(app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].closed);
     }
 
-    /// The idle Pen's add and delete go through Add Anchor Point and Delete Anchor Point (#2756):
-    /// `t` defaults to 0.5, and the results carry `anchor` / `subpathRemoved`.
     #[test]
-    fn pen_add_and_delete_follow_the_anchor_point_commands() {
-        use crate::canvas::{ToolEvent, tool_event};
-        use crate::direct_select::{DirectSelection, PathRef};
+    fn pen_shift_drag_turns_handles_to_45_degrees_live() {
         let mut app = app();
         app.ui.tool = Tool::Pen;
-        app.ui.extras.snap = false;
-        let click = |app: &mut PhotocraftApp, x, y| {
-            let none = egui::Modifiers::NONE;
-            tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, none);
-            tool_event(app, ToolEvent::Up { x, y }, none);
+        pen_down(&mut app, 20.0, 20.0, false);
+        pen_up(&mut app);
+        pen_down(&mut app, 100.0, 100.0, false);
+        // Without ⇧ the handle follows the pointer.
+        pen_move(&mut app, 130.0, 110.0, false);
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots[1][2], [130.0, 110.0]);
+        // Pressing ⇧ mid-drag snaps the handle (~18°) to horizontal; the opposite handle mirrors it.
+        pen_move(&mut app, 130.0, 110.0, true);
+        let k = app.ui.pen.as_ref().unwrap().knots[1];
+        assert!(close(k[2], [130.0, 100.0]) && close(k[1], [70.0, 100.0]), "{k:?}");
+        assert_eq!(k[0], [100.0, 100.0], "the anchor does not move");
+        // Releasing ⇧ frees it again.
+        pen_move(&mut app, 120.0, 140.0, false);
+        assert_eq!(app.ui.pen.as_ref().unwrap().knots[1][2], [120.0, 140.0]);
+        // ⌥ breaks the pair; ⇧ then constrains the outgoing handle alone (~63° → 45°).
+        pen_break_handle(&mut app);
+        pen_move(&mut app, 120.0, 140.0, true);
+        let k = app.ui.pen.as_ref().unwrap().knots[1];
+        assert!(close(k[2], [130.0, 130.0]), "{k:?}");
+        assert_eq!(k[1], [80.0, 60.0], "the incoming handle stays where it was");
+        pen_up(&mut app);
+        // Degenerate: ⇧ with the pointer on the anchor leaves the handle on it.
+        pen_down(&mut app, 200.0, 100.0, false);
+        pen_move(&mut app, 200.0, 100.0, true);
+        let k = app.ui.pen.as_ref().unwrap().knots[2];
+        assert!(k.iter().all(|p| *p == [200.0, 100.0]), "{k:?}");
+        pen_up(&mut app);
+    }
+
+    /// #4721: a second Pen path joins the Work Path it was drawn after (still selected), as a new
+    /// subpath, instead of replacing it; a saved path that is selected takes it instead; with no
+    /// path selected, the new path replaces the Work Path, as in Photoshop.
+    #[test]
+    fn a_new_pen_path_joins_the_selected_path() {
+        let mut app = app();
+        app.ui.tool = Tool::Pen;
+        let draw = |app: &mut PhotocraftApp, x: f64| {
+            for (dx, dy) in [(0.0, 0.0), (40.0, 0.0), (40.0, 40.0)] {
+                pen_down(app, x + dx, 20.0 + dy, false);
+                pen_up(app);
+            }
+            pen_down(app, x + 0.5, 20.5, false); // close
+            pen_up(app);
         };
-        app.run(
-            "path.set",
-            json!({"name": "work", "path": {"subpaths": [
-                {"closed": false, "knots": [[10, 40], [110, 40]]},
-                {"closed": true, "knots": [[20, 80], [70, 80], [70, 120]]}
-            ]}}),
-        )
-        .unwrap();
-
-        // Omitting `t` inserts at 0.5 and names the new knot. The Pen's click on that midpoint does the same.
-        let added = app.run("path.addAnchor", json!({"name": "work", "subpath": 0, "knot": 0})).unwrap();
-        assert_eq!(added["anchor"], json!({"subpath": 0, "knot": 1}));
-        assert_eq!(added["path"]["subpaths"][0]["knots"][1]["anchor"], json!([60.0, 40.0]));
-        app.run("edit.undo", json!({})).unwrap();
-
-        app.ui.direct_selection = DirectSelection { target: Some(PathRef::Work), anchors: vec![[0, 0]], ..Default::default() };
-        click(&mut app, 60.0, 40.0);
-        assert!(app.ui.pen.is_none(), "adding on a placed segment does not start a new path");
-        assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Add Anchor Point"));
-        assert!(app.ui.direct_selection.anchors.is_empty(), "the result's anchor index replaced the old selection");
-        let wp = app.session.active().unwrap().doc.work_path.clone().unwrap();
-        assert_eq!(wp.subpaths[0].knots.len(), 3);
-        let mid = wp.subpaths[0].knots[1].anchor;
-        assert!((mid.x - 60.0).abs() < 1.0 && (mid.y - 40.0).abs() < 1.0, "{mid:?}");
-        assert!(wp.subpaths[1].closed && wp.subpaths[1].knots.len() == 3, "the other subpath stays");
-
-        // Deleting that new anchor rejoins its neighbours and keeps the subpath.
-        let removed = app.run("path.deleteAnchor", json!({"name": "work", "subpath": 0, "knot": 1})).unwrap();
-        assert_eq!(removed["subpathRemoved"], json!(false));
-        assert_eq!(removed["path"]["subpaths"][0]["knots"].as_array().unwrap().len(), 2);
-        app.run("edit.undo", json!({})).unwrap();
-        let mid = app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].knots[1].anchor;
-        click(&mut app, mid.x, mid.y);
-        assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Delete Anchor Point"));
-        let wp = app.session.active().unwrap().doc.work_path.clone().unwrap();
-        assert_eq!(wp.subpaths[0].knots.len(), 2);
-        assert!(!wp.subpaths[0].closed);
-
-        // A closed subpath stays closed as anchors go. Its last anchor removes the subpath
-        // (`subpathRemoved`) while another subpath is still there.
-        click(&mut app, 70.0, 80.0);
-        let sp = &app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[1];
-        assert!(sp.closed && sp.knots.len() == 2);
-        click(&mut app, 70.0, 120.0);
-        let sp = &app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[1];
-        assert!(sp.closed && sp.knots.len() == 1, "one anchor remains, and the subpath stays");
-        let last = sp.knots[0].anchor;
-        click(&mut app, last.x, last.y);
-        let wp = app.session.active().unwrap().doc.work_path.as_ref().unwrap();
-        assert_eq!(wp.subpaths.len(), 1, "the closed subpath's last anchor removed it");
-        assert_eq!(wp.subpaths[0].knots.len(), 2);
-
-        // The path's only anchor is refused, and the point stays.
-        app.run("path.set", json!({"path": {"subpaths": [{"closed": true, "knots": [[20, 20]]}]}})).unwrap();
-        click(&mut app, 20.0, 20.0);
-        assert!(app.ui.status_error, "{}", app.ui.status);
-        assert!(app.ui.status.contains("only anchor"), "{}", app.ui.status);
-        assert_eq!(app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths[0].knots.len(), 1);
+        let work = |app: &PhotocraftApp| app.session.active().unwrap().doc.work_path.clone().unwrap();
+        draw(&mut app, 20.0);
+        assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
+        draw(&mut app, 120.0);
+        let wp = work(&app);
+        assert_eq!(wp.subpaths.len(), 2, "the first path stays");
+        assert!(wp.subpaths.iter().all(|s| s.closed && s.knots.len() == 3));
+        assert_eq!(wp.subpaths[0].knots[0].anchor.x, 20.0);
+        assert_eq!(wp.subpaths[1].knots[0].anchor.x, 120.0);
+        // One History step per path.
+        app.session.undo();
+        assert_eq!(work(&app).subpaths.len(), 1, "undo takes back only the second path");
+        app.session.redo();
+        // A selected saved path takes the next one.
+        app.run("path.set", json!({"name": "Saved", "path": {"subpaths": [{"knots": [[2, 2], [12, 2], [12, 8]]}]}})).unwrap();
+        app.ui.selected_path = Some("Saved".into());
+        draw(&mut app, 220.0);
+        let saved = app.session.active().unwrap().doc.paths.iter().find(|p| p.name == "Saved").unwrap().path.clone();
+        assert_eq!(saved.subpaths.len(), 2);
+        assert_eq!(work(&app).subpaths.len(), 2, "the Work Path is left alone");
+        assert_eq!(app.ui.selected_path.as_deref(), Some("Saved"));
+        // No path selected: a new Work Path replaces the old one.
+        app.ui.selected_path = None;
+        draw(&mut app, 320.0);
+        let wp = work(&app);
+        assert_eq!(wp.subpaths.len(), 1);
+        assert_eq!(wp.subpaths[0].knots[0].anchor.x, 320.0);
+        assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
     }
 
+    /// #4596: the close-path pointer shows where a click would close the path, and only there:
+    /// over the first anchor once the Pen has two anchors (the Curvature Pen three), not while an
+    /// anchor is being dragged.
     #[test]
-    fn pen_hover_cursor_matches_the_press() {
+    fn close_path_pointer_shows_where_a_click_closes() {
         let mut app = app();
         app.ui.tool = Tool::Pen;
-        app.ui.extras.snap = false;
-        app.run("path.set", json!({"path": {"subpaths": [{"closed": false, "knots": [[20, 40], [80, 40], [80, 100]]}]}})).unwrap();
-        let at = |app: &PhotocraftApp, x, y, mods| path_cursor(app, [x, y], mods);
-        let none = egui::Modifiers::NONE;
-        assert_eq!(at(&app, 20.0, 40.0, none), Some(PathCursor::Continue));
-        assert_eq!(at(&app, 80.0, 100.0, none), Some(PathCursor::Continue));
-        assert_eq!(at(&app, 80.0, 40.0, none), Some(PathCursor::Remove));
-        assert_eq!(at(&app, 50.0, 40.0, none), Some(PathCursor::Add));
-        assert_eq!(at(&app, 10.0, 10.0, none), None);
-        assert_eq!(at(&app, 80.0, 40.0, egui::Modifiers::ALT), Some(PathCursor::Curve));
-        assert_eq!(at(&app, 50.0, 40.0, egui::Modifiers::COMMAND), Some(PathCursor::Curve));
-        assert_eq!(at(&app, 80.0, 40.0, egui::Modifiers::COMMAND), Some(PathCursor::Move));
-        assert_eq!(PathCursor::Continue.icon(), "circle");
-        assert_eq!(PathCursor::Remove.icon(), "minus");
-        assert_eq!(PathCursor::Add.icon(), "plus");
-        assert_eq!(PathCursor::Curve.icon(), "pen-curve");
-        assert_eq!(PathCursor::Move.icon(), "move");
+        assert!(!closes_path_at(&app, Tool::Pen, 20.0, 20.0), "no path yet");
+        pen_down(&mut app, 20.0, 20.0, false);
+        pen_up(&mut app);
+        assert!(!closes_path_at(&app, Tool::Pen, 20.0, 20.0), "one anchor: a click there doesn't close");
+        pen_down(&mut app, 120.0, 20.0, false);
+        assert!(!closes_path_at(&app, Tool::Pen, 20.0, 20.0), "not while dragging the new anchor");
+        pen_up(&mut app);
+        assert!(closes_path_at(&app, Tool::Pen, 21.0, 22.0), "over the first anchor");
+        assert!(!closes_path_at(&app, Tool::Pen, 120.0, 20.0) && !closes_path_at(&app, Tool::Pen, 60.0, 60.0), "the last anchor and empty canvas");
+        assert!(!closes_path_at(&app, Tool::CurvaturePen, 20.0, 20.0), "a Pen path isn't the Curvature Pen's");
+        pen_down(&mut app, 21.0, 22.0, false);
+        pen_up(&mut app);
+        assert!(app.ui.pen.is_none() && !closes_path_at(&app, Tool::Pen, 20.0, 20.0), "the click closed it");
 
-        app.ui.pen = Some(PenPath { knots: vec![[[20.0, 40.0]; 3], [[80.0, 40.0]; 3], [[80.0, 100.0]; 3]], ..Default::default() });
-        assert_eq!(at(&app, 20.0, 40.0, none), Some(PathCursor::Continue));
-        assert_eq!(at(&app, 80.0, 100.0, none), Some(PathCursor::Curve));
-        assert_eq!(at(&app, 50.0, 40.0, none), None, "a path being drawn does not insert on its own segments");
-
-        app.ui.pen = None;
-        app.ui.tool = Tool::PathSelection;
-        assert_eq!(at(&app, 80.0, 40.0, none), Some(PathCursor::Move));
-        assert_eq!(at(&app, 50.0, 40.0, none), Some(PathCursor::Move));
+        app.ui.tool = Tool::CurvaturePen;
+        for (x, y) in [(20.0, 20.0), (120.0, 20.0)] {
+            curvature_down(&mut app, x, y);
+            curvature_up(&mut app);
+        }
+        assert!(!closes_path_at(&app, Tool::CurvaturePen, 20.0, 20.0), "two anchors: the Curvature Pen moves the first");
+        curvature_down(&mut app, 120.0, 120.0);
+        curvature_up(&mut app);
+        assert!(closes_path_at(&app, Tool::CurvaturePen, 20.0, 20.0));
+        assert!(!closes_path_at(&app, Tool::CurvaturePen, 120.0, 120.0));
     }
 
     #[test]
@@ -2571,6 +2655,65 @@ mod tests {
         h.run_steps(2);
         click_fill(&mut h);
         assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+    }
+
+    /// #3915: Path Selection and Direct Selection options bars show Fill, Stroke, and Radius
+    /// controls when a shape is selected, and editing them edits the selected shape.
+    #[test]
+    fn path_selection_options_bar_edits_the_selected_shape() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut app = app();
+        app.run("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
+        finish_shape(&mut app, Tool::Rectangle, [20.0, 20.0], [120.0, 100.0], Default::default());
+        let shape = |app: &PhotocraftApp| {
+            let st = app.session.active().unwrap();
+            match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
+                LayerContent::Shape(sh) => (sh.fill.clone(), sh.stroke.clone()),
+                _ => panic!("not a shape layer"),
+            }
+        };
+        assert!(shape(&app).0.is_some() && shape(&app).1.is_none());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1100.0, 48.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    ui.horizontal_centered(|ui| options_bar(app, ui, Tool::PathSelection));
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(4);
+        let click_fill = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>| {
+            let label = h.query_all(egui_kittest::kittest::by().label("Fill:").include_labels()).next().expect("the Fill label").rect();
+            let at = egui::pos2(label.right() + h.ctx.global_style().spacing.item_spacing.x + 7.0, label.center().y);
+            h.hover_at(at);
+            h.step();
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                h.step();
+            }
+            h.run_steps(2);
+        };
+        // Stroke width field is available on Path Selection bar too.
+        h.get_all_by_role(Role::SpinButton).next().expect("the stroke width").click();
+        h.run();
+        for c in "6".chars() {
+            h.event(egui::Event::Text(c.to_string()));
+            h.run();
+        }
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        let stroke = shape(h.state()).1.expect("the width field stroked the shape");
+        assert_eq!(stroke.width, 6.0);
+        assert_eq!(stroke.paint, photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(0.0, 0.0, 1.0, 1.0)));
+        // Fill toggle.
+        click_fill(&mut h);
+        assert_eq!(shape(h.state()).0, None, "unchecking Fill removed the shape's fill");
+        // No shape selected: renders hint text instead.
+        h.state_mut().run("layer.new.layer", json!({})).unwrap();
+        h.run_steps(2);
+        assert!(h.query_all(egui_kittest::kittest::by().label("Fill:").include_labels()).next().is_none());
     }
 }
 
