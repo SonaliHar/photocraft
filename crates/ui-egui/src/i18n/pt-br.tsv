@@ -4153,3 +4153,6 @@ cameraRaw	Type	Tipo
 	GPU Memory (MB, 0 = Automatic)	Memória da GPU (MB, 0 = Automático)
 	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Desenhe duas ou mais guias na imagem ao longo de linhas que devem ser verticais ou horizontais (Shift+T).
 	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Arraste a extremidade de uma guia para movê-la; selecione uma guia e pressione Delete para removê-la. Até quatro guias.
+	Didn't update {file}: it is empty on this computer (maybe not downloaded yet from a sync service)	{file} não foi atualizado: está vazio neste computador (talvez ainda não tenha sido baixado de um serviço de sincronização)
+	Didn't update {file}: {reason}	{file} não foi atualizado: {reason}
+	Saved Camera Raw settings to {file}	Configurações do Camera Raw salvas em {file}

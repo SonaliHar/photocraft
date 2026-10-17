@@ -4032,3 +4032,6 @@ cameraRaw	Type	種類
 	GPU Memory (MB, 0 = Automatic)	GPU メモリ（MB、0 = 自動）
 	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	垂直または水平にしたい線に沿って、画像上にガイドを 2 本以上描画します (Shift+T)。
 	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	ガイドの端をドラッグして移動します。ガイドを選択して Delete キーを押すと削除されます。ガイドは最大 4 本です。
+	Didn't update {file}: it is empty on this computer (maybe not downloaded yet from a sync service)	{file} を更新しませんでした：このコンピュータでは空です（同期サービスからまだダウンロードされていない可能性があります）
+	Didn't update {file}: {reason}	{file} を更新しませんでした：{reason}
+	Saved Camera Raw settings to {file}	Camera Raw の設定を {file} に保存しました

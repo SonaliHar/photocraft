@@ -4357,3 +4357,6 @@ navigator	Zoom	Zoom
 	GPU Memory (MB, 0 = Automatic)	Memoria de GPU (MB, 0 = Automático)
 	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Dibuje dos o más guías en la imagen a lo largo de líneas que deban ser verticales u horizontales (Mayús+T).
 	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Arrastre el extremo de una guía para moverlo; seleccione una guía y pulse Supr para eliminarla. Hasta cuatro guías.
+	Didn't update {file}: it is empty on this computer (maybe not downloaded yet from a sync service)	No se actualizó {file}: está vacío en este ordenador (quizá aún no se ha descargado de un servicio de sincronización)
+	Didn't update {file}: {reason}	No se actualizó {file}: {reason}
+	Saved Camera Raw settings to {file}	Ajustes de Camera Raw guardados en {file}

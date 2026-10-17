@@ -3370,3 +3370,6 @@ cameraRaw	Type	Type
 	GPU Memory (MB, 0 = Automatic)	Mémoire GPU (Mo, 0 = Automatique)
 	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Tracez au moins deux repères sur l'image le long de lignes qui doivent être verticales ou horizontales (Maj+T).
 	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Faites glisser l'extrémité d'un repère pour la déplacer ; sélectionnez un repère et appuyez sur Suppr pour le supprimer. Quatre repères au maximum.
+	Didn't update {file}: it is empty on this computer (maybe not downloaded yet from a sync service)	{file} n’a pas été mis à jour : il est vide sur cet ordinateur (peut-être pas encore téléchargé depuis un service de synchronisation)
+	Didn't update {file}: {reason}	{file} n’a pas été mis à jour : {reason}
+	Saved Camera Raw settings to {file}	Réglages Camera Raw enregistrés dans {file}

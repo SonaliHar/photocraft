@@ -3954,3 +3954,6 @@ cameraRaw	Type	Typ
 	GPU Memory (MB, 0 = Automatic)	Pamięć GPU (MB, 0 = Automatycznie)
 	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Narysuj na obrazie co najmniej dwie prowadnice wzdłuż linii, które powinny być pionowe lub poziome (Shift+T).
 	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Przeciągnij koniec prowadnicy, aby go przesunąć; zaznacz prowadnicę i naciśnij Delete, aby ją usunąć. Maksymalnie cztery prowadnice.
+	Didn't update {file}: it is empty on this computer (maybe not downloaded yet from a sync service)	Nie zaktualizowano {file}: plik jest pusty na tym komputerze (może nie został jeszcze pobrany z usługi synchronizacji)
+	Didn't update {file}: {reason}	Nie zaktualizowano {file}: {reason}
+	Saved Camera Raw settings to {file}	Zapisano ustawienia Camera Raw w {file}

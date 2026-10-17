@@ -329,6 +329,11 @@ pub fn queue_open_dialog(app: &mut PhotocraftApp, name: &str, path: Option<&str>
     let Some(st) = app.session.close(index) else { return };
     app.sync_views();
     let thumb = thumbnail(app, &st.doc);
+    // Settings saved next to the raw (by PhotoCraft, Camera Raw or Lightroom) come back.
+    let params = path.and_then(read_sidecar).and_then(|text| {
+        let mut p = CameraRaw::default();
+        photocraft_io::camera_raw_xmp::load(&mut p, text.as_bytes()).ok().filter(|_| p != CameraRaw::default()).map(|_| p)
+    });
     app.raw_shelf.push(HeldRaw {
         raw: RawOpen {
             document: st.doc.id,
@@ -339,7 +344,7 @@ pub fn queue_open_dialog(app: &mut PhotocraftApp, name: &str, path: Option<&str>
             demosaic: method,
         },
         doc: st.doc,
-        params: None,
+        params,
         thumb,
         tex: None,
     });
@@ -457,9 +462,86 @@ fn keep_shelf_settings(app: &mut PhotocraftApp) {
     }
 }
 
-/// Open with raws in the filmstrip: each becomes a document, developed with its own settings.
+/// The sidecar of the raw at `raw_path`: `name.xmp`, or an existing `name.XMP`.
+#[cfg(not(target_arch = "wasm32"))]
+fn sidecar_of(raw_path: &str) -> std::path::PathBuf {
+    let xmp = std::path::PathBuf::from(photocraft_io::camera_raw_xmp::sidecar_path(raw_path));
+    let upper = xmp.with_extension("XMP");
+    if !xmp.exists() && upper.exists() { upper } else { xmp }
+}
+
+/// The text of the raw's sidecar, when there is a readable, non-empty one.
+fn read_sidecar(raw_path: &str) -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::fs::read_to_string(sidecar_of(raw_path)).ok().filter(|t| !t.trim().is_empty())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = raw_path;
+        None
+    }
+}
+
+/// Writes each filmstrip raw's settings to its sidecar (`.xmp` next to the raw), as Camera Raw
+/// does on Open and Done: an existing sidecar keeps everything else in it (rating, keywords,
+/// settings PhotoCraft doesn't have). A sidecar that is empty here (a sync service that hasn't
+/// downloaded it) or can't be read safely is never overwritten. Returns the files written and
+/// the warnings.
+fn write_sidecars(app: &PhotocraftApp) -> (Vec<String>, Vec<String>) {
+    let (mut saved, mut warnings) = (Vec::new(), Vec::new());
+    #[cfg(not(target_arch = "wasm32"))]
+    for held in &app.raw_shelf {
+        let Some(raw_path) = &held.raw.path else { continue };
+        let params = held.params.clone().unwrap_or_default();
+        let path = sidecar_of(raw_path);
+        let file = path.file_name().map_or_else(String::new, |f| f.to_string_lossy().into_owned());
+        let existing = match std::fs::read(&path) {
+            Ok(bytes) if bytes.iter().all(u8::is_ascii_whitespace) => {
+                let template = "Didn't update {file}: it is empty on this computer (maybe not downloaded yet from a sync service)";
+                warnings.push(crate::i18n::fmt(tl!(template), &[("file", &file)]));
+                continue;
+            }
+            Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+            // No sidecar and nothing to say: don't leave one behind.
+            Err(_) if params.is_identity() => continue,
+            Err(_) => None,
+        };
+        match photocraft_io::camera_raw_xmp::save_sidecar(&params, existing.as_deref()).and_then(|text| std::fs::write(&path, text).map_err(|e| e.to_string()))
+        {
+            Ok(()) => saved.push(file),
+            Err(reason) => warnings.push(crate::i18n::fmt(tl!("Didn't update {file}: {reason}"), &[("file", &file), ("reason", &reason)])),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    let _ = app;
+    (saved, warnings)
+}
+
+/// Done: saves each raw's settings to its sidecar and opens nothing.
+fn done(app: &mut PhotocraftApp) {
+    keep_shelf_settings(app);
+    let (saved, warnings) = write_sidecars(app);
+    app.raw_shelf.clear();
+    app.camera_raw = None;
+    report_sidecars(app, &saved, &warnings);
+}
+
+fn report_sidecars(app: &mut PhotocraftApp, saved: &[String], warnings: &[String]) {
+    if !warnings.is_empty() {
+        crate::notices::error(app, warnings.join("\n"));
+    } else if !saved.is_empty() {
+        app.ui.status = crate::i18n::fmt(tl!("Saved Camera Raw settings to {file}"), &[("file", &saved.join(", "))]);
+        app.ui.status_error = false;
+    }
+}
+
+/// Open with raws in the filmstrip: each becomes a document, developed with its own settings
+/// (saved to its sidecar first).
 fn open_shelf(app: &mut PhotocraftApp) -> Result<Value, String> {
     keep_shelf_settings(app);
+    let (saved, warnings) = write_sidecars(app);
+    report_sidecars(app, &saved, &warnings);
     let mut opened = Vec::new();
     let mut failed = Vec::new();
     for held in std::mem::take(&mut app.raw_shelf) {
@@ -921,8 +1003,8 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     for (key, value) in fields {
         match key.as_str() {
             "set" | "scope" | "view" | "layout" | "hidden" | "beforeAfter" | "demosaic" => {}
-            "before" | "commit" | "cancel" | "profileBrowser" | "saveSettings" | "loadSettings" | "undo" | "redo" if value.is_boolean() => {}
-            "before" | "commit" | "cancel" | "profileBrowser" | "saveSettings" | "loadSettings" | "undo" | "redo" => {
+            "before" | "commit" | "cancel" | "done" | "profileBrowser" | "saveSettings" | "loadSettings" | "undo" | "redo" if value.is_boolean() => {}
+            "before" | "commit" | "cancel" | "done" | "profileBrowser" | "saveSettings" | "loadSettings" | "undo" | "redo" => {
                 return Some(Err(format!("Camera Raw {key} must be a boolean")));
             }
             _ => return Some(Err(format!("unknown Camera Raw ui property {key}"))),
@@ -1109,6 +1191,13 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     }
     if ui.get("commit").and_then(Value::as_bool) == Some(true) {
         return Some(commit(app));
+    }
+    if ui.get("done").and_then(Value::as_bool) == Some(true) {
+        if app.camera_raw.as_ref().is_none_or(|d| d.target != Target::OpenRaw) {
+            return Some(Err("Done is for a raw being opened".into()));
+        }
+        done(app);
+        return Some(Ok(json!({"done": true})));
     }
     Some(Ok(app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)).unwrap_or(Value::Null)))
 }
@@ -1684,6 +1773,19 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             painter.rect_filled(cancel_rect, 12.0, c.hover);
         }
         painter.text(cancel_rect.center(), Align2::CENTER_CENTER, tl!("Cancel"), FontId::proportional(12.5), c.text);
+        // Done (a raw being opened from a file): save its settings next to it, open nothing.
+        if d.target == Target::OpenRaw && app.raw_shelf.iter().any(|h| h.raw.path.is_some()) {
+            let done_rect = ERect::from_min_size(pos2(ok_rect.left() - 16.0 - 70.0, foot.center().y - 12.0), vec2(70.0, 24.0));
+            let done = ui.interact(done_rect, ui.id().with("cr-done"), Sense::click());
+            done.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Done")));
+            if done.hovered() {
+                painter.rect_filled(done_rect, 12.0, c.hover);
+            }
+            painter.text(done_rect.center(), Align2::CENTER_CENTER, tl!("Done"), FontId::proportional(12.5), c.text);
+            if done.clicked() {
+                action = Some("done");
+            }
+        }
         if ok.clicked() {
             action = Some("ok");
         }
@@ -1715,6 +1817,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             }
         }
         Some("cancel") => cancel(app),
+        Some("done") => done(app),
         Some("save") => {
             let r = save_settings(app);
             report_file_error(app, r);
@@ -2500,6 +2603,44 @@ mod tests {
         assert!(app.raw_shelf.is_empty());
         // A place past the filmstrip is an error, not a panic.
         assert!(open_raw(&mut app, &ctx, 9).is_err());
+    }
+
+    /// Open and Done save each raw's settings next to it (`.xmp`), keeping what else an existing
+    /// sidecar holds; an empty sidecar (not downloaded from a sync service yet) is left alone;
+    /// the settings come back when the raw is opened again.
+    #[test]
+    fn done_and_open_save_sidecars_and_reopening_reads_them() {
+        let (mut app, dng) = raw_app();
+        let ctx = egui::Context::default();
+        let dir = std::env::temp_dir().join(format!("photocraft-sidecar-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = |name: &str| dir.join(name).to_string_lossy().into_owned();
+        let rated = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="4"/></rdf:RDF></x:xmpmeta>"#;
+        std::fs::write(dir.join("b.xmp"), rated).unwrap();
+        std::fs::write(dir.join("c.xmp"), "").unwrap();
+        for name in ["a.dng", "b.dng", "c.dng"] {
+            app.open_bytes(name, &dng).unwrap();
+            app.raw_shelf.last_mut().unwrap().raw.path = Some(path(name));
+        }
+        open_raw(&mut app, &ctx, 0).unwrap();
+        for i in 0..3 {
+            show_raw(&mut app, &ctx, i).unwrap();
+            menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0.5, "upright": "level"}}})).unwrap().unwrap();
+        }
+        let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"done": true}})).unwrap().unwrap();
+        assert_eq!(r["done"], true);
+        assert!(app.camera_raw.is_none() && app.raw_shelf.is_empty() && app.session.documents().is_empty(), "Done opens nothing");
+        let a = std::fs::read_to_string(dir.join("a.xmp")).unwrap();
+        assert!(a.contains("crs:Exposure2012=\"+0.50\"") && a.contains("crs:PerspectiveUpright=\"2\""), "{a}");
+        let b = std::fs::read_to_string(dir.join("b.xmp")).unwrap();
+        assert!(b.contains("xmp:Rating=\"4\"") && b.contains("crs:Exposure2012"), "the rating stays: {b}");
+        assert_eq!(std::fs::read(dir.join("c.xmp")).unwrap().len(), 0, "an empty sidecar is never overwritten");
+        // Opening a again brings its settings back.
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        queue_open_dialog(&mut app, "a.dng", Some(&path("a.dng")), None);
+        let p = app.raw_shelf[0].params.clone().expect("settings read from a.xmp");
+        assert_eq!((p.exposure, p.upright.as_str()), (0.5, "level"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
