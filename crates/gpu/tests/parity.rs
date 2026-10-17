@@ -197,7 +197,7 @@ fn hdr_adjustments_preserve_range_and_cpu_parity() {
         let mut layer = Layer::raster("pixels", PixelFormat::RGBA32F);
         layer.surface_mut().unwrap().write_region(Rect::new(0, 0, 3, 1), &[4.0, 2.0, 0.5, 1.0, -0.1, 3.0, 0.25, 0.75, 0.0, 0.0, 0.0, 1.0]);
         d.layers = vec![layer, Layer::new("adjustment", LayerContent::Adjustment(adj.clone()))];
-        let cpu = photocraft_compose::flatten(&d);
+        let cpu = photocraft_compose::flatten(&d).unwrap();
         assert!(cpu.px[0][0] > 1.0, "HDR reference unexpectedly clipped: {adj:?}");
         check(&mut g, &d, &format!("HDR {adj:?}"));
     }
@@ -450,7 +450,7 @@ fn chunks_keep_their_own_checkpoint_after_a_partial_refresh() {
         let (cached, stats) = photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, doc, rect).unwrap();
         let cold = render_to_vec(&mut uncached, &g.device, &g.queue, doc, rect).unwrap();
         assert_eq!(cached, cold, "{what}: reuse preserves the GPU accumulator exactly");
-        let cpu = photocraft_compose::render(doc, rect);
+        let cpu = photocraft_compose::render(doc, rect).unwrap();
         assert!(worst_diff(&cpu.px, &cached).0 <= TOL, "{what}: GPU and CPU differ");
         stats
     };
@@ -698,7 +698,7 @@ fn xor_rounding_on_half_float_targets() {
         layer.blend = blend;
         doc.layers.push(layer);
     }
-    let cpu = photocraft_compose::flatten(&doc);
+    let cpu = photocraft_compose::flatten(&doc).unwrap();
     assert!((cpu.px[0][0] - 63.0 / 255.0).abs() < 1e-6);
     let gpu = render_to_vec(&mut comp, &device, &queue, &doc, doc.bounds()).unwrap();
     assert!(worst_diff(&cpu.px, &gpu).0 <= TOL, "CPU {:?}, GPU {:?}", cpu.px[0], gpu[0]);
@@ -935,13 +935,13 @@ fn hard_stop_gradients_match_cpu_or_fall_back() {
             }
             d.layers.clear();
             d.layers.push(Layer::new("gradient", LayerContent::Fill(fill.clone())));
-            let cpu = photocraft_compose::render(&d, d.bounds());
+            let cpu = photocraft_compose::render(&d, d.bounds()).unwrap();
             assert_eq!(cpu.px[4], [1.0; 4]);
             let out = match render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()) {
                 Ok(out) => out,
                 Err(e) => {
                     assert!(e.0.contains("coincident gradient stops"), "{e}");
-                    photocraft_compose::render(&d, d.bounds()).px
+                    photocraft_compose::render(&d, d.bounds()).unwrap().px
                 }
             };
             let worst = worst_diff(&cpu.px, &out);
@@ -1227,9 +1227,9 @@ fn changed_mask_default_updates_absent_tiles() {
     let data = vec![0.5f32; 70 * 70];
     for default in [0.0, 1.0] {
         let mut m = LayerMask::reveal_all();
-        m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[default]);
+        m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[default]).into();
         for r in corners {
-            m.surface.write_region(r, &data);
+            std::sync::Arc::make_mut(&mut m.surface).write_region(r, &data);
         }
         d.layers[1].mask = Some(m);
         check(&mut g, &d, &format!("mask default {default}"));
@@ -1248,7 +1248,7 @@ fn shared_tiles_upload_once_and_copy() {
         let mut l = Layer::raster("fill", fmt);
         l.surface_mut().unwrap().fill_rect(Rect::new(30, 40, 90, 70), &[0.3, 0.6, 0.2, 0.9][..fmt.channels()]);
         let mut m = LayerMask::reveal_all();
-        m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[1.0]);
+        m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[1.0]).into();
         l.mask = Some(m);
         d.layers.push(l);
         check(&mut g, &d, &format!("{fmt:?} small"));
@@ -1260,11 +1260,11 @@ fn shared_tiles_upload_once_and_copy() {
         let s = d.layers[1].surface_mut().unwrap();
         s.fill_rect(Rect::new(0, 0, w as i32, h as i32), &[0.1, 0.9, 0.4, 0.6][..fmt.channels()]);
         s.fill_rect(Rect::new(300, 300, 340, 320), &[1.0, 0.0, 0.0, 1.0][..fmt.channels()]);
-        let m = &mut d.layers[1].mask.as_mut().unwrap().surface;
+        let m = std::sync::Arc::make_mut(&mut d.layers[1].mask.as_mut().unwrap().surface);
         m.fill_rect(Rect::new(0, 0, w as i32, h as i32), &[0.25]);
         check(&mut g, &d, &format!("{fmt:?} refilled"));
         // Clear the mask back to its (non-zero) default: its tiles go away.
-        d.layers[1].mask.as_mut().unwrap().surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[1.0]);
+        d.layers[1].mask.as_mut().unwrap().surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[1.0]).into();
         check(&mut g, &d, &format!("{fmt:?} mask cleared"));
         // Clear the layer: every tile goes away and reads as transparent again.
         *d.layers[1].surface_mut().unwrap() = photocraft_raster::Surface::new(fmt);
@@ -1286,8 +1286,8 @@ fn growing_layer_keeps_its_resident_tiles() {
         let mut l = Layer::raster("paint", fmt);
         l.surface_mut().unwrap().fill_rect(Rect::new(500, 300, 540, 340), &[0.3, 0.6, 0.2, 0.9][..fmt.channels()]);
         let mut m = LayerMask::reveal_all();
-        m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[0.75]);
-        m.surface.fill_rect(Rect::new(510, 310, 520, 320), &[0.25]);
+        m.surface = photocraft_raster::Surface::with_default(PixelFormat::GRAY8, &[0.75]).into();
+        std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(510, 310, 520, 320), &[0.25]);
         l.mask = Some(m);
         d.layers.push(l);
         check(&mut g, &d, &format!("{fmt:?} initial"));
@@ -1298,7 +1298,7 @@ fn growing_layer_keeps_its_resident_tiles() {
             let dab = Rect::new(r.0, r.1, r.2, r.3);
             d.layers[1].surface_mut().unwrap().fill_rect(dab, &[0.9, 0.1, 0.3, 0.7][..fmt.channels()]);
             if i == 2 {
-                d.layers[1].mask.as_mut().unwrap().surface.fill_rect(dab, &[0.5]);
+                std::sync::Arc::make_mut(&mut d.layers[1].mask.as_mut().unwrap().surface).fill_rect(dab, &[0.5]);
             }
             let what = format!("{fmt:?} dab {i}");
             let s = diff_rect(&mut g, &d, d.bounds(), &what).unwrap_or_else(|e| panic!("{e}"));
@@ -2385,7 +2385,7 @@ fn pattern_cache_tracks_default_pixels() {
         pat.surface = photocraft_raster::Surface::with_default(fmt, &[0.0, 0.0, 1.0, 1.0]);
         assert_eq!(pat.surface.tiles().count(), 0);
         d.patterns[0] = pat;
-        let cpu = photocraft_compose::flatten(&d);
+        let cpu = photocraft_compose::flatten(&d).unwrap();
         let mut fresh = Compositor::new(&g.device);
         let out = render_to_vec(&mut fresh, &g.device, &g.queue, &d, d.bounds()).unwrap();
         assert!(worst_diff(&cpu.px, &out).0 <= TOL, "fresh compositor matches blue default");
@@ -2475,7 +2475,7 @@ fn pattern_cache_tracks_source_format_and_cow_tiles() {
             assert_eq!(pat.surface.default_pixel(), defaults);
         }
         d.patterns = vec![pat.clone()];
-        let cpu = photocraft_compose::flatten(&d);
+        let cpu = photocraft_compose::flatten(&d).unwrap();
         if fmt.mode == ColorMode::Lab {
             let old: Vec<[f32; 4]> = previous.take().unwrap();
             assert!(worst_diff(&old, &cpu.px).0 > 0.1, "same default bits have different source-format colours");
@@ -2498,7 +2498,7 @@ fn pattern_cache_tracks_source_format_and_cow_tiles() {
     check(&mut g, &d, "COW blue tile edit");
     let mut fresh = Compositor::new(&g.device);
     let out = render_to_vec(&mut fresh, &g.device, &g.queue, &d, d.bounds()).unwrap();
-    assert!(worst_diff(&photocraft_compose::flatten(&d).px, &out).0 <= TOL, "fresh compositor matches COW edit");
+    assert!(worst_diff(&photocraft_compose::flatten(&d).unwrap().px, &out).0 <= TOL, "fresh compositor matches COW edit");
     assert_eq!(old.surface.tile_count(), 1);
 }
 
@@ -2557,7 +2557,7 @@ fn rgb_patterns_paint_in_the_document_mode() {
         }];
         d.layers.push(o);
         if mode == ColorMode::Grayscale {
-            let cpu = photocraft_compose::flatten(&d);
+            let cpu = photocraft_compose::flatten(&d).unwrap();
             assert!(cpu.px.iter().all(|p| (p[0] - p[1]).abs() < 1e-6 && (p[1] - p[2]).abs() < 1e-6), "a Grayscale composite is neutral");
         }
         fx_check(&mut g, &d, &format!("RGB pattern in {mode:?}"));

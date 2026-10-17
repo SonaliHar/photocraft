@@ -41,7 +41,7 @@ fn distinct_interpretations_keep_wide_arithmetic() {
     assert_eq!(Kind::Linear.version(), "0:0");
     assert_eq!(Kind::Gamma.version(), "0:0");
     let q = q();
-    let curve = photocraft_cms::srgb_trc();
+    let curve = photocraft_cms::curve::srgb_trc();
     let linear = held(&q, Kind::Linear);
     let gamma = held(&q, Kind::Gamma);
     for p in [[0., 0.25, 1., -0.], [0.125, 0.5, 0.75, 0.375], [0.5 + 2f64.powi(-40), 0.25, 0.75, f64::from_bits(1f64.to_bits() - 1)], [-0.125, 1.25, 0.75, 0.5]]

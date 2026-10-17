@@ -70,7 +70,7 @@ mod tests {
         let mut k = Surface::new(fmt);
         k.write_region(Rect::new(0, 0, 4, 1), &[0.5, 0.0, 0.0, 0.0]);
         doc.channels.push(AlphaChannel::new("Alpha", k));
-        let r = crate::flatten(&doc);
+        let r = crate::flatten(&doc).unwrap();
         // 0.5 is stored as 128/255 in an 8-bit channel: within one 8-bit step.
         assert!((r.px[0][0] - 0.5).abs() <= 1.0 / 255.0 && (r.px[0][1] - 0.5).abs() <= 1.0 / 255.0, "{:?}", r.px[0]);
         assert_eq!(r.px[1], [0.0, 1.0, 1.0, 1.0]);

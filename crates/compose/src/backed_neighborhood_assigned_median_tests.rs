@@ -126,7 +126,7 @@ fn dedicated_median_exact_arguments_profile_and_dispatch_fail_authoritatively() 
             3 => node.arguments[3] = node.arguments[2].clone(),
             4 => node.composition.as_mut().unwrap().compatibility_epoch = "unqualified-current".into(),
             5 => node.operation.name = "gegl:gaussian-blur".into(),
-            6 => doc.icc_profile = Some(Arc::new(photocraft_cms::Builtin::Srgb.profile().to_bytes())),
+            6 => doc.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes()),
             _ => node.composition.as_mut().unwrap().stored_operator = -261651887,
         }
         let owner = adopt_assigned(doc, q.clone(), guard);

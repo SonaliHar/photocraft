@@ -35,7 +35,7 @@ fn reference(b: [f64; 4], a: [f64; 4], t: f64) -> [f64; 4] {
     if t == 0. {
         return b.map(|v| f64::from(v as f32));
     }
-    let curve = photocraft_cms::srgb_trc();
+    let curve = photocraft_cms::curve::srgb_trc();
     let bb = [curve.eval64(b[0]), curve.eval64(b[1]), curve.eval64(b[2])];
     let aa = [curve.eval64(a[0]), curve.eval64(a[1]), curve.eval64(a[2])];
     let alpha = b[3] + t * (a[3] - b[3]);

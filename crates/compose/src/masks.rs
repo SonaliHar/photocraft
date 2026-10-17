@@ -549,7 +549,7 @@ mod tests {
         let canvas = Rect::new(0, 0, 600, 400);
         let mut layer = Layer::raster("cold shared mask", PixelFormat::RGBA8);
         let mut mask = photocraft_doc::LayerMask::reveal_all();
-        mask.surface.fill_rect(canvas, &[0.5]);
+        std::sync::Arc::make_mut(&mut mask.surface).fill_rect(canvas, &[0.5]);
         mask.feather = 8.0;
         layer.mask = Some(mask);
         let barrier = std::sync::Barrier::new(8);

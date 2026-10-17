@@ -35,12 +35,13 @@ fn held(q: &BackingQuota, stops: f32, black: f32) -> Held {
     Held { value, _fee: fee }
 }
 fn reference(before: [f64; 4], stops: f64, black: f64, raw: f64) -> [f64; 4] {
-    let curve = photocraft_cms::srgb_trc();
+    let curve = photocraft_cms::curve::srgb_trc();
     let b = [curve.eval64(before[0]), curve.eval64(before[1]), curve.eval64(before[2])];
     let after = b.map(|v| curve.eval_inverse64(if black == 0.0 { v * stops.exp2() } else { (v - black) / ((-stops).exp2() - black) }));
     let a = after.map(|v| curve.eval64(v));
     let t = f64::from(raw as f32);
-    let alpha = before[3] + t * (before[3] - before[3]);
+    let after_alpha = before[3];
+    let alpha = before[3] + t * (after_alpha - before[3]);
     let mut out = [0.; 4];
     for k in 0..3 {
         let x = if alpha == 0. {
@@ -68,7 +69,7 @@ fn present_mask_endpoints_never_bypass_mix() {
                 let actual = h.value.evaluate(before, true, raw, &q, &ctl()).unwrap();
                 assert_eq!(actual.map(f64::to_bits), reference(before, f64::from(stops), f64::from(black), raw).map(f64::to_bits));
                 if before[3].to_bits() == (-0f64).to_bits() {
-                    assert_eq!(actual[3].to_bits(), 0f64.to_bits());
+                    assert_eq!(actual[3].to_bits(), if raw.to_bits() == (-0f64).to_bits() { (-0f64).to_bits() } else { 0f64.to_bits() });
                 }
                 assert_eq!(h.value.evaluate(before, false, raw, &q, &ctl()).unwrap().map(f64::to_bits), before.map(f64::to_bits));
             }

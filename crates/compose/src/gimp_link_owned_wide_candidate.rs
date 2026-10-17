@@ -303,16 +303,15 @@ fn bind<'a>(
     if profile.definition.color_space != ColorSpace::Rgb {
         return Err(refused());
     }
-    if matches!(policy.reconstruction, Reconstruction::Cubic { .. }) {
-        if profile.definition.a2b.iter().chain(&profile.definition.b2a).any(Option::is_some)
+    if matches!(policy.reconstruction, Reconstruction::Cubic { .. })
+        && (profile.definition.a2b.iter().chain(&profile.definition.b2a).any(Option::is_some)
             || profile
                 .definition
                 .trc
                 .as_ref()
-                .is_none_or(|curves| curves.iter().any(|curve| !matches!(curve, Curve::Identity | Curve::Gamma(_) | Curve::Parametric { kind: 0..=4, .. })))
-        {
-            return Err(refused());
-        }
+                .is_none_or(|curves| curves.iter().any(|curve| !matches!(curve, Curve::Identity | Curve::Gamma(_) | Curve::Parametric { kind: 0..=4, .. }))))
+    {
+        return Err(refused());
     }
     let ItemRef::Layer(owner) = source.owner else {
         return Err(refused());
@@ -466,10 +465,8 @@ fn held_floor(doc: &Document, c: &Interrupt<'_>) -> Result<(u64, u64, u64)> {
     }
     for resource in &s.resources {
         poll(c)?;
-        for name in [Some(&resource.name), resource.collection.as_ref(), resource.locator.as_ref(), resource.content_hash.as_ref()] {
-            if let Some(name) = name {
-                model = plus(model, name.capacity() as u64)?;
-            }
+        for name in [Some(&resource.name), resource.collection.as_ref(), resource.locator.as_ref(), resource.content_hash.as_ref()].into_iter().flatten() {
+            model = plus(model, name.capacity() as u64)?;
         }
         if let Some(resolution) = &resource.resolution {
             model = plus(model, resolution.payload_hash.capacity() as u64)?;
@@ -644,7 +641,6 @@ pub fn prepare_owned_current_candidate_with_original_profile_policy(
         &photocraft_codecs::DecodeOptions {
             limits: photocraft_codecs::Limits { max_width: 8192, max_height: 8192, max_pixels: 4_000_000, max_alloc: DECODE_LIMIT },
             keep_orientation: true,
-            ..Default::default()
         },
     )
     .map_err(|_| CompositionError::Invalid("invalid bounded owned PNG16 image"))?;
@@ -729,7 +725,7 @@ mod tests {
         let raw = [17u16, 32769, 60003, 0, 12007, 48011, 24013, 65535].into_iter().flat_map(u16::to_ne_bytes).collect::<Vec<_>>();
         let encoded = photocraft_cms::builtin::srgb().to_bytes();
         let profile = photocraft_cms::Profile::parse(&encoded).unwrap();
-        let mut doc = Document::with_background("Owned candidate", Size::new(2, 1), ColorMode::Rgb, SampleType::U16);
+        let mut doc = Document::with_background("Owned candidate", Size::new(2, 1), ColorMode::Rgb, SampleType::U16, photocraft_color::Color::WHITE);
         doc.icc_profile = Some(encoded.clone());
         doc.source_color_context = Some(photocraft_doc::SourceColorContext { original_icc: Some(encoded.clone()), source_precision: 250 });
         doc.sample_encoding = Some(SampleEncoding::NonlinearProfile);

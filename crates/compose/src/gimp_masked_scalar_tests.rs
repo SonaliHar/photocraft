@@ -45,7 +45,7 @@ fn arg(name: &str, value: f32) -> FilterArgument {
     }
 }
 fn reference(p: Parameters, before: [f64; 4], raw: f64) -> [f64; 4] {
-    let curve = photocraft_cms::srgb_trc();
+    let curve = photocraft_cms::curve::srgb_trc();
     let mut after = before;
     for k in 0..3 {
         let v = if p.kind().linear() { curve.eval64(before[k]) } else { before[k] };

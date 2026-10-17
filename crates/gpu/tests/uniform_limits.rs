@@ -45,7 +45,7 @@ fn compositor(adapter: &wgpu::Adapter, device: &wgpu::Device) -> Compositor {
 
 fn healthy_control(compositor: &mut Compositor, device: &wgpu::Device, queue: &wgpu::Queue) {
     let small = fills(2);
-    let expected = photocraft_compose::flatten(&small);
+    let expected = photocraft_compose::flatten(&small).unwrap();
     let actual = render_to_vec(compositor, device, queue, &small, small.bounds()).expect("a fitting stack renders on the same device");
     assert_eq!(actual.len(), 1);
     for (cpu, gpu) in expected.px[0].iter().zip(actual[0]) {
@@ -83,7 +83,7 @@ fn an_oversized_stack_falls_back_without_faulting_the_watched_device() {
     let deep = fills(150);
     let fallback = match render_to_vec(&mut compositor, &device, &queue, &deep, deep.bounds()) {
         Ok(_) => panic!("the oversized stack must return Unsupported for CPU fallback"),
-        Err(_) => photocraft_compose::flatten(&deep),
+        Err(_) => photocraft_compose::flatten(&deep).unwrap(),
     };
     for (actual, expected) in fallback.px[0].iter().zip([0.25, 0.5, 0.75, 1.0]) {
         assert!((actual - expected).abs() <= 1.0 / 255.0, "CPU fallback preserves the translucent-fill composite: {actual} vs {expected}");
@@ -106,7 +106,7 @@ fn the_exact_buffer_limit_still_renders_with_cpu_parity() {
     compositor.set_health(health.clone());
     let boundary = fills(127);
     assert_eq!(plan(&boundary).unwrap().passes.len(), 255, "one chunk plus255passes uses exactly65536bytes");
-    let expected = photocraft_compose::flatten(&boundary);
+    let expected = photocraft_compose::flatten(&boundary).unwrap();
     let actual = render_to_vec(&mut compositor, &device, &queue, &boundary, boundary.bounds()).expect("the exact supported buffer boundary is accepted");
     assert_eq!(actual.len(), 1);
     for (cpu, gpu) in expected.px[0].iter().zip(actual[0]) {

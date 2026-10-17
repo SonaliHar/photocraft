@@ -183,7 +183,7 @@ fn exact_tiled_selected_outputs_and_cancellation() {
     let mut sel = Surface::new(PixelFormat::GRAY8);
     sel.fill_rect(area, &[0.4]);
     sel.fill_rect(Rect::new(250, 250, 270, 265), &[1.0]);
-    for depth in SampleType::ALL {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let surface = source(bounds, PixelFormat::new(ColorMode::Rgb, depth, true));
         for radius in [0.6, 3.0, 10.0] {
             let p = crate::FilterParams::UnsharpMask { amount: 150.0, radius, threshold: 8.0 };
@@ -211,7 +211,7 @@ fn preserve_details_resampling_keeps_the_same_sharpening() {
     let src = Rect::new(-3, 2, 19, 17);
     let (sx, sy) = (2.0, 1.5);
     let dst = crate::resample::scaled_rect(src, sx, sy);
-    for depth in SampleType::ALL {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         for mode in [ColorMode::Grayscale, ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
             let s = source(src, PixelFormat::new(mode, depth, true));
             let resized = resize_surface(&s, sx, sy, Resample::Lanczos);
@@ -221,6 +221,29 @@ fn preserve_details_resampling_keeps_the_same_sharpening() {
             let actual = resize_surface(&s, sx, sy, Resample::PreserveDetails);
             assert_eq!(actual.to_interleaved(area), expected.to_interleaved(area));
         }
+    }
+}
+
+// These frozen F32 convolution oracles predate U32/F64 storage. Native-wide
+// sharpening remains unimplemented; refusal must not narrow or modify its input.
+#[test]
+fn unsupported_wide_sharpening_preserves_exact_native_words() {
+    let area = Rect::new(-1, 2, 1, 3);
+    for (sample, raw) in [
+        (SampleType::U32, [0x8000_0001u32.to_ne_bytes(), 0x8000_0002u32.to_ne_bytes()].concat()),
+        (SampleType::F64, [(-0.0f64).to_ne_bytes(), (1.0f64 + f64::EPSILON).to_ne_bytes()].concat()),
+    ] {
+        let source = Surface::try_from_interleaved(PixelFormat::new(ColorMode::Grayscale, sample, false), area, &raw).unwrap();
+        let before = source.clone();
+        let params = crate::FilterParams::UnsharpMask { amount: 150.0, radius: 3.0, threshold: 8.0 };
+        assert!(crate::apply_tiled_with(&source, &params, area, area, None, 256, Some(area), &Interrupt::NONE).is_none());
+        assert!(crate::apply_in_with(&source, &params, area, area, None, area, &Interrupt::NONE).is_none());
+        assert_eq!(
+            crate::resample::try_resize_surface_with_interrupt(&source, 2.0, 1.5, crate::resample::Resample::PreserveDetails, &Interrupt::NONE),
+            Err(photocraft_raster::RasterInputError::UnsupportedConversion)
+        );
+        assert_eq!(source.try_read_interleaved(area).unwrap(), raw);
+        assert_eq!(source, before);
     }
 }
 

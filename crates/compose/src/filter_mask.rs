@@ -118,7 +118,7 @@ mod tests {
     /// A mask ramping from hidden (left) to shown (right).
     fn ramp() -> LayerMask {
         let mut m = LayerMask::reveal_all();
-        m.surface = surface(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), |x, _| vec![x as f32 / 7.0]);
+        m.surface = surface(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), |x, _| vec![x as f32 / 7.0]).into();
         m
     }
 
@@ -170,7 +170,7 @@ mod tests {
         let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
         let base = surface(fmt, |x, _| if x < 4 { vec![1.0, 1.0, 1.0, 0.0] } else { vec![0.3, 0.4, 0.5, 1.0] });
         let mut hidden = LayerMask::reveal_all();
-        hidden.surface = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
+        hidden.surface = Surface::with_default(PixelFormat::GRAY8, &[0.0]).into();
         let mixed = mix(&base, &base, &hidden);
         let back = unmix(&base, &mixed, &hidden);
         assert_eq!(back.pixel(1, 1), vec![0.0; 4]);

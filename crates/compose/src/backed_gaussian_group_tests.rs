@@ -6,7 +6,7 @@ use photocraft_doc::item_identity::{FilterId, ItemRef, MaskId};
 use photocraft_doc::xcf_filters::{ExactNumber, FilterArgument, FilterNode, FilterStack, FilterValue, OperationIdentity};
 use photocraft_doc::xcf_state::{ItemState, MaskState};
 use photocraft_doc::{
-    ColorMode, Document, Group, ImportCompositing, Layer, LayerContent, LayerId, LayerMask, PixelFormat, SampleType, Size, SourceColorContext,
+    BackedLayer, ColorMode, Document, Group, Layer, LayerContent, LayerId, LayerMask, PixelFormat, SampleType, Size, SourceColorContext,
     WorkingProfileInterpretation, XcfState,
 };
 use photocraft_raster::{
@@ -135,7 +135,7 @@ fn fixture(q: &BackingQuota, edited: bool, enabled: bool) -> (Document, Arc<Guar
     });
     let mut doc = Document::new("original.pcraft", Size::new(16, 12), ColorMode::Rgb, SampleType::F32);
     doc.sample_encoding = Some(SampleEncoding::NonlinearProfile);
-    doc.icc_profile = Some(Arc::new(photocraft_cms::Builtin::Srgb.profile().to_bytes()));
+    doc.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
     doc.working_profile_interpretation = WorkingProfileInterpretation::implicit_srgb(doc.icc_profile.as_ref().unwrap());
     doc.source_color_context = Some(SourceColorContext { original_icc: None, source_precision: 650 });
     let base = leaf("base", doc.bounds(), q, &guard);

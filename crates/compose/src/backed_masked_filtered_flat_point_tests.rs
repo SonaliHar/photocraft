@@ -114,7 +114,7 @@ fn real_ordered_masks_use_actual_previous_wide_values() {
         let (o, _, _, _) = adopt_masked(f);
         let ctx = Context::new_masked(&o, Default::default(), &ctl()).unwrap();
         let p = input(0, 1, 0, sample);
-        let trc = photocraft_cms::srgb_trc();
+        let trc = photocraft_cms::curve::srgb_trc();
         let mut hdr = p;
         for v in &mut hdr[..3] {
             *v = trc.eval_inverse64((trc.eval64(*v) - 0.5) * 2. + 0.5 + 1.);

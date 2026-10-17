@@ -273,7 +273,7 @@ mod tests {
         sample_encoding::SampleEncoding,
         xcf_filters::{FilterGraph, GraphEdge, GraphNode, OperationIdentity},
     };
-    use photocraft_raster::Interrupt;
+    use photocraft_raster::{Interrupt, Surface};
     fn graph() -> FilterGraph {
         let node = |id| GraphNode {
             id: GraphNodeId(id),

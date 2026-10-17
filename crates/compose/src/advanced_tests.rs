@@ -328,8 +328,8 @@ fn shapeless_stroke_tile_skips_match_full_region_across_blending_settings() {
                         d.layers.push(l);
 
                         let rect = Rect::new(0, 0, 80, 768);
-                        let whole = render_tiled(&d, rect, 1024);
-                        let tiled = render_tiled(&d, rect, 64);
+                        let whole = render_tiled(&d, rect, 1024).unwrap();
+                        let tiled = render_tiled(&d, rect, 64).unwrap();
                         assert_eq!(whole.px, tiled.px, "{depth:?}, {position:?}, {blend:?}, fill={fill}, blend_if={blend_if}");
 
                         let mut bands = Vec::new();

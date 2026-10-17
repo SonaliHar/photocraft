@@ -537,7 +537,7 @@ fn dithered_gradient_fills_under_color_dodge_keep_black_channels() {
     let mut l = Layer::new("top", LayerContent::Fill(top));
     l.blend = BlendMode::ColorDodge;
     d.layers.push(l);
-    for (i, p) in flatten(&d).px.iter().enumerate() {
+    for (i, p) in flatten(&d).unwrap().px.iter().enumerate() {
         assert_eq!(p[1], 0.0, "pixel {i}: green lifted off black to {} levels", p[1] * 255.0);
     }
 }
@@ -636,7 +636,7 @@ fn cmyk_ink_adjustments_composite_on_the_documents_inks() {
         // Half opacity and a half mask mix the inks linearly: a quarter of the way.
         d.layers[1].opacity = 0.5;
         let mut m = LayerMask::reveal_all();
-        m.surface.fill_rect(Rect::new(0, 0, 4, 4), &[0.5]);
+        std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(0, 0, 4, 4), &[0.5]);
         d.layers[1].mask = Some(m);
         let k = 0.5 * d.layers[1].mask.as_ref().unwrap().value(1, 1);
         assert!(close4(px(&d, 1, 1), rgb(stored.map(|v| v + (1.0 - 2.0 * v) * k))), "{depth:?} mixed");
@@ -645,7 +645,7 @@ fn cmyk_ink_adjustments_composite_on_the_documents_inks() {
         d.layers[1] = Layer::new("bc", LayerContent::Adjustment(Adjustment::BrightnessContrast { brightness: 25.0, contrast: 30.0, legacy: true }));
         assert!(close4(px(&d, 1, 1), rgb(stored.map(|v| adjust::ink_through(&table, v)))), "{depth:?} brightness/contrast");
         // Flattening keeps the adjusted inks exactly, with no trip through RGB.
-        let flat = flatten_to_surface(&d, d.pixel_format(), None);
+        let flat = flatten_to_surface(&d, d.pixel_format(), None).unwrap();
         let got = flat.pixel(2, 2);
         for c in 0..4 {
             let want = adjust::ink_through(&table, stored[c]);
@@ -677,8 +677,8 @@ fn only_cmyk_stacks_with_ink_adjustments_render_on_their_inks() {
     rgb.layers.push(Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert)));
     assert!(native::render_cmyk(&rgb, r, 64).is_none(), "not a CMYK document");
     // Tiles render alike whatever their size.
-    let whole = render_tiled(&d, d.bounds(), 64);
-    assert_eq!(render_tiled(&d, d.bounds(), 1).px, whole.px);
+    let whole = render_tiled(&d, d.bounds(), 64).unwrap();
+    assert_eq!(render_tiled(&d, d.bounds(), 1).unwrap().px, whole.px);
 }
 
 /// Hue/Saturation (not Colorize) and Color Balance work on C, M and Y as inverted RGB with the
@@ -702,7 +702,7 @@ fn cmyk_hue_saturation_and_color_balance_keep_the_black_ink() {
         assert!(native::render_cmyk(&d, d.bounds(), 64).is_some(), "{}", adj.label());
         let c = cmyk_to_rgb(want);
         assert!(close4(px(&d, 1, 1), [c[0], c[1], c[2], 1.0]), "{}", adj.label());
-        let flat = flatten_to_surface(&d, d.pixel_format(), None);
+        let flat = flatten_to_surface(&d, d.pixel_format(), None).unwrap();
         let got = flat.pixel(1, 1);
         assert!((got[3] - stored[3]).abs() < 1e-4, "{}: black kept", adj.label());
         assert!((0..3).all(|i| (got[i] - want[i]).abs() < 1e-3), "{}: {got:?} vs {want:?}", adj.label());
@@ -772,11 +772,11 @@ fn flatten_to_surface_leaves_transparent_pixels_empty_in_every_mode() {
             let opaque: Vec<f32> = photocraft_raster::from_rgba(&fmt, [0.9, 0.4, 0.1, 1.0]);
             l.surface_mut().unwrap().fill_rect(Rect::new(120, 80, 140, 90), &opaque);
             d.layers.push(l);
-            let s = flatten_to_surface(&d, fmt, None);
+            let s = flatten_to_surface(&d, fmt, None).unwrap();
             assert_eq!(s.content_bounds(), Rect::new(120, 80, 140, 90), "{mode:?} {sample:?}");
             // Over a background everything is content, as before.
             let fmt_opaque = PixelFormat::new(mode, sample, false);
-            let s = flatten_to_surface(&d, fmt_opaque, Some([1.0, 1.0, 1.0]));
+            let s = flatten_to_surface(&d, fmt_opaque, Some([1.0, 1.0, 1.0])).unwrap();
             assert_eq!(s.rgba(5, 5)[3], 1.0, "{mode:?} {sample:?}: background stays opaque");
         }
     }
@@ -813,7 +813,7 @@ fn float_documents_add_and_divide_past_white() {
     let (bg, top) = ([2.0, 0.5, 4.0], [0.5, 0.25, 0.5]);
     for (mode, want) in [(BlendMode::LinearDodge, [2.5, 0.75, 4.5]), (BlendMode::Divide, [4.0, 2.0, 8.0]), (BlendMode::Multiply, [1.0, 0.125, 2.0])] {
         let d = two_solid_layers(SampleType::F32, mode, bg, top);
-        for buf in [flatten(&d), render_tiled(&d, d.bounds(), 2)] {
+        for buf in [flatten(&d).unwrap(), render_tiled(&d, d.bounds(), 2).unwrap()] {
             for p in &buf.px {
                 assert!(close4(*p, [want[0], want[1], want[2], 1.0]), "{mode:?}: {p:?}");
             }
@@ -821,7 +821,7 @@ fn float_documents_add_and_divide_past_white() {
     }
     // The flag doesn't leak into later renders on this thread.
     let d = two_solid_layers(SampleType::U16, BlendMode::LinearDodge, [0.8, 0.5, 0.6], top);
-    assert!(close4(flatten(&d).px[0], [1.0, 0.75, 1.0, 1.0]));
+    assert!(close4(flatten(&d).unwrap().px[0], [1.0, 0.75, 1.0, 1.0]));
 }
 
 #[test]
@@ -831,7 +831,7 @@ fn integer_documents_clip_add_and_divide_at_white() {
         let f32_doc = depth == SampleType::F32;
         for (mode, clipped, hdr) in [(BlendMode::LinearDodge, [1.0, 0.75, 1.0], [1.3, 0.75, 1.1]), (BlendMode::Divide, [1.0, 1.0, 1.0], [1.6, 2.0, 1.2])] {
             let want = if f32_doc { hdr } else { clipped };
-            let p = flatten(&two_solid_layers(depth, mode, bg, top)).px[5];
+            let p = flatten(&two_solid_layers(depth, mode, bg, top)).unwrap().px[5];
             assert!(close4(p, [want[0], want[1], want[2], 1.0]), "{mode:?} {depth:?}: {p:?}");
         }
     }
@@ -1348,7 +1348,7 @@ fn shapeless_fx_doc(depth: SampleType) -> Document {
             let mut m = photocraft_raster::Surface::new(mask_fmt);
             m.fill_rect(Rect::new(4 + i as i32, y - 12, 44, y + 30), &[1.0]);
             m.fill_rect(Rect::new(4 + i as i32, y + 30, 30, y + 34), &[0.5]);
-            l.mask = Some(LayerMask { surface: m, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+            l.mask = Some(LayerMask { surface: m.into(), enabled: true, linked: true, density: 1.0, feather: 0.0 });
         }
         d.layers.push(l);
     }
@@ -1360,7 +1360,7 @@ fn shapeless_fx_doc(depth: SampleType) -> Document {
     inner.advanced.transparency_shapes = false;
     let mut m = photocraft_raster::Surface::new(mask_fmt);
     m.fill_rect(Rect::new(8, 240, 36, 380), &[1.0]);
-    inner.mask = Some(LayerMask { surface: m, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+    inner.mask = Some(LayerMask { surface: m.into(), enabled: true, linked: true, density: 1.0, feather: 0.0 });
     let mut g = Layer::group("g", vec![inner]);
     g.effects.items = vec![Effect::DropShadow(Shadow { size: 40.0, spread: 0.1, ..shadow(90.0, 70.0) }), stroke(120.0, StrokePosition::Outside)];
     g.opacity = 0.6;
@@ -1396,9 +1396,9 @@ fn shapeless_effects_render_the_same_in_bands_and_parts() {
         let parts: Vec<(Rect, Buffer)> =
             [Rect::new(3, 290, 41, 333), Rect::new(0, 0, 48, 20), Rect::new(20, 600, 48, 640), Rect::new(0, 296, 20, 312), Rect::new(10, 425, 40, 445)]
                 .into_iter()
-                .map(|r| (r, render(&d, r)))
+                .map(|r| (r, render(&d, r).unwrap()))
                 .collect();
-        let whole = render(&d, d.bounds());
+        let whole = render(&d, d.bounds()).unwrap();
         assert_eq!(banded.len(), whole.px.len());
         let diff = banded.iter().zip(&whole.px).position(|(a, b)| a != b);
         assert!(diff.is_none(), "{depth:?}: band render differs at {diff:?}");
@@ -1411,7 +1411,7 @@ fn shapeless_effects_render_the_same_in_bands_and_parts() {
                 }
             }
         }
-        assert!(render_tiled(&d, d.bounds(), 16).px == whole.px, "{depth:?}: tiled render differs");
+        assert!(render_tiled(&d, d.bounds(), 16).unwrap().px == whole.px, "{depth:?}: tiled render differs");
     }
 }
 
@@ -1486,7 +1486,7 @@ fn a_wide_outside_stroke_is_round_not_a_polygon() {
     let mut l = solid_layer("dot", Rect::new(85, 85, 86, 86), [1.0, 0.0, 0.0, 1.0]);
     l.effects.items = vec![stroke(60.0, StrokePosition::Outside)];
     d.layers.push(l);
-    let buf = render(&d, Rect::new(0, 0, 170, 170));
+    let buf = render(&d, Rect::new(0, 0, 170, 170)).unwrap();
     let at = |x: i32, y: i32| buf.px[(y as usize) * 170 + x as usize];
     let (mut lo, mut hi) = (f64::MAX, 0.0f64);
     let stroke_at = |x: i32, y: i32| x >= 0 && y >= 0 && x < 170 && y < 170 && at(x, y)[2] > 0.5 && at(x, y)[0] < 0.5;
@@ -2638,7 +2638,7 @@ fn rendering_restores_the_lab_mix_flag_it_found() {
         for tile in [RENDER_TILE, 4] {
             for outer in [true, false] {
                 psblend::LAB_MIX.with(|l| l.set(outer));
-                let _ = render_tiled(&doc, doc.bounds(), tile);
+                let _ = render_tiled(&doc, doc.bounds(), tile).unwrap();
                 let after = psblend::LAB_MIX.with(|l| l.get());
                 psblend::LAB_MIX.with(|l| l.set(false));
                 assert_eq!(after, outer, "{mode:?} with tile {tile} inside a tile that had LAB_MIX = {outer}");
@@ -2782,7 +2782,7 @@ fn lab_documents_evaluate_invert_threshold_and_gradient_map_on_lab() {
         let render = |adj: Adjustment| {
             let mut d = Document::with_background("t", Size::new(4, 4), ColorMode::Lab, depth, Color::rgb(c[0], c[1], c[2]));
             d.layers.push(Layer::new("adj", LayerContent::Adjustment(adj)));
-            let p = flatten(&d).px[5];
+            let p = flatten(&d).unwrap().px[5];
             srgb_to_lab([p[0], p[1], p[2]])
         };
         let near = |got: [f32; 3], want: [f32; 3], tol: f32| got.iter().zip(want).all(|(g, w)| (g - w).abs() <= tol);
@@ -2892,7 +2892,7 @@ fn lab_flatten_keeps_the_stored_values() {
     let lab = [0.6, 218.0 / 255.0, 38.0 / 255.0];
     for depth in [SampleType::U8, SampleType::U16] {
         let doc = lab_stack(lab, depth, vec![]);
-        let s = flatten_to_surface(&doc, doc.pixel_format(), None);
+        let s = flatten_to_surface(&doc, doc.pixel_format(), None).unwrap();
         let got = s.pixel(2, 2);
         assert!(got.iter().zip(lab).all(|(g, w)| (g - w).abs() < 1e-3), "{depth:?}: {got:?}");
     }
@@ -3002,19 +3002,19 @@ fn memoised_effect_identity_leaves_every_render_unchanged() {
         let b = d.bounds();
         // One tile for the whole canvas never goes through `prepare_effects`; small tiles do.
         purge_effect_cache();
-        let whole = render_tiled(&d, b, 4096);
+        let whole = render_tiled(&d, b, 4096).unwrap();
         purge_effect_cache();
-        let tiled = render_tiled(&d, b, 16);
-        let warm = render_tiled(&d, b, 24);
+        let tiled = render_tiled(&d, b, 16).unwrap();
+        let warm = render_tiled(&d, b, 24).unwrap();
         assert!(whole.px == tiled.px, "{depth:?}: tiled differs from one tile");
         assert!(whole.px == warm.px, "{depth:?}: warm differs from cold");
         assert!(whole.px.iter().any(|p| *p != [1.0; 4]), "{depth:?}: the effects should draw");
         // Edits still invalidate: a changed layer must not keep its old maps.
         let mut e = d.clone();
         e.layers[1].effects.items = vec![Effect::DropShadow(shadow(9.0, 200.0))];
-        let edited = render_tiled(&e, b, 16);
+        let edited = render_tiled(&e, b, 16).unwrap();
         purge_effect_cache();
-        assert!(edited.px == render_tiled(&e, b, 4096).px, "{depth:?}: stale maps after an edit");
+        assert!(edited.px == render_tiled(&e, b, 4096).unwrap().px, "{depth:?}: stale maps after an edit");
         assert!(edited.px != whole.px, "{depth:?}: the edit should show");
     }
 }
@@ -3044,7 +3044,7 @@ fn render_refuses_rects_beyond_the_pixel_cap() {
     // 2^32 - 1 px wide: the width wraps negative as an i32, which once took the single-tile path.
     for tile in [crate::RENDER_TILE, 1 << 20] {
         let b = crate::render_tiled(&doc, Rect::new(i32::MIN, 0, i32::MAX, 1), tile);
-        assert!(b.px.is_empty() && b.rect.is_empty());
+        assert!(matches!(b, Err(photocraft_raster::RasterInputError::InvalidBounds)));
     }
 }
 
@@ -3061,11 +3061,11 @@ fn effect_cache_follows_transparency_shapes_layer() {
     l.effects.items = vec![stroke(2.0, StrokePosition::Outside)];
     assert!(l.advanced.transparency_shapes);
     d.layers.push(l);
-    let on = render(&d, d.bounds());
+    let on = render(&d, d.bounds()).unwrap();
     d.layers[1].advanced.transparency_shapes = false;
-    let warm = render(&d, d.bounds());
+    let warm = render(&d, d.bounds()).unwrap();
     purge_effect_cache();
-    let cold = render(&d, d.bounds());
+    let cold = render(&d, d.bounds()).unwrap();
     assert!(on.px != cold.px, "the stroke should stop rimming the hole");
     assert!(warm.px == cold.px, "stale effect maps after turning Transparency Shapes Layer off");
 }
@@ -3078,13 +3078,13 @@ fn effect_cache_follows_a_group_childs_blend_if() {
     let mut g = Layer::group("g", vec![child]);
     g.effects.items = vec![Effect::DropShadow(Shadow { size: 2.0, spread: 0.0, ..shadow(3.0, 90.0) })];
     d.layers.push(g);
-    let before = render(&d, d.bounds());
+    let before = render(&d, d.bounds()).unwrap();
     let LayerContent::Group(grp) = &mut d.layers[1].content else { panic!("not a group") };
     // Gray › This Layer: black point at 128 hides the black half.
     grp.children[0].blend_if.set(0, [range([128, 128], [255, 255]), FULL]);
-    let warm = render(&d, d.bounds());
+    let warm = render(&d, d.bounds()).unwrap();
     purge_effect_cache();
-    let cold = render(&d, d.bounds());
+    let cold = render(&d, d.bounds()).unwrap();
     assert!(before.px != cold.px, "Blend If should change the group's shadow");
     assert!(warm.px == cold.px, "stale group effect maps after a child's Blend If changed");
 }
@@ -3139,9 +3139,9 @@ fn cmyk_ink_render_timing() {
     for adj in [Adjustment::Invert, Adjustment::Exposure { exposure: 0.5, offset: 0.0, gamma: 1.0 }] {
         d.layers.truncate(1);
         d.layers.push(Layer::new("adj", LayerContent::Adjustment(adj.clone())));
-        let _ = render(&d, Rect::new(0, 0, 512, 512));
+        let _ = render(&d, Rect::new(0, 0, 512, 512)).unwrap();
         let t = std::time::Instant::now();
-        let b = render(&d, d.bounds());
+        let b = render(&d, d.bounds()).unwrap();
         println!("{}: {:?} ({} px)", adj.label(), t.elapsed(), b.px.len());
     }
 }
@@ -3180,12 +3180,12 @@ fn effect_cache_keeps_no_pixels_of_a_dropped_layer() {
     let mut g = Layer::group("g", vec![solid_layer("child", Rect::new(40, 40, 120, 120), [0.1, 0.2, 0.9, 1.0])]);
     g.effects.items = vec![Effect::DropShadow(Shadow { size: 2.0, spread: 0.0, ..shadow(3.0, 90.0) })];
     d.layers.push(g);
-    let first = render(&d, d.bounds());
+    let first = render(&d, d.bounds()).unwrap();
     let tile = |l: &Layer| l.surface().and_then(|s| s.tiles().next()).map(|(_, t)| t.clone()).unwrap();
     let own = tile(&d.layers[1]);
     let LayerContent::Group(grp) = &d.layers[2].content else { panic!("not a group") };
     let child = tile(&grp.children[0]);
-    assert_eq!(render(&d, d.bounds()).px, first.px, "warm render");
+    assert_eq!(render(&d, d.bounds()).unwrap().px, first.px, "warm render");
     drop(d);
     // Only this test's handles are left: the cache pins neither the layer's nor the child's pixels.
     assert_eq!(std::sync::Arc::strong_count(&own), 1);

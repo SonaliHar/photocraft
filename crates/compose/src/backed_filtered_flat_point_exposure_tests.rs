@@ -25,7 +25,7 @@ fn exposed(sample: SampleType, sequence: &[u8], enabled: bool) -> Fixture {
     f
 }
 fn exposure(p: [f64; 4]) -> [f64; 4] {
-    let curve = photocraft_cms::srgb_trc();
+    let curve = photocraft_cms::curve::srgb_trc();
     let mut out = p;
     for i in 0..3 {
         out[i] = curve.eval_inverse64((curve.eval64(p[i]) - 0.0625) / ((-0.5f64).exp2() - 0.0625));

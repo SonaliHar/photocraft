@@ -138,7 +138,7 @@ fn shifted_tiles_match_a_whole_mask_at_canvas_edges() {
         // Constant guide keeps this check independent of image detail.
         let p = RefineParams { radius: 32.0, shift_edge: shift, ..Default::default() };
         let whole = refine_buffer(Some(&img), &input, w, h, &p);
-        let tiled = refine_mask(&sampler, &region_reader(&region), rect, rect, &p).unwrap();
+        let tiled = refine_mask(&sampler, &region_reader(&region), rect, rect, &p).unwrap().expect("nonempty refined mask");
         for y in 0..h {
             for x in 0..w {
                 assert!((tiled.at(x as i32, y as i32) - whole[y * w + x]).abs() <= 1.5 / 255.0, "shift={shift} at {x},{y}");

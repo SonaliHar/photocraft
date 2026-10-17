@@ -79,7 +79,7 @@ fn step(kind: u8, p: [f64; 4], derived: bool, nl: &photocraft_cms::owned_lab::Pa
     if !derived {
         assert!(p.iter().all(|v| (0.0..=1.0).contains(v)));
     }
-    let curve = photocraft_cms::srgb_trc();
+    let curve = photocraft_cms::curve::srgb_trc();
     match kind {
         0 => {
             let input = [curve.eval64(p[0]), curve.eval64(p[1]), curve.eval64(p[2]), p[3]].map(|v| f64::from(v as f32));
@@ -127,7 +127,9 @@ fn parts() -> (photocraft_cms::owned_lab::Parts, photocraft_cms::owned_lab::Part
 fn root_value(context: &Context<'_>, root: usize, x: i32, y: i32) -> [f64; 4] {
     let LayerContent::BackedRaster(backed) = &context.owner.document().layers[root].content else { panic!("backed") };
     let view = backed.checked_view();
-    let pin = view.pin_tile(photocraft_geom::TileCoord { tx: 0, ty: 0 }, &ctl()).unwrap();
+    let pin = view
+        .pin_tile(photocraft_geom::TileCoord { tx: 0, ty: 0 }, &ctl())
+        .unwrap_or_else(|e| panic!("root={root} pin error={e:?}; quota={:?}", context.owner.quota().usage()));
     let mut raw = [0u8; 32];
     let bpp = backed.format().bytes_per_pixel();
     pin.read_pixel_native_into(x, y, &mut raw[..bpp], &ctl()).unwrap();
@@ -143,8 +145,8 @@ fn named_sequences_are_not_family_batches_or_forward_order() {
             .unwrap();
     for sample in [SampleType::F32, SampleType::F64] {
         let (owner, _, _, _) = adopt(ordered(sample, &orders, true));
-        let context = Context::new(&owner, Default::default(), &ctl()).unwrap();
-        context.validate_operative(&ctl()).unwrap();
+        let context = Context::new(&owner, Default::default(), &ctl()).unwrap_or_else(|e| panic!("prepare failed {e:?}; quota={:?}", owner.quota().usage()));
+        context.validate_operative(&ctl()).unwrap_or_else(|e| panic!("operative failed {e:?}; quota={:?}", owner.quota().usage()));
         for x in [0u32, 2, 4, 7] {
             let a = input(0, x, 0, sample);
             let b = input(1, x, 0, sample);
@@ -187,8 +189,8 @@ fn named_sequences_are_not_family_batches_or_forward_order() {
 fn disabled_stages_do_not_create_initial_or_final_float_boundaries() {
     let (nl, linear) = parts();
     let (owner, _, _, _) = adopt(ordered(SampleType::F64, &[&[0, 1, 2]], false));
-    let context = Context::new(&owner, Default::default(), &ctl()).unwrap();
-    context.validate_operative(&ctl()).unwrap();
+    let context = Context::new(&owner, Default::default(), &ctl()).unwrap_or_else(|e| panic!("prepare failed {e:?}; quota={:?}", owner.quota().usage()));
+    context.validate_operative(&ctl()).unwrap_or_else(|e| panic!("operative failed {e:?}; quota={:?}", owner.quota().usage()));
     let native = input(0, 4, 0, SampleType::F64);
     assert_ne!(native[1].to_bits(), f64::from(native[1] as f32).to_bits());
     assert_ne!(native[3].to_bits(), f64::from(native[3] as f32).to_bits());
@@ -197,7 +199,7 @@ fn disabled_stages_do_not_create_initial_or_final_float_boundaries() {
     let mut f = ordered(SampleType::F64, &[&[0, 0, 1]], false);
     f.document.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[1].enabled = true;
     let (owner, _, _, _) = adopt(f);
-    let context = Context::new(&owner, Default::default(), &ctl()).unwrap();
+    let context = Context::new(&owner, Default::default(), &ctl()).unwrap_or_else(|e| panic!("prepare failed {e:?}; quota={:?}", owner.quota().usage()));
     let expected = step(0, input(0, 2, 0, SampleType::F64), false, &nl, &linear);
     assert!(expected[..3].iter().any(|v| v.to_bits() != f64::from(*v as f32).to_bits()));
     assert_eq!(root_value(&context, 0, 2, 0).map(f64::to_bits), expected.map(f64::to_bits));
@@ -389,5 +391,5 @@ mod loaded_exposure;
 #[path = "backed_filtered_flat_point_opacity_tests.rs"]
 mod filter_opacity;
 
-#[path="backed_masked_filtered_flat_point_tests.rs"]
+#[path = "backed_masked_filtered_flat_point_tests.rs"]
 mod masked_mixed;

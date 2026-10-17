@@ -27,7 +27,7 @@ fn current(f: Fixture) -> (AccountedDocument, Vec<BackedRaster>, Vec<Arc<AtomicB
     (o, f.rasters, f.fails, f.reads)
 }
 fn invert(kind: crate::InvertKind, p: [f64; 4]) -> [f64; 4] {
-    let curve = photocraft_cms::srgb_trc();
+    let curve = photocraft_cms::curve::srgb_trc();
     let mut out = p;
     for i in 0..3 {
         out[i] = match kind {
@@ -83,7 +83,7 @@ fn actual_order_preserves_distinct_working_interpretations() {
                 let p = input(0, 2, 0, sample);
                 let prior = if old == 3 {
                     {
-                        let curve = photocraft_cms::srgb_trc();
+                        let curve = photocraft_cms::curve::srgb_trc();
                         let mut v = p;
                         for i in 0..3 {
                             v[i] = curve.eval_inverse64((curve.eval64(p[i]) - 0.0625) / ((-0.5f64).exp2() - 0.0625));
@@ -198,7 +198,12 @@ fn sole_current_source_and_inactive_proof_keep_closed_roles() {
             _ => {} // Actual provider tail NaN was generated under its prospective fee.
         }
         if let Ok(o) = AccountedDocument::new_readonly_filtered_flat_point_current_storage(f.document, f.retention, f.quota, &ctl()) {
-            assert!(Context::new(&o, Default::default(), &ctl()).is_err());
+            if fault == 5 {
+                let c = Context::new(&o, Default::default(), &ctl()).unwrap();
+                assert!(c.validate_operative(&ctl()).is_err());
+            } else {
+                assert!(Context::new(&o, Default::default(), &ctl()).is_err());
+            }
         }
     }
 }

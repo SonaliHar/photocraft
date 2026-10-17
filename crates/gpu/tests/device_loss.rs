@@ -157,7 +157,7 @@ fn a_captured_render_error_preserves_the_device_for_a_later_render() {
     let error = result.unwrap().expect_err("an invalid allocation must fail this render");
     assert!(error.0.contains("synthetic_invalid_buffer"), "{error}");
     let out = render_to_vec(&mut comp, &device, &queue, &d, d.bounds()).expect("the next fitting render keeps working");
-    let expected = photocraft_compose::flatten(&d);
+    let expected = photocraft_compose::flatten(&d).unwrap();
     for (cpu, gpu) in expected.px[0].iter().zip(out[0]) {
         assert!((cpu - gpu).abs() <= 1.0 / 255.0, "the healthy GPU control differs: {cpu} vs {gpu}");
     }

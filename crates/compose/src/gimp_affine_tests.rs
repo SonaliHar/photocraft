@@ -45,7 +45,7 @@ fn reference(p: Parameters, input: [f64; 4]) -> [f64; 4] {
     if p.identity() {
         return input;
     }
-    let curve = photocraft_cms::srgb_trc();
+    let curve = photocraft_cms::curve::srgb_trc();
     let mut out = input;
     for i in 0..3 {
         let x = curve.eval64(input[i]);

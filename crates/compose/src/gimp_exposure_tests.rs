@@ -57,7 +57,7 @@ fn stored_parameters_are_exact_and_checked() {
 fn singleton_wide_math_and_additive_derived_input() {
     let q = q();
     let h = held(&q, 0.5, 0.0625);
-    let curve = photocraft_cms::srgb_trc();
+    let curve = photocraft_cms::curve::srgb_trc();
     for p in [[0., 0.25, 1., -0.], [0.125, 0.5, 0.75, 0.375], [0.5 + 2f64.powi(-40), 0.25, 0.75, f64::from_bits(1f64.to_bits() - 1)], [-0.125, 1.25, 0.75, 0.5]]
     {
         let derived = p[..3].iter().any(|v| !(0.0..=1.0).contains(v));

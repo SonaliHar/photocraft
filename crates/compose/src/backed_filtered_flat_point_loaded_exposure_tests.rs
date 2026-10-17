@@ -28,7 +28,7 @@ fn expected(p: [f64; 4], stops: f64, black: f64) -> [f64; 4] {
     if stops == 0. && black == 0. {
         return p;
     }
-    let curve = photocraft_cms::srgb_trc();
+    let curve = photocraft_cms::curve::srgb_trc();
     let mut o = p;
     for i in 0..3 {
         let v = curve.eval64(p[i]);
@@ -136,6 +136,9 @@ fn mixed_uses_effective_parameters_without_rewriting_the_stack() {
             let reference = expected(bridge(step(2, bridge(step(0, p, false, &nl, &linear)), true, &nl, &linear)), 0.5, 0.);
             assert_eq!(root_value(&c, 0, 2, 0).map(f64::to_bits), reference.map(f64::to_bits));
             assert_eq!(o.document().xcf_state.as_ref().unwrap().filter_stacks[0].nodes, raw);
+            // This independent Source-construction phase does not retain the
+            // already checked CURRENT renderer's construction-peak leases.
+            drop(c);
             let q = o.quota().clone();
             let before = q.usage().unwrap();
             let mut b = Budget { q: q.clone(), used: 0, limit: u64::MAX };

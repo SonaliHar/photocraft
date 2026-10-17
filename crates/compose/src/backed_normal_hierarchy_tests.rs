@@ -127,6 +127,7 @@ fn configure(n: &mut photocraft_doc::xcf_filters::FilterNode, kind: u8) {
 }
 fn group(name: &str, children: Vec<Layer>, opacity: f32) -> Layer {
     let mut l = Layer::group(name, children);
+    l.blend = photocraft_doc::BlendMode::Normal;
     l.opacity = opacity;
     l.import_compositing = Some(physical());
     l
@@ -273,7 +274,7 @@ fn gamma(p: [f64; 4]) -> [f64; 4] {
     [1. - p[0], 1. - p[1], 1. - p[2], p[3]]
 }
 fn exposure(p: [f64; 4]) -> [f64; 4] {
-    let trc = photocraft_cms::srgb_trc();
+    let trc = photocraft_cms::curve::srgb_trc();
     let d = (-0.5f64).exp2() - 0.0625;
     [
         trc.eval_inverse64((trc.eval64(p[0]) - 0.0625) / d),
@@ -283,7 +284,7 @@ fn exposure(p: [f64; 4]) -> [f64; 4] {
     ]
 }
 fn semi(p: [f64; 4]) -> [f64; 4] {
-    let trc = photocraft_cms::srgb_trc();
+    let trc = photocraft_cms::curve::srgb_trc();
     let input = [trc.eval64(p[0]), trc.eval64(p[1]), trc.eval64(p[2]), p[3]];
     let mut out = [0.; 4];
     photocraft_algo::gimp::point_semi_flatten::SemiFlatten { color: [0.25, 0.5, 0.75, 0.375] }.try_eval_pixel(&input, 3, &mut out).unwrap();
@@ -409,7 +410,7 @@ fn actual_tree_roles_and_inactive_defects_refuse_without_fallback() {
             0 => f.doc.xcf_state.as_mut().unwrap().items.iter_mut().find(|r| r.item == ItemRef::Layer(outer_id)).unwrap().raster_bounds = Some(canvas),
             1 => f.doc.xcf_state.as_mut().unwrap().items[1].parent = Some(ItemRef::Layer(LayerId::fresh())),
             2 => f.doc.xcf_state.as_mut().unwrap().items[0].composition.as_mut().unwrap().stored_composite_space = 1,
-            3 => f.doc.source_color_context.as_mut().unwrap().original_icc = Some(vec![0; 132]),
+            3 => f.doc.source_color_context.as_mut().unwrap().original_icc = Some(vec![0; 132].into()),
             4 => f.doc.xcf_state.as_mut().unwrap().filter_masks[0].surface.try_write_pixel_f64(255, 255, &[-0.]).unwrap(),
             5 => f.doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].operation.schema_epoch = "foreign".into(),
             7 => {
@@ -491,11 +492,11 @@ mod masked;
 #[path = "backed_normal_hierarchy_integer_tests.rs"]
 mod integer;
 
-#[path="backed_normal_hierarchy_u32_tests.rs"]
+#[path = "backed_normal_hierarchy_u32_tests.rs"]
 mod u32_plain;
 
-#[path="backed_normal_hierarchy_native_tests.rs"]
+#[path = "backed_normal_hierarchy_native_tests.rs"]
 mod native_edit;
 
-#[path="backed_programme_selection_hierarchy_tests.rs"]
+#[path = "backed_programme_selection_hierarchy_tests.rs"]
 mod programme_selection;

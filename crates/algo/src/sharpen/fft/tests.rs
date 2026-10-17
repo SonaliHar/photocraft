@@ -7,7 +7,9 @@ fn compare(old: &Surface, new: &Surface, area: Rect) {
     let tolerance = match old.format().sample {
         SampleType::U8 => 1.0 / 255.0 + 1e-7,
         SampleType::U16 => 2.0 / 65535.0 + 1e-7,
-        SampleType::F32 => 3e-5,
+        // This oracle compares the legacy F32 Image/read_region view even when
+        // the containing Surface has wide native storage.
+        SampleType::F32 | SampleType::U32 | SampleType::F64 => 3e-5,
     };
     for (a, b) in old.read_region(area).iter().zip(new.read_region(area)) {
         let limit = if old.format().sample == SampleType::F32 { tolerance * (1.0 + a.abs()) } else { tolerance };
@@ -28,7 +30,7 @@ fn fft_preserves_gaussian_quality_at_every_depth_and_model() {
         ColorMode::Lab,
         ColorMode::Multichannel,
     ] {
-        for depth in SampleType::ALL {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
             for alpha in [false, true] {
                 let s = source(area, PixelFormat::new(mode, depth, alpha));
                 let ctx = Ctx { bounds: area, mode, alpha };
@@ -59,7 +61,7 @@ fn fft_keeps_partial_regions_selections_and_edge_policies() {
     let area = Rect::new(-3, 2, 19, 23);
     let mut sel = Surface::new(PixelFormat::GRAY8);
     sel.fill_rect(area, &[0.4]);
-    for depth in SampleType::ALL {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let s = source(extent, PixelFormat::new(ColorMode::Rgb, depth, true));
         let p = FilterParams::UnsharpMask { amount: 150.0, radius: 64.0, threshold: 0.0 };
         for edge in [None, Some(extent)] {
@@ -113,7 +115,7 @@ fn fft_cancellation_discards_partial_work_and_bounds_scratch() {
 #[test]
 fn positive_threshold_dispatch_retains_exact_pixel_decisions() {
     let area = Rect::new(-3, 2, 253, 258);
-    for depth in SampleType::ALL {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let s = source(area, PixelFormat::new(ColorMode::Rgb, depth, true));
         let p = FilterParams::UnsharpMask { amount: 500.0, radius: 64.0, threshold: 8.0 };
         let expected = crate::sharpen::tests::apply_reference(&s, &p, area, area, None, Some(area), 256);

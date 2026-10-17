@@ -155,7 +155,7 @@ fn assigned_role_mismatch_foreign_profile_and_implicit_lane_refuse_without_hash_
     for case in 0..5 {
         let (mut doc, q, guard, _, _) = assigned(4, false, 0);
         match case {
-            0 => doc.icc_profile = Some(Arc::new(photocraft_cms::Builtin::Srgb.profile().to_bytes())),
+            0 => doc.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes()),
             1 => {
                 let mut bytes = embedded(false);
                 bytes[36] = b'x';

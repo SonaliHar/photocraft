@@ -116,8 +116,8 @@ pub fn stored_parameters(arguments: &[FilterArgument]) -> Result<Parameters> {
             if storage.layout != "HSL float" || storage.samples.len() != 12 || !storage.opaque_tail.is_empty() {
                 return Err(bad("observed exact HSL Float storage framing"));
             }
-            for (out, bytes) in hsl.iter_mut().zip(storage.samples.chunks_exact(4)) {
-                *out = u32::from_le_bytes(bytes.try_into().map_err(|_| bad("HSL native word width"))?);
+            for (out, bytes) in hsl.iter_mut().zip(storage.samples.as_chunks::<4>().0.iter()) {
+                *out = u32::from_le_bytes(*bytes);
             }
         }
     }

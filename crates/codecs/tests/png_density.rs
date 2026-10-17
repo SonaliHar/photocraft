@@ -73,7 +73,7 @@ fn metadata_off_and_palette_encoder_keep_existing_behavior() {
     let new = encode_png_with_density(&image, &opts, PngDensity::from_dpi(144.25, 287.75).unwrap()).unwrap();
     assert_eq!(old, new);
     assert_eq!(phys(&new), None);
-    let bytes = photocraft_codecs::encode_png_indexed(3, 1, &[0, 1, 0], &[[255, 0, 0], [0, 0, 255]], Some(1)).unwrap();
+    let bytes = photocraft_codecs::encode_png_indexed(3, 1, &[0, 1, 0], &[[255, 0, 0], [0, 0, 255]], Some(1), None).unwrap();
     assert_eq!(phys(&bytes), None);
     let decoded = photocraft_codecs::decode(&bytes).unwrap().convert(ChannelLayout::Rgba, SampleType::U8);
     assert_eq!(decoded.data(), &[255, 0, 0, 255, 0, 0, 255, 0, 255, 0, 0, 255]);

@@ -21,9 +21,9 @@ fn gaussian(edit: bool, hdr: bool, hidden: bool, defect: u8) -> (Document, Backi
     assert_eq!(raw, std::fs::read(root.join(format!("{prefix}.source.reopened.layer.buffer-extent.native.none.bin"))).unwrap());
     // Actual captured words are finiteRGB/unitAlpha, not filename-unit. All3072
     // bytes have independently recorded SHA3102cfa5(namedunit) or77cacaa1(HDR).
-    assert!(raw.chunks_exact(4).all(|word| f32::from_le_bytes(word.try_into().unwrap()).is_finite()));
-    assert!(raw.chunks_exact(16).all(|pixel| (0.0..=1.0).contains(&f32::from_le_bytes(pixel[12..16].try_into().unwrap()))));
-    assert!(raw.chunks_exact(16).any(|pixel| pixel[..12].chunks_exact(4).any(|word| !(0.0..=1.0).contains(&f32::from_le_bytes(word.try_into().unwrap())))));
+    assert!(raw.as_chunks::<4>().0.iter().all(|word| f32::from_le_bytes(*word).is_finite()));
+    assert!(raw.as_chunks::<16>().0.iter().all(|pixel| (0.0..=1.0).contains(&f32::from_le_bytes(pixel[12..16].try_into().unwrap()))));
+    assert!(raw.as_chunks::<16>().0.iter().any(|pixel| pixel[..12].as_chunks::<4>().0.iter().any(|word| !(0.0..=1.0).contains(&f32::from_le_bytes(*word)))));
     let len = raw.len();
     match defect {
         1 => raw[len - 16..len - 12].copy_from_slice(&f32::NAN.to_le_bytes()),
@@ -149,7 +149,7 @@ fn gaussian_exact_five_field_algorithm_pair_and_profile_rule_refuse_without_retr
             4 => node.arguments[4] = arg("clip-extent", FilterValue::Bool(false)),
             5 => node.composition.as_mut().unwrap().compatibility_epoch = "group-small-auto".into(),
             6 => node.arguments[1] = node.arguments[0].clone(),
-            _ => doc.icc_profile = Some(Arc::new(photocraft_cms::Builtin::Srgb.profile().to_bytes())),
+            _ => doc.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes()),
         }
         let owner = adopt_assigned(doc, q.clone(), guard);
         let before = q.usage().unwrap();

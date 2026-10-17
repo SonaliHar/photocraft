@@ -814,7 +814,7 @@ fn coverage(region: &Region, part: &[bool], w: usize, h: usize) -> f32 {
 fn select_subject_keeps_parts_close_to_the_background_colour() {
     let (img, truth, cream) = low_contrast_figure(7);
     let s = ImageSampler { img: &img, origin: (0, 0) };
-    let reg = subject::select_subject(&s, Rect::new(0, 0, 240, 200)).unwrap();
+    let reg = subject::select_subject(&s, Rect::new(0, 0, 240, 200)).unwrap().unwrap();
     let v = iou(&reg, &truth, 240, 200);
     let c = coverage(&reg, &cream, 240, 200);
     assert!(c > 0.85, "the cream shoulders are part of the subject: covered {c}");
@@ -842,7 +842,7 @@ fn select_subject_leaves_a_background_coloured_gap_open() {
         }
     }
     let s = ImageSampler { img: &img, origin: (0, 0) };
-    let reg = subject::select_subject(&s, Rect::new(0, 0, w as i32, h as i32)).unwrap();
+    let reg = subject::select_subject(&s, Rect::new(0, 0, w as i32, h as i32)).unwrap().unwrap();
     let g = coverage(&reg, &gap, w, h);
     assert!(g < 0.1, "the backdrop inside the ring stays unselected: covered {g}");
     let v = iou(&reg, &truth, w, h);
@@ -869,7 +869,7 @@ fn select_subject_timing() {
     let s = ImageSampler { img: &img, origin: (0, 0) };
     for _ in 0..2 {
         let t0 = std::time::Instant::now();
-        let reg = subject::select_subject(&s, Rect::new(0, 0, w as i32, h as i32)).unwrap();
+        let reg = subject::select_subject(&s, Rect::new(0, 0, w as i32, h as i32)).unwrap().unwrap();
         eprintln!("select_subject 6 MP: {:?} bbox {:?}", t0.elapsed(), reg.bbox);
     }
 }
@@ -897,7 +897,7 @@ fn select_subject_dump_pictures() {
     };
     let (img, _, _) = low_contrast_figure(7);
     let s = ImageSampler { img: &img, origin: (0, 0) };
-    let reg = subject::select_subject(&s, Rect::new(0, 0, 240, 200));
+    let reg = subject::select_subject(&s, Rect::new(0, 0, 240, 200)).unwrap();
     write("figure", &img, None);
     write("figure-selected", &img, reg.as_ref());
     let (w, h) = (220usize, 200usize);
@@ -908,7 +908,7 @@ fn select_subject_dump_pictures() {
         if (17.0..80.0).contains(&d) { [0.2 + n, 0.15 + n, 0.35 + n] } else { [0.95 + n, 0.94 + n, 0.92 + n] }.map(|v| v.clamp(0.0, 1.0))
     });
     let s = ImageSampler { img: &img, origin: (0, 0) };
-    let reg = subject::select_subject(&s, Rect::new(0, 0, w as i32, h as i32));
+    let reg = subject::select_subject(&s, Rect::new(0, 0, w as i32, h as i32)).unwrap();
     write("ring", &img, None);
     write("ring-selected", &img, reg.as_ref());
 }

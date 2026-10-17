@@ -85,7 +85,7 @@ fn fixture(mode: i32, explicit: u8) -> (AccountedDocument, [Arc<Store>; 2]) {
     let model = q.reserve(QuotaKind::Index, 2 << 20).unwrap();
     let mut doc = Document::new("flat", Size::new(16, 12), ColorMode::Rgb, SampleType::F32);
     doc.sample_encoding = Some(SampleEncoding::NonlinearProfile);
-    doc.icc_profile = Some(Arc::new(Builtin::Srgb.profile().to_bytes()));
+    doc.icc_profile = Some(Builtin::Srgb.profile().to_bytes());
     doc.working_profile_interpretation = WorkingProfileInterpretation::implicit_srgb(doc.icc_profile.as_ref().unwrap());
     doc.source_color_context = Some(SourceColorContext { source_precision: 650, original_icc: None });
     let (base, bs) = leaf(&q, doc.mode, doc.depth, doc.bounds());

@@ -37,7 +37,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     for layer_count in [3, 10] {
         let document = document_with_strokes(layer_count)?;
         let start = Instant::now();
-        render_bands(&document, document.bounds(), BAND_ROWS, |_| -> Result<(), &'static str> { Ok(()) })?;
+        render_bands(&document, document.bounds(), BAND_ROWS, |_| -> Result<(), std::io::Error> { Ok(()) })?;
         println!("{WIDTH}×{HEIGHT}, {layer_count} TSL-off 6 px outside strokes: {:.3} s", start.elapsed().as_secs_f64());
     }
     Ok(())

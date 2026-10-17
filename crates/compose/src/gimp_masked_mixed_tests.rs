@@ -52,7 +52,7 @@ const KINDS: [Kind; 5] = [Kind::Exposure, Kind::InvertLinear, Kind::InvertGamma,
 // full masked difference-alpha policy. Reference allocations are external harness.
 pub(crate) fn reference(p: Parameters, before: [f64; 4], raw: f64) -> [f64; 4] {
     use photocraft_algo::gimp::point::PointOperation;
-    let trc = photocraft_cms::srgb_trc();
+    let trc = photocraft_cms::curve::srgb_trc();
     let linear = p.kind() != Kind::InvertGamma;
     let mut working = before;
     if linear {

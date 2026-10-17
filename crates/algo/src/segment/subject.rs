@@ -32,7 +32,7 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
 use photocraft_geom::Rect;
-use photocraft_raster::{Interrupt, RasterInputError};
+use photocraft_raster::{Cancelled, Interrupt, RasterInputError};
 
 use super::gmm::Gmm;
 use super::grabcut::{self, BG, PR_BG, PR_FG};
@@ -90,8 +90,8 @@ pub fn select_subject_with(sampler: &dyn Sampler, canvas: Rect, ctl: &Interrupt)
     if !low.iter().any(|v| *v) {
         return Ok(None);
     }
-    let (low, fg, bg) = backdrop_pass(&img, &low, ctl)?.unwrap_or((low, fg, bg));
-    ctl.check()?;
+    let (low, fg, bg) = backdrop_pass(&img, &low, ctl).map_err(|_| RasterInputError::Cancelled)?.unwrap_or((low, fg, bg));
+    ctl.check().map_err(|_| RasterInputError::Cancelled)?;
     let low = super::fill_holes_by_model(&low, &img, &fg, &bg, 0.002, 0.05);
     super::finish_region_with(sampler, canvas, step, &low, w, h, Some((&fg, &bg)), ctl)
 }
@@ -344,4 +344,4 @@ pub fn otsu(v: &[f32]) -> f32 {
 }
 
 mod controlled;
-pub use controlled::{SubjectLimits,SubjectRequirements,requirements,select_subject_with_interrupt};
+pub use controlled::{SubjectLimits, SubjectRequirements, requirements, select_subject_with_interrupt};

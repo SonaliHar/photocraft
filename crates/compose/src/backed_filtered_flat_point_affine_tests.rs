@@ -24,7 +24,7 @@ fn affine_fixture(sample: SampleType, kind: crate::AffineKind, amount: f64, size
     f
 }
 fn affine(kind: crate::AffineKind, p: [f64; 4]) -> [f64; 4] {
-    let curve = photocraft_cms::srgb_trc();
+    let curve = photocraft_cms::curve::srgb_trc();
     let mut out = p;
     for c in 0..3 {
         let x = curve.eval64(p[c]);
@@ -252,7 +252,7 @@ fn strict_roles_and_inactive_control_proof() {
         rasters[1].clear_cache().unwrap();
         let before = q.usage().unwrap();
         fails[1].store(true, Ordering::Relaxed);
-        assert!(matches!(c.render_band(r, &ctl()), Err(E::Backing(BackingError::Io))));
+        assert!(matches!(c.render_band(r, &ctl()), Err(E::View(photocraft_raster::checked_view::RasterViewError::Backed(BackingError::Io)))));
         assert_eq!(q.usage().unwrap(), before);
         fails[1].store(false, Ordering::Relaxed);
     }

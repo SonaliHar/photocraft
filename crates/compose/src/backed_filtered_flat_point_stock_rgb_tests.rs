@@ -53,7 +53,7 @@ fn stock_fixture(sample: SampleType, variant: u8, amount: f64, size: Size) -> Fi
 // independent-producer or exact-format claim is attached to these references.
 fn stock(variant: u8, p: [f64; 4]) -> [f64; 4] {
     use photocraft_algo::gimp::point::PointOperation;
-    let curve = photocraft_cms::srgb_trc();
+    let curve = photocraft_cms::curve::srgb_trc();
     let linear = variant < 2;
     let mut w = p;
     if linear {
@@ -300,7 +300,7 @@ fn exact_role_refusal_and_unconditional_control() {
         rasters[1].clear_cache().unwrap();
         let before = q.usage().unwrap();
         fails[1].store(true, Ordering::Relaxed);
-        assert!(matches!(c.render_band(r, &ctl()), Err(E::Backing(BackingError::Io))));
+        assert!(matches!(c.render_band(r, &ctl()), Err(E::View(photocraft_raster::checked_view::RasterViewError::Backed(BackingError::Io)))));
         assert_eq!(q.usage().unwrap(), before);
         fails[1].store(false, Ordering::Relaxed);
     }

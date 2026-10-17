@@ -41,7 +41,7 @@ fn feathered_color_to_alpha_preserves_appearance_over_the_key() {
 fn feathered_offset_ignores_hidden_colour_of_the_original_pixel() {
     let r = Rect::new(0, 0, 2, 1);
     let filter = FilterParams::Offset { horizontal: 1, vertical: 0, undefined: UndefinedAreas::Wrap };
-    for sample in SampleType::ALL {
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
         s.write_pixel(0, 0, &[1.0, 0.0, 0.0, 0.0]);
         s.write_pixel(1, 0, &[0.0, 0.0, 1.0, 1.0]);
@@ -49,6 +49,12 @@ fn feathered_offset_ignores_hidden_colour_of_the_original_pixel() {
         let p = out.pixel(0, 0);
         assert_eq!(&p[..3], &[0.0, 0.0, 1.0], "{sample:?}: hidden red contaminated the selected blue: {p:?}");
         assert!((p[3] - 0.5).abs() < 1.0 / 255.0);
+    }
+    // The checked Offset endpoint has no wide implementation; the convenience
+    // wrapper's unchanged-input fallback is not evidence of a filtered result.
+    for sample in [SampleType::U32, SampleType::F64] {
+        let s = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
+        assert!(apply_tiled_with(&s, &filter, r, r, Some(&selection(0.5)), 256, None, &photocraft_raster::Interrupt::NONE).is_none());
     }
 }
 

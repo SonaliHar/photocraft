@@ -2,7 +2,7 @@
 use super::*;
 use photocraft_doc::accounted_document::{AccountedEdit, PointArgumentPatch, PointArgumentValue, PointFilterPatch};
 fn changed(kind: usize, p: [f64; 4], nl: &photocraft_cms::owned_lab::Parts, linear: &photocraft_cms::owned_lab::Parts) -> [f64; 4] {
-    let curve = photocraft_cms::srgb_trc();
+    let curve = photocraft_cms::curve::srgb_trc();
     match kind {
         0 => {
             let work = [curve.eval64(p[0]) as f32, curve.eval64(p[1]) as f32, curve.eval64(p[2]) as f32, p[3] as f32].map(f64::from);

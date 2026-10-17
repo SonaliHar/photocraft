@@ -64,7 +64,7 @@ fn alien_args() -> Vec<FilterArgument> {
 // Public transfer curve + old public operation for coefficient custody only.
 // These reference allocations/constructions are external harness, not quota proof.
 pub(super) fn reference(p: Parameters, input: [f64; 4]) -> [f64; 4] {
-    let curve = photocraft_cms::srgb_trc();
+    let curve = photocraft_cms::curve::srgb_trc();
     let mut working = input;
     if p.working() == GimpSpace::LinearRgb {
         for x in &mut working[..3] {

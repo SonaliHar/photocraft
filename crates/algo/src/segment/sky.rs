@@ -307,9 +307,9 @@ mod tests {
     fn a_white_backdrop_is_not_sky_but_a_blue_sky_down_to_the_bottom_is() {
         let disc = |x: usize, y: usize| ((x as f32 - 75.0).powi(2) + (y as f32 - 50.0).powi(2)).sqrt() < 30.0;
         let img = RgbImage::from_fn(150, 100, |x, y| if disc(x, y) { [0.12, 0.12, 0.12] } else { [0.95, 0.95, 0.94] });
-        assert!(select_sky(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, 150, 100), SkyParams::default()).is_none());
+        assert!(select_sky(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, 150, 100), SkyParams::default()).unwrap().is_none());
         let img = RgbImage::from_fn(150, 100, |x, y| if disc(x, y) { [0.12, 0.3, 0.1] } else { [0.35, 0.6, 0.95] });
-        let r = select_sky(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, 150, 100), SkyParams::default()).expect("blue sky");
+        let r = select_sky(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, 150, 100), SkyParams::default()).unwrap().expect("blue sky");
         assert!(r.at(5, 95) > 0.9 && r.at(75, 50) < 0.1);
     }
 

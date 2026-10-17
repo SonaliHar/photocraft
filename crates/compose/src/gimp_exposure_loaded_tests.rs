@@ -75,7 +75,7 @@ fn loaded_effective_zero_reuses_paid_kernel() {
             PreparedExposure::prepare(LoadedParameters::from_words(0.5f32.to_bits(), black).unwrap().effective(), 128, &Interrupt::NONE, &mut b).unwrap();
         let h = Held { value, _fee: fee };
         let p = [0.125, 0.5 + 2f64.powi(-45), 0.75, f64::from_bits(1f64.to_bits() - 1)];
-        let curve = photocraft_cms::srgb_trc();
+        let curve = photocraft_cms::curve::srgb_trc();
         let expected = [
             curve.eval_inverse64(curve.eval64(p[0]) * 0.5f64.exp2()),
             curve.eval_inverse64(curve.eval64(p[1]) * 0.5f64.exp2()),

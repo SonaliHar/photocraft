@@ -50,7 +50,7 @@ impl PreparationBudget for Budget {
 // All reference/profile/expected clones are external harness, not quota receipts.
 fn reference(p: Parameters, before: [f64; 4], raw: f64) -> [f64; 4] {
     use photocraft_algo::gimp::point::PointOperation;
-    let curve = photocraft_cms::srgb_trc();
+    let curve = photocraft_cms::curve::srgb_trc();
     let linear = p.kind() != Kind::InvertGamma;
     let mut working = before;
     if linear {

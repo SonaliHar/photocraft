@@ -18,42 +18,162 @@
 
 pub mod adjust;
 pub mod advanced;
-pub mod backed_document;
+pub(crate) mod backed_analytic_geometry;
+pub mod backed_assigned_current;
+pub mod backed_assigned_current_profile;
 pub mod backed_box_context;
 pub mod backed_box_document;
 pub mod backed_box_source;
-pub mod backed_gaussian_group;
-pub mod backed_separable;
-pub mod backed_separable_document;
-mod gimp_group_gaussian;
-pub mod backed_plain_current;
-pub mod backed_assigned_current;
-pub(crate) mod backed_analytic_geometry;
-pub mod backed_assigned_current_profile;
-pub mod backed_normal;
-pub mod backed_normal_stack;
-pub mod backed_normal_hierarchy_context;
-pub mod backed_normal_hierarchy_document;
+pub mod backed_document;
 pub mod backed_filtered_flat_point_context;
 pub mod backed_filtered_flat_point_document;
+pub mod backed_gaussian_group;
 pub mod backed_neighborhood_context;
 pub mod backed_neighborhood_document;
-pub mod backed_point_filter;
+pub mod backed_normal;
+pub mod backed_normal_hierarchy_context;
+pub mod backed_normal_hierarchy_document;
+pub mod backed_normal_stack;
+pub mod backed_plain_current;
 pub mod backed_point;
+pub mod backed_point_filter;
+pub mod backed_separable;
+pub mod backed_separable_document;
 pub mod backed_stock_point_context;
 pub mod backed_stock_point_document;
 pub mod backed_threshold;
+pub mod backed_threshold_alpha_context;
+pub mod backed_threshold_alpha_document;
 pub mod backed_threshold_context;
 pub mod backed_threshold_document;
-mod gimp_threshold_current;
-pub mod backed_threshold_alpha_document;
-pub mod backed_threshold_alpha_context;
 pub mod bounds;
 pub mod effects;
 mod feather_cache;
 pub mod feather_interrupt;
 pub mod fill_layout;
+pub mod gimp_absolute;
+pub mod gimp_blend;
+pub mod gimp_brightness_contrast_candidate;
+pub mod gimp_brightness_contrast_graph_candidate;
+pub mod gimp_channel_gaussian_candidate;
+pub mod gimp_channel_mixer;
+pub mod gimp_channel_opacity_candidate;
+mod gimp_color_balance;
+pub mod gimp_color_overlay;
+pub mod gimp_color_overlay_color_candidate;
+pub mod gimp_color_overlay_graph_candidate;
+pub mod gimp_color_rotate;
+pub mod gimp_color_to_alpha_color_candidate;
+pub mod gimp_color_to_alpha_graph_candidate;
+pub mod gimp_component_hsv_hsl;
+pub mod gimp_composite;
+pub mod gimp_configured_candidate;
+pub mod gimp_configured_color_candidate;
+pub mod gimp_configured_color_graph_candidate;
+pub mod gimp_configured_graph_candidate;
+pub mod gimp_configured_graph_execution;
+pub mod gimp_configured_graph_preparation;
+pub mod gimp_configured_prepared_graph_candidate;
+pub mod gimp_configured_render_candidate;
+mod gimp_curves;
+mod gimp_filters;
+pub mod gimp_gray_hue_saturation_candidate;
+pub mod gimp_gray_hue_saturation_graph_candidate;
+mod gimp_group_gaussian;
+pub mod gimp_hue_chroma_candidate;
+pub mod gimp_hue_chroma_color_candidate;
+pub mod gimp_hue_chroma_graph_candidate;
+pub mod gimp_hue_chroma_rgb_binding_candidate;
+pub mod gimp_hue_saturation_candidate;
+pub mod gimp_hue_saturation_graph_candidate;
+pub mod gimp_layer_fractional_gaussian_candidate;
+pub mod gimp_layer_selection_gaussian_candidate;
+pub mod gimp_link_cached_affine_candidate;
+pub mod gimp_link_native_precision_candidate;
+pub mod gimp_link_owned_wide_candidate;
+pub mod gimp_link_wide_cubic_candidate;
+pub mod gimp_mixed_hue_saturation_candidate;
+pub mod gimp_mixed_hue_saturation_graph_candidate;
+pub mod gimp_sector_hue_saturation_candidate;
+pub mod gimp_sector_hue_saturation_graph_candidate;
+pub mod gimp_threshold_alpha_composition_candidate;
+mod gimp_threshold_current;
+pub mod gimp_unpremultiply;
+pub mod gimp_vibrance_candidate;
+pub mod gimp_vibrance_color_candidate;
+pub mod gimp_vibrance_graph_candidate;
+pub mod gimp_vibrance_prepared_candidate;
+pub mod gimp_video_degradation;
+pub use gimp_filters::SEMI_FLATTEN_EPOCH;
+mod gimp_hue_chroma;
+mod gimp_semi_flatten;
+pub use gimp_hue_chroma::EPOCH as HUE_CHROMA_EPOCH;
+mod gimp_vibrance;
+pub use gimp_vibrance::EPOCH as VIBRANCE_EPOCH;
+mod gimp_exposure;
+mod gimp_mixed_filter_opacity;
+pub use gimp_exposure::{EPOCH as EXPOSURE_MIXED_EPOCH, Parameters as ExposureParameters, PreparedExposure, parameters as exposure_mixed_parameters};
+pub use gimp_exposure::{
+    LOADED_MIXED_EPOCH as EXPOSURE_LOADED_MIXED_EPOCH, LOADED_POINT_EPOCH as EXPOSURE_LOADED_POINT_EPOCH, LoadedParameters as LoadedExposureParameters,
+    loaded_parameters as loaded_exposure_parameters,
+};
+mod gimp_masked_mixed;
+pub use gimp_masked_mixed::{
+    BRIGHTNESS_CONTRAST_EPOCH as BRIGHTNESS_CONTRAST_MASKED_MIXED_EPOCH, EXPOSURE_EPOCH as EXPOSURE_MASKED_MIXED_EPOCH,
+    GEGL_LEVELS_EPOCH as GEGL_LEVELS_MASKED_MIXED_EPOCH, INVERT_GAMMA_EPOCH as INVERT_GAMMA_MASKED_MIXED_EPOCH,
+    INVERT_LINEAR_EPOCH as INVERT_LINEAR_MASKED_MIXED_EPOCH, Kind as MaskedMixedKind, Parameters as MaskedMixedParameters,
+    parameters as masked_mixed_parameters,
+};
+pub mod backed_masked_filtered_flat_point_context;
+pub mod backed_masked_filtered_flat_point_document;
+mod gimp_masked_scalar;
+pub use gimp_masked_scalar::{
+    BRIGHTNESS_CONTRAST_EPOCH as BRIGHTNESS_CONTRAST_MASKED_EPOCH, GEGL_LEVELS_EPOCH as GEGL_LEVELS_MASKED_EPOCH,
+    INVERT_GAMMA_EPOCH as INVERT_GAMMA_MASKED_EPOCH, INVERT_LINEAR_EPOCH as INVERT_LINEAR_MASKED_EPOCH, Kind as MaskedScalarKind,
+    Parameters as MaskedScalarParameters, parameters as masked_scalar_parameters,
+};
+mod gimp_masked_exposure;
+pub use gimp_masked_exposure::{EPOCH as EXPOSURE_MASKED_EPOCH, parameters as masked_exposure_parameters};
+mod gimp_stock_rgb;
+pub use gimp_stock_rgb::{
+    ALIEN_MAP_HSL_EPOCH as ALIEN_MAP_HSL_MIXED_EPOCH, ALIEN_MAP_RGB_EPOCH as ALIEN_MAP_RGB_MIXED_EPOCH, AlienHslParameters, AlienRgbParameters,
+    COLOR_TEMPERATURE_EPOCH as COLOR_TEMPERATURE_MIXED_EPOCH, Kind as StockRgbKind, Parameters as MixedStockRgbParameters, PreparedStockRgb,
+    SEPIA_EPOCH as SEPIA_MIXED_EPOCH, SepiaParameters, TemperatureParameters, alien_map_hsl_parameters as alien_map_hsl_mixed_parameters,
+    alien_map_rgb_parameters as alien_map_rgb_mixed_parameters, color_temperature_parameters as color_temperature_mixed_parameters,
+    sepia_parameters as sepia_mixed_parameters,
+};
+mod gimp_affine;
+pub use gimp_affine::{
+    BRIGHTNESS_CONTRAST_EPOCH as BRIGHTNESS_CONTRAST_MIXED_EPOCH, BrightnessContrastParameters, GEGL_LEVELS_EPOCH as GEGL_LEVELS_MIXED_EPOCH,
+    GeglLevelsParameters, Kind as AffineKind, Parameters as MixedAffineParameters, PreparedAffine,
+    brightness_contrast_parameters as brightness_contrast_mixed_parameters, gegl_levels_parameters as gegl_levels_mixed_parameters,
+};
+mod gimp_invert;
+pub use gimp_invert::{GAMMA_EPOCH as INVERT_GAMMA_MIXED_EPOCH, Kind as InvertKind, LINEAR_EPOCH as INVERT_LINEAR_MIXED_EPOCH, PreparedInvert};
 pub mod filter_mask;
+pub mod gimp_checkerboard_candidate;
+pub mod gimp_colorize_candidate;
+pub mod gimp_colorize_graph_candidate;
+pub mod gimp_filter_mask_state;
+mod gimp_levels;
+pub mod gimp_link_alpha_candidate;
+pub mod gimp_link_cubic;
+pub mod gimp_link_items;
+pub mod gimp_link_linear;
+pub mod gimp_link_nearest;
+pub mod gimp_link_nohalo;
+pub mod gimp_mono_mixer;
+mod gimp_neighborhood;
+pub mod gimp_red_eye;
+pub mod gimp_render;
+pub mod gimp_singleton_preparation;
+pub mod gimp_stretch_contrast_candidate;
+pub mod gimp_stretch_hsv_candidate;
+pub mod gimp_stretch_hsv_graph_candidate;
+pub mod gimp_text_fixed_box_candidate;
+pub mod gimp_text_items;
+pub mod gimp_text_unit_candidate;
+pub mod gimp_vector_items;
 pub mod gradient_fill;
 pub mod masks;
 pub mod multichannel;
@@ -441,8 +561,14 @@ pub fn band_rows_for(width: u32, requested: i32) -> i32 {
 /// A CMYK document of plain Normal layers is composited in its ink values instead
 /// ([`native::flatten_cmyk`]), so flattening doesn't round-trip its pixels through RGB (#3778),
 /// and a Lab one in its L, a and b ([`native_lab::flatten_lab`]).
-pub fn flatten_to_surface(doc: &Document, fmt: photocraft_color::PixelFormat, background: Option<[f32; 3]>) -> Surface {
-    composite_to_surface(doc, doc.bounds(), fmt, background)
+fn flatten_to_surface_resident(doc: &Document, fmt: photocraft_color::PixelFormat, background: Option<[f32; 3]>) -> Surface {
+    composite_to_surface_resident(doc, doc.bounds(), fmt, background)
+}
+
+pub fn composite_to_surface(doc: &Document, rect: Rect, fmt: photocraft_color::PixelFormat, background: Option<[f32; 3]>) -> Result<Surface, RasterInputError> {
+    require_resident(doc)?;
+    photocraft_raster::checked_region_byte_len(rect, fmt)?;
+    Ok(composite_to_surface_resident(doc, rect, fmt, background))
 }
 
 /// [`flatten_to_surface`] over `rect` only (the rest of the surface stays empty).
@@ -722,6 +848,8 @@ struct Ctx<'a> {
     doc: Option<&'a Document>,
     /// Effect-map identities of this render's document layers (see [`LayerKeys`]).
     layer_keys: LayerKeys,
+    // Last: cache owners above are destroyed before their live leases.
+    preparation: Option<preparation_bridge::PreparationBridge<'a>>,
 }
 
 /// Memo of [`layer_identity`] for the layers of the document being rendered. The identity depends
@@ -1952,11 +2080,7 @@ fn effect_maps(layer: &Layer, rect: Rect, cx: &Ctx) -> std::sync::Arc<effects::F
         let shape = if region.is_empty() { Vec::new() } else { effect_shape(layer, region, cx) };
         return std::sync::Arc::new(effects::build_maps_prepared(layer, shape, region, &cx.light, &texture_ctx(layer, region, cx), cx.patterns));
     }
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    cx.layer_keys.identity(layer, cx.doc).hash(&mut h);
-    (region.x0, region.y0, region.x1, region.y1).hash(&mut h);
-    (cx.light.angle.to_bits(), cx.light.altitude.to_bits()).hash(&mut h);
-    let key = h.finish();
+    let key = effect_cache_key(layer, region, cx);
     // Prepared for this render (see `prepare_effects`): no global lookup, no build.
     if let Some((m, _)) = cx.fx_maps.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
         return m.clone();
@@ -1968,7 +2092,15 @@ fn effect_maps(layer: &Layer, rect: Rect, cx: &Ctx) -> std::sync::Arc<effects::F
 fn effect_cache_key(layer: &Layer, region: Rect, cx: &Ctx) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    layer_identity(layer, &mut h);
+    // Checked preparation already owns a bounded metadata envelope. Keep its
+    // key computation free of new memo containers: the ordinary-render memo builds
+    // document-address and identity containers outside that envelope.
+    let identity = if cx.checked_effects || cx.vector_control.is_some() || cx.preparation.is_some() {
+        cx.layer_keys.compute(layer)
+    } else {
+        cx.layer_keys.identity(layer, cx.doc)
+    };
+    identity.hash(&mut h);
     (region.x0, region.y0, region.x1, region.y1).hash(&mut h);
     (cx.light.angle.to_bits(), cx.light.altitude.to_bits()).hash(&mut h);
     h.finish()
@@ -2004,6 +2136,12 @@ fn cached_effect_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx) -> std::s
             let bytes =
                 maps.bytes().saturating_add(pin.len().saturating_mul(std::mem::size_of::<photocraft_raster::Tile>() + 2 * std::mem::size_of::<usize>()));
             let maps = std::sync::Arc::new(maps);
+            // A failed checked mask abandons this private preparation. Never
+            // publish maps computed from its discarded microblock to later
+            // renders through the shared successful-result cache.
+            if cx.checked_vectors.error().is_err() {
+                return maps;
+            }
             if slot.set(FxEntry { maps: maps.clone(), _pin: pin, bytes }).is_ok() {
                 // Counted exactly once, by the build that filled the slot, and only while the
                 // slot is still cached (eviction may have dropped it meanwhile).
@@ -2186,6 +2324,32 @@ mod advanced_tests;
 #[cfg(test)]
 mod xcf_merge_interaction_tests {
     use super::*;
+    #[test]
+    fn checked_effect_identity_matches_ordinary_without_allocating_memo_containers() {
+        use photocraft_doc::{ColorMode, SampleType, Size};
+        let mut doc = Document::new("effect identity", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        doc.layers.push(Layer::raster("source", doc.pixel_format()));
+        let patterns = pattern::PreparedPatterns::new(&[], pattern::PREPARED_PATTERN_BYTES);
+        let ordinary = Ctx::for_doc(&doc, &patterns);
+        let expected = effect_cache_key(&doc.layers[0], doc.bounds(), &ordinary);
+        assert!(ordinary.layer_keys.in_doc.get().is_some());
+        assert_eq!(ordinary.layer_keys.ids.lock().unwrap_or_else(|e| e.into_inner()).len(), 1);
+        for mode in 0..3 {
+            let mut checked = Ctx::for_doc(&doc, &patterns);
+            match mode {
+                0 => checked.checked_effects = true,
+                1 => checked.vector_control = Some(&Interrupt::NONE),
+                _ => {
+                    checked.checked_effects = true;
+                    checked.vector_control = Some(&Interrupt::NONE);
+                }
+            }
+            assert_eq!(effect_cache_key(&doc.layers[0], doc.bounds(), &checked), expected);
+            assert!(checked.layer_keys.in_doc.get().is_none());
+            assert_eq!(checked.layer_keys.ids.lock().unwrap_or_else(|e| e.into_inner()).len(), 0);
+        }
+    }
+
     #[test]
     fn imported_source_over_retains_upstream_blend_if() {
         use photocraft_doc::{BlendRange, ColorMode, ImportCompositing, SampleEncoding, SampleType, Size};

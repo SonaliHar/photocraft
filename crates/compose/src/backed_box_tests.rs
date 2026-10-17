@@ -144,7 +144,7 @@ fn reference(format: photocraft_color::PixelFormat, s: Rect, radius: u32, profil
     let o = n::box_blur_extent(s, radius).unwrap();
     let space = WorkingSpace::new_with_interrupt(profile, SampleEncoding::NonlinearProfile, GimpSpace::LinearRgb, &Interrupt::NONE).unwrap();
     let mut samples = source.try_read_region_f64(s).unwrap();
-    for p in samples.chunks_exact_mut(4) {
+    for p in samples.as_chunks_mut::<4>().0 {
         let rgb = space.convert([p[0], p[1], p[2]], true).unwrap();
         p[..3].copy_from_slice(&rgb);
     }
@@ -155,7 +155,7 @@ fn reference(format: photocraft_color::PixelFormat, s: Rect, radius: u32, profil
         n::try_box_blur(&linear, o, s, radius, n::GaussianLimits { resident_bytes: req.peak_resident_bytes, work_units: req.work_units }, &Interrupt::NONE)
             .unwrap();
     let mut samples = filtered.try_read_region_f64(o).unwrap();
-    for p in samples.chunks_exact_mut(4) {
+    for p in samples.as_chunks_mut::<4>().0 {
         let rgb = space.convert([p[0], p[1], p[2]], false).unwrap();
         p[..3].copy_from_slice(&rgb);
     }
@@ -334,7 +334,7 @@ fn current_selector_has_no_source_permission_and_preserves_exact_profile_recipe_
         let state = doc.xcf_state.as_mut().unwrap();
         state.items.iter_mut().find(|i| i.item == ItemRef::Layer(doc.layers[0].id)).unwrap().visible = false;
         match case {
-            0 => doc.icc_profile = Some(Arc::new(photocraft_cms::Builtin::Srgb.profile().to_bytes())),
+            0 => doc.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes()),
             1 => state.filter_masks[0].surface.try_write_pixel_f64(40, 36, &[1.]).unwrap(),
             2 => state.filter_stacks[0].nodes[0].arguments = vec![i("radius", 6)],
             3 => {

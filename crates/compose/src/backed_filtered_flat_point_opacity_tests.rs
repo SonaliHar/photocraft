@@ -39,13 +39,13 @@ fn old_leaf(kind: u8, p: [f64; 4], derived: bool, nl: &photocraft_cms::owned_lab
     if kind < 3 {
         return step(kind, p, derived, nl, linear);
     }
-    let c = photocraft_cms::srgb_trc();
+    let c = photocraft_cms::curve::srgb_trc();
     let mut out = p;
     for i in 0..3 {
         out[i] = match kind {
             3 | 6 => {
                 let black = if kind == 6 { 0. } else { 0.0625 };
-                c.eval_inverse64((c.eval64(p[i]) - black) / ((-0.5f64).exp2() - black))
+                c.eval_inverse64(if black == 0. { c.eval64(p[i]) * 0.5f64.exp2() } else { (c.eval64(p[i]) - black) / ((-0.5f64).exp2() - black) })
             }
             4 => c.eval_inverse64(1. - c.eval64(p[i])),
             _ => 1. - p[i],
@@ -60,7 +60,7 @@ fn mix_reference(b: [f64; 4], a: [f64; 4], t: f64) -> [f64; 4] {
     if t == 0. {
         return b.map(|v| f64::from(v as f32));
     }
-    let c = photocraft_cms::srgb_trc();
+    let c = photocraft_cms::curve::srgb_trc();
     let alpha = b[3] + t * (a[3] - b[3]);
     let mut out = [0.; 4];
     for i in 0..3 {
@@ -96,7 +96,11 @@ fn all_current_families_and_source_boundary() {
                     for x in 0u32..5 {
                         let p = input(0, x, 0, sample);
                         let expected = if enabled { mix_reference(p, old_leaf(kind, p, false, &nl, &linear), amount) } else { p };
-                        assert_eq!(root_value(&c, 0, x as i32, 0).map(f64::to_bits), expected.map(f64::to_bits));
+                        assert_eq!(
+                            root_value(&c, 0, x as i32, 0).map(f64::to_bits),
+                            expected.map(f64::to_bits),
+                            "sample={sample:?} kind={kind} amount={amount:?} enabled={enabled} x={x}"
+                        );
                     }
                     assert_eq!(o.document().xcf_state.as_ref().unwrap().filter_stacks[0].nodes, nodes);
                     assert_eq!(o.document().icc_profile, profile);
@@ -179,7 +183,12 @@ fn full_inactive_proof_and_real_control_cleanup() {
             f.document.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].operation.stored_version = "9:9".into();
         }
         let (o, _, _, _) = current(f);
-        assert!(Context::new(&o, Default::default(), &ctl()).is_err());
+        if fault == 3 {
+            let c = Context::new(&o, Default::default(), &ctl()).unwrap();
+            assert!(c.validate_operative(&ctl()).is_err());
+        } else {
+            assert!(Context::new(&o, Default::default(), &ctl()).is_err());
+        }
     }
     let (o, rasters, fails, _) = current(fixture_opacity(SampleType::F64, 2, 0.375, true));
     let q = o.quota().clone();
@@ -217,11 +226,14 @@ fn full_inactive_proof_and_real_control_cleanup() {
     rasters[1].clear_cache().unwrap();
     let baseline = q.usage().unwrap();
     fails[1].store(true, Ordering::Relaxed);
-    assert!(matches!(c.render_band(r, &ctl()), Err(E::Backing(BackingError::Io))));
+    assert!(matches!(
+        c.render_band(r, &ctl()),
+        Err(E::Backing(BackingError::Io)) | Err(E::View(photocraft_raster::checked_view::RasterViewError::Backed(BackingError::Io)))
+    ));
     assert_eq!(q.usage().unwrap(), baseline);
     fails[1].store(false, Ordering::Relaxed);
     drop(c.render_band(r, &ctl()).unwrap());
 }
 
-#[path="backed_filtered_flat_point_source_opacity_tests.rs"]
+#[path = "backed_filtered_flat_point_source_opacity_tests.rs"]
 mod source_opacity;
