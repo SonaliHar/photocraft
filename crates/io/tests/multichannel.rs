@@ -49,7 +49,7 @@ fn alpha_type_channels_import_as_alpha_and_round_trip() {
         // It still prints as black ink, so the composite is what a black spot channel gives.
         let mut as_ink = d.clone();
         as_ink.channels[1].spot = Some((photocraft_color::Color::BLACK, 0.0));
-        assert_eq!(photocraft_compose::flatten(&d).px, photocraft_compose::flatten(&as_ink).px);
+        assert_eq!(photocraft_compose::flatten(&d).unwrap().px, photocraft_compose::flatten(&as_ink).unwrap().px);
 
         // Saved back unchanged: same DisplayInfo, same planes, same channels on reopening.
         let (back, d2) = roundtrip(&d);
@@ -83,7 +83,7 @@ fn resources_and_global_blocks_survive_a_save() {
     d.global_light.angle = 60.0;
     let path =
         Path::new(vec![Subpath { closed: true, op: PathOp::Combine, knots: vec![Knot::corner(1.0, 1.0), Knot::corner(8.0, 1.0), Knot::corner(4.0, 4.0)] }]);
-    d.paths.push(NamedPath { name: "Outline".into(), path, psd_raw: None });
+    d.paths.push(NamedPath { id: photocraft_doc::item_identity::PathId::fresh(), name: "Outline".into(), path, psd_raw: None });
 
     let (back, d2) = roundtrip(&d);
     let res = |id: u16| back.resource(id).map(|r| r.data.clone());

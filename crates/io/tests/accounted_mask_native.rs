@@ -216,6 +216,9 @@ fn six_actual_masked_native_paths_preserve_source_current_metadata_projection_an
         }
         let history = owner.clone();
         let id = owner.document().layers[0].id;
+        // This ordinary masked native is the genuine Legacy data owner, not
+        // the separate assigned-geometry compound-metadata programme.
+        assert!(owner.is_legacy_storage());
         let renamed = owner.try_edit(photocraft_doc::accounted_document::AccountedEdit::LayerName { layer: id, name: "paid native rename" }, &ctl()).unwrap();
         assert_eq!(history.document().xcf_state, original_state);
         assert_eq!(renamed.document().layers[0].name, "paid native rename");

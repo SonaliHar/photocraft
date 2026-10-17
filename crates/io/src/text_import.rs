@@ -102,12 +102,17 @@ pub(crate) fn prepare(doc: &mut Document) -> Result<(), crate::IoError> {
         let mut changed = false;
         for run in &mut text.runs {
             if let Some(ps) = &run.style.postscript_name
-                && !eng.fonts.faces(&run.style.font_family).iter().any(|face|face.postscript_name.as_deref()==Some(ps.as_str())) {
-                let font=eng.fonts.resolve_postscript(ps);
-                let installed=eng.fonts.has_family(&run.style.font_family);
-                let exact_recovery=font.exact && (!installed || font.family.strip_prefix(&run.style.font_family).is_some_and(|suffix|suffix.starts_with('-')));
+                && !eng.fonts.faces(&run.style.font_family).iter().any(|face| face.postscript_name.as_deref() == Some(ps.as_str()))
+            {
+                let font = eng.fonts.resolve_postscript(ps);
+                let installed = eng.fonts.has_family(&run.style.font_family);
+                let exact_recovery =
+                    font.exact && (!installed || font.family.strip_prefix(&run.style.font_family).is_some_and(|suffix| suffix.starts_with('-')));
                 if exact_recovery || (!installed && eng.fonts.has_family(&font.family)) {
-                    run.style.font_family=font.family;run.style.weight=font.weight;run.style.italic=font.italic;changed=true;
+                    run.style.font_family = font.family;
+                    run.style.weight = font.weight;
+                    run.style.italic = font.italic;
+                    changed = true;
                 }
             }
         }
@@ -184,7 +189,9 @@ mod adapter_tests {
         first.cache = Some(photocraft_raster::Surface::new(doc.pixel_format()));
         doc.layers.push(Layer::new("Cached first", LayerContent::Text(first)));
         let mut later = TextLayer { text: "AV late".into(), ..Default::default() };
-        later.runs[0].style.size_pt = f32::INFINITY;
+        let mut invalid_style = later.char_runs()[0].style.clone();
+        invalid_style.size_pt = f32::INFINITY;
+        later.runs = vec![photocraft_doc::text::TextRun { len: later.text.len(), style: invalid_style }];
         doc.layers.push(Layer::new("Missing later", LayerContent::Text(later)));
         let before = doc.clone();
         let error = prepare(&mut doc).unwrap_err();

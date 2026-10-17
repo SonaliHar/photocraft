@@ -236,7 +236,14 @@ fn import_parsed(name: &str, parsed: Parsed, max_group_depth: usize) -> Result<I
     if doc.layers.is_empty() {
         conv.warnings.push("SVG: nothing to draw (an empty drawing)".to_string());
     }
-    Ok(ImportResult { document: doc, warnings: conv.warnings, origin: crate::ImportOrigin::writable(crate::ImportFormat::Unknown), assessment: None, source_read_only: false, preview_only: false})
+    Ok(ImportResult {
+        document: doc,
+        warnings: conv.warnings,
+        origin: crate::ImportOrigin::writable(crate::ImportFormat::Unknown),
+        assessment: None,
+        source_read_only: false,
+        preview_only: false,
+    })
 }
 
 /// The whole drawing rendered at `scale` (1 = its own size), as a straight-alpha RGBA buffer at
@@ -758,7 +765,7 @@ mod tests {
         let (lo, hi) = (xs.iter().copied().fold(f64::MAX, f64::min), xs.iter().copied().fold(f64::MIN, f64::max));
         assert!((lo - 12.0).abs() < 1e-3 && (hi - 52.0).abs() < 1e-3, "in the group's space: {lo}..{hi}");
         // Pixel for pixel what resvg draws, but for anti-aliasing along the edges.
-        let ours = photocraft_compose::flatten(&r.document).to_rgba8().pixels;
+        let ours = photocraft_compose::flatten(&r.document).unwrap().to_rgba8().pixels;
         let tree = parse(svg).unwrap().tree;
         let mut pm = tiny_skia::Pixmap::new(64, 64).unwrap();
         resvg::render(&tree, tiny_skia::Transform::default(), &mut pm.as_mut());

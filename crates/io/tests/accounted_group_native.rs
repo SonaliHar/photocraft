@@ -258,7 +258,7 @@ fn check_history(
     assert!(std::sync::Arc::ptr_eq(&current_mask.surface, &original_mask.surface));
     assert!(original_mask.enabled);
     verify_reopened(&current_owner.document().layers, &expected_state, row["layers"].as_array().unwrap(), root);
-    history.try_commit(AccountedEdit::LayerVisibility { layer, visible: false }, &ctl()).unwrap();
+    history.try_commit(AccountedEdit::LayerMetadata { layer, name: None, visible: Some(false), opacity: None }, &ctl()).unwrap();
     expected_state.items.iter_mut().find(|i| i.item == ItemRef::Layer(layer)).unwrap().visible = false;
     assert_eq!(history.current().unwrap().document().xcf_state.as_ref().unwrap(), &expected_state);
     let hidden_band = check_projection(history.current().unwrap(), profile, root, hidden);
@@ -425,8 +425,17 @@ fn twenty_four_actual_group_archives_preserve_tree_native_current_source_and_ren
         assert!(PreparedBackedDocument::new_accounted(&owner, photocraft_cms::Builtin::Srgb.profile(), NormalBandLimits::default(), &ctl()).is_err());
         let previous = owner.clone();
         let id = owner.document().layers[1].id;
-        let renamed =
-            owner.try_edit(photocraft_doc::accounted_document::AccountedEdit::LayerName { layer: id, name: "current paid group name" }, &ctl()).unwrap();
+        let renamed = owner
+            .try_edit(
+                photocraft_doc::accounted_document::AccountedEdit::LayerMetadata {
+                    layer: id,
+                    name: Some("current paid group name"),
+                    visible: None,
+                    opacity: None,
+                },
+                &ctl(),
+            )
+            .unwrap();
         assert_eq!(previous.document().xcf_state, original_state);
         assert_eq!(renamed.document().layers[1].name, "current paid group name");
         let current = check_projection(&renamed, &profile, &root, row);

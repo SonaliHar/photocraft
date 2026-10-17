@@ -32,7 +32,7 @@ fn truncated_merged_image_keeps_layer_pixels_at_every_depth_and_compression() {
             for compression in Compression::ALL {
                 let mut file = layered_in_mode(mode, depth, extension);
                 let intact = import(extension, &file.to_bytes().unwrap()).unwrap();
-                let expected = photocraft_compose::flatten(&intact.document).px;
+                let expected = photocraft_compose::flatten(&intact.document).unwrap().px;
                 let pixels = file.decode_merged().unwrap();
                 file.image_data = photocraft_psd::ImageData::encode(compression, &pixels, &file.header).unwrap();
                 file.image_data.data.truncate(file.image_data.data.len() / 2);
@@ -42,7 +42,7 @@ fn truncated_merged_image_keeps_layer_pixels_at_every_depth_and_compression() {
                 assert_eq!(result.document.layer_count(), 1);
                 assert_eq!(result.document.depth, depth);
                 assert!(result.warnings.iter().any(|w| w.contains("merged image")), "{:?}", result.warnings);
-                let rendered = photocraft_compose::flatten(&result.document);
+                let rendered = photocraft_compose::flatten(&result.document).unwrap();
                 assert_eq!(rendered.px, expected, "{extension} {mode:?} {depth:?} {compression:?}");
                 // Saving the recovered document replaces the bad preview with a valid one.
                 let saved = export(&result.document, extension, &ExportOptions::default()).unwrap();

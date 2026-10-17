@@ -769,6 +769,11 @@ pub fn psd_to_document(file: &PsdFile) -> (Document, Vec<String>) {
 /// progress. `None` when cancelled or physical geometry is unsupported. Use
 /// [`try_psd_to_document_with`] to distinguish rejection from cancellation.
 pub fn psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) -> Option<(Document, Vec<String>)> {
+    try_psd_to_document_with(file, ctl).ok().flatten()
+}
+
+/// Fallible physical type geometry, distinct from cooperative cancellation.
+pub fn try_psd_to_document_with(file: &PsdFile, ctl: &photocraft_raster::Interrupt) -> Result<Option<(Document, Vec<String>)>, crate::IoError> {
     psd_to_document_decoded(file, ctl, None)
 }
 
@@ -788,13 +793,13 @@ pub(crate) fn can_recover_layers(file: &PsdFile) -> bool {
     matches!(file.header.color_mode, PsdMode::Grayscale | PsdMode::Rgb | PsdMode::Cmyk | PsdMode::Lab) && file.header.depth != 1 && !file.layers().is_empty()
 }
 
-/// [`psd_to_document_with`] with the merged image already decoded (by
+/// [`try_psd_to_document_with`] with the merged image already decoded (by
 /// [`PsdFile::from_bytes_and_merged`] with [`merged_needed`]), so it is not decoded again.
 pub(crate) fn psd_to_document_decoded(
     file: &PsdFile,
     ctl: &photocraft_raster::Interrupt,
     decoded: Option<photocraft_psd::Result<Vec<u8>>>,
-) -> Option<(Document, Vec<String>)> {
+) -> Result<Option<(Document, Vec<String>)>, crate::IoError> {
     let h = &file.header;
     let mut warnings = Vec::new();
     let mode = doc_mode(h.color_mode).unwrap_or_else(|| {
@@ -814,9 +819,15 @@ pub(crate) fn psd_to_document_decoded(
                     // Fixed 16.16 hRes/vRes are pixels per inch. The unit shorts only
                     // say how to show that number (1 = px/in, 2 = px/cm).
                     let (x, y) = (ri.h_res(), ri.v_res());
-                    doc.resolution_dpi = x as f32;
-                    warnings.extend(crate::unequal_resolution_warning(x, y));
+                    if let Err(error) =
+                        doc.set_physical_resolution(photocraft_doc::PhysicalResolution { x_dpi: x, y_dpi: y, unit: photocraft_doc::PhysicalUnit::Inch })
+                    {
+                        warnings.push(format!("Invalid PSD resolution was ignored: {error}"));
+                    }
                 }
+                // Preserve display-unit shorts and original fixed words independently
+                // of the model's exact physical axes.
+                doc.metadata.psd_resources.push((r.id, String::from_utf8_lossy(&r.name).into_owned(), Arc::new(r.data.clone())));
             }
             ids::ICC_PROFILE => doc.icc_profile = Some(Arc::new(r.data.clone())),
             ids::XMP => doc.metadata.xmp = Some(String::from_utf8_lossy(&r.data).into_owned()),

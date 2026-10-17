@@ -99,10 +99,24 @@ fn layers_and_alpha_channels_reopen_unchanged() {
     };
     let (on, off) = (reopen(&ExportOptions::default()), reopen(&compat_off()));
     assert_eq!(off.layers.len(), 1);
-    assert_eq!(off.channels, on.channels, "alpha channels follow the placeholder");
-    assert_eq!(off.quick_mask, on.quick_mask);
+    // Foreign PSD imports mint runtime ChannelIds independently (psd_import extra channels).
+    // Compare every persisted channel field, rather than unrelated in-memory identities.
+    fn same_channel(a: &AlphaChannel, b: &AlphaChannel) {
+        let AlphaChannel { id: _, name: an, surface: asf, spot: asp, color: ac, opacity: ao, indicates: ai } = a;
+        let AlphaChannel { id: _, name: bn, surface: bsf, spot: bsp, color: bc, opacity: bo, indicates: bi } = b;
+        assert_eq!((an, asf, asp, ac, ao, ai), (bn, bsf, bsp, bc, bo, bi));
+    }
+    assert_eq!(off.channels.len(), on.channels.len());
+    for (off, on) in off.channels.iter().zip(&on.channels) {
+        same_channel(off, on);
+    }
+    match (&off.quick_mask, &on.quick_mask) {
+        (Some(off), Some(on)) => same_channel(off, on),
+        (None, None) => {}
+        _ => panic!("Quick Mask presence differs"),
+    }
     let canvas = d.bounds();
-    assert_eq!(photocraft_compose::render(&off, canvas).px, photocraft_compose::render(&on, canvas).px, "the same image");
+    assert_eq!(photocraft_compose::render(&off, canvas).unwrap().px, photocraft_compose::render(&on, canvas).unwrap().px, "the same image");
 }
 
 /// Without layer records the merged image is the only copy of the pixels, so it stays real.

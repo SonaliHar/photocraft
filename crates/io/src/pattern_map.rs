@@ -111,6 +111,42 @@ pub fn to_psd(p: &Pattern) -> PsdPattern {
     }
 }
 
+/// Checked exact-depth pattern serialization; model changes and unsupported wide PAT are errors.
+pub fn try_to_psd(p: &Pattern) -> Result<PsdPattern, String> {
+    if matches!(p.surface.format().sample, SampleType::U32 | SampleType::F64) {
+        return Err("PSD patterns cannot retain U32/F64; save as .pcraft".into());
+    }
+    let f = p.surface.format();
+    let mode = match f.mode {
+        ColorMode::Grayscale | ColorMode::Rgb | ColorMode::Cmyk | ColorMode::Lab => f.mode,
+        _ => return Err("PSD patterns require RGB, Gray, CMYK or Lab; indexed palette conversion is not qualified".into()),
+    };
+    let fmt = PixelFormat::new(mode, f.sample, f.alpha);
+    let surf = p.surface.try_convert(fmt).map_err(|e| format!("pattern pixel conversion: {e}"))?;
+    let mut bytes = surf.try_read_interleaved(p.rect()).map_err(|e| e.to_string())?;
+    let ch = fmt.channels();
+    if mode == ColorMode::Lab && fmt.sample == SampleType::U16 {
+        crate::pixels::lab16_chroma(&mut bytes, ch, false);
+    }
+    let mut invert = vec![mode == ColorMode::Cmyk; ch];
+    if fmt.alpha {
+        invert[ch - 1] = false;
+    }
+    let mut planes = deinterleave(&bytes, ch, fmt.sample, &invert);
+    let alpha = fmt.alpha.then(|| planes.pop()).flatten();
+    Ok(PsdPattern {
+        mode: psd_mode(mode),
+        width: p.width,
+        height: p.height,
+        name: p.name.clone(),
+        id: p.id.clone(),
+        palette: None,
+        depth: psd_depth(fmt.sample),
+        channels: planes,
+        alpha,
+    })
+}
+
 /// Patterns decoded from the document's raw pattern blocks (malformed blocks are skipped). All
 /// blocks share one memory budget, so repeating a block can't multiply it.
 pub fn from_global_blocks(doc: &Document) -> Vec<Pattern> {

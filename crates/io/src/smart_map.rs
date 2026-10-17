@@ -890,6 +890,12 @@ pub fn mask_from_item(item: &FilterEffectsItem, sample: SampleType, stack: &Filt
 /// channels from slot 0, transparency from the last slot (opaque without it). `None` when the
 /// item has no colour planes, its depth isn't `fmt`'s, or a plane doesn't decode.
 pub fn unfiltered_from_item(item: &FilterEffectsItem, fmt: PixelFormat) -> Option<Surface> {
+    // PSD32 stores float32, never native unsigned32 or float64. This reader has
+    // no explicit depth-conversion authority; preserve refusal instead of
+    // interpreting32-bit PSD planes as native-wide sample words.
+    if matches!(fmt.sample, SampleType::U32 | SampleType::F64) {
+        return None;
+    }
     let depth = u16::try_from(item.depth).ok()?;
     if u32::from(crate::pixels::psd_depth(fmt.sample)) != item.depth || !fmt.alpha {
         return None;
@@ -912,6 +918,7 @@ pub fn unfiltered_from_item(item: &FilterEffectsItem, fmt: PixelFormat) -> Optio
         SampleType::U8 => vec![u8::MAX],
         SampleType::U16 => u16::MAX.to_ne_bytes().to_vec(),
         SampleType::F32 => 1.0f32.to_ne_bytes().to_vec(),
+        SampleType::U32 | SampleType::F64 => return None,
     });
     let mut invert = vec![fmt.mode == ColorMode::Cmyk; cc];
     invert.push(false);
@@ -1162,7 +1169,9 @@ mod tests {
         let raw: Vec<_> = [value, 0.25, 0.5, 1.0].iter().flat_map(|v| v.to_ne_bytes()).collect();
         let source = Surface::try_from_interleaved(PixelFormat::RGBA64F, area, &raw).unwrap();
         let mask = LayerMask {
-            surface: std::sync::Arc::new(Surface::try_from_interleaved(PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false), area, &value.to_ne_bytes()).unwrap()),
+            surface: std::sync::Arc::new(
+                Surface::try_from_interleaved(PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false), area, &value.to_ne_bytes()).unwrap(),
+            ),
             ..LayerMask::reveal_all()
         };
         let item = try_feid_item("own", &source, Some(&mask), area, PixelFormat::RGBA8).unwrap().unwrap();
@@ -1179,7 +1188,33 @@ mod tests {
             let bytes = item.slots[i].as_ref().unwrap().decode(width, height, 32).unwrap();
             assert_eq!(&bytes[..4], &bit.to_be_bytes());
         }
-        assert!(try_feid_item("own", &Surface::new(PixelFormat::GRAYA8), None, area, PixelFormat::RGBA8).is_err());
+        let gray = Surface::try_from_interleaved(PixelFormat::GRAYA8, area, &[64, 128]).unwrap();
+        let gray_item = try_feid_item("own", &gray, None, area, PixelFormat::RGBA8).unwrap().unwrap();
+        for channel in 0..3 {
+            assert_eq!(gray_item.slots[channel].as_ref().unwrap().decode(width, height, 8).unwrap()[0], 64);
+        }
+        assert_eq!(gray_item.slots[25].as_ref().unwrap().decode(width, height, 8).unwrap()[0], 128);
+        assert!(try_feid_item("own", &Surface::new(PixelFormat::GRAYA8), None, area, PixelFormat::RGBA8).unwrap().is_none());
+        // Authoritative wide indexed conversion has no palette/profile authority.
+        assert!(try_feid_item("own", &Surface::new(PixelFormat::new(ColorMode::Indexed, SampleType::U32, false)), None, area, PixelFormat::RGBA8).is_err());
+    }
+
+    #[test]
+    fn unfiltered_psd_float_planes_keep_opaque_alpha_and_refuse_native_wide_reinterpretation() {
+        let area = GeomRect::new(0, 0, 1, 1);
+        let words = [0x3eaaaaabu32, 0x80000000, 0x3f000001, 0x3f800000];
+        let raw: Vec<_> = words.iter().flat_map(|word| word.to_ne_bytes()).collect();
+        let source = Surface::try_from_interleaved(PixelFormat::RGBA32F, area, &raw).unwrap();
+        let mut item = try_feid_item("own-float", &source, None, area, PixelFormat::RGBA32F).unwrap().unwrap();
+        item.slots[25] = None;
+        let before = item.clone();
+        let decoded = unfiltered_from_item(&item, PixelFormat::RGBA32F).unwrap();
+        assert_eq!(decoded.try_read_interleaved(area).unwrap(), raw);
+        for sample in [SampleType::U32, SampleType::F64] {
+            assert!(unfiltered_from_item(&item, PixelFormat::new(ColorMode::Rgb, sample, true)).is_none());
+        }
+        assert_eq!(item, before);
+        assert_eq!(source.try_read_interleaved(area).unwrap(), raw);
     }
 
     #[test]

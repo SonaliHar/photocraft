@@ -24,7 +24,7 @@ fn source(axes: Option<[f64; 2]>, cache: bool, raster: bool) -> Document {
         st.size_pt = 12.0;
         t.runs = vec![photocraft_doc::text::TextRun { len: t.text.len(), style: st }];
         t.sync_summary();
-        t.psd_raw = Some(Arc::new(photocraft_text::psd::build_tysh(&t, d.resolution_dpi, None)));
+        t.psd_raw = Some(Arc::new(photocraft_text::psd::build_tysh_with_resolution(&t, &d.effective_resolution(), None).unwrap()));
         t.cache = Some(s);
         d.layers.push(Layer::new("Retained editable type", LayerContent::Text(t)));
     }
@@ -36,7 +36,7 @@ fn fixture(d: &Document, ext: &str) -> Vec<u8> {
     assert_eq!(photocraft_format::save_to_bytes(d, &Default::default()).unwrap(), native, "export mutated model");
     bytes
 }
-fn public_refusal(ext: &str) {
+fn public_paired_layout(ext: &str) {
     let d = source(Some([144.0, 288.0]), false, false);
     let bytes = fixture(&d, ext);
     let before = hash(&bytes);
@@ -48,12 +48,15 @@ fn public_refusal(ext: &str) {
     assert!(parsed_warnings.is_empty());
     let parsed_native = photocraft_format::save_to_bytes(&parsed, &Default::default()).unwrap();
     assert_eq!(photocraft_format::load_from_bytes(&parsed_native).unwrap(), parsed);
-    let result = photocraft_io::import(ext, &bytes);
+    // Paired physical-axis layout is now implemented. Public import must retain
+    // its point styles and authored TySh while generating the missing cache.
+    let imported = photocraft_io::import(ext, &bytes).unwrap().document;
     assert_eq!(hash(&bytes), before);
-    assert!(
-        matches!(result,Err(photocraft_io::IoError::Unsupported(ref message)) if message.contains("unequal") && message.contains("text")),
-        "public {ext} missing-cache unequal type synthesized unqualified scalar ink; existing engine scalar geometry contract requires named unsupported"
-    );
+    let LayerContent::Text(text) = &imported.layers[0].content else { panic!("imported type lost") };
+    assert!(text.cache.as_ref().is_some_and(|s| !s.content_bounds().is_empty()));
+    assert_eq!(text.char_runs(), parsed_text.char_runs());
+    assert_eq!(text.psd_raw, parsed_text.psd_raw);
+    assert_eq!(imported.effective_resolution(), parsed.effective_resolution());
 }
 fn accepted(axes: Option<[f64; 2]>, cached: bool, raster: bool, _label: &str) {
     for ext in ["psd", "psb"] {
@@ -92,12 +95,12 @@ fn accepted(axes: Option<[f64; 2]>, cached: bool, raster: bool, _label: &str) {
     }
 }
 #[test]
-fn public_psd_missing_cache_unequal_requires_named_unsupported() {
-    public_refusal("psd");
+fn public_psd_missing_cache_unequal_uses_paired_layout() {
+    public_paired_layout("psd");
 }
 #[test]
-fn public_psb_missing_cache_unequal_requires_named_unsupported() {
-    public_refusal("psb");
+fn public_psb_missing_cache_unequal_uses_paired_layout() {
+    public_paired_layout("psb");
 }
 #[test]
 fn square_missing_cache_remains_usable() {

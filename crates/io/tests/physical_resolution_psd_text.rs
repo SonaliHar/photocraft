@@ -34,14 +34,21 @@ fn generated_psd_type_keeps_point_size_at_authoritative_square_dpi() {
 }
 
 #[test]
-fn generated_psd_type_refuses_unequal_or_invalid_canonical_axes() {
+fn generated_psd_type_supports_paired_axes_and_refuses_invalid_canonical_axes() {
     for axes in [[144.0, 72.0], [144.0, 0.0], [f64::NAN, 144.0]] {
         let mut doc = source(SampleType::U8);
         let resolution = doc.physical_resolution.as_mut().unwrap();
         (resolution.x_dpi, resolution.y_dpi) = (axes[0], axes[1]);
         for extension in ["psd", "psb"] {
             let result = photocraft_io::export(&doc, extension, &Default::default());
-            assert!(result.is_err(), "unqualified canonical axes {axes:?}/{extension} generated editable text");
+            if axes == [144.0, 72.0] {
+                let back = photocraft_io::import(extension, &result.unwrap().bytes).unwrap().document;
+                let LayerContent::Text(text) = &back.layers[0].content else { panic!("type lost") };
+                assert_eq!(text.char_runs()[0].style.size_pt, 24.0);
+                assert_eq!([back.effective_resolution().x_dpi, back.effective_resolution().y_dpi], axes);
+            } else {
+                assert!(result.is_err(), "invalid canonical axes {axes:?}/{extension} generated editable text");
+            }
         }
     }
 }
@@ -64,7 +71,14 @@ fn untouched_psd_text_can_preserve_raw_data_with_unequal_axes() {
         let expected = cache.try_read_region_f64(bounds).unwrap();
         assert!(expected.iter().any(|sample| *sample != 0.0));
         assert_eq!(cache.format(), format);
-        let raw = std::sync::Arc::new(photocraft_text::psd::build_tysh(text, 144.0, None));
+        let raw = std::sync::Arc::new(
+            photocraft_text::psd::build_tysh_with_resolution(
+                text,
+                &PhysicalResolution { x_dpi: 144.0, y_dpi: 288.0, unit: photocraft_doc::PhysicalUnit::Inch },
+                None,
+            )
+            .unwrap(),
+        );
         text.psd_raw = Some(raw.clone());
         doc.physical_resolution.as_mut().unwrap().y_dpi = 288.0;
         let before = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
@@ -117,7 +131,12 @@ fn named_psd_styles_use_canonical_dpi_when_rewriting_existing_or_generated_type(
             assert_eq!(text.char_runs()[1].style.size_pt, 30.0, "existing raw={existing_raw}/{extension}");
         }
         doc.physical_resolution.as_mut().unwrap().y_dpi = 288.0;
-        assert!(photocraft_io::export(&doc, "psd", &Default::default()).is_err());
+        let output = photocraft_io::export(&doc, "psd", &Default::default()).unwrap();
+        let back = photocraft_io::import("psd", &output.bytes).unwrap().document;
+        let LayerContent::Text(text) = &back.layers[0].content else { panic!("type lost") };
+        assert_eq!(text.char_runs()[0].style.size_pt, 24.0);
+        assert_eq!(text.char_runs()[1].style.size_pt, 30.0);
+        assert_eq!(back.effective_resolution().y_dpi, 288.0);
     }
 }
 

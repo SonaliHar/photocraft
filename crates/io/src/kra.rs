@@ -326,10 +326,12 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
         }
     }
     let (xres, yres) = (number(image, "x-res", 72.0)?, number(image, "y-res", 72.0)?);
-    if xres > 0.0 && xres < 1.0e6 {
-        if let Err(error)=document.set_physical_resolution(photocraft_doc::PhysicalResolution{x_dpi:xres,y_dpi:yres,unit:photocraft_doc::PhysicalUnit::Inch}) {
-            reader.warnings.note(&format!("Invalid image resolution was ignored: {error}"));
-        }
+    if xres > 0.0
+        && xres < 1.0e6
+        && let Err(error) =
+            document.set_physical_resolution(photocraft_doc::PhysicalResolution { x_dpi: xres, y_dpi: yres, unit: photocraft_doc::PhysicalUnit::Inch })
+    {
+        reader.warnings.note(&format!("Invalid image resolution was ignored: {error}"));
     }
     if document.layers.is_empty() {
         reader.warnings.note("no layers of the Krita document could be imported");
@@ -337,5 +339,12 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     if image.children().any(|n| n.has_tag_name("assistants") || n.has_tag_name("ReferenceImages")) {
         reader.warnings.note("drawing assistants and reference images were left out");
     }
-    Ok(ImportResult { document, warnings: reader.warnings.finish(), source_read_only: true, preview_only: false , origin: crate::ImportOrigin {format:crate::ImportFormat::Unknown,source_policy:crate::SourcePolicy::ReadOnlySource}, assessment: None})
+    Ok(ImportResult {
+        document,
+        warnings: reader.warnings.finish(),
+        source_read_only: true,
+        preview_only: false,
+        origin: crate::ImportOrigin { format: crate::ImportFormat::Unknown, source_policy: crate::SourcePolicy::ReadOnlySource },
+        assessment: None,
+    })
 }

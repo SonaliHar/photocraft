@@ -360,7 +360,7 @@ fn postscript_font_names_resolve_to_the_installed_family_on_import() {
 #[test]
 fn hostile_type_sizes_without_pixels_import_without_a_huge_render() {
     // The import renders type layers that come without pixels; the model is untrusted, so an
-    // absurd size or scale must not make opening the file allocate gigabytes (or fail).
+    // absurd size or scale must not allocate gigabytes; named bounded export refusal is valid.
     let scaled = |s: f64| Affine { m: [s, 0.0, 0.0, s, 10.0, 10.0] };
     for (size, transform, big) in
         [(12.0, scaled(1100.0), true), (1.0e30, scaled(1.0), false), (12.0, scaled(1.0e12), false), (f64::MAX, scaled(f64::MAX), false)]
@@ -380,8 +380,22 @@ fn hostile_type_sizes_without_pixels_import_without_a_huge_render() {
         t.psd_raw = Some(std::sync::Arc::new(data));
         let mut doc = Document::new("t", Size::new(64, 64), ColorMode::Rgb, SampleType::U8);
         doc.layers.push(Layer::new("hostile", LayerContent::Text(t)));
-        let bytes = photocraft_io::export(&doc, "t.psd", &Default::default()).unwrap().bytes;
-        let back = photocraft_io::import("t.psd", &bytes).unwrap().document;
+        let bytes = match photocraft_io::export(&doc, "t.psd", &Default::default()) {
+            Ok(output) => output.bytes,
+            Err(photocraft_io::IoError::Unsupported(message)) => {
+                assert!(message.contains("unrepresentable geometry"), "{message}");
+                continue; // Bounded physical layout can refuse before writing hostile geometry.
+            }
+            Err(error) => panic!("unexpected hostile type failure: {error}"),
+        };
+        let back = match photocraft_io::import("t.psd", &bytes) {
+            Ok(imported) => imported.document,
+            Err(photocraft_io::IoError::Unsupported(message)) => {
+                assert!(message.contains("unrepresentable geometry"), "{message}");
+                continue; // The checked import may refuse the hostile physical layout too.
+            }
+            Err(error) => panic!("unexpected hostile type import failure: {error}"),
+        };
         let LayerContent::Text(bt) = &back.layers[0].content else { panic!("not a type layer") };
         let cache = bt.cache.as_ref().expect("a cache, even if empty");
         assert!(cache.content_bounds().is_empty(), "size {size}: drew {:?}", cache.content_bounds());

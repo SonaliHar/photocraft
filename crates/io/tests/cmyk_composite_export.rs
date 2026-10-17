@@ -30,7 +30,7 @@ fn mixed_region_document(depth: SampleType, opaque: bool) -> Document {
     let mut top = Layer::new("Masked ink", LayerContent::Raster(surface));
     top.opacity = 0.5;
     top.mask = Some(LayerMask {
-        surface: Surface::with_default(PixelFormat::new(ColorMode::Grayscale, depth, false), &[0.5]),
+        surface: Surface::with_default(PixelFormat::new(ColorMode::Grayscale, depth, false), &[0.5]).into(),
         enabled: true,
         linked: true,
         density: 1.0,
@@ -137,6 +137,7 @@ fn flat_and_layered_tiff_agree_for_mixed_cmyk_regions() {
                     SampleType::U8 => 1.0 / 255.0,
                     SampleType::U16 => 1.0 / 65535.0,
                     SampleType::F32 => 1e-6,
+                    SampleType::U32 | SampleType::F64 => panic!("mixed-region fixture covers U8, U16 and F32 only"),
                 };
                 let actual = image.to_normalized();
                 let expected = reference.to_normalized();
@@ -223,7 +224,7 @@ fn composite_uses_distinctive_document_profile_on_every_worker() {
     let mut doc = document(SampleType::F32, 0.5);
     doc.size = Size::new(64, 64);
     doc.icc_profile = Some(profile.to_bytes());
-    let rgb = photocraft_compose::flatten(&doc);
+    let rgb = photocraft_compose::flatten(&doc).unwrap();
     let transform = Transform::new(Builtin::Srgb.profile(), &profile, Intent::RelativeColorimetric, true).unwrap();
     let fallback = Transform::new(Builtin::Srgb.profile(), Builtin::CoatedCmyk.profile(), Intent::RelativeColorimetric, true).unwrap();
     let mut expected = [0.0; 4];
@@ -297,7 +298,7 @@ fn native_samples_are_preserved_without_composite_roundtrip() {
 #[test]
 fn rgb_only_export_uses_direct_composite_not_reseparated_cmyk() {
     let doc = document(SampleType::U16, 0.5);
-    let rgb = photocraft_compose::flatten(&doc);
+    let rgb = photocraft_compose::flatten(&doc).unwrap();
     let expected =
         photocraft_codecs::Image::from_normalized(8, 8, ChannelLayout::Rgba, CodecSample::U16, &rgb.px.into_iter().flatten().collect::<Vec<_>>()).unwrap();
 

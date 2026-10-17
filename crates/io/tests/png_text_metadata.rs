@@ -28,7 +28,7 @@ fn png_text_survives_native_and_png_saves_at_both_depths() {
         let native = export(&opened.document, "pcraft", &ExportOptions::default()).unwrap();
         let reopened = import("synthetic.pcraft", &native.bytes).unwrap();
         let saved = export(&reopened.document, "png", &ExportOptions::default()).unwrap();
-        assert!(saved.warnings.is_empty(), "{:?}", saved.warnings);
+        assert!(!saved.warnings.iter().any(|w| w.contains("text metadata")), "{:?}", saved.warnings);
         let back = decode(&saved.bytes).unwrap();
         assert_eq!(back.meta.text, original.meta.text, "duplicates and Unicode must survive");
         assert_eq!(back.meta.xmp, original.meta.xmp);

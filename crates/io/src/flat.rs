@@ -46,8 +46,8 @@ pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     let d = &mut r.document;
     if d.icc_profile.is_none() && matches!(format, Some(Format::OpenExr | Format::Hdr)) {
         d.icc_profile = match d.mode {
-            ColorMode::Rgb => Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes().into()),
-            ColorMode::Grayscale => Some(photocraft_cms::builtin::linear_gray().to_bytes().into()),
+            ColorMode::Rgb => Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes()),
+            ColorMode::Grayscale => Some(photocraft_cms::builtin::linear_gray().to_bytes()),
             _ => None,
         };
     }
@@ -238,10 +238,22 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
     doc.metadata.xmp = img.meta.xmp.clone();
     doc.metadata.text = img.meta.text.clone();
     if let Some((x, y)) = img.meta.dpi
-        && let Err(error) = doc.set_physical_resolution(photocraft_doc::PhysicalResolution {x_dpi:f64::from(x),y_dpi:f64::from(y),unit:photocraft_doc::PhysicalUnit::Inch}) {
+        && let Err(error) = doc.set_physical_resolution(photocraft_doc::PhysicalResolution {
+            x_dpi: f64::from(x),
+            y_dpi: f64::from(y),
+            unit: photocraft_doc::PhysicalUnit::Inch,
+        })
+    {
         warnings.push(format!("Invalid image resolution was ignored: {error}"));
     }
-    Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false , origin: crate::ImportOrigin {format:crate::ImportFormat::Unknown,source_policy:crate::SourcePolicy::Writable}, assessment: None})
+    Ok(ImportResult {
+        document: doc,
+        warnings,
+        source_read_only: false,
+        preview_only: false,
+        origin: crate::ImportOrigin { format: crate::ImportFormat::Unknown, source_policy: crate::SourcePolicy::Writable },
+        assessment: None,
+    })
 }
 
 /// The pixels of a decoded image as a surface of `fmt`, converting layout and sample type a
@@ -412,35 +424,35 @@ fn document_to_image_for(doc: &Document, warnings: &mut Vec<String>, cmyk_target
             photocraft_compose::render_bands(doc, canvas, 0, |band| -> Result<(), ()> {
                 opaque &= band.px.iter().all(|p| p[3] >= 1.0);
                 let parts = crate::pixels::par_map(crate::pixels::bands(band.px.len()), |range| {
-                photocraft_color::convert::with_cmyk_space(space.as_ref(), || {
-                    let mut out = Vec::with_capacity(range.len() * (colors + 1) * cs.bytes());
-                    let mut put = |v: f32| {
-                        let v = if v.is_nan() { 0.0 } else { v };
-                        match cs {
-                            CSample::U8 => out.push((v.clamp(0.0, 1.0) * 255.0).round() as u8),
-                            CSample::U16 => out.extend_from_slice(&((v.clamp(0.0, 1.0) * 65535.0).round() as u16).to_ne_bytes()),
-                            CSample::F16 | CSample::F32 => out.extend_from_slice(&v.to_ne_bytes()),
-                        }
-                    };
-                    let mut converted = [0.0; 5];
-                    for p in &band.px[range] {
-                        if cmyk {
-                            let channels = photocraft_raster::from_rgba_into(&fmt, *p, &mut converted);
-                            for value in converted.iter().take(channels) {
-                                put(*value);
+                    photocraft_color::convert::with_cmyk_space(space.as_ref(), || {
+                        let mut out = Vec::with_capacity(range.len() * (colors + 1) * cs.bytes());
+                        let mut put = |v: f32| {
+                            let v = if v.is_nan() { 0.0 } else { v };
+                            match cs {
+                                CSample::U8 => out.push((v.clamp(0.0, 1.0) * 255.0).round() as u8),
+                                CSample::U16 => out.extend_from_slice(&((v.clamp(0.0, 1.0) * 65535.0).round() as u16).to_ne_bytes()),
+                                CSample::F16 | CSample::F32 => out.extend_from_slice(&v.to_ne_bytes()),
                             }
-                            continue;
-                        } else if gray {
-                            put(photocraft_color::convert::rgb_to_gray([p[0], p[1], p[2]]));
-                        } else {
-                            put(p[0]);
-                            put(p[1]);
-                            put(p[2]);
+                        };
+                        let mut converted = [0.0; 5];
+                        for p in &band.px[range] {
+                            if cmyk {
+                                let channels = photocraft_raster::from_rgba_into(&fmt, *p, &mut converted);
+                                for value in converted.iter().take(channels) {
+                                    put(*value);
+                                }
+                                continue;
+                            } else if gray {
+                                put(photocraft_color::convert::rgb_to_gray([p[0], p[1], p[2]]));
+                            } else {
+                                put(p[0]);
+                                put(p[1]);
+                                put(p[2]);
+                            }
+                            put(p[3]);
                         }
-                        put(p[3]);
-                    }
-                    out
-                })
+                        out
+                    })
                 });
                 for part in parts {
                     data.extend_from_slice(&part);
@@ -600,9 +612,18 @@ pub fn export_flat(doc: &Document, format: Format, opts: &ExportOptions) -> Resu
 /// [`export_flat`] reporting a coarse step through `ctl` once the composite is rendered; the
 /// encoder does the rest (#3389).
 pub(crate) fn export_flat_with(doc: &Document, format: Format, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
+    export_flat_with_layout(doc, format, opts, ctl).map(|(result, _)| result)
+}
+// The boolean describes the actual completed codec image, not a layer-lock inference.
+pub(crate) fn export_flat_with_layout(
+    doc: &Document,
+    format: Format,
+    opts: &ExportOptions,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<(ExportResult, bool), IoError> {
     use photocraft_cms::{Builtin, Intent};
     if let Some(r) = export_mode_specific(doc, format, opts)? {
-        return Ok(r);
+        return Ok((r, false));
     }
     let mut warnings = Vec::new();
     let cmyk_target = format.caps().layouts.iter().any(|layout| layout.is_cmyk());
@@ -649,7 +670,8 @@ pub(crate) fn export_flat_with(doc: &Document, format: Format, opts: &ExportOpti
     if format == Format::Tga {
         img = tga_image(doc, img, opts.tga_bits, &mut warnings)?;
     }
-    encode_image(&img, format, opts, warnings)
+    let opaque_tiff = format == Format::Tiff && !img.layout().has_alpha();
+    encode_image(&img, format, opts, warnings).map(|result| (result, opaque_tiff))
 }
 
 /// What Targa Options offers first, as Photoshop does: 32 bits per pixel when the document has an
@@ -894,7 +916,10 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
                 Ok(())
             })?;
             // Same rule as the ordinary PNG encoder: the resolution goes into `pHYs` with the metadata.
-            let dpi = opts.encode.embed_metadata.then_some({let r=doc.effective_resolution();(r.x_dpi as f32,r.y_dpi as f32)});
+            let dpi = opts.encode.embed_metadata.then_some({
+                let r = doc.effective_resolution();
+                (r.x_dpi as f32, r.y_dpi as f32)
+            });
             let bytes = codecs::encode_png_indexed(doc.size.width, doc.size.height, &idx, &table.colors, table.transparent, dpi)?;
             let mut warnings = vec![format!("written as an 8-bit palette PNG ({} colours)", table.colors.len())];
             if opts.encode.embed_metadata && opts.xmp == XmpEmbed::All && !doc.metadata.text.is_empty() {

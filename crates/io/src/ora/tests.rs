@@ -84,7 +84,7 @@ fn layers_groups_and_properties_round_trip_at_8_and_16_bit() {
         assert_eq!(back.size, d.size);
         assert_eq!(back.depth, depth);
         assert_same(&d.layers, &back.layers);
-        assert_eq!(photocraft_compose::flatten(&d).px, photocraft_compose::flatten(&back).px);
+        assert_eq!(photocraft_compose::flatten(&d).unwrap().px, photocraft_compose::flatten(&back).unwrap().px);
     }
 }
 
@@ -97,7 +97,7 @@ fn float_documents_save_as_16_bit() {
     let (back, warnings, _) = round_trip(&d);
     assert!(warnings.iter().any(|w| w.contains("16-bit")), "{warnings:?}");
     assert_eq!(back.depth, SampleType::U16);
-    let (a, b) = (photocraft_compose::flatten(&d), photocraft_compose::flatten(&back));
+    let (a, b) = (photocraft_compose::flatten(&d).unwrap(), photocraft_compose::flatten(&back).unwrap());
     let err = a.px.iter().zip(&b.px).flat_map(|(p, q)| (0..4).map(move |c| (p[c] - q[c]).abs())).fold(0.0f32, f32::max);
     assert!(err < 1.0 / 65535.0 + 1e-6, "{err}");
 }
@@ -128,14 +128,14 @@ fn masks_are_applied_to_pixels_and_reported() {
     let mut d = Document::new("m.ora", CANVAS, ColorMode::Rgb, SampleType::U8);
     let mut l = block("Masked", PixelFormat::RGBA8, 0, 0, 20, 20, 0);
     let mut mask = LayerMask::hide_all();
-    mask.surface.fill_rect(Rect::from_xywh(0, 0, 10, 20), &[1.0]);
+    std::sync::Arc::make_mut(&mut mask.surface).fill_rect(Rect::from_xywh(0, 0, 10, 20), &[1.0]);
     l.mask = Some(mask);
     d.layers.push(l);
     let (back, warnings, _) = round_trip(&d);
     assert!(warnings.iter().any(|w| w.contains("layer masks were applied")), "{warnings:?}");
     let s = back.layers.first().and_then(Layer::surface).unwrap();
     assert_eq!(s.content_bounds(), Rect::from_xywh(0, 0, 10, 20));
-    assert_eq!(photocraft_compose::flatten(&d).px, photocraft_compose::flatten(&back).px);
+    assert_eq!(photocraft_compose::flatten(&d).unwrap().px, photocraft_compose::flatten(&back).unwrap().px);
 }
 
 #[test]
@@ -235,7 +235,7 @@ fn omitted_group_isolation_defaults_to_isolated_since_version_0_0_6() {
         for version in ["0.0.6", " 0.0.6 ", "0.0.6+app.1", "0.0.6-rc.1", "0.0.10", "0.1.0", "1.0.0"] {
             let d = group_isolation_document(Some(version), "", depth);
             assert_eq!(d.layers[1].blend, BlendMode::Normal, "{version}, {depth:?}");
-            assert_eq!(photocraft_compose::flatten(&d).px, [[0.0, 1.0, 0.0, 1.0]], "{version}, {depth:?}");
+            assert_eq!(photocraft_compose::flatten(&d).unwrap().px, [[0.0, 1.0, 0.0, 1.0]], "{version}, {depth:?}");
         }
     }
 }
@@ -251,7 +251,7 @@ fn explicit_group_isolation_preserves_isolate_and_auto() {
             ] {
                 let d = group_isolation_document(Some(version), attributes, depth);
                 assert_eq!(d.layers[1].blend, blend, "{version}, {attributes}, {depth:?}");
-                assert_eq!(photocraft_compose::flatten(&d).px, [expected], "{version}, {attributes}, {depth:?}");
+                assert_eq!(photocraft_compose::flatten(&d).unwrap().px, [expected], "{version}, {attributes}, {depth:?}");
             }
         }
     }
@@ -262,7 +262,7 @@ fn auto_group_ignores_its_composite_op_since_version_0_0_6() {
     for depth in [SampleType::U8, SampleType::U16] {
         let d = group_isolation_document(Some("0.0.6"), "isolation='auto' composite-op='svg:screen'", depth);
         assert_eq!(d.layers[1].blend, BlendMode::PassThrough);
-        assert_eq!(photocraft_compose::flatten(&d).px, [[0.0, 0.0, 0.0, 1.0]], "{depth:?}");
+        assert_eq!(photocraft_compose::flatten(&d).unwrap().px, [[0.0, 0.0, 0.0, 1.0]], "{depth:?}");
     }
 }
 
@@ -277,7 +277,7 @@ fn legacy_group_isolation_keeps_inference_from_blend_mode() {
             ] {
                 let d = group_isolation_document(version, attributes, depth);
                 assert_eq!(d.layers[1].blend, blend, "{version:?}, {attributes}, {depth:?}");
-                assert_eq!(photocraft_compose::flatten(&d).px, [expected], "{version:?}, {attributes}, {depth:?}");
+                assert_eq!(photocraft_compose::flatten(&d).unwrap().px, [expected], "{version:?}, {attributes}, {depth:?}");
             }
         }
     }
@@ -456,8 +456,8 @@ fn normal_group_fill_opacity_survives_openraster_export() {
     let imported_group = back.layers.first().unwrap();
     assert!((imported_group.opacity - 0.5).abs() < 1e-6);
     assert_eq!(imported_group.fill_opacity, 1.0);
-    let before = photocraft_compose::flatten(&d);
-    let after = photocraft_compose::flatten(&back);
+    let before = photocraft_compose::flatten(&d).unwrap();
+    let after = photocraft_compose::flatten(&back).unwrap();
     for (a, b) in before.px.iter().zip(&after.px) {
         assert!((a[3] - b[3]).abs() < 1.0 / 255.0 + 1e-6, "alpha: {a:?} vs {b:?}");
     }

@@ -71,8 +71,6 @@ pub(crate) fn import(file: &PsdFile, all: &[u8], doc: &mut Document, names: &[St
     }
 }
 
-
-
 /// Authoritative ink-density export. Invert the original f64 value before the
 /// single destination quantization; preconverting the channel changes half-code ties.
 pub(crate) fn try_document_to_psd_with_interrupt(
@@ -87,10 +85,7 @@ pub(crate) fn try_document_to_psd_with_interrupt(
     if doc.mode != ColorMode::Multichannel || !doc.layers.is_empty() || doc.channels.len() > 56 {
         return Err(invalid("requires a layerless Multichannel document with at most 56 channels"));
     }
-    if doc.icc_profile.is_some()
-        || doc.sample_encoding.is_some()
-        || !matches!(doc.working_profile_interpretation, photocraft_doc::WorkingProfileInterpretation::Icc)
-    {
+    if doc.sample_encoding.is_some() || !matches!(doc.working_profile_interpretation, photocraft_doc::WorkingProfileInterpretation::Icc) {
         return Err(invalid("color-profile interpretation of numeric ink channels is unsupported"));
     }
     let sample = match doc.depth {
@@ -113,6 +108,9 @@ pub(crate) fn try_document_to_psd_with_interrupt(
         Ok(())
     };
     charge(0)?;
+    if let Some(bytes) = &doc.icc_profile {
+        charge((bytes.len() as u64).checked_mul(4).and_then(|n| n.checked_add(512)).ok_or_else(|| invalid("inert ICC allocation budget overflow"))?)?;
+    }
     if let Some(xmp) = &doc.metadata.xmp {
         charge(xmp.len() as u64)?;
     }
@@ -170,9 +168,28 @@ pub(crate) fn try_document_to_psd_with_interrupt(
             psd_depth(sample)
         ));
     }
-    Ok(finish(doc, force_psb, sample, &channels, planes, warnings, true))
+    let inert_icc = if let Some(bytes) = &doc.icc_profile {
+        let mut owned = Vec::new();
+        owned.try_reserve_exact(bytes.len()).map_err(|_| invalid("inert ICC allocation failed"))?;
+        let capacity_limit = bytes.len().checked_mul(2).and_then(|n| n.checked_add(128)).ok_or_else(|| invalid("inert ICC capacity overflow"))?;
+        if owned.capacity() > capacity_limit {
+            return Err(invalid("inert ICC allocation exceeds priced capacity"));
+        }
+        for chunk in bytes.chunks(32768) {
+            if interrupt.cancelled() {
+                return Err(crate::IoError::Cancelled);
+            }
+            owned.extend_from_slice(chunk);
+        }
+        Some(ImageResource::new(ids::ICC_PROFILE, owned))
+    } else {
+        None
+    };
+    Ok(finish(doc, force_psb, sample, &channels, planes, warnings, true, inert_icc))
 }
 
+// Keep the fixed parameter contract: source identity, limits, control and original budget remain explicit.
+#[allow(clippy::too_many_arguments)]
 fn finish(
     doc: &Document,
     force_psb: bool,
@@ -181,6 +198,7 @@ fn finish(
     planes: Vec<u8>,
     mut warnings: Vec<String>,
     checked: bool,
+    inert_icc: Option<ImageResource>,
 ) -> (PsdFile, Vec<String>) {
     let big = doc.size.width > 30_000 || doc.size.height > 30_000;
     let size_exceeds_limit = !force_psb && !big && crate::psd_export::psd_size_exceeds_limit(doc);
@@ -203,16 +221,23 @@ fn finish(
     let resolution = doc.effective_resolution();
     let mut axes = ResolutionInfo::from_dpi(resolution.x_dpi);
     axes.v_res_fixed = ResolutionInfo::from_dpi(resolution.y_dpi).v_res_fixed;
-    let mut resources = vec![ImageResource::new(ids::RESOLUTION_INFO, axes.to_bytes()),
-        ImageResource::new(ids::GLOBAL_ANGLE,(doc.global_light.angle.round() as i32).to_be_bytes().to_vec()),
-        ImageResource::new(ids::GLOBAL_ALTITUDE,(doc.global_light.altitude.round() as i32).to_be_bytes().to_vec())];
+    let mut resources = vec![
+        ImageResource::new(ids::RESOLUTION_INFO, axes.to_bytes()),
+        ImageResource::new(ids::GLOBAL_ANGLE, (doc.global_light.angle.round() as i32).to_be_bytes().to_vec()),
+        ImageResource::new(ids::GLOBAL_ALTITUDE, (doc.global_light.altitude.round() as i32).to_be_bytes().to_vec()),
+    ];
+    // An ICC blob on numeric ink channels is retained as inert metadata. It is
+    // never parsed or used to reinterpret these authoritative channel densities.
+    if let Some(icc) = inert_icc {
+        resources.push(icc);
+    }
     // Grid and guides: Photoshop writes it in every file, guides or not.
     resources.push(ImageResource::new(GRID_AND_GUIDES, crate::psd_export::guides_resource(doc)));
     if !channels.is_empty() {
         let names: Vec<&str> = channels.iter().map(|c| c.name.as_str()).collect();
         resources.push(ImageResource::new(1006, crate::psd_export::pascal_names_resource(&names)));
         resources.push(ImageResource::new(1045, crate::psd_export::unicode_names_resource(&names)));
-        resources.push(ImageResource::new(crate::channel_map::DISPLAY_INFO, crate::channel_map::display_info(&channels, false)));
+        resources.push(ImageResource::new(crate::channel_map::DISPLAY_INFO, crate::channel_map::display_info(channels, false)));
     }
     resources.extend(crate::psd_export::path_resources(doc, &mut warnings));
     // The XMP and EXIF resolution follow the ResolutionInfo resource, so no copy contradicts it.
@@ -312,11 +337,19 @@ mod checked_tests {
         let tile = forged.channels[0].surface.solid_tile(&[0.0]);
         forged.channels[0].surface.put_tiles([(photocraft_geom::TileCoord::new(i32::MAX, 0), tile)]);
         cases.push(forged);
-        let mut profiled = base.clone();
-        profiled.icc_profile = Some(std::sync::Arc::new(vec![1, 2, 3]));
-        cases.push(profiled);
+        // Opaque ICC bytes are metadata, not a numeric ink interpretation.
+        for bytes in [std::sync::Arc::new(vec![1, 2, 3]), photocraft_cms::Builtin::Srgb.profile().to_bytes()] {
+            let mut profiled = base.clone();
+            profiled.icc_profile = Some(bytes.clone());
+            let before = profiled.clone();
+            let output = crate::export(&profiled, "inert.psd", &crate::ExportOptions::default()).unwrap();
+            let psd = PsdFile::from_bytes(&output.bytes).unwrap();
+            assert_eq!(psd.resource(ids::ICC_PROFILE).unwrap().data.as_slice(), bytes.as_slice());
+            assert_eq!(psd.decode_merged().unwrap(), 49151u16.to_be_bytes());
+            assert_eq!(profiled, before);
+        }
         let mut assigned = base.clone();
-        assigned.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
+        assigned.working_profile_interpretation = photocraft_doc::WorkingProfileInterpretation::ImplicitSrgb { icc_blake3: "0".repeat(64) };
         cases.push(assigned);
         let mut layered = base.clone();
         layered.layers.push(photocraft_doc::Layer::raster("Layer", PixelFormat::RGBA8));

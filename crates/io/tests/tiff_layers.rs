@@ -173,6 +173,40 @@ fn a_plain_background_needs_no_layer_data() {
 }
 
 #[test]
+fn background_flat_warning_requires_exact_metadata_and_an_opaque_encoded_image() {
+    let original =
+        import("x.png", &export(&gen_doc(ColorMode::Rgb, SampleType::U8, Features::PIXELS), "x.png", &Default::default()).unwrap().bytes).unwrap().document;
+    for case in 0..4 {
+        let mut doc = original.clone();
+        let bounds = doc.bounds();
+        match case {
+            0 => doc.layers[0].name = "Own renamed background".into(),
+            1 => doc.layers[0].locks.position = false,
+            2 => doc.layers[0].surface_mut().unwrap().fill_rect(bounds, &[0.25, 0.5, 0.75, 0.5]),
+            _ => doc.layers[0].effects.reference = Some((3.0, 4.0)),
+        }
+        let before = doc.clone();
+        let result = tiff(&doc, true);
+        assert_eq!(tags(&result.bytes), (None, None));
+        assert!(
+            result.warnings.iter().any(|warning| warning.contains("flat raster export does not retain independent raster layer content")),
+            "case {case}: {:?}",
+            result.warnings
+        );
+        assert_eq!(doc, before);
+        let back = import("x.tif", &result.bytes).unwrap().document;
+        if case == 2 {
+            assert_eq!(back.layers[0].name, "Layer 0");
+            assert!(!back.layers[0].locks.transparency);
+            assert!(!back.layers[0].locks.position);
+        } else {
+            assert_eq!(back.layers[0].name, "Background");
+            assert!(back.layers[0].locks.position);
+        }
+    }
+}
+
+#[test]
 fn lab_documents_are_saved_flat_with_a_warning() {
     let d = gen_doc(ColorMode::Lab, SampleType::U8, Features::PIXELS);
     let r = tiff(&d, true);

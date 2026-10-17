@@ -454,15 +454,24 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     document.layers = build(nodes, &reader.images, fmt, ctl)?;
     let xres = num(image, "xres", 72.0)?;
     let yres = num(image, "yres", xres)?;
-    if xres > 0.0 && xres < 1.0e6 {
-        if let Err(error)=document.set_physical_resolution(photocraft_doc::PhysicalResolution{x_dpi:xres,y_dpi:yres,unit:photocraft_doc::PhysicalUnit::Inch}) {
-            reader.warnings.note(&format!("Invalid image resolution was ignored: {error}"));
-        }
+    if xres > 0.0
+        && xres < 1.0e6
+        && let Err(error) =
+            document.set_physical_resolution(photocraft_doc::PhysicalResolution { x_dpi: xres, y_dpi: yres, unit: photocraft_doc::PhysicalUnit::Inch })
+    {
+        reader.warnings.note(&format!("Invalid image resolution was ignored: {error}"));
     }
     if document.layers.is_empty() {
         reader.warnings.note("the OpenRaster file has no layers");
     }
-    Ok(ImportResult { document, warnings: reader.warnings.finish(), source_read_only: false, preview_only: false , origin: crate::ImportOrigin {format:crate::ImportFormat::Unknown,source_policy:crate::SourcePolicy::Writable}, assessment: None})
+    Ok(ImportResult {
+        document,
+        warnings: reader.warnings.finish(),
+        source_read_only: false,
+        preview_only: false,
+        origin: crate::ImportOrigin { format: crate::ImportFormat::Unknown, source_policy: crate::SourcePolicy::Writable },
+        assessment: None,
+    })
 }
 
 // ---------------------------------------------------------------------------------------------

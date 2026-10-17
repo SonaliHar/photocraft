@@ -387,8 +387,9 @@ impl Ex {
             // in row bands on all cores and the band results concatenate in order.
             let row_len = r.width() as usize;
             let bands = crate::pixels::bands(h_of(r));
-            let parts =
-                crate::pixels::par_map(bands, |rows| s.to_interleaved(photocraft_geom::Rect::new(r.x0, r.y0 + rows.start as i32, r.x1, r.y0 + rows.end as i32)));
+            let parts = crate::pixels::par_map(bands, |rows| {
+                s.to_interleaved(photocraft_geom::Rect::new(r.x0, r.y0 + rows.start as i32, r.x1, r.y0 + rows.end as i32))
+            });
             let mut bytes = Vec::with_capacity(row_len * h_of(r) * s.format().bytes_per_pixel());
             for part in parts {
                 bytes.extend_from_slice(&part);
@@ -732,7 +733,9 @@ impl Ex {
                 raw.retain(|(k, _)| !(RASTER_STALE_KEYS.contains(&k) || adjust_map::ADJUSTMENT_KEYS.contains(&k) || k == b"CgEd" || (k == b"vstk" && masked)));
             }
             LayerContent::Group(_) => {}
-            LayerContent::BackedRaster(_) => { self.auxiliary_error = Some("backed raster requires a qualified streamed PSD exporter".into()); }
+            LayerContent::BackedRaster(_) => {
+                self.auxiliary_error = Some("backed raster requires a qualified streamed PSD exporter".into());
+            }
         }
         // Effects reference point: written from the field (in place, keeping block order).
         match l.effects.reference {
@@ -868,7 +871,7 @@ impl Ex {
             let bounds = sm.cache.as_ref().map_or(self.canvas, |c| c.content_bounds().union(&self.canvas));
             let item = match (sm.stack_mode, self.source_composite(&src.uuid)) {
                 (None, Some((img, img_bounds))) => {
-                    let unfiltered = if self.auxiliary.is_some() {
+                    if self.auxiliary.is_some() {
                         let checked = match &sm.perspective {
                             Some(p) => photocraft_algo::warp::try_place_source_projective(
                                 &img,
@@ -878,40 +881,56 @@ impl Ex {
                             ),
                             None => photocraft_algo::warp::try_place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref()),
                         };
-                        match checked {
+                        let unfiltered = match checked {
                             Ok(surface) => surface,
                             Err(error) => {
                                 self.auxiliary_error = Some(error.to_string());
                                 return;
                             }
+                        };
+                        let item = match crate::smart_map::try_feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt) {
+                            Ok(item) => item,
+                            Err(error) => {
+                                self.auxiliary_error = Some(error);
+                                None
+                            }
+                        };
+                        if item.is_some() && masked(sm) {
+                            let unfiltered = if unfiltered.format() == self.fmt {
+                                unfiltered
+                            } else {
+                                match unfiltered.try_convert(self.fmt) {
+                                    Ok(surface) => surface,
+                                    Err(error) => {
+                                        self.auxiliary_error = Some(error.to_string());
+                                        return;
+                                    }
+                                }
+                            };
+                            self.smart.unfiltered.insert(l.id, unfiltered);
                         }
+                        item
                     } else {
-                        let placed = match &sm.perspective {
+                        let unfiltered = match &sm.perspective {
                             Some(p) => {
                                 photocraft_algo::warp::place_source_projective(&img, img_bounds, &photocraft_algo::transform::Homography(*p), sm.warp.as_ref())
                             }
                             None => photocraft_algo::warp::place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref()),
                         };
-                        match placed {
-                            Ok(surface) => surface,
-                            Err(error) => { self.auxiliary_error = Some(error.to_string()); return; }
-                        }
-                    };
-                    match unfiltered {
-                        Ok(unfiltered) => {
-                            let item = crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt);
-                            if item.is_some() && masked(sm) {
-                                let u = if unfiltered.format() == self.fmt { unfiltered } else { unfiltered.convert(self.fmt) };
-                                self.smart.unfiltered.insert(l.id, u);
+                        match unfiltered {
+                            Ok(unfiltered) => {
+                                let item = crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt);
+                                if item.is_some() && masked(sm) {
+                                    let u = if unfiltered.format() == self.fmt { unfiltered } else { unfiltered.convert(self.fmt) };
+                                    self.smart.unfiltered.insert(l.id, u);
+                                }
+                                item
                             }
-                            item
+                            Err(e) => {
+                                warnings.push(format!("smart filter mask was not re-rendered for PSD export ({e})"));
+                                None
+                            }
                         }
-                        Err(e) => {
-                            warnings.push(format!("smart filter mask was not re-rendered for PSD export ({e})"));
-                            None
-                        }
-                    } else {
-                        crate::smart_map::feid_item(&placed, &unfiltered, sm.filter_mask.as_ref(), bounds, self.fmt)
                     }
                 }
                 _ => None,
@@ -1103,8 +1122,9 @@ impl Ex {
                 return Err(format!("smart objects nest more than {MAX_NESTING} deep"));
             }
             let doc = photocraft_format::load_from_bytes(bytes).map_err(|e| format!("its contents can't be read: {e}"))?;
-            let (file, mut warnings) = try_document_to_psd_nested(&doc, &PsdExportOptions { force_psb: true, ..Default::default() }, self.smart.depth + 1, &Interrupt::NONE)
-                .map_err(|e| e.to_string())?;
+            let (file, mut warnings) =
+                try_document_to_psd_nested(&doc, &PsdExportOptions { force_psb: true, ..Default::default() }, self.smart.depth + 1, &Interrupt::NONE)
+                    .map_err(|e| e.to_string())?;
             warnings.extend(crate::import_state_export_warnings(&doc));
             let data = file.to_bytes().map_err(|e| format!("its contents can't be written: {e}"))?;
             let stem = file_name.rsplit_once('.').map_or(file_name, |(a, _)| a);
@@ -1403,7 +1423,9 @@ fn merged_planes(doc: &Document, fmt: &PixelFormat, cmyk: bool, matte: bool, ctl
     let lab16 = fmt.mode == ColorMode::Lab && sample == SampleType::U16;
     let rows = canvas.height().max(1) as f32;
     photocraft_compose::render_bands(doc, canvas, 0, |band| -> Result<(), ()> {
-        if ctl.cancelled() { return Err(()); }
+        if ctl.cancelled() {
+            return Err(());
+        }
         // Retain alpha whenever it differs from opaque at the stored precision.
         has_alpha |= band.px.iter().any(|p| match sample {
             SampleType::U8 => q255(p[3]) < 255,
@@ -1440,7 +1462,8 @@ fn merged_planes(doc: &Document, fmt: &PixelFormat, cmyk: bool, matte: bool, ctl
         }
         ctl.progress((band.rect.y1 - canvas.y0) as f32 / rows);
         Ok(())
-    }).map_err(|error| if ctl.cancelled(){crate::IoError::Cancelled}else{crate::IoError::from(error)})?;
+    })
+    .map_err(|error| if ctl.cancelled() { crate::IoError::Cancelled } else { crate::IoError::from(error) })?;
     Ok((planes, has_alpha, translucent))
 }
 
@@ -1677,7 +1700,7 @@ fn generated_type_resolution(doc: &Document) -> Result<photocraft_doc::PhysicalR
 }
 
 fn try_document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u32, ctl: &Interrupt) -> Result<(PsdFile, Vec<String>), crate::IoError> {
-    ctl.check().map_err(|_|crate::IoError::Cancelled)?;
+    ctl.check().map_err(|_| crate::IoError::Cancelled)?;
     generated_type_resolution(doc)?;
     if doc.has_backed_rasters()? {
         return Err(crate::IoError::Unsupported("backed raster requires a qualified streamed PSD exporter".into()));
@@ -1700,7 +1723,7 @@ fn try_document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u3
     let mut prepared = std::collections::HashMap::new();
     let mut accounted = 0u64;
     let mut add = |surface: &Surface, target: PixelFormat, canvas_plane: bool| -> Result<(), crate::IoError> {
-        ctl.check().map_err(|_|crate::IoError::Cancelled)?;
+        ctl.check().map_err(|_| crate::IoError::Cancelled)?;
         let key = std::ptr::from_ref(surface) as usize;
         if prepared.contains_key(&key) {
             return Ok(());
@@ -1720,7 +1743,7 @@ fn try_document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u3
             return Err(failure("aggregate auxiliary limit exceeded"));
         }
         prepared.try_reserve(1).map_err(|e| failure(&e.to_string()))?;
-        let converted = surface.try_convert_with(target,ctl).map_err(crate::IoError::from)?;
+        let converted = surface.try_convert_with(target, ctl).map_err(crate::IoError::from)?;
         let default = photocraft_color::try_read_sample_f64(converted.default_bytes(), target.sample, 0).map_err(|e| failure(&e.to_string()))?;
         if target.mode == ColorMode::Grayscale && !default.is_finite() {
             return Err(failure("nonfinite PSD auxiliary default"));
@@ -1787,7 +1810,7 @@ fn try_document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, depth: u3
     if let Some(error) = error {
         return Err(crate::IoError::Unsupported(error));
     }
-    ctl.check().map_err(|_|crate::IoError::Cancelled)?;
+    ctl.check().map_err(|_| crate::IoError::Cancelled)?;
     Ok(file)
 }
 
@@ -2078,10 +2101,13 @@ fn document_to_psd_prepared(
         .unwrap_or(ImageData { compression: Compression::Raw, data: planes });
     ctl.progress(1.0);
 
-    // Resources.
+    // Resources. Preserve both authoritative axes; PSD display units do not scale ppi.
+    let resolution = doc.effective_resolution();
+    let mut resolution_info = ResolutionInfo::from_dpi(resolution.x_dpi);
+    resolution_info.v_res_fixed = ResolutionInfo::from_dpi(resolution.y_dpi).v_res_fixed;
     let mut resources = vec![
         // hRes/vRes are always pixels per inch. The display unit written here is inches.
-        ImageResource::new(ids::RESOLUTION_INFO, ResolutionInfo::from_dpi(f64::from(doc.resolution_dpi)).to_bytes()),
+        ImageResource::new(ids::RESOLUTION_INFO, resolution_info.to_bytes()),
         ImageResource::new(ids::GLOBAL_ANGLE, (doc.global_light.angle.round() as i32).to_be_bytes().to_vec()),
         ImageResource::new(ids::GLOBAL_ALTITUDE, (doc.global_light.altitude.round() as i32).to_be_bytes().to_vec()),
     ];
@@ -2110,8 +2136,7 @@ fn document_to_psd_prepared(
     }
     // The pixels are saved as they are shown: never let a reader rotate them again. The XMP and
     // EXIF resolution follow the ResolutionInfo resource, so no copy contradicts it (#1691).
-    let resolution=doc.effective_resolution();
-    let ppi=Some((resolution.x_dpi as f32,resolution.y_dpi as f32)).filter(|d|d.0>0.0 && d.1>0.0);
+    let ppi = Some((resolution.x_dpi as f32, resolution.y_dpi as f32)).filter(|d| d.0 > 0.0 && d.1 > 0.0);
     if let Some(x) = &doc.metadata.xmp {
         resources.push(ImageResource::new(ids::XMP, photocraft_codecs::export_xmp(x, ppi).as_bytes().to_vec()));
     }
@@ -2175,6 +2200,11 @@ fn document_to_psd_prepared(
         ex.warnings.push(warning);
     }
     for (id, name, data) in &doc.metadata.psd_resources {
+        // Original resolution bytes remain source metadata, but current axes and
+        // canonical display units were regenerated above; never emit a second copy.
+        if *id == ids::RESOLUTION_INFO {
+            continue;
+        }
         // Layer comps: the preserved list while unchanged, else regenerated (or dropped) below.
         if *id == crate::comps_map::LAYER_COMPS && comps_resource.is_some() {
             continue;
@@ -2238,7 +2268,7 @@ fn document_to_psd_prepared(
         layer_mask_trailing: Vec::new(),
         image_data,
     };
-    ctl.check().map_err(|_|crate::IoError::Cancelled)?;
+    ctl.check().map_err(|_| crate::IoError::Cancelled)?;
     *error = ex.auxiliary_error;
     Ok((file, ex.warnings))
 }
@@ -2265,6 +2295,41 @@ mod tests {
         Document::new("size estimate", photocraft_geom::Size::new(width, height), ColorMode::Rgb, SampleType::U8)
     }
 
+    #[test]
+    fn asymmetric_resolution_keeps_ppi_axes_and_raw_display_resource_without_duplicate_export() {
+        let mut source = photocraft_psd::testgen::small(Version::Psd, Compression::Raw);
+        let mut info = ResolutionInfo::from_dpi(300.25);
+        info.v_res_fixed = ResolutionInfo::from_dpi(150.5).v_res_fixed;
+        info.h_res_unit = 2;
+        info.v_res_unit = 2;
+        info.width_unit = 2;
+        info.height_unit = 2;
+        let original_resource = info.to_bytes();
+        source.resources.retain(|resource| resource.id != ids::RESOLUTION_INFO);
+        source.resources.push(ImageResource::new(ids::RESOLUTION_INFO, original_resource.clone()));
+        let source_bytes = source.to_bytes().unwrap();
+        let mut doc = crate::import("asymmetric.psd", &source_bytes).unwrap().document;
+        assert_eq!((doc.effective_resolution().x_dpi, doc.effective_resolution().y_dpi), (300.25, 150.5));
+        assert_eq!(doc.resolution_dpi, 300.25);
+        let retained =
+            || doc.metadata.psd_resources.iter().filter(|(id, _, _)| *id == ids::RESOLUTION_INFO).map(|(_, _, data)| data.as_slice()).collect::<Vec<_>>();
+        assert_eq!(retained(), vec![original_resource.as_slice()]);
+        for axes in [(300.25, 150.5), (96.0, 192.0)] {
+            doc.set_physical_resolution(photocraft_doc::PhysicalResolution { x_dpi: axes.0, y_dpi: axes.1, unit: photocraft_doc::PhysicalUnit::Inch }).unwrap();
+            let before = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+            let (exported, _) = try_document_to_psd_with(&doc, &PsdExportOptions::default()).unwrap();
+            assert_eq!(exported.resources.iter().filter(|resource| resource.id == ids::RESOLUTION_INFO).count(), 1);
+            let written = exported.resolution().unwrap();
+            assert_eq!((written.h_res(), written.v_res()), axes);
+            assert_eq!((written.h_res_unit, written.v_res_unit), (1, 1));
+            let reopened = crate::import("current.psd", &exported.to_bytes().unwrap()).unwrap().document;
+            assert_eq!((reopened.effective_resolution().x_dpi, reopened.effective_resolution().y_dpi), axes);
+            assert_eq!(photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap(), before);
+            assert_eq!(doc.metadata.psd_resources.iter().find(|(id, _, _)| *id == ids::RESOLUTION_INFO).unwrap().2.as_slice(), original_resource);
+        }
+        assert_eq!(source.to_bytes().unwrap(), source_bytes);
+    }
+
     /// Photoshop opens a PSD's bottom layer as its Background only when that layer has no
     /// transparency channel (measured on Photoshop 27.11: with the channel written, re-exported
     /// files reopened with the Background as an ordinary layer).
@@ -2274,7 +2339,7 @@ mod tests {
         let size = photocraft_geom::Size::new(8, 6);
         let mut doc = Document::with_background("bg", size, ColorMode::Rgb, SampleType::U8, Color::rgb(0.2, 0.4, 0.6));
         doc.layers.push(Layer::raster("Layer 1", doc.pixel_format()));
-        let file = document_to_psd(&doc);
+        let file = document_to_psd(&doc).unwrap();
         let layers = &file.layer_info.as_ref().unwrap().layers;
         let ids = |i: usize| layers[i].channels.iter().map(|c| c.id).collect::<Vec<_>>();
         assert_eq!(ids(0), vec![0, 1, 2], "the Background has no -1 channel");
@@ -2288,10 +2353,10 @@ mod tests {
         // A bottom layer with transparency (or unlocked) is not a Background.
         let mut holey = doc.clone();
         holey.layers[0].surface_mut().unwrap().write_pixel(2, 2, &[0.0, 0.0, 0.0, 0.0]);
-        assert!(document_to_psd(&holey).layer_info.unwrap().layers[0].channels.iter().any(|c| c.id == -1));
+        assert!(document_to_psd(&holey).unwrap().layer_info.unwrap().layers[0].channels.iter().any(|c| c.id == -1));
         let mut unlocked = doc.clone();
         unlocked.layers[0].locks.position = false;
-        assert!(document_to_psd(&unlocked).layer_info.unwrap().layers[0].channels.iter().any(|c| c.id == -1));
+        assert!(document_to_psd(&unlocked).unwrap().layer_info.unwrap().layers[0].channels.iter().any(|c| c.id == -1));
     }
 
     /// A flat 1-bit Bitmap file (no layers) opens in Photoshop as its Background; so does it in
@@ -2302,7 +2367,7 @@ mod tests {
         let doc = crate::import("flat.psd", &file.to_bytes().unwrap()).unwrap().document;
         let bg = &doc.layers[0];
         assert!(bg.name == "Background" && bg.locks.transparency && bg.locks.position, "{:?}", bg.locks);
-        let out = document_to_psd(&doc);
+        let out = document_to_psd(&doc).unwrap();
         assert!(out.layer_info.unwrap().layers[0].channels.iter().all(|c| c.id >= 0));
     }
 
@@ -2313,7 +2378,7 @@ mod tests {
         group.psd_id = Some(u32::MAX);
         doc.layers.push(group);
 
-        let file = document_to_psd(&doc);
+        let file = document_to_psd(&doc).unwrap();
         let ids: Vec<u32> = file.layers().iter().filter_map(|layer| layer.layer_id()).collect();
         let unique: std::collections::HashSet<u32> = ids.iter().copied().collect();
         assert_eq!(ids.len(), 3, "group, child and closing divider");
@@ -2338,7 +2403,7 @@ mod tests {
             s.fill_rect(photocraft_geom::Rect::new(1, 1, 5, 4), &[0.5, 0.2, 0.9, 1.0]);
             doc.layers.push(Layer::new("Layer 1", LayerContent::Raster(s)));
             doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Patt", std::sync::Arc::new(Vec::new())), (*b"8BIM", marker, std::sync::Arc::new(Vec::new()))];
-            let saved = PsdFile::from_bytes(&document_to_psd(&doc).to_bytes().unwrap()).unwrap();
+            let saved = PsdFile::from_bytes(&document_to_psd(&doc).unwrap().to_bytes().unwrap()).unwrap();
             let LayerInfoPlacement::GlobalBlock { index, key: written, .. } = saved.layer_info_placement else { panic!("{depth:?}: a global layer block") };
             assert_eq!(written, key);
             let at = saved.global_blocks.iter().position(|b| b.key == marker).expect("the marker is kept");
@@ -2348,7 +2413,7 @@ mod tests {
         let mut doc = Document::new("t", photocraft_geom::Size::new(8, 6), ColorMode::Rgb, SampleType::F32);
         doc.layers.push(Layer::new("Layer 1", LayerContent::Raster(Surface::new(doc.pixel_format()))));
         doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Patt", std::sync::Arc::new(Vec::new()))];
-        let saved = PsdFile::from_bytes(&document_to_psd(&doc).to_bytes().unwrap()).unwrap();
+        let saved = PsdFile::from_bytes(&document_to_psd(&doc).unwrap().to_bytes().unwrap()).unwrap();
         assert!(matches!(saved.layer_info_placement, LayerInfoPlacement::GlobalBlock { index: 0, .. }));
     }
 

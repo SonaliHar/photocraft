@@ -25,15 +25,15 @@ fn real_pdn_layers_and_native_saves() {
     let mut worst = 0.0f32;
     for path in &paths {
         let doc = photocraft_io::import(&path.to_string_lossy(), &std::fs::read(path).unwrap()).unwrap_or_else(|e| panic!("{}: {e}", path.display())).document;
-        let flat = photocraft_compose::flatten(&doc);
+        let flat = photocraft_compose::flatten(&doc).unwrap();
         let native = photocraft_io::export(&doc, "copy.pcraft", &Default::default()).unwrap();
         let back = photocraft_io::import("copy.pcraft", &native.bytes).unwrap().document;
         assert_eq!(doc.layers, back.layers, "{}", path.display());
-        assert_eq!(flat.px, photocraft_compose::flatten(&back).px);
+        assert_eq!(flat.px, photocraft_compose::flatten(&back).unwrap().px);
         let png = path.with_extension("png");
         let oracle = photocraft_io::import("oracle.png", &std::fs::read(&png).expect("matching PNG export")).unwrap().document;
         assert_eq!(doc.size, oracle.size);
-        let expected = photocraft_compose::flatten(&oracle);
+        let expected = photocraft_compose::flatten(&oracle).unwrap();
         let error = flat
             .px
             .iter()

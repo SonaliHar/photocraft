@@ -63,7 +63,7 @@ fn native_reopen_then_public_style_adapter_uses_canonical_square_dpi() {
     assert_eq!(photocraft_io::import("continued.pcraft", &native).unwrap().document, reopened);
 }
 #[test]
-fn unequal_or_malformed_resolution_warns_before_style_or_run_mutation() {
+fn unequal_resolution_uses_y_basis_and_malformed_resolution_refuses_atomically() {
     for case in 0..5 {
         let mut doc = source();
         let resolution = doc.physical_resolution.as_mut().unwrap();
@@ -82,6 +82,19 @@ fn unequal_or_malformed_resolution_warns_before_style_or_run_mutation() {
         }
         let before = doc.clone();
         let warnings = photocraft_io::text_styles_map::import(&mut doc);
+        if case == 0 {
+            // Paired-axis layout is supported: named point sizes use the retained Y-DPI basis.
+            assert!(warnings.is_empty(), "{warnings:?}");
+            assert_eq!(size(&doc), Some(60.0));
+            assert_eq!(doc.physical_resolution, before.physical_resolution);
+            assert_eq!(doc.resolution_dpi, before.resolution_dpi);
+            let LayerContent::Text(text) = &doc.layers[0].content else { panic!("type") };
+            let LayerContent::Text(original) = &before.layers[0].content else { panic!("type") };
+            assert_eq!(text.psd_raw, original.psd_raw);
+            let style = doc.text_styles.character.iter().find(|style| style.name == "Own30pt").unwrap();
+            assert_eq!(text.runs[1].style.style_sheet, Some(style.id));
+            continue;
+        }
         assert!(!warnings.is_empty(), "case {case}: unqualified context silently interpreted");
         assert!(warnings[0].contains("Named PSD styles"));
         assert_eq!(doc, before, "case {case}: refusal changed model/styles/raw");

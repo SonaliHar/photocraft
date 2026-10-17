@@ -154,7 +154,7 @@ fn all_pdn_blend_modes_and_layer_properties_import_and_save_natively() {
             assert!(saved.warnings.is_empty());
             let back = crate::import("sample.pcraft", &saved.bytes).unwrap().document;
             assert_eq!(doc.layers, back.layers);
-            assert_eq!(photocraft_compose::flatten(&doc).px, photocraft_compose::flatten(&back).px);
+            assert_eq!(photocraft_compose::flatten(&doc).unwrap().px, photocraft_compose::flatten(&back).unwrap().px);
         }
     }
 }

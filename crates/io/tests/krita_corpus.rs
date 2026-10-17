@@ -24,8 +24,8 @@ fn merged(bytes: &[u8]) -> photocraft_doc::Document {
 /// where it is (x, y, ours, Krita's).
 fn max_error(doc: &photocraft_doc::Document, oracle: &photocraft_doc::Document, tolerance: f32) -> (f32, f32, String) {
     assert_eq!(doc.size, oracle.size);
-    let ours = photocraft_compose::flatten(doc);
-    let theirs = photocraft_compose::flatten(oracle);
+    let ours = photocraft_compose::flatten(doc).unwrap();
+    let theirs = photocraft_compose::flatten(oracle).unwrap();
     let w = doc.size.width as usize;
     let mut worst = (0.0f32, String::new());
     let mut over = 0usize;

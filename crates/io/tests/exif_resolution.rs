@@ -36,7 +36,7 @@ fn webp_with_exif_resolution_imports_at_it_and_psd_save_follows_the_document() {
     let mut doc = import("photo.webp", &webp).unwrap().document;
     assert_eq!(doc.resolution_dpi, 300.0);
 
-    doc.resolution_dpi = 240.0;
+    doc.set_physical_resolution(photocraft_doc::PhysicalResolution::square(240.0)).unwrap();
     let psd = export(&doc, "photo.psd", &ExportOptions::default()).unwrap().bytes;
     let back = import("photo.psd", &psd).unwrap().document;
     assert_eq!(back.resolution_dpi, 240.0);

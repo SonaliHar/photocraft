@@ -246,7 +246,7 @@ fn transformed_text_lands_where_resvg_draws_it() {
             return;
         }
         assert!(matches!(d.layers[0].content, LayerContent::Group(_)), "text stays outline shapes: {c}");
-        let imported = photocraft_compose::flatten(d);
+        let imported = photocraft_compose::flatten(d).unwrap();
         let reference = svg::rasterize(svg.as_bytes(), 1.0).unwrap();
         let (mut both, mut either) = (0usize, 0usize);
         let (mut a_box, mut b_box) = ([i32::MAX, i32::MAX, i32::MIN, i32::MIN], [i32::MAX, i32::MAX, i32::MIN, i32::MIN]);
@@ -348,9 +348,10 @@ fn svgz_is_inflated_with_a_size_cap() {
     assert!(gz.len() < 2 << 20, "{} bytes compressed", gz.len());
     let e = import("bomb.svgz", &gz).err().unwrap_or_else(|| panic!("the bomb opened"));
     assert!(matches!(&e, IoError::Svg(m) if m.contains("inflates past")), "{e}");
-    // Corrupt gzip is an error too.
+    // An undecodable recognized wrapper fails in the content-first container
+    // probe before a non-XCF prefix can hand authority to the SVG loader.
     let e = import("bad.svgz", &[0x1f, 0x8b, 0x08, 0x00, 0xff, 0xff]).err().unwrap_or_else(|| panic!("corrupt gzip opened"));
-    assert!(matches!(e, IoError::Svg(_)), "{e}");
+    assert!(matches!(e, IoError::Xcf(ref error) if error.kind == photocraft_xcf::ErrorKind::Compression), "{e}");
 }
 
 #[test]

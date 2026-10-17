@@ -10,6 +10,20 @@ use photocraft_cms::{Builtin, ColorSpace, Profile};
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_io::*;
 
+// These structured PSD fixtures were introduced when ALL contained three
+// depths (5290930e4, dd708f4ce). New native wide storage has a separately
+// checked raster/group PSD boundary; structured Fill/Adjustment remains closed.
+fn closed_structured_wide_psd(doc: &photocraft_doc::Document) -> bool {
+    if !matches!(doc.depth, SampleType::U32 | SampleType::F64) {
+        return false;
+    }
+    let before = doc.clone(); // External immutable assertion snapshot.
+    assert!(matches!(export(doc, "x.psd", &ExportOptions::default()),
+        Err(photocraft_io::IoError::Unsupported(message)) if message.contains("qualified raster or group representation")));
+    assert_eq!(doc, &before);
+    true
+}
+
 fn single(mode: ColorMode, depth: SampleType, alpha: bool) -> photocraft_doc::Document {
     let mut d = photocraft_doc::Document::new("s", photocraft_geom::Size::new(9, 6), mode, depth);
     let fmt = d.pixel_format();
@@ -116,11 +130,14 @@ fn cmyk_fills_survive_psd_roundtrip_at_every_depth() {
                 let mut doc = Document::new("CMYK fill", photocraft_geom::Size::new(9, 6), ColorMode::Cmyk, depth);
                 doc.icc_profile = profile.clone();
                 doc.layers.push(Layer::new("Fill", LayerContent::Fill(fill)));
-                let expected = photocraft_compose::flatten(&doc).px;
-                assert!(max_diff(&expected, &photocraft_compose::render_tiled(&doc, doc.bounds(), 3).px) <= 1e-6);
+                let expected = photocraft_compose::flatten(&doc).unwrap().px;
+                assert!(max_diff(&expected, &photocraft_compose::render_tiled(&doc, doc.bounds(), 3).unwrap().px) <= 1e-6);
+                if closed_structured_wide_psd(&doc) {
+                    continue;
+                }
                 let bytes = export(&doc, "x.psd", &ExportOptions::default()).unwrap().bytes;
                 let back = import("x.psd", &bytes).unwrap().document;
-                let actual = photocraft_compose::flatten(&back).px;
+                let actual = photocraft_compose::flatten(&back).unwrap().px;
                 let diff = max_diff(&expected, &actual);
                 assert!(diff <= 1e-6, "{depth:?} {style:?}: round-trip error {diff}");
                 assert_eq!(back.icc_profile, doc.icc_profile);
@@ -144,10 +161,10 @@ fn uncached_cmyk_gradient_corpus_roundtrip() {
     let bytes = std::fs::read(path).expect("run cargo xtask corpus --all");
     let doc = import("x.psd", &bytes).unwrap().document;
     assert!(doc.layers.iter().any(|l| matches!(l.content, photocraft_doc::LayerContent::Fill(_)) && l.fill_cache.is_none()));
-    let expected = photocraft_compose::flatten(&doc).px;
+    let expected = photocraft_compose::flatten(&doc).unwrap().px;
     let saved = export(&doc, "x.psd", &ExportOptions::default()).unwrap().bytes;
     let back = import("x.psd", &saved).unwrap().document;
-    let diff = max_diff(&expected, &photocraft_compose::flatten(&back).px);
+    let diff = max_diff(&expected, &photocraft_compose::flatten(&back).unwrap().px);
     eprintln!("uncached 16-bit CMYK gradient round-trip max error: {diff:.8}");
     assert!(diff <= 1e-6, "round-trip error {diff}");
     assert_eq!(back.icc_profile, doc.icc_profile);
@@ -166,6 +183,9 @@ fn rgb_fill_colours_separate_through_the_document_cmyk_profile() {
         let mut doc = Document::new("RGB fill", photocraft_geom::Size::new(1, 1), ColorMode::Cmyk, depth);
         doc.icc_profile = Some(profile.to_bytes());
         doc.layers.push(Layer::new("Fill", LayerContent::Fill(Fill::Solid(Color::rgb(rgb[0], rgb[1], rgb[2])))));
+        if closed_structured_wide_psd(&doc) {
+            continue;
+        }
         let bytes = export(&doc, "x.psd", &ExportOptions::default()).unwrap().bytes;
         let back = import("x.psd", &bytes).unwrap().document;
         let samples = back.layers[0].fill_cache.as_ref().unwrap().surface.read_region(back.bounds());
@@ -173,6 +193,7 @@ fn rgb_fill_colours_separate_through_the_document_cmyk_profile() {
             SampleType::U8 => 1.0 / 255.0,
             SampleType::U16 => 1.0 / 65535.0,
             SampleType::F32 => 1e-6,
+            SampleType::U32 | SampleType::F64 => panic!("this PSD fixture uses U8/U16/F32 only"),
         };
         for (actual, expected) in samples.iter().zip(expected) {
             assert!((actual - expected).abs() <= tolerance, "{depth:?}: {actual} vs {expected}");
@@ -235,6 +256,9 @@ fn gradient_maps_with_cmyk_lab_gray_stops_import_and_keep_their_space() {
             let fmt = doc.pixel_format();
             doc.layers.push(raster("Background", fmt, doc.bounds(), 3, false));
             doc.layers.push(Layer::new("Map", LayerContent::Adjustment(Adjustment::Unsupported { psd_key: "grdm".into(), raw: block.clone() })));
+            if closed_structured_wide_psd(&doc) {
+                continue;
+            }
             let bytes = export(&doc, "x.psd", &ExportOptions::default()).unwrap().bytes;
             let mut back = import("x.psd", &bytes).unwrap().document;
             let LayerContent::Adjustment(Adjustment::GradientMap { stops: got, .. }) = &back.layers[1].content else {
@@ -258,10 +282,10 @@ fn gradient_maps_with_cmyk_lab_gray_stops_import_and_keep_their_space() {
                 _ => assert_eq!((first, last), ([1.0; 3], [0.0; 3])),
             }
             // The layer now renders: the composite differs from the background alone.
-            let with_map = photocraft_compose::flatten(&back).px;
+            let with_map = photocraft_compose::flatten(&back).unwrap().px;
             let mut hidden = back.clone();
             hidden.layers[1].visible = false;
-            assert!(max_diff(&with_map, &photocraft_compose::flatten(&hidden).px) > 0.01, "{mode:?} {depth:?}");
+            assert!(max_diff(&with_map, &photocraft_compose::flatten(&hidden).unwrap().px) > 0.01, "{mode:?} {depth:?}");
             // Saving again keeps the block (and so the stops' colour space) byte for byte...
             let again = export(&back, "x.psd", &ExportOptions::default()).unwrap().bytes;
             assert_eq!(saved_grdm(&again), block, "{mode:?} {depth:?}");
