@@ -99,8 +99,12 @@ in `apps/photocraft-web`, or the Docker image above) still has the app in one `.
 without such a cap.
 
 The app is built with the `wasm-release` Cargo profile (fat LTO, size-optimized code with the
-pixel and file-decoding crates kept at speed) plus `wasm-opt -Oz`, and stores the bundled fonts
+pixel and file-decoding crates kept at speed) plus `wasm-opt -Oz --converge --reorder-functions`, and stores the bundled fonts
 (PhotoCraft's and egui's) and the translation catalogs compressed, unpacked on first use.
+
+The browser profile also size-optimizes the plug-in VM, instruction encoder and module validator
+(`wasmi`, `wasmi_ir`, `wasmparser`). Function reordering reduces encoded function-index sizes.
+The measurements above predate these settings and the current main merge.
 
 ## Any path works
 
