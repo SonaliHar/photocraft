@@ -108,7 +108,7 @@ fn large_logical_planes_and_checked_endpoints_have_no_override_count_admission()
     let far = root.try_translated(i32::MIN, 0, &ctl()).unwrap();
     // An exterior tile must not inverse-map its huge coordinates unnecessarily.
     let pin = far.pin_tile(TileCoord { tx: 0, ty: 0 }, &ctl()).unwrap();
-    assert!(pin.bytes().chunks_exact(4).all(|pixel| pixel == far.descriptor().default_bytes()));
+    assert!(pin.bytes().as_chunks::<4>().0.iter().all(|pixel| pixel == far.descriptor().default_bytes()));
 }
 
 #[test]
@@ -165,5 +165,5 @@ fn aligned_partial_tiles_share_actual_payload_and_exact_default_padding() {
     assert_eq!(root.quota().usage().unwrap(), before);
     assert_eq!(target.bytes(), source.bytes());
     let exterior = view.pin_tile(TileCoord { tx: 3, ty: 3 }, &ctl()).unwrap();
-    assert!(exterior.bytes().chunks_exact(32).all(|p| p == view.descriptor().default_bytes()));
+    assert!(exterior.bytes().as_chunks::<32>().0.iter().all(|p| p == view.descriptor().default_bytes()));
 }

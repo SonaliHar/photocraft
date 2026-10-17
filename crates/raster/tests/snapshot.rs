@@ -33,7 +33,7 @@ fn lazy_backing_and_cow_history_preserve_exact_wide_source() {
 #[test]
 fn limit_cancel_and_hostile_coordinates_fail_without_editing() {
     let format = PixelFormat::GRAY8;
-    let snapshot = OwnedRasterSnapshot::try_new(format, Rect::new(0, 0, 1, 1), vec![17], vec![0], 100).unwrap();
+    let snapshot = OwnedRasterSnapshot::try_new(format, Rect::new(0, 0, 1, 1), vec![17], vec![0], 256).unwrap();
     assert_eq!(snapshot.try_read_tile(TileCoord::new(0, 0), &Interrupt::NONE).unwrap_err(), RasterInputError::LimitExceeded);
     assert_eq!(snapshot.try_read_tile(TileCoord::new(i32::MAX, 0), &Interrupt::NONE).unwrap_err(), RasterInputError::InvalidBounds);
     let mut lazy = SnapshotSurface::try_new(snapshot).unwrap();

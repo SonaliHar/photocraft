@@ -140,10 +140,10 @@ fn added(mut used: QuotaUsage, limits: QuotaLimits, aggregate_limit: Option<u64>
     if used.index > limits.index {
         return Err(QuotaError::LimitExceeded(QuotaKind::Index));
     }
-    if let Some(limit) = aggregate_limit {
-        if used.resident.checked_add(used.scratch).ok_or(QuotaError::Overflow)? > limit {
-            return Err(QuotaError::LimitExceeded(QuotaKind::Resident));
-        }
+    if let Some(limit) = aggregate_limit
+        && used.resident.checked_add(used.scratch).ok_or(QuotaError::Overflow)? > limit
+    {
+        return Err(QuotaError::LimitExceeded(QuotaKind::Resident));
     }
     Ok(used)
 }

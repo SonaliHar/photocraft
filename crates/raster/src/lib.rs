@@ -2317,3 +2317,90 @@ mod echelon_case {
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "Synthetic regression assertions are test-only")]
+mod checked_import_tests {
+    use super::*;
+    #[test]
+    fn rejects_bad_input_without_changing_surface() {
+        let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+        let mut s = Surface::new(fmt);
+        let before = s.clone();
+        for r in [Rect::new(i32::MIN, 0, i32::MAX, 1), Rect::new(1, 0, 0, 1), Rect::new(0, 0, 300000, 1)] {
+            assert!(s.try_write_interleaved(r, &[]).is_err());
+            assert_eq!(s, before);
+        }
+        assert!(s.try_write_interleaved(Rect::new(0, 0, 1, 1), &[0]).is_err());
+        assert_eq!(s, before);
+    }
+    #[test]
+    fn exact_native_samples_across_negative_tile_boundary() {
+        for depth in SampleType::ALL {
+            let f = PixelFormat::new(ColorMode::Grayscale, depth, true);
+            let r = Rect::new(-1, -1, 2, 1);
+            let bytes: Vec<u8> = (0..r.width() as usize * r.height() as usize * f.bytes_per_pixel()).map(|n| (n * 17) as u8).collect();
+            let s = Surface::try_from_interleaved(f, r, &bytes).unwrap();
+            assert_eq!(s.to_interleaved(r), bytes);
+        }
+    }
+}
+
+#[cfg(test)]
+mod cancelled_ingestion_tests {
+    use super::*;
+    #[test]
+    fn cancellation_between_staged_tiles_keeps_original() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let mut s = Surface::new(PixelFormat::RGBA8);
+        s.write_pixel(0, 0, &[1.0, 0.0, 0.0, 1.0]);
+        let original = s.clone();
+        let calls = AtomicUsize::new(0);
+        let cancel = || calls.fetch_add(1, Ordering::Relaxed) >= 2;
+        let ctl = Interrupt::cancel_only(&cancel);
+        assert_eq!(s.try_write_interleaved_with(Rect::new(0, 0, 257, 1), &vec![255; 257 * 4], &ctl), Err(RasterInputError::Cancelled));
+        assert_eq!(s, original);
+    }
+}
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "Synthetic regression assertions are test-only")]
+mod authoritative_conversion_tests {
+    use super::*;
+    #[test]
+    fn checked_depth_quantization_uses_authoritative_f64_not_display_f32() {
+        let area = Rect::new(0, 0, 1, 1);
+        for (target, value, expected) in [
+            (SampleType::U8, (128.5 - 1e-8) / 255., 128u32),
+            (SampleType::U16, (32768.5 - 1e-7) / 65535., 32768),
+            (SampleType::U32, f64::from(0x80000001u32) / f64::from(u32::MAX), 0x80000001),
+        ] {
+            let format = PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false);
+            let source = Surface::try_from_interleaved(format, area, &value.to_ne_bytes()).unwrap();
+            let before = source.clone();
+            let converted = source.try_convert(format.with_sample(target)).unwrap();
+            let bytes = converted.try_read_interleaved(area).unwrap();
+            let got = match target {
+                SampleType::U8 => u32::from(bytes[0]),
+                SampleType::U16 => u32::from(u16::from_ne_bytes(bytes.try_into().unwrap())),
+                SampleType::U32 => u32::from_ne_bytes(bytes.try_into().unwrap()),
+                _ => 0,
+            };
+            assert_eq!(got, expected);
+            assert_eq!(source, before);
+        }
+    }
+    #[test]
+    fn identity_rejects_hostile_retained_origins_and_nonfinite_narrowing_is_atomic() {
+        let mut source = Surface::new(PixelFormat::RGBA64F);
+        source.tile_mut(TileCoord::new(i32::MAX, 0));
+        let before = source.clone();
+        assert_eq!(source.try_convert(PixelFormat::RGBA64F), Err(RasterInputError::InvalidBounds));
+        assert_eq!(source, before);
+        let format = PixelFormat::new(ColorMode::Grayscale, SampleType::F64, false);
+        let source = Surface::try_from_interleaved(format, Rect::new(0, 0, 1, 1), &f64::from_bits(0x7ff8000000001234).to_ne_bytes()).unwrap();
+        let before = source.clone();
+        assert_eq!(source.try_convert(format).unwrap(), source);
+        assert_eq!(source.try_convert(format.with_sample(SampleType::F32)), Err(RasterInputError::InvalidSample));
+        assert_eq!(source, before);
+    }
+}
