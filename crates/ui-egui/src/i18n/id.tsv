@@ -3357,6 +3357,5 @@ cameraRaw	Type	Jenis
 	GPU Memory (MB, 0 = Automatic)	Memori GPU (MB, 0 = Otomatis)
 	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Gambar dua panduan atau lebih pada gambar di sepanjang garis yang seharusnya vertikal atau horizontal (Shift+T).
 	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Seret ujung panduan untuk memindahkannya; pilih panduan dan tekan Delete untuk menghapusnya. Maksimal empat panduan.
-	Didn't update {file}: it is empty on this computer (maybe not downloaded yet from a sync service)	{file} tidak diperbarui: file kosong di komputer ini (mungkin belum diunduh dari layanan sinkronisasi)
 	Didn't update {file}: {reason}	{file} tidak diperbarui: {reason}
 	Saved Camera Raw settings to {file}	Pengaturan Camera Raw disimpan ke {file}

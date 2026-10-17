@@ -2969,6 +2969,5 @@ cameraRaw	Type	類型
 	GPU Memory (MB, 0 = Automatic)	GPU 記憶體（MB，0 = 自動）
 	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	沿應為垂直或水平的線條在影像上繪製兩條或更多參考線 (Shift+T)。
 	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	拖曳參考線的端點可移動它；選取參考線並按 Delete 鍵可將其刪除。最多四條參考線。
-	Didn't update {file}: it is empty on this computer (maybe not downloaded yet from a sync service)	未更新 {file}：它在這台電腦上是空的（可能尚未從同步服務下載）
 	Didn't update {file}: {reason}	未更新 {file}：{reason}
 	Saved Camera Raw settings to {file}	已將 Camera Raw 設定儲存到 {file}

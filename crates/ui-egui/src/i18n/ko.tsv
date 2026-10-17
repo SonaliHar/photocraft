@@ -3566,6 +3566,5 @@ cameraRaw	Type	유형
 	GPU Memory (MB, 0 = Automatic)	GPU 메모리(MB, 0 = 자동)
 	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	세로 또는 가로여야 하는 선을 따라 이미지에 안내선을 두 개 이상 그립니다(Shift+T).
 	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	안내선 끝을 드래그하여 이동하고, 안내선을 선택한 후 Delete 키를 눌러 제거합니다. 안내선은 최대 4개입니다.
-	Didn't update {file}: it is empty on this computer (maybe not downloaded yet from a sync service)	{file}을(를) 업데이트하지 않았습니다: 이 컴퓨터에서 비어 있습니다(동기화 서비스에서 아직 다운로드되지 않았을 수 있음)
 	Didn't update {file}: {reason}	{file}을(를) 업데이트하지 않았습니다: {reason}
 	Saved Camera Raw settings to {file}	Camera Raw 설정을 {file}에 저장했습니다

@@ -4422,6 +4422,5 @@ cameraRaw	Zoom and Pan	Uvećanje i pomeranje
 	GPU Memory (MB, 0 = Automatic)	GPU memorija (MB, 0 = Automatski)
 	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Nacrtajte na slici dve ili više vodilja duž linija koje treba da budu vertikalne ili horizontalne (Shift+T).
 	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Prevucite kraj vodilje da biste ga pomerili; izaberite vodilju i pritisnite Delete da biste je uklonili. Najviše četiri vodilje.
-	Didn't update {file}: it is empty on this computer (maybe not downloaded yet from a sync service)	{file} није ажуриран: празан је на овом рачунару (можда још није преузет са услуге синхронизације)
 	Didn't update {file}: {reason}	{file} није ажуриран: {reason}
 	Saved Camera Raw settings to {file}	Подешавања Camera Raw сачувана у {file}

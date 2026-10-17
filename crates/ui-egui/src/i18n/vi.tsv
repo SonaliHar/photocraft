@@ -3856,6 +3856,5 @@ cameraRaw	Zoom and Pan	Thu phóng và kéo
 	GPU Memory (MB, 0 = Automatic)	Bộ nhớ GPU (MB, 0 = Tự động)
 	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Vẽ hai đường căn trở lên trên ảnh dọc theo các đường cần thẳng đứng hoặc nằm ngang (Shift+T).
 	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Kéo đầu của đường căn để di chuyển; chọn một đường căn rồi nhấn Delete để xóa. Tối đa bốn đường căn.
-	Didn't update {file}: it is empty on this computer (maybe not downloaded yet from a sync service)	Không cập nhật {file}: tệp trống trên máy tính này (có thể chưa được tải xuống từ dịch vụ đồng bộ)
 	Didn't update {file}: {reason}	Không cập nhật {file}: {reason}
 	Saved Camera Raw settings to {file}	Đã lưu cài đặt Camera Raw vào {file}

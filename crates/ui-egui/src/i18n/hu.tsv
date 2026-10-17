@@ -4267,6 +4267,5 @@ cameraRaw	Zoom and Pan	Nagyítás és pásztázás
 	GPU Memory (MB, 0 = Automatic)	GPU-memória (MB, 0 = Automatikus)
 	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Rajzoljon két vagy több segédvonalat a képre olyan vonalak mentén, amelyeknek függőlegesnek vagy vízszintesnek kell lenniük (Shift+T).
 	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	A segédvonal végét húzással mozgathatja; egy segédvonalat kijelölve és a Delete billentyűt lenyomva törölhet. Legfeljebb négy segédvonal.
-	Didn't update {file}: it is empty on this computer (maybe not downloaded yet from a sync service)	A(z) {file} nem frissült: ezen a számítógépen üres (talán még nem töltődött le a szinkronizáló szolgáltatásból)
 	Didn't update {file}: {reason}	A(z) {file} nem frissült: {reason}
 	Saved Camera Raw settings to {file}	Camera Raw-beállítások mentve ide: {file}

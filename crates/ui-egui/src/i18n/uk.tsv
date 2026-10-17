@@ -4055,6 +4055,5 @@ cameraRaw	Type	Тип
 	GPU Memory (MB, 0 = Automatic)	Пам'ять GPU (МБ, 0 = автоматично)
 	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Намалюйте на зображенні дві або більше напрямних уздовж ліній, які мають бути вертикальними або горизонтальними (Shift+T).
 	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Перетягніть кінець напрямної, щоб перемістити його; виберіть напрямну й натисніть Delete, щоб видалити її. Не більше чотирьох напрямних.
-	Didn't update {file}: it is empty on this computer (maybe not downloaded yet from a sync service)	Файл {file} не оновлено: на цьому комп’ютері він порожній (можливо, ще не завантажений зі служби синхронізації)
 	Didn't update {file}: {reason}	Файл {file} не оновлено: {reason}
 	Saved Camera Raw settings to {file}	Налаштування Camera Raw збережено в {file}

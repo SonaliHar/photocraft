@@ -484,10 +484,9 @@ fn read_sidecar(raw_path: &str) -> Option<String> {
 }
 
 /// Writes each filmstrip raw's settings to its sidecar (`.xmp` next to the raw), as Camera Raw
-/// does on Open and Done: an existing sidecar keeps everything else in it (rating, keywords,
-/// settings PhotoCraft doesn't have). A sidecar that is empty here (a sync service that hasn't
-/// downloaded it) or can't be read safely is never overwritten. Returns the files written and
-/// the warnings.
+/// does on Open and Done (Cancel writes nothing): an existing sidecar keeps everything else in
+/// it (rating, keywords, settings PhotoCraft doesn't have); an empty one is written afresh; one
+/// that can't be read safely is never overwritten. Returns the files written and the warnings.
 fn write_sidecars(app: &PhotocraftApp) -> (Vec<String>, Vec<String>) {
     let (mut saved, mut warnings) = (Vec::new(), Vec::new());
     #[cfg(not(target_arch = "wasm32"))]
@@ -497,11 +496,9 @@ fn write_sidecars(app: &PhotocraftApp) -> (Vec<String>, Vec<String>) {
         let path = sidecar_of(raw_path);
         let file = path.file_name().map_or_else(String::new, |f| f.to_string_lossy().into_owned());
         let existing = match std::fs::read(&path) {
-            Ok(bytes) if bytes.iter().all(u8::is_ascii_whitespace) => {
-                let template = "Didn't update {file}: it is empty on this computer (maybe not downloaded yet from a sync service)";
-                warnings.push(crate::i18n::fmt(tl!(template), &[("file", &file)]));
-                continue;
-            }
+            // An empty one (a sync service's placeholder) holds nothing to keep: Open and Done
+            // write it, as Camera Raw does.
+            Ok(bytes) if bytes.iter().all(u8::is_ascii_whitespace) => None,
             Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
             // No sidecar and nothing to say: don't leave one behind.
             Err(_) if params.is_identity() => continue,
@@ -2606,8 +2603,8 @@ mod tests {
     }
 
     /// Open and Done save each raw's settings next to it (`.xmp`), keeping what else an existing
-    /// sidecar holds; an empty sidecar (not downloaded from a sync service yet) is left alone;
-    /// the settings come back when the raw is opened again.
+    /// sidecar holds, and write an empty one; Cancel writes nothing; the settings come back when
+    /// the raw is opened again.
     #[test]
     fn done_and_open_save_sidecars_and_reopening_reads_them() {
         let (mut app, dng) = raw_app();
@@ -2634,7 +2631,16 @@ mod tests {
         assert!(a.contains("crs:Exposure2012=\"+0.50\"") && a.contains("crs:PerspectiveUpright=\"2\""), "{a}");
         let b = std::fs::read_to_string(dir.join("b.xmp")).unwrap();
         assert!(b.contains("xmp:Rating=\"4\"") && b.contains("crs:Exposure2012"), "the rating stays: {b}");
-        assert_eq!(std::fs::read(dir.join("c.xmp")).unwrap().len(), 0, "an empty sidecar is never overwritten");
+        let c = std::fs::read_to_string(dir.join("c.xmp")).unwrap();
+        assert!(c.contains("crs:Exposure2012=\"+0.50\""), "an empty sidecar is written: {c}");
+        // Cancel writes nothing.
+        std::fs::write(dir.join("d.xmp"), "").unwrap();
+        app.open_bytes("d.dng", &dng).unwrap();
+        app.raw_shelf.last_mut().unwrap().raw.path = Some(path("d.dng"));
+        open_raw(&mut app, &ctx, 0).unwrap();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0.5}}})).unwrap().unwrap();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
+        assert_eq!(std::fs::read(dir.join("d.xmp")).unwrap().len(), 0, "Cancel leaves the sidecar alone");
         // Opening a again brings its settings back.
         app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
         queue_open_dialog(&mut app, "a.dng", Some(&path("a.dng")), None);

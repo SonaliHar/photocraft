@@ -4079,6 +4079,5 @@ cameraRaw	Zoom and Pan	Yakınlaştırma ve Kaydırma
 	GPU Memory (MB, 0 = Automatic)	GPU Belleği (MB, 0 = Otomatik)
 	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Görüntüde dikey veya yatay olması gereken çizgiler boyunca iki veya daha fazla kılavuz çizin (Shift+T).
 	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Taşımak için kılavuzun ucunu sürükleyin; kaldırmak için bir kılavuz seçip Delete tuşuna basın. En fazla dört kılavuz.
-	Didn't update {file}: it is empty on this computer (maybe not downloaded yet from a sync service)	{file} güncellenmedi: bu bilgisayarda boş (belki henüz bir eşitleme hizmetinden indirilmedi)
 	Didn't update {file}: {reason}	{file} güncellenmedi: {reason}
 	Saved Camera Raw settings to {file}	Camera Raw ayarları {file} dosyasına kaydedildi
