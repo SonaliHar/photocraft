@@ -12,6 +12,7 @@ use photocraft_ui_egui::{PhotocraftApp, adjust_dialog, adjust_preview, dialogs, 
 use serde_json::{Value, json};
 
 const MODES: [ColorMode; 3] = [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab];
+const GRAY_TARGET_MODES: [ColorMode; 4] = [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab, ColorMode::Grayscale];
 const DEPTHS: [SampleType; 3] = [SampleType::U8, SampleType::U16, SampleType::F32];
 const TARGETS: [ChannelTarget; 3] = [ChannelTarget::Alpha(0), ChannelTarget::LayerMask, ChannelTarget::Composite];
 
@@ -23,6 +24,7 @@ fn fixture(mode: ColorMode, depth: SampleType, target: ChannelTarget) -> Photocr
         &match mode {
             ColorMode::Cmyk => vec![0.1, 0.2, 0.3, 0.4, 1.0],
             ColorMode::Lab => vec![0.5, 0.5, 0.5, 1.0],
+            ColorMode::Grayscale => vec![0.25, 1.0],
             _ => vec![0.0, 0.0, 0.0, 1.0],
         },
     );
@@ -76,22 +78,31 @@ fn names(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
     h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.value()).collect()
 }
 
+fn edit_gamma(h: &mut Harness<'static, PhotocraftApp>, gamma: &str) {
+    h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(1).unwrap().click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    h.event(egui::Event::Text(gamma.into()));
+    h.run_steps(1);
+    h.get_by_label("Preview").click();
+    h.run_steps(2);
+}
+
 #[test]
 fn levels_gray_target_controls_change_the_target_in_every_mode_and_depth() {
-    for mode in MODES {
+    for mode in GRAY_TARGET_MODES {
         for depth in DEPTHS {
             for target in TARGETS {
                 let mut h = open(fixture(mode, depth, target), "levels");
-                assert_eq!(names(&h), ["Gray"], "{mode:?} {depth:?} {target:?}");
+                let name = match target {
+                    ChannelTarget::Alpha(_) => "Saved sky",
+                    ChannelTarget::LayerMask => "Named layer Mask",
+                    _ => "Quick Mask",
+                };
+                assert_eq!(names(&h), [name], "{mode:?} {depth:?} {target:?}");
                 // Type into the actual visible gamma field and blur it without confirming.
-                h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(1).unwrap().click();
-                h.run_steps(2);
-                h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-                h.run_steps(1);
-                h.event(egui::Event::Text("2.0".into()));
-                h.run_steps(1);
-                h.get_by_label("Preview").click();
-                h.run_steps(2);
+                edit_gamma(&mut h, "2.0");
                 assert_eq!(params(&h)["gamma"], 2.0);
                 let st = h.state().session.active().unwrap();
                 let pixels = st.doc.layers[0].content.clone();
@@ -113,9 +124,112 @@ fn levels_gray_target_controls_change_the_target_in_every_mode_and_depth() {
 }
 
 #[test]
+fn levels_isolates_each_colour_channel_and_edits_its_matching_record() {
+    for mode in MODES {
+        let labels: &[&str] = match mode {
+            ColorMode::Rgb => &["Red", "Green", "Blue"],
+            ColorMode::Cmyk => &["Cyan", "Magenta", "Yellow", "Black"],
+            ColorMode::Lab => &["Lightness", "a", "b"],
+            _ => unreachable!(),
+        };
+        let keys = photocraft_engine::adjust_params::channel_keys(photocraft_engine::adjust_params::default_space(mode));
+        for depth in DEPTHS {
+            for (k, label) in labels.iter().enumerate() {
+                let mut app = fixture(mode, depth, ChannelTarget::Color(k));
+                // Nonzero samples let gamma change each RGB component as well as Lab/CMYK.
+                app.session
+                    .edit("Colour pattern", |doc, _| {
+                        let bounds = doc.bounds();
+                        let n = mode.color_channels();
+                        let mut values = vec![0.25; n + 1];
+                        values[n] = 0.6;
+                        doc.layers[0].surface_mut().unwrap().fill_rect(bounds, &values);
+                        Ok(())
+                    })
+                    .unwrap();
+                let mut h = open(app, "levels");
+                assert_eq!(names(&h), [*label], "{mode:?} {depth:?} {k}");
+                let before = params(&h);
+                let original = h.state().session.active().unwrap().doc.clone();
+                edit_gamma(&mut h, "2.0");
+                let after = params(&h);
+                assert_eq!(after[keys[k]]["gamma"], 2.0);
+                for (i, key) in keys.iter().enumerate().filter(|(i, _)| *i != k) {
+                    assert_eq!(after[key], before[key], "untargeted {i}");
+                }
+                let id = h.state().ui.dialogs.last().unwrap().id;
+                dialogs::confirm(h.state_mut(), id).unwrap();
+                let doc = &h.state().session.active().unwrap().doc;
+                let old = original.layers[0].surface().unwrap().pixel(8, 8);
+                let new = doc.layers[0].surface().unwrap().pixel(8, 8);
+                assert!((new[k] - old[k]).abs() > 0.01, "{mode:?} {depth:?} {k}: {old:?} -> {new:?}");
+                for i in (0..old.len()).filter(|i| *i != k) {
+                    assert_eq!(new[i], old[i], "untargeted sample/transparency {i}");
+                }
+                assert_eq!(doc.channels, original.channels);
+                assert_eq!(doc.layers[0].mask, original.layers[0].mask);
+            }
+        }
+    }
+}
+
+#[test]
+fn levels_uses_literal_spot_name_and_layers_panel_mask_name() {
+    for mode in GRAY_TARGET_MODES {
+        let mut app = fixture(mode, SampleType::U8, ChannelTarget::Alpha(0));
+        app.session
+            .edit("Named spot", |doc, _| {
+                doc.channels[0].name = "Sky α — ink 1".into();
+                doc.channels[0].spot = Some((photocraft_color::Color::rgb(0.2, 0.4, 0.6), 0.8));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(names(&open(app, "levels")), ["Sky α — ink 1"]);
+
+        let mut app = fixture(mode, SampleType::U8, ChannelTarget::LayerMask);
+        app.session.active_mut().unwrap().channel_view.target = ChannelTarget::Composite;
+        app.ui.mask_target = true;
+        let mut h = open(app, "levels");
+        assert_eq!(names(&h), ["Named layer Mask"]);
+        assert_eq!(params(&h)["target"], "mask");
+        let id = h.state().ui.dialogs.last().unwrap().id;
+        let mut fields = h.state().ui.dialogs.last().unwrap().fields.clone();
+        adjust_dialog::reset(h.state(), &h.ctx, &mut fields);
+        h.state_mut().ui.dialog_mut(id).unwrap().fields = fields;
+        h.run_steps(2);
+        assert_eq!(names(&h), ["Named layer Mask"]);
+        assert_eq!(params(&h)["target"], "mask");
+    }
+}
+
+#[test]
+fn levels_auto_uses_the_selected_colour_channels_histogram() {
+    let mut app = fixture(ColorMode::Rgb, SampleType::U8, ChannelTarget::Color(1));
+    app.session
+        .edit("Distinct colour components", |doc, _| {
+            let bounds = doc.bounds();
+            doc.layers[0].mask = None;
+            doc.layers[0].surface_mut().unwrap().fill_rect(bounds, &[0.1, 0.4, 0.8, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    let mut h = open(app, "levels");
+    assert_eq!(names(&h), ["Green"]);
+    let before = params(&h);
+    h.get_by_label("Auto").click();
+    h.run_steps(2);
+    let after = params(&h);
+    assert_eq!(after["green"]["inBlack"], 102.0);
+    assert_eq!(after["green"]["inWhite"], 104.0);
+    for key in ["red", "blue", "inBlack", "inWhite"] {
+        assert_eq!(after[key], before[key]);
+    }
+}
+
+#[test]
 fn grayscale_picker_controls_sample_the_plane_and_change_the_visible_curve() {
     for kind in ["curves", "levels"] {
-        for mode in MODES {
+        for mode in GRAY_TARGET_MODES {
             for depth in DEPTHS {
                 for target in TARGETS {
                     let mut h = open(fixture(mode, depth, target), kind);
@@ -170,18 +284,26 @@ fn action_dialog(mode: ColorMode, target: Value, panel: ChannelTarget, kind: &st
 #[test]
 fn action_dialog_uses_recorded_alpha_instead_of_current_red_channel() {
     for mode in MODES {
-        let mut h = action_dialog(mode, json!({"channel": 0}), ChannelTarget::Color(0), "curves");
-        assert_eq!(names(&h), ["Saved sky"]);
-        assert_eq!(params(&h)["target"], json!({"channel": 0}));
-        for key in ["cyan", "black", "lightness", "a", "b"] {
-            assert!(params(&h).get(key).is_none());
+        for kind in ["curves", "levels"] {
+            let mut h = action_dialog(mode, json!({"channel": 0}), ChannelTarget::Color(0), kind);
+            assert_eq!(names(&h), ["Saved sky"]);
+            assert_eq!(params(&h)["target"], json!({"channel": 0}));
+            for key in ["cyan", "black", "lightness", "a", "b"] {
+                assert!(params(&h).get(key).is_none());
+            }
+            let id = h.state().ui.dialogs.last().unwrap().id;
+            let expected = if kind == "curves" {
+                h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("points".into(), json!([[0, 255], [255, 0]]));
+                0.75
+            } else {
+                edit_gamma(&mut h, "2.0");
+                0.5
+            };
+            let before = h.state().session.active().unwrap().doc.layers[0].content.clone();
+            dialogs::confirm(h.state_mut(), id).unwrap();
+            assert!((value(h.state(), ChannelTarget::Alpha(0)) - expected).abs() < 0.01);
+            assert_eq!(h.state().session.active().unwrap().doc.layers[0].content, before);
         }
-        let id = h.state().ui.dialogs.last().unwrap().id;
-        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("points".into(), json!([[0, 255], [255, 0]]));
-        let before = h.state().session.active().unwrap().doc.layers[0].content.clone();
-        dialogs::confirm(h.state_mut(), id).unwrap();
-        assert!((value(h.state(), ChannelTarget::Alpha(0)) - 0.75).abs() < 0.01);
-        assert_eq!(h.state().session.active().unwrap().doc.layers[0].content, before);
     }
 }
 
@@ -189,9 +311,7 @@ fn action_dialog_uses_recorded_alpha_instead_of_current_red_channel() {
 fn action_mask_target_survives_reset_pencil_and_picker() {
     for kind in ["curves", "levels"] {
         let mut h = action_dialog(ColorMode::Lab, json!("mask"), ChannelTarget::Alpha(0), kind);
-        if kind == "curves" {
-            assert_eq!(names(&h), ["Named layer Mask"]);
-        }
+        assert_eq!(names(&h), ["Named layer Mask"]);
         let id = h.state().ui.dialogs.last().unwrap().id;
         let mut fields = h.state().ui.dialogs.last().unwrap().fields.clone();
         adjust_dialog::reset(h.state(), &h.ctx, &mut fields);

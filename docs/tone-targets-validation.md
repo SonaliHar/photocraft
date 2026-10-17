@@ -2,18 +2,18 @@
 
 Completed 2026-10-17 against upstream main `2a952f164c0b4cf936b1c6497db10dd095341c00`. Follow-up to PR #5448 for issue #5335.
 
-Levels now uses grayscale controls and the edited plane's histogram for raster masks, alpha/spot channels and Quick Mask in every document colour mode. Curves/Levels Action dialogs resolve their recorded explicit target before choosing defaults. Their channel context survives Reset, pencil editing and sampling. Grayscale black/white eyedroppers sample the committed plane directly at native depth, including default samples, and update the visible neutral curve. Explicit scalar Action previews use the same CPU preview path as a normally selected scalar channel.
+Levels now lists only the selected target by its actual name, using literal custom names and translated built-in names like Curves. Its controls and Auto use the matching parameter key and histogram for individual RGB/CMYK/Lab components. It uses grayscale controls and the edited plane's histogram for raster masks, alpha/spot channels and Quick Mask in every document colour mode. Curves/Levels Action dialogs resolve their recorded explicit target before choosing defaults. Their channel context survives Reset, pencil editing and sampling. Grayscale black/white eyedroppers sample the committed plane directly at native depth, including default samples, and update the visible neutral curve. Explicit scalar Action previews use the same CPU preview path as a normally selected scalar channel.
 
 ## Validation
 
-- Full engine/UI `cargo test`: **4,984 passed, 0 failed, 32 normally ignored**, including doctest builds and all new tests.
+- Full engine/UI `cargo test`: **4,988 passed, 0 failed, 32 normally ignored**, including doctest builds and all new tests.
 - The ignored full-registry `panic_hunt` test passed separately.
 - Strict engine/UI all-target Clippy (`-D warnings`), formatting, layering and `cargo xtask wasm` passed. Wasm reports three pre-existing cfg-specific unused-constant warnings (`PAR_PIXELS`, `MAX_SUBFOLDER_DEPTH`, `MAX_SUBFOLDER_FILES`); native strict Clippy is clean.
 - `cargo xtask perf --quick` passed with `failures: []`. Quick mode uses small documents and does not apply full-size budgets. Its repository-baseline comparison was skipped because that baseline is from an M4 Pro; the separate comparison below uses the same machine for both builds.
-- Full-app offscreen before/after screenshots were inspected for Lab Levels gamma, a Lab alpha white-point picker with a real canvas click, and an alpha-targeted Action played while Red is selected.
+- Full-app offscreen before/after screenshots were inspected for Lab Levels gamma, a Lab alpha white-point picker with a real canvas click, an alpha-targeted Action played while Red is selected, and Levels on a selected Green component. Updated candidate captures show `Saved sky` and `Green` in the Levels dropdown.
 - Multiple local review/fix passes completed; the final review found no further actionable functional bugs within the reviewed scope.
 
-The 14 new regression functions exercise RGB, CMYK, Lab and grayscale documents across native 8/16/32-bit samples; real Levels field editing; black/white pickers on masks, alpha/spot and Quick Mask; serialized Action defaults and explicit target precedence; reset, pencil and sampling context; explicit pixel targets; preview/commit agreement; native-depth edge averages and unstored mask defaults; feathered selections; preservation of colour pixels, transparency and other planes; undo/redo, cancel and malformed inputs.
+The 18 new regression functions exercise RGB, CMYK, Lab and grayscale documents across native 8/16/32-bit samples; real Levels field editing; exact target names, literal spot names, translated built-in names, every RGB/CMYK/Lab component, Levels Auto histogram routing; black/white pickers on masks, alpha/spot and Quick Mask; serialized Action defaults and explicit target precedence; reset, pencil and sampling context; explicit pixel targets; preview/commit agreement; native-depth edge averages and unstored mask defaults; feathered selections; preservation of colour pixels, transparency and other planes; undo/redo, cancel and malformed inputs.
 
 ## 24 MP release comparison
 
@@ -35,6 +35,8 @@ Timing includes CPU proxy construction, command execution and flattening. It exc
 | Quick Mask | Central 50% coverage | 41.74 | 40.48 | -3.0% |
 | Alpha + white-point sample | None | 74.72 | 74.21 | -0.7% |
 | Alpha + white-point sample | Central 50% coverage | 42.58 | 40.49 | -4.9% |
+
+Timings were captured on the initial functional fix (`96dcb10f`); the later Levels dropdown naming/control update leaves this CPU benchmark workload unchanged.
 
 No candidate median was slower in these cases. Small reductions are observations, not a claimed algorithmic speedup. Existing pixel-processing and proxy algorithms are reused; metadata resolution and a bounded 101 × 101 picker sample add no full-canvas scan to a drag frame. These measurements do not establish a 16 ms interactive budget.
 

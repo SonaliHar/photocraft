@@ -897,6 +897,29 @@ mod tests {
         assert!(names.iter().any(|n| n == "Verde"), "built-in labels follow the language: {names:?}");
     }
 
+    #[test]
+    fn levels_channel_popup_keeps_custom_names_verbatim_in_italian() {
+        let it = crate::i18n::Lang::from_code("it").expect("it registered");
+        let _lang = crate::i18n::language_scope(it);
+        let make = |app| {
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+            PhotocraftApp::setup_context(&h.ctx, Default::default());
+            open(h.state_mut(), "image.adjustments.levels").unwrap();
+            h.run_steps(4);
+            h
+        };
+        let mut app = app_with_image();
+        app.run("channel.new", json!({"name": "Green", "fill": "white"})).unwrap();
+        app.run("channel.target", json!({"channel": 0})).unwrap();
+        let mut h = make(app);
+        assert_eq!(popup_channels(&mut h), ["Green"], "custom names stay as entered");
+
+        let mut app = app_with_image();
+        app.run("channel.target", json!({"channel": {"color": 1}})).unwrap();
+        let mut h = make(app);
+        assert_eq!(popup_channels(&mut h), ["Verde"], "built-in names translate");
+    }
+
     /// Curves open in a harness over `app`.
     fn curves_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
