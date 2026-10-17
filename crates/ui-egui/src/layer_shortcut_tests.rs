@@ -163,15 +163,26 @@ fn command_click_on_a_thumbnail_loads_transparency_except_on_the_background() {
         st.doc.selection.as_ref().map(|s| s.content_bounds())
     };
     let top = h.state().session.active().unwrap().active_layer.unwrap();
+    let selected = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().selected_layers();
     click(&mut h, shape, Modifiers::COMMAND);
     assert_eq!(bounds(&h), Some(photocraft_geom::Rect::new(100, 50, 220, 150)), "the layer's pixels are selected");
     assert_eq!(h.state().session.active().unwrap().active_layer, Some(top), "the selected layer stays");
+    assert_eq!(selected(&h), vec![top]);
     click(&mut h, background, Modifiers::COMMAND);
     assert_eq!(
         bounds(&h),
         Some(photocraft_geom::Rect::new(100, 50, 220, 150)),
         "the Background has no transparency to load: a plain click, which leaves the selection and selects the row"
     );
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(photocraft_doc::LayerId(background)));
+    assert_eq!(selected(&h), vec![photocraft_doc::LayerId(background)], "the Background alone, not toggled into the set");
+    // Already in a multi-selection: the ⌘-click still leaves it the only selected layer.
+    h.state_mut().run("layer.select", json!({"layer": top.0})).unwrap();
+    h.state_mut().run("layer.select", json!({"layer": background, "mode": "add"})).unwrap();
+    h.run_steps(2);
+    assert_eq!(selected(&h).len(), 2);
+    click(&mut h, background, Modifiers::COMMAND);
+    assert_eq!(selected(&h), vec![photocraft_doc::LayerId(background)], "replaced, not removed from the set");
     assert_eq!(h.state().session.active().unwrap().active_layer, Some(photocraft_doc::LayerId(background)));
     h.state_mut().run("layer.setProps", json!({"layer": shape, "visible": false})).unwrap();
     click(&mut h, shape, Modifiers::COMMAND);
