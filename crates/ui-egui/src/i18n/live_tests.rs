@@ -429,7 +429,6 @@ fn czech_shortcut_conflicts_keep_warning_state_and_shortcut_codes() {
 #[test]
 fn french_color_wheel_labels_are_translated() {
     let fr = lang("fr");
-    assert_eq!(tr(fr, "H"), "T");
-    assert_eq!(tr(fr, "S"), "S");
-    assert_eq!(tr(fr, "B"), "V");
+    assert_eq!(tr(fr, "Color Wheel"), "Roue chromatique");
+    assert_eq!(tr(fr, "Hue Cube"), "Cube de teinte");
 }

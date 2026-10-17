@@ -3780,7 +3780,11 @@ fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// saturation selected while its brightness remains at zero.
 fn wheel_display_hsv(current: egui::ecolor::Hsva, remembered: (f32, f32)) -> egui::ecolor::Hsva {
     if current.v < 0.001 {
+        // Noir : teinte et saturation indéfinies, on restaure les deux
         egui::ecolor::Hsva::new(remembered.0, remembered.1, current.v, current.a)
+    } else if current.s < 0.001 {
+        // Gris : saturation réelle = 0, mais on garde la teinte mémorisée
+        egui::ecolor::Hsva::new(remembered.0, 0.0, current.v, current.a)
     } else {
         current
     }
@@ -6728,7 +6732,8 @@ mod color_wheel_tests {
 
         let displayed = wheel_display_hsv(current, remembered);
 
-        assert!((displayed.h - 240.0 / 360.0).abs() < 1e-6);
+        // Un gris garde la teinte mémorisée, avec une saturation nulle
+        assert!((displayed.h - 120.0 / 360.0).abs() < 1e-6);
         assert!((displayed.s - 0.0).abs() < 1e-6);
         assert!((displayed.v - 0.5).abs() < 1e-6);
     }
@@ -6766,7 +6771,26 @@ mod color_wheel_tests {
 
         let displayed = wheel_display_hsv(hue_only_edit, remembered);
 
-        // La couleur doit rester achromatique : saturation toujours 0
+        // La teinte mémorisée est conservée, la couleur reste achromatique
+        assert!((displayed.h - 120.0 / 360.0).abs() < 1e-6);
+        assert!((displayed.s - 0.0).abs() < 1e-6);
+        assert!((displayed.v - 0.5).abs() < 1e-6);
+    }
+    #[test]
+    fn wheel_keeps_remembered_hue_for_grey_after_rgb_round_trip() {
+        let remembered = (120.0 / 360.0, 0.8);
+
+        // Un gris choisi avec la teinte mémorisée
+        let grey = egui::ecolor::Hsva::new(120.0 / 360.0, 0.0, 0.5, 1.0);
+
+        // Aller-retour RGB comme dans le vrai chemin de rendu
+        let rgb = hsva_srgb(grey);
+        let current = srgb_hsva(rgb);
+
+        let displayed = wheel_display_hsv(current, remembered);
+
+        // La teinte mémorisée est conservée, la saturation reste 0
+        assert!((displayed.h - 120.0 / 360.0).abs() < 1e-6);
         assert!((displayed.s - 0.0).abs() < 1e-6);
         assert!((displayed.v - 0.5).abs() < 1e-6);
     }
