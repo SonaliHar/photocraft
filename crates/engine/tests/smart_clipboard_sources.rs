@@ -33,7 +33,7 @@ fn hash(bytes: &[u8]) -> (usize, String) {
 fn source_session(doc: Document) -> (Session, LayerId) {
     let mut s = Session::new();
     let id = smart_id(&doc);
-    s.add_document(doc, None);
+    s.add_document(doc, None).unwrap();
     s.select_layer(id).unwrap();
     (s, id)
 }
@@ -70,13 +70,13 @@ fn clipboard_valid_psd_smart_sources_open_reopen_and_undo() {
             assert!(s.redo());
             assert_eq!(s.active().unwrap().doc, after);
             s.execute("layer.smartObjects.editContents", json!({"layer": pasted.0})).unwrap();
-            assert_eq!(photocraft_compose::flatten(&s.active().unwrap().doc).px[0], [1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(photocraft_compose::flatten(&s.active().unwrap().doc).unwrap().px[0], [1.0, 0.0, 0.0, 1.0]);
             s.set_active(1);
             for format in ["pcraft", "psd", "psb"] {
                 let back = roundtrip(&s.active().unwrap().doc, format);
                 let (mut reopened, id) = source_session(back);
                 reopened.execute("layer.smartObjects.editContents", json!({"layer": id.0})).unwrap();
-                assert_eq!(photocraft_compose::flatten(&reopened.active().unwrap().doc).px[0], [1.0, 0.0, 0.0, 1.0], "depth {depth}, {format}");
+                assert_eq!(photocraft_compose::flatten(&reopened.active().unwrap().doc).unwrap().px[0], [1.0, 0.0, 0.0, 1.0], "depth {depth}, {format}");
             }
         }
     }
@@ -120,7 +120,7 @@ fn clipboard_batch_and_same_document_duplicates_keep_sources() {
         for id in ids {
             assert_eq!(hash(&bytes(&s.active().unwrap().doc, id)), hash(&expected));
             s.execute("layer.smartObjects.editContents", json!({"layer": id.0})).unwrap();
-            assert_eq!(photocraft_compose::flatten(&s.active().unwrap().doc).px[0], [1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(photocraft_compose::flatten(&s.active().unwrap().doc).unwrap().px[0], [1.0, 0.0, 0.0, 1.0]);
             s.set_active(1);
         }
     }
@@ -137,7 +137,7 @@ fn clipboard_converts_parent_without_losing_contents_and_disk_reopen() {
             let pasted = LayerId(s.execute("edit.paste", json!({})).unwrap()["layer"].as_u64().unwrap());
             assert_eq!(hash(&bytes(&s.active().unwrap().doc, pasted)), hash(&expected), "{mode}, depth {depth}");
             s.execute("layer.smartObjects.editContents", json!({"layer": pasted.0})).unwrap();
-            assert_eq!(photocraft_compose::flatten(&s.active().unwrap().doc).px[0], [1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(photocraft_compose::flatten(&s.active().unwrap().doc).unwrap().px[0], [1.0, 0.0, 0.0, 1.0]);
             s.set_active(1);
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("pasted.pcraft");
@@ -147,7 +147,7 @@ fn clipboard_converts_parent_without_losing_contents_and_disk_reopen() {
             let reopened_id = smart_id(&reopened.active().unwrap().doc);
             assert_eq!(hash(&bytes(&reopened.active().unwrap().doc, reopened_id)), hash(&expected));
             reopened.execute("layer.smartObjects.editContents", json!({"layer": reopened_id.0})).unwrap();
-            assert_eq!(photocraft_compose::flatten(&reopened.active().unwrap().doc).px[0], [1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(photocraft_compose::flatten(&reopened.active().unwrap().doc).unwrap().px[0], [1.0, 0.0, 0.0, 1.0]);
         }
     }
 }
@@ -169,7 +169,7 @@ fn clipboard_group_keeps_nested_linked_sources() {
     let pasted = smart_id(&s.active().unwrap().doc);
     assert_eq!(hash(&bytes(&s.active().unwrap().doc, pasted)), hash(&expected));
     s.execute("layer.smartObjects.editContents", json!({"layer": pasted.0})).unwrap();
-    assert_eq!(photocraft_compose::flatten(&s.active().unwrap().doc).px[0], [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(photocraft_compose::flatten(&s.active().unwrap().doc).unwrap().px[0], [1.0, 0.0, 0.0, 1.0]);
 }
 
 #[test]

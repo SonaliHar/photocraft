@@ -931,12 +931,15 @@ fn automation_smart_contents_refuses_disk_sources_before_changes() {
         s.authorize = Some(deny_contents_paths);
         let before = s.active().unwrap().doc.clone();
         let revision = s.active().unwrap().revision;
-        let history = s.active().unwrap().history.entries().len();
+        let history = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
         let error = s.execute(cmd, json!({"layer": id})).unwrap_err().to_string();
         // The error Debug-quotes the path (doubled backslashes on Windows), so match its file name.
         assert!(error.contains("source path refused") && error.contains(path.file_name().unwrap().to_str().unwrap()), "{error}");
-        assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
-        assert_eq!((s.documents().len(), s.active().unwrap().revision, s.active().unwrap().history.entries().len()), (1, revision, history));
+        assert!(before.shares_state(&s.active().unwrap().doc));
+        assert_eq!(
+            (s.documents().len(), s.active().unwrap().revision, s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len()),
+            (1, revision, history)
+        );
 
         // Human commands retain their linked-file behavior. Returning to an already-open child
         // reads no source, and saving it updates only its parent layer, never a linked sibling.
@@ -992,13 +995,13 @@ fn automation_smart_contents_checks_nested_reads_at_nontrivial_placements() {
             )),
         ));
         let mut s = Session::new();
-        s.add_document(parent, None);
+        s.add_document(parent, None).unwrap();
         s.authorize = Some(deny_contents_paths);
         let before = s.active().unwrap().doc.clone();
         let r = s.execute("layer.smartObjects.convertToLayers", json!({}));
         if !allowed {
             assert!(r.unwrap_err().to_string().contains("source path refused"));
-            assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+            assert!(before.shares_state(&s.active().unwrap().doc));
             assert_eq!(s.active().unwrap().revision, 1);
         } else {
             r.unwrap();
@@ -1034,7 +1037,7 @@ fn automation_smart_contents_malformed_embedded_sources_leave_documents_unchange
         let before = s.active().unwrap().doc.clone();
         let revision = s.active().unwrap().revision;
         assert!(s.execute(cmd, json!({})).is_err());
-        assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+        assert!(before.shares_state(&s.active().unwrap().doc));
         assert_eq!((s.documents().len(), s.active().unwrap().revision), (1, revision));
     }
 }
@@ -1064,7 +1067,7 @@ fn inspect_reports_the_smart_source() {
     assert_eq!(front, json!({"kind": "linked", "path": "uuid-1"}));
     // The document's info knows the file is embedded in the PSD (a `liFD` item) and says so,
     // with its file name; the uuid stays its key.
-    let info = crate::inspect::document(s.active().unwrap());
+    let info = crate::inspect::document(s.active().unwrap()).unwrap();
     assert_eq!(info["layers"][0]["smartSource"], json!({"kind": "embedded", "fileName": "in.png", "uuid": "uuid-1"}));
     // A duplicate shares the file; New Smart Object via Copy gets its own.
     s.execute("layer.duplicate", json!({})).unwrap();
@@ -1107,4 +1110,192 @@ fn displace_smart_filter_reads_its_map_path_on_re_render() {
         assert!(max_diff(&before, &flat(&s)) > 0.1, "shown again at {depth}-bit");
     }
     std::fs::remove_dir_all(&dir).ok();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn displace_replay_rechecks_requester_and_invalidates_external_stages() {
+    fn allow(_: &str, _: &Value) -> Result<()> {
+        Ok(())
+    }
+    fn deny_map(id: &str, params: &Value) -> Result<()> {
+        if id == "filter.distort.displace" && params.get("mapPath").is_some() {
+            Err(EngineError::BadParams { cmd: id.into(), msg: "requester denied displacement map".into() })
+        } else {
+            Ok(())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("changing.png");
+    let write_map = |value| {
+        let document = Document::with_background(
+            "map",
+            Size::new(W as u32, H as u32),
+            photocraft_color::ColorMode::Rgb,
+            photocraft_color::SampleType::U8,
+            photocraft_color::Color::rgba(value, value, value, 1.0),
+        );
+        std::fs::write(&path, photocraft_io::export(&document, "png", &Default::default()).unwrap().bytes).unwrap();
+    };
+    write_map(1.0);
+    let mut s = session(8);
+    paint(&mut s);
+    convert(&mut s);
+    let unfiltered = flat(&s);
+    s.authorize = Some(allow);
+    s.execute("filter.distort.displace", json!({"horizontal":8,"vertical":8,"mapPath":path.to_str().unwrap()})).unwrap();
+    let white = flat(&s);
+    assert!(max_diff(&unfiltered, &white) > 0.1);
+    let before = s.active().unwrap().doc.clone();
+    let revision = s.active().unwrap().revision;
+    let history = s.active().unwrap().history.past_len();
+    // Both inline and worker replay reject a restricted requester, including warmed stages.
+    s.authorize = Some(deny_map);
+    let error = s.execute("layer.smartFilter.blendingOptions", json!({"index":0,"opacity":0.5})).unwrap_err();
+    assert!(matches!(error,EngineError::BadParams { ref cmd, ref msg } if cmd=="filter.distort.displace" && msg=="requester denied displacement map"));
+    assert!(s.active().unwrap().doc.shares_state(&before));
+    assert_eq!(s.active().unwrap().revision, revision);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    let crate::jobs::Started::Job(job) = s.start("layer.smartFilter.blendingOptions", json!({"index":0,"opacity":0.5})).unwrap() else {
+        panic!("native worker")
+    };
+    assert!(s.wait_job(job).unwrap_err().to_string().contains("requester denied displacement map"));
+    assert!(s.active().unwrap().doc.shares_state(&before));
+    assert_eq!(s.active().unwrap().revision, revision);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    // Original inline cancellation is still authoritative before a replay can publish.
+    s.authorize = Some(allow);
+    let cancelled = crate::jobs::JobCtx::new();
+    cancelled.cancel();
+    s.set_inline_job_ctx(Some(cancelled));
+    assert!(matches!(s.execute("layer.smartFilter.blendingOptions", json!({"index":0,"opacity":0.5})), Err(EngineError::Cancelled)));
+    s.set_inline_job_ctx(None);
+    assert!(s.active().unwrap().doc.shares_state(&before));
+    assert_eq!(s.active().unwrap().revision, revision);
+    assert_eq!(s.active().unwrap().history.past_len(), history);
+    // The path is unchanged but its bytes changed: no cached external stage may survive.
+    s.authorize = Some(allow);
+    write_map(0.0);
+    s.execute("layer.smartFilter.setVisible", json!({"index":0,"visible":false})).unwrap();
+    assert_eq!(flat(&s), unfiltered);
+    let hidden = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("layer.smartFilter.setVisible", json!({"index":0,"visible":true})).unwrap();
+    let black = flat(&s);
+    assert!(max_diff(&black, &white) > 0.1, "file dependency must be reread");
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+    let shown = s.active().unwrap().doc.clone();
+    s.execute("edit.undo", Value::Null).unwrap();
+    assert_eq!(s.active().unwrap().doc, hidden);
+    s.execute("edit.redo", Value::Null).unwrap();
+    assert_eq!(s.active().unwrap().doc, shown);
+    // Existing upstream missing-map fallback is identity rather than stale filtered cache.
+    std::fs::remove_file(&path).unwrap();
+    s.execute("layer.smartFilter.setVisible", json!({"index":0,"visible":false})).unwrap();
+    s.execute("layer.smartFilter.setVisible", json!({"index":0,"visible":true})).unwrap();
+    assert_eq!(flat(&s), unfiltered);
+    std::fs::write(&path, b"not an image").unwrap();
+    s.execute("layer.smartFilter.setVisible", json!({"index":0,"visible":false})).unwrap();
+    s.execute("layer.smartFilter.setVisible", json!({"index":0,"visible":true})).unwrap();
+    assert_eq!(flat(&s), unfiltered, "unreadable-map fallback remains identity");
+    assert_eq!(s.active().unwrap().doc.icc_profile, before.icc_profile);
+    assert_eq!(s.active().unwrap().doc.sample_encoding, before.sample_encoding);
+}
+
+#[test]
+fn replay_authorization_scope_restores_after_nested_scope_and_unwind() {
+    fn deny(id: &str, _: &Value) -> Result<()> {
+        Err(EngineError::BadParams { cmd: id.into(), msg: "scope marker".into() })
+    }
+    let result = std::panic::catch_unwind(|| {
+        let _outer = crate::jobs::render_authorization_scope(Some(deny)).unwrap();
+        let _nested = crate::jobs::render_authorization_scope(None).unwrap();
+        assert!(crate::jobs::authorize_render_command("filter.distort.displace", &Value::Null).is_err());
+        panic!("test unwind restoration");
+    });
+    assert!(result.is_err());
+    assert!(crate::jobs::authorize_render_command("filter.distort.displace", &Value::Null).is_ok());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn replay_apply_keeps_original_and_current_requester_policies() {
+    fn allow(_: &str, _: &Value) -> Result<()> {
+        Ok(())
+    }
+    fn deny(id: &str, p: &Value) -> Result<()> {
+        if id == "filter.distort.displace" && p.get("mapPath").is_some() {
+            Err(EngineError::BadParams { cmd: id.into(), msg: "apply requester denied map".into() })
+        } else {
+            Ok(())
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("apply-map.png");
+    let map = Document::with_background(
+        "map",
+        Size::new(W as u32, H as u32),
+        photocraft_color::ColorMode::Rgb,
+        photocraft_color::SampleType::U8,
+        photocraft_color::Color::WHITE,
+    );
+    std::fs::write(&path, photocraft_io::export(&map, "png", &Default::default()).unwrap().bytes).unwrap();
+    for original_denies in [true, false] {
+        for direct_query in [false, true] {
+            let mut s = session(8);
+            paint(&mut s);
+            convert(&mut s);
+            s.execute("filter.distort.displace", json!({"horizontal":8,"vertical":8,"mapPath":path.to_str().unwrap()})).unwrap();
+            let before = s.active().unwrap().doc.clone();
+            let revision = s.active().unwrap().revision;
+            let steps = s.active().unwrap().history.past_len();
+            let id = s.active().unwrap().active_layer.unwrap();
+            s.authorize = Some(if original_denies { deny } else { allow });
+            let crate::jobs::Started::Job(job) = s
+                .start_job(
+                    "test.smart.replayApply",
+                    Value::Null,
+                    "Apply replay",
+                    true,
+                    |_| Ok(()),
+                    move |session, ()| {
+                        if direct_query {
+                            // A public Doc-only renderer inside apply must still inherit BOTH requesters,
+                            // even when the callback never enters Session::edit or a Session query wrapper.
+                            let doc = &session.active().unwrap().doc;
+                            let rendered = render(doc, smart(doc, id)?)?;
+                            assert!(rendered.is_some());
+                        } else {
+                            session.edit("Apply replay", |doc, _| {
+                                doc.name = "must not publish".into();
+                                let snapshot = doc.clone();
+                                let layer = doc.layer_mut(id).unwrap();
+                                refresh_layer(&snapshot, layer)?;
+                                Ok(())
+                            })?;
+                        }
+                        Ok(Value::Null)
+                    },
+                )
+                .unwrap()
+            else {
+                panic!("native work/apply route")
+            };
+            // The FIRST replay is in apply, after policy changed. Neither requester may weaken the other.
+            s.authorize = Some(if original_denies { allow } else { deny });
+            assert!(
+                s.wait_job(job).unwrap_err().to_string().contains("apply requester denied map"),
+                "original_denies={original_denies}, direct_query={direct_query}"
+            );
+            assert!(s.active().unwrap().doc.shares_state(&before));
+            assert_eq!(s.active().unwrap().revision, revision);
+            assert_eq!(s.active().unwrap().history.past_len(), steps);
+            s.authorize = Some(deny);
+            assert!(matches!(s.render_below_smart_filter(id,1),Err(EngineError::BadParams{ref cmd,..}) if cmd=="filter.distort.displace"));
+            assert!(s.active().unwrap().doc.shares_state(&before));
+            s.authorize = Some(allow);
+            assert!(s.render_below_smart_filter(id, 1).unwrap().is_some());
+            assert!(s.active().unwrap().doc.shares_state(&before));
+        }
+    }
 }

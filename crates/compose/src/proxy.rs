@@ -166,6 +166,8 @@ fn shrink_layer(l: &mut Layer, k: u32) {
         LayerContent::Text(t) => t.cache = t.cache.as_ref().map(|s| downsample(s, k)),
         LayerContent::Shape(sh) => sh.cache = sh.cache.as_ref().map(|s| downsample(s, k)),
         LayerContent::Smart(so) => shrink_smart(so, k),
+        // Both public entry points validate and refuse backed storage first.
+        LayerContent::BackedRaster(_) => {}
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => {}
     }
 }
@@ -177,8 +179,12 @@ fn shrink_layer(l: &mut Layer, k: u32) {
 fn shrink_smart(so: &mut SmartObject, k: u32) {
     so.cache = so.cache.as_ref().map(|s| downsample(s, k));
     if let Some(m) = &mut so.filter_mask {
-        m.surface = downsample(&m.surface, k);
+        m.surface = std::sync::Arc::new(downsample(&m.surface, k));
     }
+    shrink_smart_placement(so, k);
+}
+
+fn shrink_smart_placement(so: &mut SmartObject, k: u32) {
     let s = 1.0 / f64::from(k);
     so.transform = Affine::scale(s).mul(&so.transform);
     // Row-major source → document map: scaling the document side scales its first two rows.
@@ -234,6 +240,11 @@ pub(crate) fn validate_surfaces_with_interrupt(doc: &Document, control: &photocr
         }
         if let Some(cache) = &l.fill_cache {
             cache.surface.try_validate_tile_origins_with(control)?;
+        }
+        if let LayerContent::Smart(smart) = &l.content
+            && let Some(mask) = &smart.filter_mask
+        {
+            mask.surface.try_validate_tile_origins_with(control)?;
         }
         if let Some(children) = l.children() {
             for child in children {
@@ -418,6 +429,13 @@ fn charge_layer(
     if let Some(cache) = &layer.fill_cache {
         charge_surface(&cache.surface, k, total, staging, control)?;
     }
+    if let LayerContent::Smart(smart) = &layer.content
+        && let Some(mask) = &smart.filter_mask
+    {
+        // The immutable source and the generated smart-filter mask have distinct Arc headers.
+        add_charge(total, ((std::mem::size_of::<Surface>() + 128) * 2) as u64)?;
+        charge_surface(&mask.surface, k, total, staging, control)?;
+    }
     if let LayerContent::Group(group) = &layer.content {
         add_charge(total, (group.children.capacity() as u64).checked_mul(std::mem::size_of::<Layer>() as u64).ok_or(E::LimitExceeded)?)?;
         for child in &group.children {
@@ -461,6 +479,10 @@ fn shrink_layer_with_interrupt(layer: &mut Layer, k: u32, control: &photocraft_r
             if let Some(cache) = &smart.cache {
                 smart.cache = Some(try_downsample_with_interrupt(cache, k, control)?);
             }
+            if let Some(mask) = &mut smart.filter_mask {
+                mask.surface = std::sync::Arc::new(try_downsample_with_interrupt(&mask.surface, k, control)?);
+            }
+            shrink_smart_placement(smart, k);
         }
         LayerContent::BackedRaster(_) => return Err(photocraft_raster::RasterInputError::UnsupportedConversion),
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => {}
@@ -590,11 +612,17 @@ mod tests {
         let source = SmartSource::Embedded { file_name: "s.png".into(), bytes: std::sync::Arc::new(Vec::new()) };
         let mut sm = SmartObject::new(source, Affine::translate(16.0, 16.0).mul(&Affine::scale(2.0)), Some(cache));
         let mut mask = LayerMask::hide_all();
-        mask.surface.fill_rect(Rect::new(16, 16, 32, 32), &[1.0]);
+        std::sync::Arc::make_mut(&mut mask.surface).fill_rect(Rect::new(16, 16, 32, 32), &[1.0]);
         sm.filter_mask = Some(mask);
         sm.perspective = Some([2.0, 0.0, 16.0, 0.0, 2.0, 16.0, 0.0, 0.0, 1.0]);
         doc.layers.push(Layer::new("smart", LayerContent::Smart(sm)));
-        let p = proxy_document(&doc, 4);
+        let before = doc.clone();
+        let p = proxy_document(&doc, 4).unwrap();
+        // The checked path must retain the same placement, perspective, mask/default
+        // words and cache pixels as the upstream ordinary proxy, without mutating source.
+        let checked = try_proxy_document_with_interrupt(&doc, 4, &photocraft_raster::Interrupt::NONE).unwrap();
+        assert_eq!(checked, p);
+        assert_eq!(doc, before);
         let LayerContent::Smart(sm) = &p.layers[0].content else { panic!("a smart object") };
         assert_eq!(sm.transform, Affine { m: [0.5, 0.0, 0.0, 0.5, 4.0, 4.0] });
         assert_eq!(sm.perspective, Some([0.5, 0.0, 4.0, 0.0, 0.5, 4.0, 0.0, 0.0, 1.0]));
@@ -734,7 +762,7 @@ mod tests {
             mask.opacity = 0.25;
             doc.quick_mask = Some(mask);
             for k in [1, 2, 4] {
-                let proxy = proxy_document(&doc, k);
+                let proxy = proxy_document(&doc, k).unwrap();
                 let mask = proxy.quick_mask.as_ref().unwrap();
                 assert_eq!(mask.surface.pixel((8 / k - 1) as i32, 0), vec![1.0]);
                 assert_eq!(mask.surface.pixel((8 / k) as i32, 0), vec![0.0], "depth {depth:?}, factor {k}");
@@ -780,14 +808,14 @@ mod tests {
                             let coverage = if inverted { 1.0 - density } else { 1.0 };
                             let coverage = if feather > 0.0 { u16_coverage(coverage) } else { coverage };
                             let expected = [coverage, 0.0, 1.0 - coverage, 1.0];
-                            let full = crate::render(&doc, doc.bounds());
+                            let full = crate::render(&doc, doc.bounds()).unwrap();
                             for pixel in &full.px {
                                 assert!(pixel.iter().zip(expected).all(|(a, b)| (a - b).abs() < 1e-6), "{depth:?} {inverted} {density} {feather}: {pixel:?}");
                             }
-                            let proxy = proxy_document(&doc, 4);
+                            let proxy = proxy_document(&doc, 4).unwrap();
                             assert_eq!(proxy.layers[1].vector_mask, doc.layers[1].vector_mask);
-                            let reference = proxy_document(&opacity_reference(&doc, coverage), 4);
-                            assert_same_pixels(&crate::render(&proxy, proxy.bounds()), &crate::render(&reference, reference.bounds()));
+                            let reference = proxy_document(&opacity_reference(&doc, coverage), 4).unwrap();
+                            assert_same_pixels(&crate::render(&proxy, proxy.bounds()).unwrap(), &crate::render(&reference, reference.bounds()).unwrap());
                         }
                     }
                 }
@@ -800,7 +828,7 @@ mod tests {
         let mut doc = two_colors(Size::new(32, 16), SampleType::F32);
         let mut surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false), &[0.25]);
         surface.fill_rect(Rect::new(0, 0, 16, 16), &[0.75]);
-        doc.layers[1].mask = Some(LayerMask { surface, density: 0.5, feather: 2.0, ..LayerMask::reveal_all() });
+        doc.layers[1].mask = Some(LayerMask { surface: surface.into(), density: 0.5, feather: 2.0, ..LayerMask::reveal_all() });
         let mut mask = VectorMask::new(Path { inverted: true, ..Path::default() });
         mask.density = 0.75;
         mask.feather = 8.0;
@@ -808,10 +836,14 @@ mod tests {
         assert!(proxy_faithful(&doc));
         let reference = opacity_reference(&doc, 0.25);
         for k in [1, 2, 4] {
-            let (actual, expected) = (proxy_document(&doc, k), proxy_document(&reference, k));
+            let (actual, expected) = (proxy_document(&doc, k).unwrap(), proxy_document(&reference, k).unwrap());
             // Q(0.25 * pixel) versus 0.25 * Q(pixel): U16 rounding differs by at most
             // 0.625 / 65535. Allow one U16 level plus a small float arithmetic allowance.
-            assert_same_pixels_within(&crate::render(&actual, actual.bounds()), &crate::render(&expected, expected.bounds()), 1.0 / 65535.0 + 1e-6);
+            assert_same_pixels_within(
+                &crate::render(&actual, actual.bounds()).unwrap(),
+                &crate::render(&expected, expected.bounds()).unwrap(),
+                1.0 / 65535.0 + 1e-6,
+            );
         }
     }
 
@@ -820,7 +852,7 @@ mod tests {
         let mut doc = two_colors(Size::new(32, 16), SampleType::F32);
         doc.layers[1].content = LayerContent::Fill(Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 0.0, 1.0, GradientStyle::Linear, false));
         let mut pixel = LayerMask::hide_all();
-        pixel.surface.fill_rect(Rect::new(8, 4, 24, 12), &[1.0]);
+        std::sync::Arc::make_mut(&mut pixel.surface).fill_rect(Rect::new(8, 4, 24, 12), &[1.0]);
         doc.layers[1].mask = Some(pixel);
         for inverted in [false, true] {
             let mut mask = VectorMask::new(Path { inverted, ..Path::default() });
@@ -829,10 +861,10 @@ mod tests {
             doc.layers[1].vector_mask = Some(mask);
             assert!(proxy_faithful(&doc));
             assert_eq!(crate::fill_frame(&doc.layers[1], doc.bounds()), Rect::new(8, 4, 24, 12));
-            let actual = proxy_document(&doc, 4);
+            let actual = proxy_document(&doc, 4).unwrap();
             assert_eq!(crate::fill_frame(&actual.layers[1], actual.bounds()), Rect::new(2, 1, 6, 3));
-            let reference = proxy_document(&opacity_reference(&doc, u16_coverage(if inverted { 0.5 } else { 1.0 })), 4);
-            assert_same_pixels(&crate::render(&actual, actual.bounds()), &crate::render(&reference, reference.bounds()));
+            let reference = proxy_document(&opacity_reference(&doc, u16_coverage(if inverted { 0.5 } else { 1.0 })), 4).unwrap();
+            assert_same_pixels(&crate::render(&actual, actual.bounds()).unwrap(), &crate::render(&reference, reference.bounds()).unwrap());
         }
     }
 
@@ -849,9 +881,9 @@ mod tests {
         assert!(!proxy_faithful(&doc));
         assert_eq!(crate::fill_frame(&doc.layers[0], doc.bounds()), Rect::new(16, 8, 48, 24));
         // Density zero reveals all pixels, but the unscaled path would still move the fill.
-        let forced_proxy = proxy_document(&doc, 4);
-        let exact = crate::render_reduced(&doc, 16, 8);
-        let wrong = crate::render(&forced_proxy, forced_proxy.bounds());
+        let forced_proxy = proxy_document(&doc, 4).unwrap();
+        let exact = crate::render_reduced(&doc, 16, 8).unwrap();
+        let wrong = crate::render(&forced_proxy, forced_proxy.bounds()).unwrap();
         assert!(exact.px.iter().zip(&wrong.px).any(|(a, b)| (a[0] - b[0]).abs() > 0.1));
     }
 
@@ -865,7 +897,7 @@ mod tests {
         doc.layers[1].vector_mask = Some(mask);
         assert!(doc.size.area() > crate::PROXY_THUMBNAIL_PIXELS);
         assert!(proxy_faithful(&doc));
-        let actual = crate::thumbnail_buffer(&doc, 4);
+        let actual = crate::thumbnail_buffer(&doc, 4).unwrap();
         assert_eq!(actual.rect, Rect::new(0, 0, 4, 4));
         let coverage = u16_coverage(0.25);
         assert_eq!(actual.px, vec![[coverage, 0.0, 1.0 - coverage, 1.0]; 16]);

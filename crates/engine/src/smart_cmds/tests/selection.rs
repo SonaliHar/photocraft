@@ -9,7 +9,7 @@ fn pixel(doc: &Document, name: &str, bounds: Rect, rgba: [f32; 4]) -> Layer {
 
 fn selected_session(doc: Document, ids: &[LayerId]) -> Session {
     let mut s = Session::new();
-    s.add_document(doc, None);
+    s.add_document(doc, None).unwrap();
     crate::layer_multi_cmds::set_selection(&mut s, ids.to_vec(), ids.last().copied(), None).unwrap();
     s
 }
@@ -35,7 +35,7 @@ fn selected_pixels_become_one_editable_smart_object_in_every_mode_and_depth() {
             let a = pixel(&doc, "Bottom", Rect::new(-3, 4, 24, 26), [0.8, 0.2, 0.1, 1.0]);
             let mut b = pixel(&doc, "Top", Rect::new(10, 12, 36, 32), [0.1, 0.4, 0.8, 0.7]);
             b.mask = Some(LayerMask::reveal_all());
-            b.mask.as_mut().unwrap().surface.fill_rect(Rect::new(14, 16, 20, 22), &[0.5]);
+            std::sync::Arc::make_mut(&mut b.mask.as_mut().unwrap().surface).fill_rect(Rect::new(14, 16, 20, 22), &[0.5]);
             b.locks.all = true;
             b.effects.enabled = true;
             b.effects.items.push(photocraft_doc::Effect::ColorOverlay {
@@ -58,7 +58,7 @@ fn selected_pixels_become_one_editable_smart_object_in_every_mode_and_depth() {
             convert(&mut grouped);
             let id = LayerId(convert(&mut s));
             assert_eq!(s.active().unwrap().doc.layers.len(), 1, "{mode:?} {depth:?}");
-            assert_eq!(s.active().unwrap().selected_layers(), vec![id]);
+            assert_eq!(s.active().unwrap().selected_layers().unwrap(), vec![id]);
             assert_eq!(s.active().unwrap().doc.selection, original.selection);
             // The existing cache conversion quantizes channels and round-trips CMYK through
             // RGB. Combining a selection must introduce no loss beyond grouping then converting.
@@ -76,15 +76,15 @@ fn selected_pixels_become_one_editable_smart_object_in_every_mode_and_depth() {
             let sm = active_smart(&s);
             for source in &original.layers {
                 let mut shifted = source.clone();
-                shift_layer(&mut shifted, -(sm.transform.m[4] as i32), -(sm.transform.m[5] as i32));
+                shift_layer(&mut shifted, -(sm.transform.m[4] as i32), -(sm.transform.m[5] as i32)).unwrap();
                 assert_eq!(inner.layer(source.id).unwrap(), &shifted, "editable source preserved");
             }
             assert!(s.undo());
             assert_eq!(*s.active().unwrap().doc, original);
-            assert_eq!(s.active().unwrap().selected_layers(), ids);
+            assert_eq!(s.active().unwrap().selected_layers().unwrap(), ids);
             assert!(!s.undo(), "conversion is one undo step");
             assert!(s.redo());
-            assert_eq!(s.active().unwrap().selected_layers(), vec![id]);
+            assert_eq!(s.active().unwrap().selected_layers().unwrap(), vec![id]);
             assert_eq!(contents(&s), inner);
         }
     }
@@ -216,7 +216,7 @@ fn an_all_hidden_selection_is_rejected_without_changing_document_selection_or_hi
     let err = s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap_err();
     assert!(err.to_string().contains("empty"), "{err}");
     assert_eq!(*s.active().unwrap().doc, original);
-    assert_eq!(s.active().unwrap().selected_layers(), ids);
+    assert_eq!(s.active().unwrap().selected_layers().unwrap(), ids);
     assert_eq!(s.active().unwrap().active_layer, Some(ids[1]));
     assert_eq!(s.active().unwrap().history.past_len(), 0);
     assert!(!s.undo());

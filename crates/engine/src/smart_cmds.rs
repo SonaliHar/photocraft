@@ -341,141 +341,36 @@ fn blend_surfaces(base: &Surface, top: &Surface, mode: BlendMode, opacity: f32) 
     out
 }
 
-/// Runs the smart filter stack on the placed (unfiltered) content. A filter the session's
-/// authority denies surfaces its error (the trusted compositor path has no gate installed, so
-/// this reads ambiently only when the caller established one and it refuses).
+/// Runs the smart filter stack on placed content. Requester denials remain
+/// typed errors, including for callers that do not enter a command transaction.
 pub fn apply_smart_filters(placed: &Surface, sm: &SmartObject, canvas: Rect) -> Result<Surface> {
+    try_apply_smart_filters_with_transfer(placed, sm, canvas, None)
+}
+
+fn try_apply_smart_filters_with_transfer(
+    placed: &Surface,
+    sm: &SmartObject,
+    canvas: Rect,
+    transfer: Option<photocraft_compose::adjust::Transfer>,
+) -> Result<Surface> {
     if !sm.filters_enabled || !sm.smart_filters.iter().any(|f| f.visible) {
         return Ok(placed.clone());
     }
     let mut cur = placed.clone();
-    // Edge pixels repeat at the canvas ∪ placed-content edge, as for layer filters.
     let extent = canvas.union(&placed.content_bounds());
-    for f in sm.smart_filters.iter().filter(|f| f.visible) {
-        cur = apply_smart_filter(f, &cur, canvas, extent)?;
+    for filter in sm.smart_filters.iter().filter(|f| f.visible) {
+        cur = apply_smart_filter(filter, &cur, canvas, extent, transfer, &photocraft_raster::Interrupt::NONE)?;
     }
     Ok(match sm.filter_mask.as_ref().filter(|m| m.enabled) {
-        Some(m) => photocraft_compose::filter_mask::mix(placed, &cur, m),
+        Some(mask) => photocraft_compose::filter_mask::mix(placed, &cur, mask),
         None => cur,
     })
 }
 
-/// One visible smart filter over `cur`, blended with its blend mode and opacity. `Err` when the
-/// requesting session's authority denies the filter's params: callers surface the error instead of
-/// rendering (and caching) unfiltered pixels.
-fn apply_smart_filter(f: &SmartFilter, cur: &Surface, canvas: Rect, extent: Rect) -> Result<Surface> {
-    let out = match crate::filters::apply_filter_to_surface(&f.command, &f.params, cur, canvas, None, extent)? {
-        // Unknown ids (e.g. Photoshop filters we don't implement) leave the pixels alone.
-        Some(out) => out,
-        None => cur.clone(),
-    };
-    if f.blend == BlendMode::Normal && f.opacity >= 1.0 { Ok(out) } else { Ok(blend_surfaces(cur, &out, f.blend, f.opacity.clamp(0.0, 1.0))) }
-}
-
-    let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok(None) };
-    // A vector source is rendered at the placement's scale, and the placement is divided by
-    // that scale so the rendered pixels land where the source units would.
-    if sm.stack_mode.is_none() && sm.warp.is_none() && photocraft_io::svg::is_svg(&bytes) {
-        let k = vector_scale(sm);
-        let img = svg_source_image(&bytes, doc.pixel_format(), k)?;
-        let placed = match &sm.perspective {
-            Some(p) => {
-                let [h0, h1, h2, h3, h4, h5, h6, h7, h8] = *p;
-                let h = Homography([h0 / k, h1 / k, h2, h3 / k, h4 / k, h5, h6 / k, h7 / k, h8]);
-                photocraft_algo::warp::try_place_source_projective(&img.surface, img.bounds, &h, None)
-            }
-            None => {
-                let [a, b, c, d, e, f] = sm.transform.m;
-                let t = Affine { m: [a / k, b / k, c / k, d / k, e, f] };
-                photocraft_algo::warp::try_place_source(&img.surface, img.bounds, &t, None)
-            }
-        }
-        .map_err(|e| other(format!("smart-object placement: {e}")))?;
-        return Ok(Some(apply_smart_filters(&placed, sm, doc.bounds())));
-    }
-    let img = match sm.stack_mode {
-        Some(_) if doc.sample_encoding.is_some() => {
-            return Err(other("stack modes on imported document encodings are not verified; convert the document first"));
-        }
-        Some(mode) => stack_image(&name, &bytes, doc.pixel_format(), mode)?,
-        None => source_image_for_document(&name, &bytes, doc)?,
-    };
-    // Through the warp (source space) and the transform in one pass; whole-pixel moves are exact.
-    let placed = match &sm.perspective {
-        Some(p) => photocraft_algo::warp::try_place_source_projective(&img.surface, img.bounds, &Homography(*p), sm.warp.as_ref()),
-        None => photocraft_algo::warp::try_place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref()),
-    }
-    .ok()?;
-    let r = img.bounds;
-    Some([f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1)])
-}
-
-/// Renders a smart object from its source. `Ok(None)` when the source is unavailable (a missing
-/// linked file, or a PSD placed layer without embedded data): callers keep the existing cache.
+/// Render through the upstream cached stage path. Its placement retains the
+/// destination's declared sample interpretation and every active requester gate.
 pub fn render(doc: &Document, sm: &SmartObject) -> Result<Option<Surface>> {
     render_in(doc, sm, &JobCtx::new())
-}
-
-/// [`render`], reporting progress per smart filter to `ctx` and stopping between filters once it
-/// is cancelled. Gives the same pixels as [`apply_smart_filters`] on the placed source, but
-/// starts from the deepest stage of the stack already rendered (see [`stack_cache`]).
-fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Result<Option<Surface>> {
-    // Stored filters can come from a file or another layer. Check before looking up cached
-    // stages too: a trusted UI render may have populated this process-wide cache earlier.
-    for filter in sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible) {
-        crate::jobs::authorize_render_command(&filter.command, &filter.params)?;
-    }
-    let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok(None) };
-    let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
-    let placed_key = stack_cache::placed_key(&bytes, fmt, sm, canvas);
-    let placed = || -> Result<Stage> {
-        if let Some(stage) = stack_cache::get(&placed_key) {
-            return Ok(stage);
-        }
-        let surface = place(&name, &bytes, fmt, sm)?;
-        // Edge pixels repeat at the canvas ∪ placed-content edge, as for layer filters.
-        let stage = Stage { extent: canvas.union(&surface.content_bounds()), surface };
-        stack_cache::put(placed_key, &stage);
-        Ok(stage)
-    };
-    let filters: Vec<&SmartFilter> = sm.smart_filters.iter().filter(|f| sm.filters_enabled && f.visible).collect();
-    if filters.is_empty() {
-        return Ok(Some(placed()?.surface));
-    }
-    let keys: Vec<StageKey> = filters
-        .iter()
-        .scan(placed_key, |key, f| {
-            *key = stack_cache::filter_key(key, f);
-            Some(*key)
-        })
-        .collect();
-    let deepest = keys.iter().enumerate().rev().find_map(|(i, key)| stack_cache::get(key).map(|stage| (i + 1, stage)));
-    let (done, mut cur) = match deepest {
-        Some(hit) => hit,
-        None => (0, placed()?),
-    };
-    let n = filters.len() as f32;
-    for (i, (f, key)) in filters.iter().zip(&keys).enumerate().skip(done) {
-        ctx.check()?;
-        ctx.progress(i as f32 / n, "");
-        cur = Stage { surface: apply_smart_filter(f, &cur.surface, canvas, cur.extent)?, extent: cur.extent };
-        stack_cache::put(*key, &cur);
-    }
-    ctx.progress(1.0, "");
-    Ok(Some(match sm.filter_mask.as_ref().filter(|m| m.enabled) {
-        Some(m) => photocraft_compose::filter_mask::mix(&placed()?.surface, &cur.surface, m),
-        None => cur.surface,
-    }))
-}
-
-/// Bytes held by rendered smart filter stages.
-pub fn stack_cache_bytes() -> usize {
-    stack_cache::bytes()
-}
-
-/// Drop every rendered smart filter stage (Edit › Purge › All). Returns the bytes released.
-pub fn purge_stack_cache() -> usize {
-    stack_cache::purge()
 }
 
 /// The smart object's pixels below smart filter `index` (the input that filter edits): the placed
@@ -486,6 +381,20 @@ pub fn render_below_filter(doc: &Document, sm: &SmartObject, index: usize) -> Re
     below.smart_filters.truncate(index);
     below.filter_mask = None;
     render(doc, &below)
+}
+
+impl Session {
+    /// Pixels below a stored filter, under this requesting session's path policy.
+    /// UI preview code with a Session must not use the trusted Doc-only renderer.
+    pub fn render_below_smart_filter(&self, layer: LayerId, index: usize) -> Result<Option<Surface>> {
+        let _authorization = crate::jobs::render_authorization_scope(self.authorize)?;
+        let state = self.active().ok_or(EngineError::NoDocument)?;
+        let object = smart(&state.doc, layer)?;
+        if index > object.smart_filters.len() {
+            return Err(other("smart filter index is out of bounds"));
+        }
+        render_below_filter(&state.doc, object, index)
+    }
 }
 
 /// Re-renders smart layer `l` (which lives in `doc`) in place. Returns false if its source is
@@ -571,7 +480,7 @@ pub(crate) fn add_smart_filter(doc: &mut Document, id: LayerId, sf: photocraft_d
     }
     let bounds = selection.map(Surface::content_bounds).filter(|b| !b.is_empty()).unwrap_or(canvas);
     let cache = sm.cache.as_ref().ok_or_else(|| other("smart object has no pixels"))?;
-    let out = crate::filters::apply_filter_to_surface(&sf.command, &sf.params, cache, bounds, selection, canvas)?
+    let out = crate::filters::try_apply_filter_to_surface_with_transfer(&sf.command, &sf.params, cache, bounds, selection, canvas, Some(transfer))?
         .ok_or_else(|| other(format!("unknown filter {}", sf.command)))?;
     sm.cache = Some(out);
     sm.smart_filters.push(sf);
@@ -1458,7 +1367,7 @@ mod imported_adjustment_filter_tests {
             let rendered = render(&doc, &smart).unwrap().unwrap();
             assert!((rendered.pixel(0, 0)[0] - expected).abs() < 2.0 / 65535.0, "{depth:?}/{encoding:?}");
             if encoding.is_none() {
-                assert_eq!(rendered, apply_smart_filters(&samples, &smart, doc.bounds()), "ordinary default changed");
+                assert_eq!(rendered, apply_smart_filters(&samples, &smart, doc.bounds()).unwrap(), "ordinary default changed");
             }
             // Unavailable linked contents still use the same interpretation when filtering cache.
             let mut missing = SmartObject::new(SmartSource::Linked { path: String::new() }, Affine::IDENTITY, Some(samples.clone()));
@@ -1653,13 +1562,31 @@ mod current_profile_preservation_tests {
     }
 }
 
-fn apply_smart_filter(f: &SmartFilter, cur: &Surface, canvas: Rect, extent: Rect) -> Surface {
+fn apply_smart_filter(
+    f: &SmartFilter,
+    cur: &Surface,
+    canvas: Rect,
+    extent: Rect,
+    transfer: Option<photocraft_compose::adjust::Transfer>,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Surface> {
     // Unknown ids (e.g. Photoshop filters we don't implement) leave the pixels alone.
-    let Some(out) = crate::filters::apply_filter_to_surface(&f.command, &f.params, cur, canvas, None, extent) else { return cur.clone() };
-    if f.blend == BlendMode::Normal && f.opacity >= 1.0 { out } else { blend_surfaces(cur, &out, f.blend, f.opacity.clamp(0.0, 1.0)) }
+    let Some(out) =
+        crate::filters::try_apply_filter_to_surface_with_transfer_and_interrupt(&f.command, &f.params, cur, canvas, None, extent, transfer, control)?
+    else {
+        return Ok(cur.clone());
+    };
+    Ok(if f.blend == BlendMode::Normal && f.opacity >= 1.0 { out } else { blend_surfaces(cur, &out, f.blend, f.opacity.clamp(0.0, 1.0)) })
 }
 
+#[cfg(test)]
 fn place(name: &str, bytes: &[u8], fmt: PixelFormat, sm: &SmartObject) -> Result<Surface> {
+    place_with_document(name, bytes, fmt, sm, None)
+}
+
+fn place_with_document(name: &str, bytes: &[u8], fmt: PixelFormat, sm: &SmartObject, document: Option<&Document>) -> Result<Surface> {
+    let checked = document.is_some_and(|doc| doc.sample_encoding.is_some() || doc.source_color_context.is_some())
+        || matches!(fmt.sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64);
     // A vector source is rendered at the placement's scale, and the placement is divided by
     // that scale so the rendered pixels land where the source units would.
     if sm.stack_mode.is_none() && sm.warp.is_none() && photocraft_io::svg::is_svg(bytes) {
@@ -1669,35 +1596,83 @@ fn place(name: &str, bytes: &[u8], fmt: PixelFormat, sm: &SmartObject) -> Result
             Some(p) => {
                 let [h0, h1, h2, h3, h4, h5, h6, h7, h8] = *p;
                 let h = Homography([h0 / k, h1 / k, h2, h3 / k, h4 / k, h5, h6 / k, h7 / k, h8]);
-                photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, None)?
+                if checked {
+                    photocraft_algo::warp::try_place_source_projective(&img.surface, img.bounds, &h, None)
+                        .map_err(|e| other(format!("smart-object placement: {e}")))?
+                } else {
+                    photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, None)?
+                }
             }
             None => {
                 let [a, b, c, d, e, f] = sm.transform.m;
                 let t = Affine { m: [a / k, b / k, c / k, d / k, e, f] };
-                photocraft_algo::warp::place_source(&img.surface, img.bounds, &t, None)?
+                if checked {
+                    photocraft_algo::warp::try_place_source(&img.surface, img.bounds, &t, None).map_err(|e| other(format!("smart-object placement: {e}")))?
+                } else {
+                    photocraft_algo::warp::place_source(&img.surface, img.bounds, &t, None)?
+                }
             }
         });
     }
     let img = match sm.stack_mode {
+        Some(_) if document.is_some_and(|doc| doc.sample_encoding.is_some()) => {
+            return Err(other("stack modes on imported document encodings are not verified; convert the document first"));
+        }
         Some(mode) => stack_image(name, bytes, fmt, mode)?,
-        None => source_image(name, bytes, fmt)?,
+        None => match document {
+            Some(doc) => source_image_for_document(name, bytes, doc)?,
+            None => source_image(name, bytes, fmt)?,
+        },
     };
     // Through the warp (source space) and the transform in one pass; whole-pixel moves are exact.
     Ok(match &sm.perspective {
-        Some(p) => photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &Homography(*p), sm.warp.as_ref())?,
-        None => photocraft_algo::warp::place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref())?,
+        Some(p) => {
+            if checked {
+                photocraft_algo::warp::try_place_source_projective(&img.surface, img.bounds, &Homography(*p), sm.warp.as_ref())
+                    .map_err(|e| other(format!("smart-object placement: {e}")))?
+            } else {
+                photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &Homography(*p), sm.warp.as_ref())?
+            }
+        }
+        None => {
+            if checked {
+                photocraft_algo::warp::try_place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref())
+                    .map_err(|e| other(format!("smart-object placement: {e}")))?
+            } else {
+                photocraft_algo::warp::place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref())?
+            }
+        }
     })
 }
 
 fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Result<Option<Surface>> {
+    ctx.check()?;
+    for filter in sm.smart_filters.iter().filter(|filter| sm.filters_enabled && filter.visible) {
+        crate::jobs::authorize_render_command(&filter.command, &filter.params)?;
+    }
+    if matches!(doc.depth, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) && sm.smart_filters.iter().any(|f| f.visible) {
+        return Err(other("wide legacy smart-filter arithmetic is not qualified; source and cache were kept unchanged"));
+    }
     let Some((name, bytes)) = source_bytes(&doc.metadata, &sm.source) else { return Ok(None) };
     let (fmt, canvas) = (doc.pixel_format(), doc.bounds());
-    let placed_key = stack_cache::placed_key(&bytes, fmt, sm, canvas);
+    let mut placed_key = stack_cache::placed_key(&bytes, fmt, sm, canvas);
+    // The same encoded source/format can have different operative destination
+    // interpretations. Do not reuse an ordinary stage for an imported CURRENT.
+    let interpretation = interpreted_cache_key(&bytes, doc);
+    let mut key = blake3::Hasher::new();
+    key.update(&placed_key);
+    key.update(&interpretation.0);
+    placed_key = *key.finalize().as_bytes();
+    let transfer = if sm.stack_mode.is_none() && sm.warp.is_none() && photocraft_io::svg::is_svg(&bytes) {
+        None
+    } else {
+        Some(photocraft_compose::adjust::Transfer::for_doc(doc))
+    };
     let placed = || -> Result<Stage> {
         if let Some(stage) = stack_cache::get(&placed_key) {
             return Ok(stage);
         }
-        let surface = place(&name, &bytes, fmt, sm)?;
+        let surface = place_with_document(&name, &bytes, fmt, sm, Some(doc))?;
         // Edge pixels repeat at the canvas ∪ placed-content edge, as for layer filters.
         let stage = Stage { extent: canvas.union(&surface.content_bounds()), surface };
         stack_cache::put(placed_key, &stage);
@@ -1714,7 +1689,8 @@ fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Result<Option<Su
             Some(*key)
         })
         .collect();
-    let deepest = keys.iter().enumerate().rev().find_map(|(i, key)| stack_cache::get(key).map(|stage| (i + 1, stage)));
+    let cacheable = filters.iter().position(|f| crate::filters_ext::has_external_map(&f.command, &f.params)).unwrap_or(filters.len());
+    let deepest = keys.iter().take(cacheable).enumerate().rev().find_map(|(i, key)| stack_cache::get(key).map(|stage| (i + 1, stage)));
     let (done, mut cur) = match deepest {
         Some(hit) => hit,
         None => (0, placed()?),
@@ -1723,12 +1699,15 @@ fn render_in(doc: &Document, sm: &SmartObject, ctx: &JobCtx) -> Result<Option<Su
     for (i, (f, key)) in filters.iter().zip(&keys).enumerate().skip(done) {
         ctx.check()?;
         ctx.progress(i as f32 / n, "");
-        cur = Stage { surface: apply_smart_filter(f, &cur.surface, canvas, cur.extent), extent: cur.extent };
-        stack_cache::put(*key, &cur);
+        let surface = ctx.stage(i as f32 / n, (i + 1) as f32 / n, "", |control| apply_smart_filter(f, &cur.surface, canvas, cur.extent, transfer, control))?;
+        cur = Stage { surface, extent: cur.extent };
+        if i < cacheable {
+            stack_cache::put(*key, &cur);
+        }
     }
     ctx.progress(1.0, "");
     Ok(Some(match sm.filter_mask.as_ref().filter(|m| m.enabled) {
-        Some(m) => mask_mix(&placed()?.surface, &cur.surface, m),
+        Some(m) => photocraft_compose::filter_mask::mix(&placed()?.surface, &cur.surface, m),
         None => cur.surface,
     }))
 }

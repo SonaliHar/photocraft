@@ -175,7 +175,6 @@ pub(crate) fn validate_params(id: &str, params: &Value) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
 
     use photocraft_geom::Rect;
     use serde_json::json;
@@ -198,15 +197,15 @@ mod tests {
 
     fn rejected(s: &mut Session, id: &str, key: &str, value: Value) {
         let doc = s.active().unwrap().doc.clone();
-        let history = s.active().unwrap().history.entries();
+        let history = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>();
         let journal = s.journal.clone();
         let active = s.active().unwrap().active_layer;
         let error = s.execute(id, json!({key:value})).unwrap_err();
         assert!(matches!(error, EngineError::BadParams { .. }), "{id}: {error}");
         let error = error.to_string();
         assert!(error.contains(id) && error.contains(key), "{error}");
-        assert!(Arc::ptr_eq(&s.active().unwrap().doc, &doc), "{id}: {key}");
-        assert_eq!(s.active().unwrap().history.entries(), history);
+        assert!(s.active().unwrap().doc.shares_state(&doc), "{id}: {key}");
+        assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>(), history);
         assert_eq!(s.active().unwrap().active_layer, active);
         assert_eq!(s.journal, journal);
         assert!(s.jobs().is_empty());
@@ -425,15 +424,15 @@ mod tests {
         for id in STRICT_EXTENDED {
             rejected(&mut s, id, "radus", json!(3));
             let doc = s.active().unwrap().doc.clone();
-            let history = s.active().unwrap().history.entries();
+            let history = s.active().unwrap().history.entries(&crate::read_control_none()).unwrap();
             let journal = s.journal.clone();
             let params = json!({"radus":3});
             assert!(matches!(s.start(id, params.clone()), Err(EngineError::BadParams { .. })));
             let spec = crate::commands::find(id).unwrap();
             assert!(matches!((spec.run)(&mut s, &params), Err(EngineError::BadParams { .. })));
             assert!(crate::float_cmds::floating(s.active().unwrap()).is_some());
-            assert!(Arc::ptr_eq(&s.active().unwrap().doc, &doc));
-            assert_eq!(s.active().unwrap().history.entries(), history);
+            assert!(s.active().unwrap().doc.shares_state(&doc));
+            assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values(), history.values());
             assert_eq!(s.journal, journal);
             assert!(s.jobs().is_empty());
         }
@@ -482,14 +481,14 @@ mod tests {
         s.execute("select.rect", json!({"x":0,"y":0,"width":4,"height":4})).unwrap();
         s.execute("select.float", json!({"dx":8})).unwrap();
         let doc = s.active().unwrap().doc.clone();
-        let history = s.active().unwrap().history.entries();
+        let history = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>();
         for params in [json!({"radius":"big"}), json!({"radus":3}), json!({"radius":5000}), json!({"radius":-4})] {
             assert!(s.start("filter.blur.gaussianBlur", params.clone()).is_err());
             let spec = crate::commands::find("filter.blur.gaussianBlur").unwrap();
             assert!((spec.run)(&mut s, &params).is_err());
             assert!(crate::float_cmds::floating(s.active().unwrap()).is_some());
-            assert!(Arc::ptr_eq(&s.active().unwrap().doc, &doc));
-            assert_eq!(s.active().unwrap().history.entries(), history);
+            assert!(s.active().unwrap().doc.shares_state(&doc));
+            assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>(), history);
             assert!(s.jobs().is_empty());
         }
     }

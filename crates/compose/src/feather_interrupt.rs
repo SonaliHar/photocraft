@@ -14,7 +14,7 @@ impl Default for FeatherPreparationLimits {
     }
 }
 const FORMAT: photocraft_color::PixelFormat =
-    photocraft_color::PixelFormat { mode: photocraft_color::ColorMode::Grayscale, sample: photocraft_color::SampleType::F32, alpha: false };
+    photocraft_color::PixelFormat { mode: photocraft_color::ColorMode::Grayscale, sample: photocraft_color::SampleType::U16, alpha: false };
 struct Control<'a, 'b> {
     token: &'a Interrupt<'b>,
     limits: FeatherPreparationLimits,
@@ -232,36 +232,42 @@ pub fn try_combined_mask(layer: &Layer, canvas: Rect, limits: FeatherPreparation
         cx.tick(1)?;
         tiles = tiles.checked_add(1).ok_or(E::LimitExceeded)?;
     }
-    let tile_bytes = tiles.checked_mul(256 * 256 * 4).ok_or(E::LimitExceeded)?;
+    // Keep legacy U16 derived-mask quantization; all convolution planes stay F32.
+    let working_bytes = bytes.checked_mul(2).ok_or(E::LimitExceeded)?;
+    let tile_bytes = tiles.checked_mul(256 * 256 * 2 + 256).ok_or(E::LimitExceeded)?;
     let line_bytes = (area.width().max(area.height()) as usize).checked_mul(4).ok_or(E::LimitExceeded)?;
     let channels = pixel.map_or(1, |m| m.surface.channels());
     let read_bytes = 1024_usize.checked_mul(channels).and_then(|n| n.checked_mul(4)).ok_or(E::LimitExceeded)?;
-    let peak = bytes
-        .checked_mul(3)
+    let peak = working_bytes
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(bytes))
         .and_then(|n| n.checked_add(tile_bytes))
         .and_then(|n| n.checked_add(line_bytes))
         .and_then(|n| n.checked_add(read_bytes))
         .and_then(|n| n.checked_add(geometry_bytes))
-        .and_then(|n| n.checked_add(4))
+        .and_then(|n| n.checked_add(4096))
         .ok_or(E::LimitExceeded)?;
     if peak > limits.max_bytes || peak as u64 > photocraft_raster::MAX_CHECKED_RASTER_BYTES {
         return Err(E::LimitExceeded);
     }
-    let mut output = Surface::try_with_default_bytes(FORMAT, &(p_def * v_out).to_ne_bytes())?;
+    cx.tick(8)?;
+    let mut default = [0_u8; 2];
+    photocraft_color::write_sample(&mut default, FORMAT.sample, 0, p_def * v_out);
+    let mut output = Surface::try_with_default_bytes(FORMAT, &default)?;
     if !area.is_empty() {
         let (w, h) = (area.width() as usize, area.height() as usize);
         let mut values = match &geometry {
             Some(g) => g.try_render_with_interrupt(
                 area,
                 photocraft_vector::VectorPreparationLimits {
-                    max_bytes: limits.max_bytes - (peak - bytes - geometry_bytes),
+                    max_bytes: limits.max_bytes - (peak - working_bytes - geometry_bytes),
                     max_work: limits.max_work / 4,
                     ..Default::default()
                 },
                 control,
             )?,
             None => {
-                let mut v = cx.zeros::<f32>(bytes / 4)?;
+                let mut v = cx.zeros::<f32>(working_bytes / 4)?;
                 for chunk in v.chunks_mut(256) {
                     cx.tick(chunk.len())?;
                     chunk.fill(1.0);
@@ -269,13 +275,13 @@ pub fn try_combined_mask(layer: &Layer, canvas: Rect, limits: FeatherPreparation
                 v
             }
         };
-        if values.capacity() != bytes / 4 {
+        if values.capacity() != working_bytes / 4 {
             return Err(E::LimitExceeded);
         }
         let mut line = cx.zeros::<f32>(w.max(h))?;
         gaussian(&mut values, w, h, sv, &mut line, &mut cx)?;
         if let Some(m) = pixel {
-            let mut pm = cx.zeros::<f32>(bytes / 4)?;
+            let mut pm = cx.zeros::<f32>(working_bytes / 4)?;
             let mut read = cx.zeros::<f32>(read_bytes / 4)?;
             for y in area.y0..area.y1 {
                 let mut x = area.x0;
@@ -305,9 +311,17 @@ pub fn try_combined_mask(layer: &Layer, canvas: Rect, limits: FeatherPreparation
             }
         }
         let mut encoded = cx.zeros::<u8>(bytes)?;
-        for (value, out) in values.iter().zip(encoded.as_chunks_mut::<4>().0.iter_mut()) {
-            cx.tick(1)?;
-            out.copy_from_slice(&value.to_ne_bytes());
+        for (value, out) in values.iter().zip(encoded.as_chunks_mut::<2>().0.iter_mut()) {
+            cx.tick(8)?;
+            photocraft_color::write_sample(out, FORMAT.sample, 0, *value);
+        }
+        // The raster writer polls cancellation, while this facade owns its Work
+        // envelope: include physical default-filled tiles even for a tiny ROI.
+        let mut writer_work = tiles.checked_mul(256 * 256 * 2 + 256).and_then(|n| n.checked_add(bytes)).ok_or(E::LimitExceeded)?;
+        while writer_work != 0 {
+            let chunk = writer_work.min(65_536);
+            cx.tick(chunk)?;
+            writer_work -= chunk;
         }
         output.try_write_interleaved_with(area, &encoded, control)?;
     }

@@ -455,6 +455,76 @@ pub(crate) fn resolve(s: &Session, fp: &mut FilterParams, p: &Value) -> Result<(
     Ok(())
 }
 
+/// A recorded external file map is a live dependency, not a cache-keyed payload.
+pub(crate) fn has_external_map(id: &str, p: &Value) -> bool {
+    id == "filter.distort.displace" && p.get("mapPath").and_then(Value::as_str).is_some_and(|p| !p.is_empty())
+}
+/// Fallible bounded input for one authorized map handle. Every limit/allocation
+/// or retry failure propagates; none is confused with an unreadable-map fallback.
+#[cfg(any(not(target_arch = "wasm32"), test))]
+fn read_replay_input(reader: &mut impl std::io::Read, hint: u64, max: usize, control: &photocraft_raster::Interrupt<'_>) -> Result<Vec<u8>> {
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    if hint > max as u64 {
+        return Err(EngineError::Other("displacement map input limit".into()));
+    }
+    photocraft_format::read::read_all_bounded(reader, hint, max, control)
+        .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(format!("displacement map bounded read: {error}")) })
+}
+/// Session-free resolution AFTER all requesting policies have passed. `false`
+/// means an explicitly unavailable/unsupported legacy map, whose filter is identity.
+/// Resource, cancellation and Source admission errors are never fallback signals.
+pub(crate) fn resolve_map_path(fp: &mut FilterParams, p: &Value, control: &photocraft_raster::Interrupt<'_>) -> Result<bool> {
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    let FilterParams::Displace { map, .. } = fp else { return Ok(true) };
+    if map.is_some() {
+        return Ok(true);
+    }
+    let Some(path) = p.get("mapPath").and_then(Value::as_str).filter(|p| !p.is_empty()) else { return Ok(true) };
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        Ok(false)
+    } // Existing path-unavailable web fallback; no filesystem access.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut file = match std::fs::File::open(path) {
+            Ok(file) => file,
+            Err(error) if matches!(error.kind(), std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::IsADirectory) => {
+                return Ok(false);
+            }
+            Err(error) => return Err(EngineError::Other(format!("cannot open displacement map `{path}`: {error}"))),
+        };
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        let metadata = file.metadata().map_err(|error| EngineError::Other(format!("cannot inspect displacement map `{path}`: {error}")))?;
+        if !metadata.is_file() {
+            return Ok(false);
+        }
+        // Reuse the platform checked-raster ceiling as an explicit OUTER map-input
+        // admission bound. This is not a claim of cumulative decoder/renderer Work.
+        let max = usize::try_from(photocraft_raster::MAX_CHECKED_RASTER_BYTES).map_err(|_| EngineError::Other("displacement map input ceiling".into()))?;
+        let bytes = read_replay_input(&mut file, metadata.len(), max, control)?;
+        let imported = match photocraft_io::import_with(path, &bytes, control) {
+            Ok(imported) => imported,
+            Err(photocraft_io::IoError::Cancelled) => return Err(EngineError::Cancelled),
+            Err(
+                photocraft_io::IoError::UnknownFormat(_)
+                | photocraft_io::IoError::Codec(
+                    photocraft_codecs::CodecError::UnknownFormat
+                    | photocraft_codecs::CodecError::Malformed { .. }
+                    | photocraft_codecs::CodecError::Unsupported { .. },
+                ),
+            ) => return Ok(false),
+            Err(error) => return Err(EngineError::Other(format!("cannot prepare displacement map `{path}`: {error}"))),
+        };
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        // Same operative mapper as initial command resolution; retained XCF is
+        // still subject to the public importer and compositor's own Source guards.
+        *map = map_from_document(&imported.document, p.get("mapLayer").and_then(Value::as_u64))?.map(Arc::new);
+        control.check().map_err(|_| EngineError::Cancelled)?;
+        Ok(map.is_some())
+    }
+}
+
 /// Resolves inputs read from the target layer itself: the layer mask as Lens Blur depth.
 pub(crate) fn resolve_in_layer(fp: &mut FilterParams, layer: &Layer, bounds: Rect) {
     if let FilterParams::LensBlur { depth: DepthSource::LayerMask, depth_map, .. } = fp
@@ -693,3 +763,20 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod replay_read_tests {
+    use super::*;
+    #[test]
+    fn map_read_exact_limit_growth_and_cancel_do_not_become_identity() {
+        let bytes = [1u8, 2, 3];
+        assert_eq!(read_replay_input(&mut std::io::Cursor::new(bytes), 3, 3, &photocraft_raster::Interrupt::NONE).unwrap(), bytes);
+        assert!(read_replay_input(&mut std::io::Cursor::new(bytes), 0, 2, &photocraft_raster::Interrupt::NONE).is_err());
+        assert!(read_replay_input(&mut std::io::Cursor::new(bytes), 3, 2, &photocraft_raster::Interrupt::NONE).is_err());
+        assert!(matches!(
+            read_replay_input(&mut std::io::Cursor::new(bytes), 3, 3, &photocraft_raster::Interrupt::cancel_only(&|| true)),
+            Err(EngineError::Cancelled)
+        ));
+    }
+}

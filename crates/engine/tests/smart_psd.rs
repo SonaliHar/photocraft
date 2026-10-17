@@ -534,11 +534,11 @@ fn cs2_plld_only_smart_object_opens_its_contents() {
     assert!(refresh_layer(&back, &mut l).unwrap());
     let mut rerendered = back.clone();
     *rerendered.layer_mut(photocraft_doc::LayerId(bid)).unwrap() = l;
-    let d = max_diff(&photocraft_compose::flatten(&rerendered).px, &photocraft_compose::flatten(&doc).px);
+    let d = max_diff(&photocraft_compose::flatten(&rerendered).unwrap().px, &photocraft_compose::flatten(&doc).unwrap().px);
     assert!(d <= 2.0 / 255.0, "re-render differs by {d}");
     // And Edit Contents (the double-click) opens the nested document.
     let mut s2 = Session::new();
-    s2.add_document(back, None);
+    s2.add_document(back, None).unwrap();
     s2.select_layer(photocraft_doc::LayerId(bid)).unwrap();
     s2.execute("layer.smartObjects.editContents", json!({})).unwrap();
     assert_eq!(s2.active().unwrap().doc.size, nested.size);
@@ -570,7 +570,7 @@ fn cs2_plld_only_warped_smart_object_stays_warped() {
         assert!(refresh_layer(&back, &mut l).unwrap());
         let mut d = back.clone();
         *d.layer_mut(photocraft_doc::LayerId(bid)).unwrap() = l;
-        max_diff(&photocraft_compose::flatten(&d).px, &photocraft_compose::flatten(&doc).px)
+        max_diff(&photocraft_compose::flatten(&d).unwrap().px, &photocraft_compose::flatten(&doc).unwrap().px)
     };
     let d = rerender(after.warp.clone());
     assert!(d <= 2.0 / 255.0, "re-render differs by {d}");
@@ -601,7 +601,7 @@ fn cs2_plld_only_smart_object_saves_its_new_transform() {
 
     // Moved and scaled: written with the new placement, and it reopens there.
     let mut s2 = Session::new();
-    s2.add_document(back, None);
+    s2.add_document(back, None).unwrap();
     s2.execute("edit.transform", json!({"layer": bid, "matrix": [0.5, 0, 0, 0.5, 20, 12]})).unwrap();
     let edited = s2.active().unwrap().doc.clone();
     let (_, want) = smart(&edited);
@@ -634,9 +634,9 @@ fn a_soft_filter_mask_is_stored_the_way_photoshop_stores_it() {
         let l = doc.layer_mut(id).unwrap();
         let LayerContent::Smart(sm) = &mut l.content else { panic!("smart") };
         let mut m = LayerMask::reveal_all();
-        m.surface = Surface::new(photocraft_color::PixelFormat::GRAY8);
+        m.surface = Surface::new(photocraft_color::PixelFormat::GRAY8).into();
         let r = Rect::new(0, 0, W, H);
-        m.surface.write_region(r, &(0..H).flat_map(|_| (0..W).map(|x| x as f32 / (W - 1) as f32)).collect::<Vec<_>>());
+        std::sync::Arc::make_mut(&mut m.surface).write_region(r, &(0..H).flat_map(|_| (0..W).map(|x| x as f32 / (W - 1) as f32)).collect::<Vec<_>>());
         sm.filter_mask = Some(m);
         refresh_layer(&snapshot, l).map(|_| ())
     })
@@ -667,6 +667,6 @@ fn a_soft_filter_mask_is_stored_the_way_photoshop_stores_it() {
     }
     // Opening the file mixes the unfiltered pixels back in: it shows what the document showed.
     let back = photocraft_io::import("x.psd", &out.bytes).unwrap().document;
-    let d = max_diff(&photocraft_compose::flatten(&back).px, &photocraft_compose::flatten(&doc).px);
+    let d = max_diff(&photocraft_compose::flatten(&back).unwrap().px, &photocraft_compose::flatten(&doc).unwrap().px);
     assert!(d <= 2.0 / 255.0, "re-opened differs by {d}");
 }

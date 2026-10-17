@@ -185,8 +185,47 @@ pub fn apply_filter_to_surface(
     selection: Option<&photocraft_raster::Surface>,
     canvas: photocraft_geom::Rect,
 ) -> Result<Option<photocraft_raster::Surface>> {
-    // Replays bypass command dispatch; nested paths must still obey the requesting session's
-    // authority, including adjustment LUTs and plug-ins, before any resolver can read them.
+    apply_filter_to_surface_with_transfer(id, params, surf, bounds, selection, canvas, None)
+}
+
+/// As [`apply_filter_to_surface`], with an explicit document transfer for adjustment filters.
+pub fn apply_filter_to_surface_with_transfer(
+    id: &str,
+    params: &Value,
+    surf: &photocraft_raster::Surface,
+    bounds: photocraft_geom::Rect,
+    selection: Option<&photocraft_raster::Surface>,
+    canvas: photocraft_geom::Rect,
+    transfer: Option<photocraft_compose::adjust::Transfer>,
+) -> Result<Option<photocraft_raster::Surface>> {
+    try_apply_filter_to_surface_with_transfer(id, params, surf, bounds, selection, canvas, transfer)
+}
+
+pub(crate) fn try_apply_filter_to_surface_with_transfer(
+    id: &str,
+    params: &Value,
+    surf: &photocraft_raster::Surface,
+    bounds: photocraft_geom::Rect,
+    selection: Option<&photocraft_raster::Surface>,
+    canvas: photocraft_geom::Rect,
+    transfer: Option<photocraft_compose::adjust::Transfer>,
+) -> Result<Option<photocraft_raster::Surface>> {
+    try_apply_filter_to_surface_with_transfer_and_interrupt(id, params, surf, bounds, selection, canvas, transfer, &photocraft_raster::Interrupt::NONE)
+}
+
+// The fixed geometry/profile/control arguments preserve the existing replay API without allocating a request object.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn try_apply_filter_to_surface_with_transfer_and_interrupt(
+    id: &str,
+    params: &Value,
+    surf: &photocraft_raster::Surface,
+    bounds: photocraft_geom::Rect,
+    selection: Option<&photocraft_raster::Surface>,
+    canvas: photocraft_geom::Rect,
+    transfer: Option<photocraft_compose::adjust::Transfer>,
+    control: &photocraft_raster::Interrupt<'_>,
+) -> Result<Option<photocraft_raster::Surface>> {
+    control.check().map_err(|_| EngineError::Cancelled)?;
     crate::jobs::authorize_render_command(id, params)?;
     // Liquify / Puppet Warp / Perspective Warp smart filters (distort_cmds).
     if let Some(out) = crate::distort_cmds::apply_to_surface(id, params, surf, canvas) {
@@ -198,22 +237,25 @@ pub fn apply_filter_to_surface(
     }
     // Image › Adjustments recorded as smart filters (Levels, Curves, Shadows/Highlights… from PSD).
     if let Some(kind) = id.strip_prefix("image.adjustments.") {
-        return Ok(crate::adjust_cmds::adjust_as_filter(kind, params, surf));
+        return Ok(crate::adjust_cmds::adjust_as_filter(kind, params, surf, transfer));
     }
     // WebAssembly plug-in smart filters (plugin_cmds).
     if id == crate::plugin_cmds::RUN {
         return Ok(crate::plugin_cmds::apply_to_surface(id, params, surf, selection, canvas));
     }
     let Some(mut fp) = params_for(id, params) else { return Ok(None) };
-    // A map that can no longer be read (moved or deleted since) leaves the pixels alone, like an
-    // unknown filter; the command itself already refused an unreadable map when it was added.
-    if crate::filters_ext::resolve_map_path(&mut fp, params).is_err() {
+    if matches!(surf.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64) && !matches!(fp, FilterParams::Invert) {
+        return Ok(None);
+    }
+    if !crate::filters_ext::resolve_map_path(&mut fp, params, control)? {
         return Ok(None);
     }
     let sel_bounds = selection.map(photocraft_raster::Surface::content_bounds);
     let content = surf.content_bounds();
     let area = algo::output_area(&fp, content, bounds, sel_bounds);
-    Ok(Some(algo::apply_in(surf, &fp, area, bounds, selection, canvas.union(&content))))
+    let output = algo::apply_in(surf, &fp, area, bounds, selection, canvas.union(&content));
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    Ok(Some(output))
 }
 
 pub(crate) fn has_filterable_layer(s: &Session) -> std::result::Result<(), String> {

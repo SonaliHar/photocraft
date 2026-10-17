@@ -31,7 +31,7 @@ fn smart(s: &Session, id: u64) -> &SmartObject {
 
 fn contents_pixel(s: &Session, id: u64) -> [f32; 4] {
     let (name, bytes) = source_bytes(&s.active().unwrap().doc.metadata, &smart(s, id).source).unwrap();
-    photocraft_compose::flatten(&decode_source(&name, &bytes).unwrap()).px[0]
+    photocraft_compose::flatten(&decode_source(&name, &bytes).unwrap()).unwrap().px[0]
 }
 
 #[test]
@@ -118,7 +118,7 @@ fn shared_and_independent_contents_survive_native_psd_and_psb() {
         let named = |name: &str| back.walk().into_iter().find(|(_, _, l)| l.name == name).unwrap().2.id.0;
         let (original, duplicate, independent) = (named("original"), named("duplicate"), named("independent"));
         let mut s = Session::new();
-        s.add_document(back, None);
+        s.add_document(back, None).unwrap();
         s.execute("layer.smartObjects.editContents", json!({"layer": duplicate})).unwrap();
         paint(&mut s, [1.0, 0.0, 0.0, 1.0]);
         s.execute("layer.smartObjects.saveContents", json!({})).unwrap();
@@ -143,7 +143,7 @@ fn copying_a_batch_between_documents_preserves_only_its_internal_sharing() {
     let source_names = [original, duplicate, independent].map(|id| s.active().unwrap().doc.layer(LayerId(id)).unwrap().name.clone());
     // Another opening of the same document has the same persisted contents IDs.
     let target = (*s.active().unwrap().doc).clone();
-    s.add_document(target, None);
+    s.add_document(target, None).unwrap();
     s.set_active(0);
     let result = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [original, duplicate, independent]})).unwrap();
     // The command returns stacking order, which differs from the requested order after via-copy.
@@ -193,7 +193,7 @@ fn replacing_shared_contents_does_not_reuse_or_commit_a_stale_editor() {
     s.execute("file.close", json!({})).unwrap();
     assert_eq!(contents_pixel(&s, original), [0.0, 1.0, 0.0, 1.0]);
     s.execute("layer.smartObjects.editContents", json!({"layer": original})).unwrap();
-    assert_eq!(photocraft_compose::flatten(&s.active().unwrap().doc).px[0], [0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(photocraft_compose::flatten(&s.active().unwrap().doc).unwrap().px[0], [0.0, 1.0, 0.0, 1.0]);
 }
 
 /// A `.pcraft` file whose contents are one solid colour, for Replace Contents.
@@ -232,7 +232,7 @@ fn inspect_and_replace_contents_report_shared_instances() {
     .unwrap();
     let out = photocraft_io::export(&s.active().unwrap().doc, "psd", &Default::default()).unwrap();
     let mut s = Session::new();
-    s.add_document(photocraft_io::import("copies.psd", &out.bytes).unwrap().document, None);
+    s.add_document(photocraft_io::import("copies.psd", &out.bytes).unwrap().document, None).unwrap();
 
     let tree = s.execute("document.inspect", json!({})).unwrap();
     let [o, d, i] = ["original", "duplicate", "independent"].map(|name| inspected(&tree["layers"], name).unwrap().clone());
@@ -265,7 +265,7 @@ fn photoshop_placed_copies_import_as_shared_instances() {
     let placed = file.layers().iter().find(|r| r.block(b"SoLd").is_some()).expect("a placed layer").clone();
     file.layers_mut().push(placed);
     let mut s = Session::new();
-    s.add_document(photocraft_io::psd_to_document(&file).0, None);
+    s.add_document(photocraft_io::psd_to_document(&file).0, None).unwrap();
 
     let tree = s.execute("document.inspect", json!({})).unwrap();
     let copies: Vec<&Value> = tree["layers"].as_array().unwrap().iter().filter(|l| l["kind"] == "Smart Object").collect();
