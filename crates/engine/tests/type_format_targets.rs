@@ -69,12 +69,12 @@ fn selected_type_properties_preserve_each_layers_other_attributes_and_one_histor
         let mut selected: Vec<_> = indices.iter().map(|i| ids[*i]).collect();
         selected.push(raster); // The primary layer need not be Type.
         select(&mut s, &selected);
-        let target = (s.active().unwrap().active_layer, s.active().unwrap().selected_layers());
+        let target = (s.active().unwrap().active_layer, s.active().unwrap().selected_layers().unwrap());
         let before: Vec<_> = ids.iter().map(|id| text(&s, *id)).collect();
-        let steps = s.active().unwrap().history.entries().len();
+        let steps = s.active().unwrap().history.entry_labels().count();
         s.execute("type.setStyle", params).unwrap();
-        assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
-        assert_eq!((s.active().unwrap().active_layer, s.active().unwrap().selected_layers()), target);
+        assert_eq!(s.active().unwrap().history.entry_labels().count(), steps + 1);
+        assert_eq!((s.active().unwrap().active_layer, s.active().unwrap().selected_layers().unwrap()), target);
         for (i, id) in ids.iter().enumerate() {
             let mut expected = before[i].clone();
             if indices.contains(&i) {
@@ -98,7 +98,7 @@ fn selected_type_properties_preserve_each_layers_other_attributes_and_one_histor
             assert_styles(&text(&s, *id), old);
         }
         assert!(s.redo());
-        assert_eq!((s.active().unwrap().active_layer, s.active().unwrap().selected_layers()), target);
+        assert_eq!((s.active().unwrap().active_layer, s.active().unwrap().selected_layers().unwrap()), target);
     }
 }
 
@@ -142,7 +142,7 @@ fn shown_type_metrics_convert_per_target_coalesce_and_fail_atomically() {
     s.execute("type.edit", json!({"layer": ids[1].0, "transform": [0.5, 0, 0, 0.5, 75, 80]})).unwrap();
     select(&mut s, &ids[..2]);
     let before = [text(&s, ids[0]), text(&s, ids[1])];
-    let steps = s.active().unwrap().history.entries().len();
+    let steps = s.active().unwrap().history.entry_labels().count();
     for size in [24, 30] {
         s.execute("type.setStyle", json!({"metricsAsShown": true, "size": size, "leading": 40, "coalesce": "batch-size"})).unwrap();
     }
@@ -151,7 +151,7 @@ fn shown_type_metrics_convert_per_target_coalesce_and_fail_atomically() {
         assert!(t.runs.iter().all(|r| r.style.size_pt == 30.0 / scale && r.style.leading_pt == Some(40.0 / scale)));
         assert_eq!(t.transform, before[i].transform);
     }
-    assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
+    assert_eq!(s.active().unwrap().history.entry_labels().count(), steps + 1);
     assert!(s.undo());
     for i in 0..2 {
         assert_styles(&text(&s, ids[i]), &before[i]);
@@ -159,11 +159,11 @@ fn shown_type_metrics_convert_per_target_coalesce_and_fail_atomically() {
     assert!(s.redo());
     let unchanged = [text(&s, ids[0]), text(&s, ids[1])];
     let revision = s.active().unwrap().revision;
-    let steps = s.active().unwrap().history.entries().len();
+    let steps = s.active().unwrap().history.entry_labels().count();
     // The second target would exceed the existing 1296pt limit after conversion.
     assert!(s.execute("type.setStyle", json!({"metricsAsShown": true, "size": 700})).is_err());
     assert_eq!(s.active().unwrap().revision, revision);
-    assert_eq!(s.active().unwrap().history.entries().len(), steps);
+    assert_eq!(s.active().unwrap().history.entry_labels().count(), steps);
     for i in 0..2 {
         assert_styles(&text(&s, ids[i]), &unchanged[i]);
     }
@@ -189,9 +189,9 @@ fn direct_type_formatting_menu_routes_batch_without_enabling_structural_commands
         assert!(s.is_enabled(command), "{command} supports selected Type peers");
         assert!(!s.is_enabled("type.convertToShape"));
         let before: Vec<_> = ids.iter().map(|id| text(&s, *id)).collect();
-        let steps = s.active().unwrap().history.entries().len();
+        let steps = s.active().unwrap().history.entry_labels().count();
         s.execute(command, params).unwrap();
-        assert_eq!(s.active().unwrap().history.entries().len(), steps + 1);
+        assert_eq!(s.active().unwrap().history.entry_labels().count(), steps + 1);
         for (i, id) in ids.iter().enumerate() {
             let actual = text(&s, *id);
             let mut expected = before[i].clone();

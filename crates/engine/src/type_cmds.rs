@@ -1157,7 +1157,7 @@ mod tests {
     }
 
     #[test]
-    fn physical_unequal_type_commands_refuse_without_replacing_history_or_cache() {
+    fn physical_unequal_type_commands_preserve_axes_cache_and_history() {
         for (x, y) in [(144.0, 72.0), (72.0, 144.0)] {
             let mut baseline = session();
             let id = baseline.execute("type.create", json!({"text":"AV","size":24,"y":50})).unwrap()["layer"].as_u64().unwrap();
@@ -1173,7 +1173,7 @@ mod tests {
                 let mut s = Session::new();
                 s.add_document(source.clone(), None).unwrap();
                 s.edit("Retained redo", |doc, _| {
-                    doc.name.push_str(" redo");
+                    doc.layers[0].name.push_str(" redo");
                     Ok(())
                 })
                 .unwrap();
@@ -1181,44 +1181,82 @@ mod tests {
                 s.execute("edit.undo", json!({})).unwrap();
                 let revision = s.active().unwrap().revision;
                 let redo = s.active().unwrap().history.redo_labels().map(str::to_owned).collect::<Vec<_>>();
-                let result = s.execute(command, params);
-                assert!(result.is_err(), "{command} silently collapsed physical axes {x}/{y}");
-                assert!(result.unwrap_err().to_string().contains("unequal-axis physical type layout"));
-                assert_eq!(*s.active().unwrap().doc, source);
-                assert_eq!(s.active().unwrap().revision, revision);
-                assert_eq!(s.active().unwrap().history.redo_labels().map(str::to_owned).collect::<Vec<_>>(), redo);
-                s.execute("edit.redo", json!({})).unwrap();
-                assert_eq!(s.active().unwrap().doc, redo_doc);
+                let result = s.execute(command, params).unwrap();
+                if command == "type.info" {
+                    assert_eq!(result["pxPerPtAxes"], json!([x / 72.0, y / 72.0]));
+                    assert_eq!(*s.active().unwrap().doc, source);
+                    assert_eq!(s.active().unwrap().revision, revision);
+                    assert_eq!(s.active().unwrap().history.redo_labels().map(str::to_owned).collect::<Vec<_>>(), redo);
+                    s.execute("edit.redo", json!({})).unwrap();
+                    assert_eq!(s.active().unwrap().doc, redo_doc);
+                } else {
+                    let staged = s.active().unwrap().doc.clone();
+                    assert_eq!(staged.physical_resolution, source.physical_resolution);
+                    let target = if command == "type.create" { result["layer"].as_u64().unwrap() } else { id };
+                    let t = text_layer(&s, target);
+                    let (layout, expected) = text_engine()
+                        .unwrap()
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .render_with_resolution(&t, source.physical_resolution.as_ref().unwrap(), staged.pixel_format())
+                        .unwrap();
+                    assert_eq!(layout.px_per_pt_axes(), [x / 72.0, y / 72.0]);
+                    assert_eq!(t.cache.as_ref().unwrap(), &expected.surface);
+                    assert_eq!(
+                        t.psd_raw.as_deref().unwrap(),
+                        &photocraft_text::psd::build_tysh_with_resolution(&t, source.physical_resolution.as_ref().unwrap(), layout.bounds()).unwrap()
+                    );
+                    s.execute("edit.undo", json!({})).unwrap();
+                    assert_eq!(*s.active().unwrap().doc, source);
+                    s.execute("edit.redo", json!({})).unwrap();
+                    assert_eq!(s.active().unwrap().doc, staged);
+                }
             }
         }
     }
 
     #[test]
-    fn physical_refresh_refusal_leaves_native_cache_and_psd_data_untouched() {
+    fn physical_refresh_valid_axes_and_invalid_resolution_are_atomic() {
         let mut s = session();
         let id = s.execute("type.create", json!({"text":"AV","size":24,"y":50})).unwrap()["layer"].as_u64().unwrap();
         let before = text_layer(&s, id);
         let mut doc = (*s.active().unwrap().doc).clone();
-        doc.physical_resolution = Some(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 72.0, unit: photocraft_doc::PhysicalUnit::Inch });
         doc.resolution_dpi = 96.0;
-        let mut fallible = before.clone();
-        let result = try_refresh(&doc, &mut fallible);
-        assert!(result.is_err(), "unsupported physical layout replaced the source cache");
-        assert_eq!(fallible, before);
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let mut native = before.clone();
-            refresh(&doc, &mut native);
-            assert_eq!(native, before, "native compatibility wrapper must retain unsupported cache and TySh");
+        for x in [0.0, f64::NAN, f64::INFINITY, f64::MAX, f64::MIN_POSITIVE] {
+            doc.physical_resolution = Some(photocraft_doc::PhysicalResolution { x_dpi: x, y_dpi: 72.0, unit: photocraft_doc::PhysicalUnit::Inch });
+            let mut fallible = before.clone();
+            assert!(try_refresh(&doc, &mut fallible).is_err());
+            assert_eq!(fallible, before);
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let mut native = before.clone();
+                refresh(&doc, &mut native);
+                assert_eq!(native, before, "unsupported resolution must retain cache and TySh");
+            }
         }
-        doc.physical_resolution = Some(photocraft_doc::PhysicalResolution::square(144.0));
-        let expected = text_engine().unwrap().lock().unwrap_or_else(|error| error.into_inner()).render(&before, 144.0, doc.pixel_format()).1.surface;
-        try_refresh(&doc, &mut fallible).unwrap();
-        assert_eq!(fallible.cache.as_ref().unwrap(), &expected, "successful refresh uses authoritative physical DPI");
-        assert_ne!(fallible.cache, before.cache);
-        assert_eq!(fallible.text, before.text);
-        assert_eq!(fallible.char_runs(), before.char_runs());
-        assert_eq!(photocraft_text::psd::text_layer_from_tysh(fallible.psd_raw.as_ref().unwrap(), 144.0).unwrap().char_runs()[0].style.size_pt, 24.0);
+        for (x, y) in [(144.0, 72.0), (72.0, 144.0), (144.0, 144.0)] {
+            let resolution = photocraft_doc::PhysicalResolution { x_dpi: x, y_dpi: y, unit: photocraft_doc::PhysicalUnit::Inch };
+            doc.physical_resolution = Some(resolution.clone());
+            let (layout, expected) = text_engine()
+                .unwrap()
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .render_with_resolution(&before, &resolution, doc.pixel_format())
+                .unwrap();
+            assert_eq!(layout.px_per_pt_axes(), [x / 72.0, y / 72.0]);
+            if x == y {
+                let old_square = text_engine().unwrap().lock().unwrap_or_else(|error| error.into_inner()).render(&before, 144.0, doc.pixel_format()).1.surface;
+                assert_eq!(expected.surface, old_square, "square physical axes retain established renderer result");
+            }
+            let mut fallible = before.clone();
+            try_refresh(&doc, &mut fallible).unwrap();
+            assert_eq!(fallible.cache.as_ref().unwrap(), &expected.surface);
+            assert_ne!(fallible.cache, before.cache);
+            assert_eq!(fallible.text, before.text);
+            assert_eq!(fallible.char_runs(), before.char_runs());
+            assert_eq!(fallible.psd_raw.as_deref().unwrap(), &photocraft_text::psd::build_tysh_with_resolution(&before, &resolution, layout.bounds()).unwrap());
+            assert_eq!(photocraft_text::psd::text_layer_from_tysh(fallible.psd_raw.as_ref().unwrap(), y as f32).unwrap().char_runs()[0].style.size_pt, 24.0);
+        }
     }
 
     #[test]
@@ -1255,7 +1293,7 @@ mod tests {
         // Stale pixels, and a document saved in this state.
         {
             let st = s.active_mut().unwrap();
-            let Some(Layer { content: LayerContent::Text(t), .. }) = Arc::make_mut(&mut st.doc).layer_mut(id) else { panic!("not a type layer") };
+            let Some(Layer { content: LayerContent::Text(t), .. }) = st.doc.try_resident_mut().unwrap().layer_mut(id) else { panic!("not a type layer") };
             t.cache = None;
             st.saved_revision = st.revision;
         }
@@ -1779,9 +1817,9 @@ mod tests {
         let id = s.execute("type.create", json!({"x": 0, "y": 40, "text": "Hello\nworld", "size": 10})).unwrap()["layer"].as_u64().unwrap();
         s.execute("type.setStyle", json!({"layer": id, "range": [8, 11], "leading": 30, "tracking": 50})).unwrap();
         s.execute("type.setStyle", json!({"layer": id, "range": [6, 11], "autoLeading": 150})).unwrap();
-        let steps = s.active().unwrap().history.entries().len();
+        let steps = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
         s.execute("type.setStyle", json!({"layer": id, "range": [0, 11], "leadingBy": 2, "baselineShiftBy": -2, "trackingBy": 20})).unwrap();
-        assert_eq!(s.active().unwrap().history.entries().len(), steps + 1, "one history step");
+        assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), steps + 1, "one history step");
         let t = text_layer(&s, id);
         let at = |c: usize| {
             let byte = byte_at(&t.text, c);
@@ -1812,13 +1850,13 @@ mod tests {
         s.execute("type.setStyle", json!({"layer": id, "range": [3, 3], "trackingBy": 100})).unwrap();
         assert_eq!(text_layer(&s, id).char_runs(), before);
         // Hostile steps are refused.
-        let steps = s.active().unwrap().history.entries().len();
+        let steps = s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len();
         for bad_step in [json!({"leadingBy": "up"}), json!({"trackingBy": 1e30}), json!({"baselineShiftBy": null}), json!({"leadingBy": [1]})] {
             let mut p = bad_step.clone();
             p["layer"] = json!(id);
             assert!(matches!(s.execute("type.setStyle", p), Err(EngineError::BadParams { .. })), "{bad_step}");
         }
-        assert_eq!(s.active().unwrap().history.entries().len(), steps);
+        assert_eq!(s.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>().len(), steps);
         // Empty text: the step sets the style the next typed characters get.
         let empty = s.execute("type.create", json!({"x": 0, "y": 80, "text": "", "size": 10})).unwrap()["layer"].as_u64().unwrap();
         s.execute("type.setStyle", json!({"layer": empty, "range": [0, 0], "leadingBy": -2})).unwrap();

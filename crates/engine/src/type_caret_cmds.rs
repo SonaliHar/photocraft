@@ -103,8 +103,28 @@ impl Frame {
 
 /// Topmost visible type layer under the point. `walk` is bottom-up; the Type tool hits the top first.
 fn topmost(doc: &Document, x: f64, y: f64) -> Result<Option<Frame>> {
-    let mut ids: Vec<LayerId> =
-        doc.walk().into_iter().filter(|(_, _, l)| l.visible && matches!(l.content, LayerContent::Text(_))).map(|(_, _, l)| l.id).collect();
+    // Match shown_at's inherited visibility without recursively allocating a path per row.
+    let mut pending = Vec::new();
+    pending.try_reserve_exact(102).map_err(|_| bad("type.hitTest", "layer traversal allocation failed"))?;
+    pending.push((doc.layers.as_slice(), true, 0usize));
+    let mut ids = Vec::new();
+    let mut visited = 0usize;
+    while let Some((siblings, inherited, depth)) = pending.pop() {
+        let Some((layer, remaining)) = siblings.split_first() else { continue };
+        visited = visited.checked_add(1).filter(|count| *count <= 100_000).ok_or_else(|| bad("type.hitTest", "layer count limit"))?;
+        let shown = inherited && layer.visible;
+        if shown && matches!(layer.content, LayerContent::Text(_)) {
+            ids.try_reserve(1).map_err(|_| bad("type.hitTest", "type target allocation failed"))?;
+            ids.push(layer.id);
+        }
+        pending.push((remaining, inherited, depth));
+        if let Some(children) = layer.children()
+            && !children.is_empty()
+        {
+            let child_depth = depth.checked_add(1).filter(|depth| *depth <= 100).ok_or_else(|| bad("type.hitTest", "layer depth limit"))?;
+            pending.push((children, shown, child_depth));
+        }
+    }
     ids.reverse();
     for id in ids {
         let f = frame(doc, id, "type.hitTest")?;
@@ -519,6 +539,17 @@ mod tests {
         for mov in ["wordNext", "wordPrev", "lineNext", "linePrev", "lineStart", "lineEnd", "start", "end"] {
             assert_eq!(go(&mut s, empty, 0, mov, None), 0, "{mov}");
         }
+    }
+
+    #[test]
+    fn automatic_hit_test_bounds_deep_traversal_before_layout() {
+        let mut layer = photocraft_doc::Layer::raster("Bounded leaf", photocraft_doc::PixelFormat::RGBA8);
+        for _ in 0..102 {
+            layer = photocraft_doc::Layer::group("Bounded parent", vec![layer]);
+        }
+        let mut doc = Document::new("Bounded hit test", photocraft_doc::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        doc.layers.push(layer);
+        assert!(topmost(&doc, 0., 0.).is_err());
     }
 
     #[test]

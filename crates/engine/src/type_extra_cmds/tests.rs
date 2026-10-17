@@ -351,7 +351,7 @@ fn installed_postscript_face_is_not_missing_or_replaced() {
     let LayerContent::Text(t) = &reopened.layer(id).unwrap().content else { panic!("text") };
     assert_eq!(t.char_runs()[0].style.font_family, "Imported Wrong Family", ".pcraft open keeps the stored label");
     let on_open = missing_font_warnings(&reopened);
-    s.add_document(reopened, None);
+    s.add_document(reopened, None).unwrap();
     let replaced = s.execute("type.replaceAllMissingFonts", json!({})).unwrap()["replaced"].clone();
     assert_eq!((created.get("warnings"), on_open, replaced), (None, Vec::<String>::new(), json!(0)));
 }

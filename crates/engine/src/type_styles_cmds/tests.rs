@@ -208,7 +208,7 @@ fn isolated_options_preview_matches_commit_with_multiple_layers_and_local_overri
             let revision = s.active().unwrap().revision;
             let p = json!({"id":id,"attrs":{"color":"#00ff00"}});
             let shown = preview_options(&doc, &p, paragraph).unwrap();
-            assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &doc));
+            assert!(s.active().unwrap().doc.shares_state(&doc));
             assert_eq!(s.active().unwrap().revision, revision);
             assert_eq!(text_of(&shown, LayerId(a)).unwrap().char_runs().last().unwrap().style.color.to_rgb(), [0.0, 0.0, 1.0]);
             assert_eq!(text_of(&shown, LayerId(b)).unwrap().color.to_rgb(), [0.0, 1.0, 0.0]);
@@ -222,7 +222,7 @@ fn isolated_options_preview_matches_commit_with_multiple_layers_and_local_overri
                 assert_eq!(expected.paragraphs, actual.paragraphs);
                 assert_eq!(expected.psd_raw, actual.psd_raw);
             }
-            assert_eq!(photocraft_compose::flatten(&shown).get(20, 40), photocraft_compose::flatten(committed).get(20, 40));
+            assert_eq!(photocraft_compose::flatten(&shown).unwrap().get(20, 40), photocraft_compose::flatten(committed).unwrap().get(20, 40));
         }
     }
 }
