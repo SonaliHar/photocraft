@@ -79,11 +79,7 @@ fn rows_list_groups_above_their_contents_and_hide_closed_ones() {
     if let Some(LayerContent::Group(g)) = outer_open.layer_mut(id).map(|l| &mut l.content) {
         g.expanded = true;
     }
-    assert_eq!(
-        names(&outer_open, false),
-        ["0:top", "0:outer", "1:in-outer", "1:inner", "0:Background"],
-        "a collapsed child group hides its contents"
-    );
+    assert_eq!(names(&outer_open, false), ["0:top", "0:outer", "1:in-outer", "1:inner", "0:Background"], "a collapsed child group hides its contents");
     assert_eq!(names(&outer_open, true).len(), 6, "a kind filter still finds layers in closed groups");
 }
 
