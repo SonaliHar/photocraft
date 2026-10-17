@@ -3216,3 +3216,8 @@ curves	Smooth	Lisser
 	Replace	Remplacer
 	{name} was changed by another app after it was opened or saved here.	{name} a été modifié par une autre application après avoir été ouvert ou enregistré ici.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Remplacez-le par ce document, ou annulez et utilisez Fichier › Enregistrer sous pour garder les deux.
+
+# DDS Options (#1327)
+	DDS Options	Options DDS
+	Compression	Compression
+	Generate Mipmaps	Générer les mipmaps
