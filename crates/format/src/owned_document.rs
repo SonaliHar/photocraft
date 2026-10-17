@@ -15,7 +15,14 @@ mod finite_catalog;
 mod save;
 mod source;
 use accounting::RetainedReservations;
-pub use save::{save_accounted_normal_hierarchy_document_archive,save_accounted_current_document_archive, save_accounted_masked_filtered_flat_document_archive, save_accounted_point_f32_coverage_document_archive, save_current_document_archive};
+pub use save::{
+    save_accounted_current_document_archive, save_accounted_masked_filtered_flat_document_archive, save_accounted_normal_hierarchy_document_archive,
+    save_accounted_point_f32_coverage_document_archive, save_current_document_archive,
+};
+pub use save::{
+    save_accounted_current_document_archive_named, save_accounted_masked_filtered_flat_document_archive_named,
+    save_accounted_normal_hierarchy_document_archive_named, save_accounted_point_f32_coverage_document_archive_named, save_current_document_archive_named,
+};
 
 /// Standard owned-codec per-raster logical ceiling. This is a descriptor allowance,
 /// not a resident allocation or encoded archive allowance. Native-large remains
@@ -158,8 +165,15 @@ impl OwnedDocumentArchive {
     }
 
     /// Marker-only selected current handoff, never unmarked source authority.
-    pub fn into_accounted_readonly_masked_filtered_flat_storage(self,control:&ReadControl<'_>)->Result<photocraft_doc::accounted_document::AccountedDocument>{self.into_accounted_with(control,AccountedHandoff::ReadonlyMaskedFilteredFlatStorage)}
-    pub fn into_accounted_readonly_normal_hierarchy_storage(self,control:&ReadControl<'_>)->Result<photocraft_doc::accounted_document::AccountedDocument>{self.into_accounted_with(control,AccountedHandoff::ReadonlyNormalHierarchyStorage)}
+    pub fn into_accounted_readonly_masked_filtered_flat_storage(
+        self,
+        control: &ReadControl<'_>,
+    ) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
+        self.into_accounted_with(control, AccountedHandoff::ReadonlyMaskedFilteredFlatStorage)
+    }
+    pub fn into_accounted_readonly_normal_hierarchy_storage(self, control: &ReadControl<'_>) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
+        self.into_accounted_with(control, AccountedHandoff::ReadonlyNormalHierarchyStorage)
+    }
     fn into_accounted_with(self, control: &ReadControl<'_>, handoff: AccountedHandoff) -> Result<photocraft_doc::accounted_document::AccountedDocument> {
         struct NativeRetention {
             _archive: Arc<dyn ImmutableCanonicalArchive>,
@@ -167,9 +181,9 @@ impl OwnedDocumentArchive {
             _owner: photocraft_raster::backing::quota::QuotaLease,
         }
         let valid_handoff = match self.current_storage_hint {
-            Some(crate::NativeCurrentStorageHint::NormalHierarchy)=>matches!(handoff,AccountedHandoff::ReadonlyNormalHierarchyStorage),
-            None => !matches!(handoff,AccountedHandoff::ReadonlyMaskedFilteredFlatStorage|AccountedHandoff::ReadonlyNormalHierarchyStorage),
-            Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint)=>matches!(handoff,AccountedHandoff::ReadonlyMaskedFilteredFlatStorage),
+            Some(crate::NativeCurrentStorageHint::NormalHierarchy) => matches!(handoff, AccountedHandoff::ReadonlyNormalHierarchyStorage),
+            None => !matches!(handoff, AccountedHandoff::ReadonlyMaskedFilteredFlatStorage | AccountedHandoff::ReadonlyNormalHierarchyStorage),
+            Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint) => matches!(handoff, AccountedHandoff::ReadonlyMaskedFilteredFlatStorage),
             Some(crate::NativeCurrentStorageHint::FilteredFlatPoint) => matches!(handoff, AccountedHandoff::ReadonlyFilteredFlatStorage),
             Some(crate::NativeCurrentStorageHint::PointF32Coverage) => matches!(handoff, AccountedHandoff::ReadonlyPointStorage),
         };
@@ -200,7 +214,9 @@ impl OwnedDocumentArchive {
                     Some(K::FilteredFlatPoint)
                 }
             }
-        } else { None };
+        } else {
+            None
+        };
         let quota = self._model.quota().clone();
         control.check(0).map_err(error)?;
         let bytes = (std::mem::size_of::<NativeRetention>() as u64).checked_add(64).ok_or_else(|| error(BackingError::Length))?;
@@ -213,10 +229,13 @@ impl OwnedDocumentArchive {
         if let Some(kind) = programme_selection {
             return photocraft_doc::accounted_document::AccountedDocument::from_owned_programme_rehydrating_selection(
                 kind, document, retention, quota, control,
-            ).map_err(error);
+            )
+            .map_err(error);
         }
         match handoff {
-            AccountedHandoff::ReadonlyNormalHierarchyStorage=>photocraft_doc::accounted_document::AccountedDocument::new_readonly_masked_normal_hierarchy_current_storage(document,retention,quota,control),
+            AccountedHandoff::ReadonlyNormalHierarchyStorage => {
+                photocraft_doc::accounted_document::AccountedDocument::new_readonly_masked_normal_hierarchy_current_storage(document, retention, quota, control)
+            }
             AccountedHandoff::Document => {
                 photocraft_doc::accounted_document::AccountedDocument::from_owned_rehydrating_selection(document, retention, quota, control)
             }
@@ -235,14 +254,20 @@ impl OwnedDocumentArchive {
             AccountedHandoff::ReadonlyGaussianGroupStorage => {
                 photocraft_doc::accounted_document::AccountedDocument::from_owned_readonly_gaussian_group(document, retention, quota, control)
             }
-            AccountedHandoff::ReadonlyMaskedFilteredFlatStorage=>photocraft_doc::accounted_document::AccountedDocument::new_readonly_masked_filtered_flat_point_current_storage(document,retention,quota,control),
+            AccountedHandoff::ReadonlyMaskedFilteredFlatStorage => {
+                photocraft_doc::accounted_document::AccountedDocument::new_readonly_masked_filtered_flat_point_current_storage(
+                    document, retention, quota, control,
+                )
+            }
             AccountedHandoff::ReadonlyFilteredFlatStorage => match current_storage_hint {
-                Some(crate::NativeCurrentStorageHint::NormalHierarchy)=>return Err(FormatError::Unsupported("hierarchy requires exact handoff".into())),
+                Some(crate::NativeCurrentStorageHint::NormalHierarchy) => return Err(FormatError::Unsupported("hierarchy requires exact handoff".into())),
                 Some(crate::NativeCurrentStorageHint::FilteredFlatPoint) => {
                     photocraft_doc::accounted_document::AccountedDocument::new_readonly_filtered_flat_point_current_storage(document, retention, quota, control)
                 }
                 None => photocraft_doc::accounted_document::AccountedDocument::new_readonly_filtered_flat_point_storage(document, retention, quota, control),
-                Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint)=>return Err(FormatError::Unsupported("masked mixed requires exact handoff".into())),
+                Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint) => {
+                    return Err(FormatError::Unsupported("masked mixed requires exact handoff".into()));
+                }
                 Some(crate::NativeCurrentStorageHint::PointF32Coverage) => return Err(FormatError::Unsupported("coverage requires Point handoff".into())),
             },
             AccountedHandoff::ReadonlyFlatCompositeStorage => {
@@ -263,6 +288,9 @@ impl OwnedDocumentArchive {
 }
 
 #[cfg(test)]
+#[path = "owned_document/assigned_point_storage_tests.rs"]
+mod assigned_point_storage_tests;
+#[cfg(test)]
 #[path = "owned_document/threshold_alpha_storage_tests.rs"]
 mod threshold_alpha_storage_tests;
 #[cfg(test)]
@@ -271,9 +299,6 @@ mod threshold_storage_tests;
 #[cfg(test)]
 #[path = "owned_document/translated_storage_tests.rs"]
 mod translated_storage_tests;
-#[cfg(test)]
-#[path = "owned_document/assigned_point_storage_tests.rs"]
-mod assigned_point_storage_tests;
 pub(crate) fn error(error: BackingError) -> FormatError {
     if error == BackingError::Cancelled { FormatError::Cancelled } else { FormatError::Io(std::io::Error::other(error)) }
 }
@@ -281,32 +306,34 @@ pub(crate) fn error(error: BackingError) -> FormatError {
 /// Private post-validation feature scan. Both callers have just completed the
 /// normal Doc validation through doc_m or Loader::document_with_interrupt.
 /// Keep the upstream scanner and every generic node/argument limit unchanged.
-fn requires_reader_v9_after_validation(doc:&Document,quota:&BackingQuota,control:&ReadControl<'_>)->Result<bool>{
+fn requires_reader_v9_after_validation(doc: &Document, quota: &BackingQuota, control: &ReadControl<'_>) -> Result<bool> {
     control.check(1).map_err(error)?;
-    let needs_scan=doc.xcf_state.as_ref().is_some_and(|state|!state.source_items.is_empty()||!state.filter_stacks.is_empty());
+    let needs_scan = doc.xcf_state.as_ref().is_some_and(|state| !state.source_items.is_empty() || !state.filter_stacks.is_empty());
     if !needs_scan {
-        let found=crate::convert::requires_reader_v9_state_with(doc,*control.interrupt)?;
+        let found = crate::convert::requires_reader_v9_state_with(doc, *control.interrupt)?;
         control.check(0).map_err(error)?;
         return Ok(found);
     }
-    let state=doc.xcf_state.as_ref().ok_or_else(||error(BackingError::Integrity))?;
-    if state.source_items.len()>10000 || state.filter_stacks.len()>10000 {
+    let state = doc.xcf_state.as_ref().ok_or_else(|| error(BackingError::Integrity))?;
+    if state.source_items.len() > 10000 || state.filter_stacks.len() > 10000 {
         return Err(FormatError::LimitExceeded("stored-color state scan count".into()));
     }
     // Doc validation bounds total filters to100000; the upstream feature scan
     // bounds combined argument/graph visits to100000. Include root argument
     // calls/recursive frames with a conservative scalar-operation multiplier.
     // This is prepaid logical work, not measured CPU time or a fresh counter.
-    let work=100000u64.checked_add(100000)
-        .and_then(|n|n.checked_add(state.source_items.len() as u64))
-        .and_then(|n|n.checked_add(state.filter_stacks.len() as u64))
-        .and_then(|n|n.checked_add(1)).and_then(|n|n.checked_mul(8))
-        .ok_or_else(||FormatError::LimitExceeded("owned stored-color scan work".into()))?;
+    let work = 100000u64
+        .checked_add(100000)
+        .and_then(|n| n.checked_add(state.source_items.len() as u64))
+        .and_then(|n| n.checked_add(state.filter_stacks.len() as u64))
+        .and_then(|n| n.checked_add(1))
+        .and_then(|n| n.checked_mul(8))
+        .ok_or_else(|| FormatError::LimitExceeded("owned stored-color scan work".into()))?;
     control.check(work).map_err(error)?;
     // Real same-ledger phase admission for depth<=32 recursion and wrapper/
     // guard headers. A conservative logical envelope, not a stack/RSS census.
-    let _scan=quota.reserve(photocraft_raster::backing::quota::QuotaKind::Resident,32<<10).map_err(|_|error(BackingError::Quota))?;
-    let found=crate::convert::requires_reader_v9_state_with(doc,*control.interrupt)?;
+    let _scan = quota.reserve(photocraft_raster::backing::quota::QuotaKind::Resident, 32 << 10).map_err(|_| error(BackingError::Quota))?;
+    let found = crate::convert::requires_reader_v9_state_with(doc, *control.interrupt)?;
     control.check(0).map_err(error)?;
     Ok(found)
 }
@@ -333,7 +360,9 @@ pub fn load_document_from_owned_archive(
         ..*options
     };
     let manifest = crate::store::read_manifest(&source, &options)?;
-    if manifest.current_storage_hint==Some(crate::NativeCurrentStorageHint::NormalHierarchy){crate::normal_hierarchy::preflight(&manifest.document,control)?;}
+    if manifest.current_storage_hint == Some(crate::NativeCurrentStorageHint::NormalHierarchy) {
+        crate::normal_hierarchy::preflight(&manifest.document, control)?;
+    }
     fn layers(values: &[crate::manifest::LayerM], depth: usize, control: &ReadControl<'_>) -> Result<usize> {
         if depth > crate::MAX_GROUP_DEPTH {
             return Err(FormatError::LimitExceeded("owned document layer depth".into()));
@@ -369,16 +398,18 @@ pub fn load_document_from_owned_archive(
         legacy_linked_contents: HashMap::new(),
         tiles: HashMap::new(),
     };
-    let document = if manifest.current_storage_hint==Some(crate::NativeCurrentStorageHint::NormalHierarchy){loader.document_with_normal_hierarchy_control(&manifest.document,control,&quota)?}else if manifest.current_storage_hint == Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint){
-        loader.document_with_mask_set_control(&manifest.document,control,&quota)?
-    }else if manifest.current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
+    let document = if manifest.current_storage_hint == Some(crate::NativeCurrentStorageHint::NormalHierarchy) {
+        loader.document_with_normal_hierarchy_control(&manifest.document, control, &quota)?
+    } else if manifest.current_storage_hint == Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint) {
+        loader.document_with_mask_set_control(&manifest.document, control, &quota)?
+    } else if manifest.current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
         loader.document_with_coverage_control(&manifest.document, control.interrupt, Some(control))?
     } else {
         loader.document_with_interrupt(&manifest.document, control.interrupt)?
     };
     let max_id = loader.max_id;
     drop(loader);
-    if requires_reader_v9_after_validation(&document,&quota,control)? && manifest.minimum_reader_version<9 {
+    if requires_reader_v9_after_validation(&document, &quota, control)? && manifest.minimum_reader_version < 9 {
         return Err(FormatError::Corrupt("raw stored color requires minimum reader version 9".into()));
     }
     if crate::convert::requires_reader_v3_state(&document) && manifest.minimum_reader_version < 3 {
@@ -413,7 +444,7 @@ pub fn load_document_from_owned_archive(
 }
 
 #[cfg(test)]
-#[path="owned_document/stored_color_v9_tests.rs"]
+#[path = "owned_document/stored_color_v9_tests.rs"]
 mod stored_color_v9_tests;
 
 #[cfg(test)]

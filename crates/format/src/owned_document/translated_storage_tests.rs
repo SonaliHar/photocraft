@@ -264,7 +264,7 @@ fn translated_cow_survives_two_native_continuations() {
     let default = &default_bytes[..length];
     let edit = Rect::new(rect.x0 + 1, rect.y0 + 1, rect.x0 + 2, rect.y0 + 2);
     let mut replacement = [0u8; 32];
-    for (chunk, word) in replacement.chunks_exact_mut(8).zip([0x8000000000000000u64, 0x7ff8000000004321, 0x3ff0000000000001, 1]) {
+    for (chunk, word) in replacement.as_chunks_mut::<8>().0.iter_mut().zip([0x8000000000000000u64, 0x7ff8000000004321, 0x3ff0000000000001, 1]) {
         chunk.copy_from_slice(&word.to_ne_bytes());
     }
     let changed = moved.try_edited_native(edit, &replacement, &ctl()).unwrap();

@@ -78,7 +78,11 @@ fn byte_service_refuses_bad_lengths_and_quota_before_file_creation() {
     let work = |_| Ok(());
     let control = ReadControl { interrupt: &Interrupt::NONE, work: &work };
     let q = quota(4097);
-    for length in [0, (256 << 20) + 1, u64::MAX] {
+    for length in [
+        0,
+        u64::from(photocraft_io::native_plane_store::NATIVE_STORE_MAX_BLOCKS) * photocraft_io::native_plane_store::NATIVE_STORE_BLOCK_BYTES as u64 + 1,
+        u64::MAX,
+    ] {
         assert_eq!(directory.create_owned_byte_storage(length, &q, &control).unwrap_err(), BackingError::Bounds);
         assert_eq!(root.entries(), 0);
         assert_eq!(q.usage().unwrap(), QuotaUsage::default());

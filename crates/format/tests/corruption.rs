@@ -175,7 +175,11 @@ fn many_references_to_one_tile_load_within_the_budget() {
         Some(serde_json::to_vec(&m).unwrap())
     });
     let one_tile = 256 * 256 * 4;
-    let back = load_from_bytes_with(&hostile, &LoadOptions { max_total_bytes: one_tile, ..Default::default() }).unwrap();
+    // The logical tile is shared, but decode also prospectively admits the
+    // encoded input and bounded decompressor overlap. References do not multiply it.
+    let decode_envelope = one_tile + one_tile / 8 + 4096;
+    let peak = one_tile + decode_envelope + 16;
+    let back = load_from_bytes_with(&hostile, &LoadOptions { max_total_bytes: peak, ..Default::default() }).unwrap();
     let s = back.layers[0].surface().unwrap();
     assert_eq!(s.tile_count(), 256 * 256);
     let first = s.tiles().next().unwrap().1;

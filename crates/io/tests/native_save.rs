@@ -193,7 +193,7 @@ fn controlled_byte_export_is_deterministic_and_legacy_contents_match() {
     let (second, _) = photocraft_io::save_native_bytes(&doc, Default::default(), &Interrupt::NONE).unwrap();
     assert_eq!(first, second);
     assert_eq!(load_from_bytes(&first).unwrap(), before);
-    let public = photocraft_io::export(&doc, "own.pcraft", &Default::default()).unwrap();
+    let public = photocraft_io::export(&doc, "pcraft", &Default::default()).unwrap();
     assert_eq!(public.bytes, first);
     assert_eq!(doc, before);
     assert!(matches!(photocraft_io::save_native_bytes(&doc, Default::default(), &Interrupt::cancel_only(&|| true)), Err(photocraft_io::IoError::Cancelled)));
@@ -272,14 +272,14 @@ fn styled_preview_cancellation_and_small_cap_leave_destination_unchanged() {
     assert!(save_native_stream(&doc, &mut output, limits, &Interrupt::NONE).is_err());
     assert!(output.get_ref().is_empty());
     assert_eq!(doc, before);
-    // Nonported spread stays on the established baseline route rather than
-    // turning an additive preparation subset into a production restriction.
+    // Spread is now part of the admitted styled-preview route; retain its
+    // complete native model through the same controlled save.
     let mut effect = photocraft_doc::Effect::default_drop_shadow();
     if let photocraft_doc::Effect::DropShadow(s) = &mut effect {
         s.spread = 0.2;
     }
     doc.layers[0].effects.items.push(effect);
-    assert!(!photocraft_compose::styled_preview::styled_preview_supported(&doc));
+    assert!(photocraft_compose::styled_preview::styled_preview_supported(&doc));
     let (output, _) = save_native_stream(&doc, Cursor::new(Vec::new()), Default::default(), &Interrupt::NONE).unwrap();
     assert_eq!(load_from_bytes(output.get_ref()).unwrap(), doc);
 }

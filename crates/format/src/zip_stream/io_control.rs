@@ -62,8 +62,9 @@ pub(super) fn write_all(output: &mut impl Write, bytes: &[u8], control: &Interru
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
     struct ShortRead<'a> {
-        cancel: &'a std::cell::Cell<bool>,
+        cancel: &'a AtomicBool,
         calls: usize,
     }
     impl Read for ShortRead<'_> {
@@ -71,7 +72,7 @@ mod tests {
             self.calls += 1;
             if let Some(first) = bytes.first_mut() {
                 *first = 7;
-                self.cancel.set(true);
+                self.cancel.store(true, Ordering::Relaxed);
                 Ok(1)
             } else {
                 Ok(0)
@@ -79,14 +80,14 @@ mod tests {
         }
     }
     struct ShortWrite<'a> {
-        cancel: &'a std::cell::Cell<bool>,
+        cancel: &'a AtomicBool,
         bytes: Vec<u8>,
     }
     impl Write for ShortWrite<'_> {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
             if let Some(first) = bytes.first() {
                 self.bytes.push(*first);
-                self.cancel.set(true);
+                self.cancel.store(true, Ordering::Relaxed);
                 Ok(1)
             } else {
                 Ok(0)
@@ -98,13 +99,13 @@ mod tests {
     }
     #[test]
     fn token_changed_by_first_short_io_stops_before_second_attempt() {
-        let cancel = std::cell::Cell::new(false);
-        let cancelled = || cancel.get();
+        let cancel = AtomicBool::new(false);
+        let cancelled = || cancel.load(Ordering::Relaxed);
         let control = Interrupt::cancel_only(&cancelled);
         let mut reader = ShortRead { cancel: &cancel, calls: 0 };
         assert!(matches!(read_exact(&mut reader, &mut [0; 8], &control), Err(FormatError::Cancelled)));
         assert_eq!(reader.calls, 1);
-        cancel.set(false);
+        cancel.store(false, Ordering::Relaxed);
         let mut writer = ShortWrite { cancel: &cancel, bytes: Vec::new() };
         assert!(matches!(write_all(&mut writer, &[1; 8], &control), Err(FormatError::Cancelled)));
         assert_eq!(writer.bytes.len(), 1);

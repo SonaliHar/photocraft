@@ -152,7 +152,9 @@ fn actual_three_accounted_native_archive_keeps_state_and_refunds() {
             let service = ServiceAuthorizedScratchDirectory::from_platform_authorized(scratch.clone(), &budget).unwrap();
             open_accounted_native(&read, &service, OwnedDocumentLimits::default(), q.clone(), &ctl).unwrap()
         };
-        assert_eq!(*owned.document(), doc);
+        let mut expected_native = doc.clone();
+        expected_native.name = native.file_name().unwrap().to_str().unwrap().to_owned();
+        assert_eq!(*owned.document(), expected_native);
         let expected = photocraft_compose::gimp_render::try_render(&doc, doc.bounds(), &mut |_| Ok(())).unwrap();
         let observed = photocraft_compose::gimp_render::try_render(owned.document(), doc.bounds(), &mut |_| Ok(())).unwrap();
         assert_eq!(observed.px, expected.px);

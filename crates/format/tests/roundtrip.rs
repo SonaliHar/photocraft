@@ -380,7 +380,13 @@ fn solid_fill_reopens_with_one_shared_tile() {
         doc.layers.push(l);
         let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
         let one_tile = (256 * 256 * doc.pixel_format().bytes_per_pixel()) as u64;
-        let back = load_from_bytes_with(&bytes, &LoadOptions { max_total_bytes: one_tile, ..Default::default() }).unwrap();
+        // Retained tile sharing does not erase encoded/decompressed overlap.
+        let peak = one_tile + (one_tile + one_tile / 8 + 4096) + 16;
+        let back = load_from_bytes_with(&bytes, &LoadOptions { max_total_bytes: peak, ..Default::default() }).unwrap();
+        assert!(matches!(
+            load_from_bytes_with(&bytes, &LoadOptions { max_total_bytes: one_tile - 1, ..Default::default() }),
+            Err(FormatError::LimitExceeded(_))
+        ));
         assert_eq!(back, doc, "{depth:?}");
         let s = back.layers[0].surface().unwrap();
         assert_eq!(s.tile_count(), 64, "{depth:?}");

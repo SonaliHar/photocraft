@@ -153,13 +153,19 @@ struct StoredXcfState<'a>(&'a photocraft_doc::XcfState);
 pub(crate) fn requires_reader_v9_state_with(doc: &Document, control: photocraft_raster::Interrupt<'_>) -> Result<bool> {
     use photocraft_doc::xcf_filters::{FilterArgument, FilterValue};
     fn visit(control: photocraft_raster::Interrupt<'_>, visits: &mut usize) -> Result<()> {
-        if control.cancelled() { return Err(FormatError::Cancelled); }
+        if control.cancelled() {
+            return Err(FormatError::Cancelled);
+        }
         *visits = visits.checked_add(1).filter(|n| *n <= 100_000).ok_or_else(|| FormatError::LimitExceeded("stored-color feature scan visits".into()))?;
         Ok(())
     }
     fn arguments(values: &[FilterArgument], depth: usize, visits: &mut usize, control: photocraft_raster::Interrupt<'_>) -> Result<bool> {
-        if depth > 32 || values.len() > 100_000 { return Err(FormatError::LimitExceeded("stored-color feature scan depth/count".into())); }
-        if control.cancelled() { return Err(FormatError::Cancelled); }
+        if depth > 32 || values.len() > 100_000 {
+            return Err(FormatError::LimitExceeded("stored-color feature scan depth/count".into()));
+        }
+        if control.cancelled() {
+            return Err(FormatError::Cancelled);
+        }
         let mut found = false;
         for argument in values {
             visit(control, visits)?;
@@ -167,12 +173,19 @@ pub(crate) fn requires_reader_v9_state_with(doc: &Document, control: photocraft_
                 FilterValue::StoredColor(_) => found = true,
                 FilterValue::Config(config) => found |= arguments(config, depth + 1, visits, control)?,
                 FilterValue::Graph(graph) => {
-                    if graph.nodes.len() > 4096 || graph.edges.len() > 16384 { return Err(FormatError::LimitExceeded("stored-color graph count".into())); }
-                    *visits = visits.checked_add(graph.nodes.len()).and_then(|n| n.checked_add(graph.edges.len()))
-                        .and_then(|n| n.checked_add(usize::from(graph.input.is_some()))).filter(|n| *n <= 100_000)
+                    if graph.nodes.len() > 4096 || graph.edges.len() > 16384 {
+                        return Err(FormatError::LimitExceeded("stored-color graph count".into()));
+                    }
+                    *visits = visits
+                        .checked_add(graph.nodes.len())
+                        .and_then(|n| n.checked_add(graph.edges.len()))
+                        .and_then(|n| n.checked_add(usize::from(graph.input.is_some())))
+                        .filter(|n| *n <= 100_000)
                         .ok_or_else(|| FormatError::LimitExceeded("stored-color graph visits".into()))?;
                     for node in &graph.nodes {
-                        if control.cancelled() { return Err(FormatError::Cancelled); }
+                        if control.cancelled() {
+                            return Err(FormatError::Cancelled);
+                        }
                         found |= arguments(&node.arguments, depth + 2, visits, control)?;
                     }
                 }
@@ -182,12 +195,18 @@ pub(crate) fn requires_reader_v9_state_with(doc: &Document, control: photocraft_
         Ok(found)
     }
     let mut visits = 0;
-    if control.cancelled() { return Err(FormatError::Cancelled); }
+    if control.cancelled() {
+        return Err(FormatError::Cancelled);
+    }
     let mut found = false;
     if let Some(state) = &doc.xcf_state {
-        if state.source_items.len() > 10_000 || state.filter_stacks.len() > 10_000 { return Err(FormatError::LimitExceeded("stored-color state scan count".into())); }
+        if state.source_items.len() > 10_000 || state.filter_stacks.len() > 10_000 {
+            return Err(FormatError::LimitExceeded("stored-color state scan count".into()));
+        }
         for source in &state.source_items {
-            if control.cancelled() { return Err(FormatError::Cancelled); }
+            if control.cancelled() {
+                return Err(FormatError::Cancelled);
+            }
             let configuration = match &source.source {
                 photocraft_doc::xcf_items::EditableSource::Text { configuration, .. }
                 | photocraft_doc::xcf_items::EditableSource::Vector { configuration, .. }
@@ -196,15 +215,23 @@ pub(crate) fn requires_reader_v9_state_with(doc: &Document, control: photocraft_
             found |= arguments(configuration, 0, &mut visits, control)?;
         }
         for stack in &state.filter_stacks {
-            if control.cancelled() { return Err(FormatError::Cancelled); }
-            if stack.nodes.len() > 1024 { return Err(FormatError::LimitExceeded("stored-color filter scan count".into())); }
+            if control.cancelled() {
+                return Err(FormatError::Cancelled);
+            }
+            if stack.nodes.len() > 1024 {
+                return Err(FormatError::LimitExceeded("stored-color filter scan count".into()));
+            }
             for node in &stack.nodes {
-                if control.cancelled() { return Err(FormatError::Cancelled); }
+                if control.cancelled() {
+                    return Err(FormatError::Cancelled);
+                }
                 found |= arguments(&node.arguments, 0, &mut visits, control)?;
             }
         }
     }
-    if control.cancelled() { return Err(FormatError::Cancelled); }
+    if control.cancelled() {
+        return Err(FormatError::Cancelled);
+    }
     Ok(found)
 }
 #[cfg(test)]
@@ -216,17 +243,27 @@ pub(crate) fn requires_reader_v8_state_with(doc: &Document, control: photocraft_
         // Match check_nesting exactly: a deepest allowed group may have an
         // empty children slice beyond the limit. This feature scan imposes no
         // new layer-count policy; save/load callers retain their own ceilings.
-        if depth > MAX_GROUP_DEPTH && !layers.is_empty() { return Err(too_deep()); }
+        if depth > MAX_GROUP_DEPTH && !layers.is_empty() {
+            return Err(too_deep());
+        }
         for layer in layers {
-            if control.cancelled() { return Err(FormatError::Cancelled); }
-            if layer.label == photocraft_doc::LabelColor::Brown { return Ok(true); }
-            if let LayerContent::Group(group) = &layer.content {
-                if visit(&group.children, depth + 1, control)? { return Ok(true); }
+            if control.cancelled() {
+                return Err(FormatError::Cancelled);
+            }
+            if layer.label == photocraft_doc::LabelColor::Brown {
+                return Ok(true);
+            }
+            if let LayerContent::Group(group) = &layer.content
+                && visit(&group.children, depth + 1, control)?
+            {
+                return Ok(true);
             }
         }
         Ok(false)
     }
-    if control.cancelled() { return Err(FormatError::Cancelled); }
+    if control.cancelled() {
+        return Err(FormatError::Cancelled);
+    }
     visit(&doc.layers, 0, control)
 }
 pub(crate) fn requires_reader_v7_state_with(doc: &Document, control: photocraft_raster::Interrupt<'_>) -> Result<bool> {
@@ -535,6 +572,26 @@ fn string(value: &str, sink: &mut dyn Sink<'_>) -> Result<String> {
     Ok(result)
 }
 
+// Named saves allocate only the serialized title. The live model is never renamed.
+fn document_name(original: &str, destination: Option<&str>, sink: &mut dyn Sink<'_>) -> Result<String> {
+    let Some(name) = destination else {
+        return string(original, sink);
+    };
+    if name.is_empty() || name.len() > 4096 || name.contains(['/', '\\', '\0']) {
+        return Err(FormatError::Unsupported("native destination name must be a bounded UTF-8 leaf".into()));
+    }
+    // string() admits len; admit its possible spare capacity and header first.
+    let extra = name.len().checked_add(128).ok_or_else(|| FormatError::LimitExceeded("native title bytes".into()))?;
+    let capacity = name.len().checked_add(extra).ok_or_else(|| FormatError::LimitExceeded("native title bytes".into()))?;
+    sink.reserve(extra)?;
+    let result = string(name, sink)?;
+    if result.capacity() > capacity {
+        return Err(FormatError::LimitExceeded("native title capacity".into()));
+    }
+    sink.poll()?;
+    Ok(result)
+}
+
 fn optional_string(value: &Option<String>, sink: &mut dyn Sink<'_>) -> Result<Option<String>> {
     value.as_ref().map(|v| string(v, sink)).transpose()
 }
@@ -755,28 +812,85 @@ pub(crate) fn doc_m_with_checked_filter_mask<'doc>(
     sink: &mut dyn Sink<'doc>,
     proof: Option<&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,
 ) -> Result<DocM> {
-    doc_m_selected(d,sink,proof,None,false)
+    doc_m_selected(d, sink, proof, None, false, None)
 }
-pub(crate) fn doc_m_with_checked_filter_masks<'doc>(d:&'doc Document,sink:&mut dyn Sink<'doc>,proof:&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverageSet<'_>)->Result<DocM>{doc_m_selected(d,sink,None,Some(proof),false)}
+pub(crate) fn doc_m_with_checked_filter_masks<'doc>(
+    d: &'doc Document,
+    sink: &mut dyn Sink<'doc>,
+    proof: &photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverageSet<'_>,
+) -> Result<DocM> {
+    doc_m_selected(d, sink, None, Some(proof), false, None)
+}
 #[allow(dead_code)] // Retained strict BYTEzero serializer; selected Current uses the additive coverage index.
-pub(crate) fn doc_m_with_normal_hierarchy_index<'doc>(d:&'doc Document,sink:&mut dyn Sink<'doc>,index:&photocraft_doc::normal_hierarchy_index::CheckedNormalHierarchyIndex<'_>)->Result<DocM>{
-    if !index.matches_document(d){return Err(FormatError::Unsupported("foreign hierarchy index".into()))}doc_m_selected(d,sink,None,None,true)
+pub(crate) fn doc_m_with_normal_hierarchy_index<'doc>(
+    d: &'doc Document,
+    sink: &mut dyn Sink<'doc>,
+    index: &photocraft_doc::normal_hierarchy_index::CheckedNormalHierarchyIndex<'_>,
+) -> Result<DocM> {
+    if !index.matches_document(d) {
+        return Err(FormatError::Unsupported("foreign hierarchy index".into()));
+    }
+    doc_m_selected(d, sink, None, None, true, None)
 }
-pub(crate) fn doc_m_with_normal_hierarchy_mask_index<'doc>(d:&'doc Document,sink:&mut dyn Sink<'doc>,index:&photocraft_doc::normal_hierarchy_mask_index::CheckedNormalHierarchyMaskIndex<'_>)->Result<DocM>{
- if !index.matches_document(d){return Err(FormatError::Unsupported("foreign hierarchy coverage index".into()))}doc_m_selected(d,sink,None,None,true)
+pub(crate) fn doc_m_with_normal_hierarchy_mask_index<'doc>(
+    d: &'doc Document,
+    sink: &mut dyn Sink<'doc>,
+    index: &photocraft_doc::normal_hierarchy_mask_index::CheckedNormalHierarchyMaskIndex<'_>,
+) -> Result<DocM> {
+    if !index.matches_document(d) {
+        return Err(FormatError::Unsupported("foreign hierarchy coverage index".into()));
+    }
+    doc_m_selected(d, sink, None, None, true, None)
 }
-fn doc_m_selected<'doc>(d:&'doc Document,sink:&mut dyn Sink<'doc>,proof:Option<&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,set:Option<&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverageSet<'_>>,hierarchy_validated:bool)->Result<DocM>{
+pub(crate) fn doc_m_named<'doc>(d: &'doc Document, sink: &mut dyn Sink<'doc>, name: &str) -> Result<DocM> {
+    doc_m_selected(d, sink, None, None, false, Some(name))
+}
+pub(crate) fn doc_m_with_checked_filter_mask_named<'doc>(
+    d: &'doc Document,
+    sink: &mut dyn Sink<'doc>,
+    proof: Option<&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,
+    name: &str,
+) -> Result<DocM> {
+    doc_m_selected(d, sink, proof, None, false, Some(name))
+}
+pub(crate) fn doc_m_with_checked_filter_masks_named<'doc>(
+    d: &'doc Document,
+    sink: &mut dyn Sink<'doc>,
+    proof: &photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverageSet<'_>,
+    name: &str,
+) -> Result<DocM> {
+    doc_m_selected(d, sink, None, Some(proof), false, Some(name))
+}
+pub(crate) fn doc_m_with_normal_hierarchy_mask_index_named<'doc>(
+    d: &'doc Document,
+    sink: &mut dyn Sink<'doc>,
+    index: &photocraft_doc::normal_hierarchy_mask_index::CheckedNormalHierarchyMaskIndex<'_>,
+    name: &str,
+) -> Result<DocM> {
+    if !index.matches_document(d) {
+        return Err(FormatError::Unsupported("foreign hierarchy coverage index".into()));
+    }
+    doc_m_selected(d, sink, None, None, true, Some(name))
+}
+fn doc_m_selected<'doc>(
+    d: &'doc Document,
+    sink: &mut dyn Sink<'doc>,
+    proof: Option<&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverage<'_>>,
+    set: Option<&photocraft_doc::xcf_filter_masks::CheckedFilterMaskCoverageSet<'_>>,
+    hierarchy_validated: bool,
+    destination_name: Option<&str>,
+) -> Result<DocM> {
     sink.poll()?;
     if !d.resolution_dpi.is_finite() {
         return Err(FormatError::NonFinite { path: "document.resolution_dpi".into() });
     }
     if !hierarchy_validated {
-    match (set,proof) {
-        (Some(set),_)=>d.validate_xcf_state_with_checked_filter_masks(set,&sink.control()),
-        (None,Some(proof)) => d.validate_xcf_state_with_checked_filter_mask(proof, &sink.control()),
-        (None,None) => d.validate_xcf_state_with(&sink.control()),
-    }
-    .map_err(|e| if sink.control().cancelled() { FormatError::Cancelled } else { FormatError::Unsupported(e.to_string()) })?;
+        match (set, proof) {
+            (Some(set), _) => d.validate_xcf_state_with_checked_filter_masks(set, &sink.control()),
+            (None, Some(proof)) => d.validate_xcf_state_with_checked_filter_mask(proof, &sink.control()),
+            (None, None) => d.validate_xcf_state_with(&sink.control()),
+        }
+        .map_err(|e| if sink.control().cancelled() { FormatError::Cancelled } else { FormatError::Unsupported(e.to_string()) })?;
     }
     let xcf_state = d
         .xcf_state
@@ -834,7 +948,7 @@ fn doc_m_selected<'doc>(d:&'doc Document,sink:&mut dyn Sink<'doc>,proof:Option<&
             .map(|c| -> Result<_> { Ok(SourceColorContextM { original_icc: opt_blob(&c.original_icc, sink)?, source_precision: c.source_precision }) })
             .transpose()?,
         id: d.id.0,
-        name: string(&d.name, sink)?,
+        name: document_name(&d.name, destination_name, sink)?,
         size: d.size,
         resolution_dpi: d.resolution_dpi,
         mode: d.mode,
@@ -915,8 +1029,13 @@ fn comp_m(c: &LayerComp, sink: &mut dyn Sink<'_>) -> Result<LayerCompM> {
 // Load
 // ---------------------------------------------------------------------------
 
-#[derive(Clone,Copy)]
-enum CoverageLoad<'a,'c>{Hierarchy(&'a photocraft_raster::backing::quota::BackingQuota,&'a photocraft_raster::backing::ReadControl<'c>),Strict,Single(&'a photocraft_raster::backing::ReadControl<'c>),Set(&'a photocraft_raster::backing::quota::BackingQuota,&'a photocraft_raster::backing::ReadControl<'c>)}
+#[derive(Clone, Copy)]
+enum CoverageLoad<'a, 'c> {
+    Hierarchy(&'a photocraft_raster::backing::quota::BackingQuota, &'a photocraft_raster::backing::ReadControl<'c>),
+    Strict,
+    Single(&'a photocraft_raster::backing::ReadControl<'c>),
+    Set(&'a photocraft_raster::backing::quota::BackingQuota, &'a photocraft_raster::backing::ReadControl<'c>),
+}
 pub(crate) struct Loader<'a> {
     pub fetch: &'a mut dyn Fetch,
     pub preserve_ids: bool,
@@ -1223,15 +1342,48 @@ impl Loader<'_> {
         control: &photocraft_raster::Interrupt<'_>,
         coverage_control: Option<&photocraft_raster::backing::ReadControl<'_>>,
     ) -> Result<Document> {
-        self.document_with_selected_coverage(m,control,match coverage_control{Some(c)=>CoverageLoad::Single(c),None=>CoverageLoad::Strict})
+        self.document_with_selected_coverage(
+            m,
+            control,
+            match coverage_control {
+                Some(c) => CoverageLoad::Single(c),
+                None => CoverageLoad::Strict,
+            },
+        )
     }
-    pub(crate) fn document_with_mask_set_control(&mut self,m:&DocM,c:&photocraft_raster::backing::ReadControl<'_>,q:&photocraft_raster::backing::quota::BackingQuota)->Result<Document>{
-        self.document_with_selected_coverage(m,c.interrupt,CoverageLoad::Set(q,c))
+    pub(crate) fn document_with_mask_set_control(
+        &mut self,
+        m: &DocM,
+        c: &photocraft_raster::backing::ReadControl<'_>,
+        q: &photocraft_raster::backing::quota::BackingQuota,
+    ) -> Result<Document> {
+        self.document_with_selected_coverage(m, c.interrupt, CoverageLoad::Set(q, c))
     }
-    pub(crate) fn document_with_normal_hierarchy_control(&mut self,m:&DocM,c:&photocraft_raster::backing::ReadControl<'_>,q:&photocraft_raster::backing::quota::BackingQuota)->Result<Document>{self.document_with_selected_coverage(m,c.interrupt,CoverageLoad::Hierarchy(q,c))}
-    fn document_with_selected_coverage(&mut self,m:&DocM,control:&photocraft_raster::Interrupt<'_>,purpose:CoverageLoad<'_,'_>)->Result<Document>{
-        let hierarchy=match purpose{CoverageLoad::Hierarchy(q,c)=>Some((q,c)),_=>None};
-        let (coverage_control,set_quota)=match purpose{CoverageLoad::Hierarchy(_,c)=>{crate::normal_hierarchy::preflight(m,c)?;(Some(c),None)},CoverageLoad::Strict=>(None,None),CoverageLoad::Single(c)=>(Some(c),None),CoverageLoad::Set(q,c)=>{crate::masked_filtered_flat::preflight(m,c)?;(Some(c),Some(q))}};
+    pub(crate) fn document_with_normal_hierarchy_control(
+        &mut self,
+        m: &DocM,
+        c: &photocraft_raster::backing::ReadControl<'_>,
+        q: &photocraft_raster::backing::quota::BackingQuota,
+    ) -> Result<Document> {
+        self.document_with_selected_coverage(m, c.interrupt, CoverageLoad::Hierarchy(q, c))
+    }
+    fn document_with_selected_coverage(&mut self, m: &DocM, control: &photocraft_raster::Interrupt<'_>, purpose: CoverageLoad<'_, '_>) -> Result<Document> {
+        let hierarchy = match purpose {
+            CoverageLoad::Hierarchy(q, c) => Some((q, c)),
+            _ => None,
+        };
+        let (coverage_control, set_quota) = match purpose {
+            CoverageLoad::Hierarchy(_, c) => {
+                crate::normal_hierarchy::preflight(m, c)?;
+                (Some(c), None)
+            }
+            CoverageLoad::Strict => (None, None),
+            CoverageLoad::Single(c) => (Some(c), None),
+            CoverageLoad::Set(q, c) => {
+                crate::masked_filtered_flat::preflight(m, c)?;
+                (Some(c), Some(q))
+            }
+        };
         // Reserve every stored id before allocating identities missing from older bundles. If an
         // id is implausibly large, remap the whole document while retaining shared contents groups.
         if self.preserve_ids {
@@ -1337,14 +1489,165 @@ impl Loader<'_> {
         // Variable targets follow their layers through id remapping; a dangling one keeps a
         // non-colliding placeholder so it stays a missing-layer skip rather than driving an
         // unrelated layer (#4969). With preserved ids the map is the identity and defs stay as saved.
-        let mut variables = m.variables.clone();
+        let mut variables = self.model_clone(&m.variables)?;
         if !self.preserve_ids {
             for vd in &mut variables.defs {
                 vd.layer = self.id_map.get(&vd.layer.0).copied().unwrap_or(LayerId(u64::MAX - vd.layer.0.min(u64::MAX / 2)));
             }
         }
-        let id = if self.preserve_ids { DocId(m.id) } else { DocId::fresh() };
-        Ok(Document {
+        let id = if self.preserve_ids {
+            self.max_id = self.max_id.max(m.id);
+            DocId(m.id)
+        } else {
+            DocId::fresh()
+        };
+        let selection_channel_id = m.selection_channel_id.map(|id| self.channel_id(Some(id))).transpose()?;
+        let mut xcf_state = m
+            .xcf_state
+            .as_ref()
+            .map(|hash| -> Result<photocraft_doc::XcfState> {
+                let bytes = self.fetch.blob_bounded_with(hash, 256 << 20, control)?;
+                if bytes.len() > 256 << 20 {
+                    return Err(FormatError::LimitExceeded("XCF editable state".into()));
+                }
+                self.fetch.model_reserve(
+                    (bytes.len() as u64).checked_mul(64).ok_or_else(|| FormatError::LimitExceeded("owned editable-state model envelope".into()))?,
+                )?;
+                decode_xcf_state(&bytes, control)
+            })
+            .transpose()?;
+        if m.xcf_filter_masks.len() > 10000 {
+            return Err(FormatError::LimitExceeded("filter masks".into()));
+        }
+        if (!m.xcf_filter_masks.is_empty() || !m.xcf_source_caches.is_empty()) && xcf_state.is_none() {
+            return Err(FormatError::corrupt("filter masks lack editable state"));
+        }
+        if let Some(state) = &mut xcf_state {
+            if m.xcf_source_caches.len() > 10000 {
+                return Err(FormatError::LimitExceeded("source caches".into()));
+            }
+            let mut owners = std::collections::BTreeSet::new();
+            let mut total = 0usize;
+            for source in &state.source_items {
+                if control.cancelled() {
+                    return Err(FormatError::Cancelled);
+                }
+                if let Some(cache) = &source.cache {
+                    let len = cache.checked_byte_len().map_err(|e| FormatError::corrupt(e.to_string()))?;
+                    total = total.checked_add(len).ok_or_else(|| FormatError::LimitExceeded("source cache bytes".into()))?;
+                    if len != cache.bytes.len() || total > 256 << 20 {
+                        return Err(FormatError::LimitExceeded("source cache bytes".into()));
+                    }
+                }
+            }
+            for cache in &m.xcf_source_caches {
+                if control.cancelled() {
+                    return Err(FormatError::Cancelled);
+                }
+                if !owners.insert(cache.owner) {
+                    return Err(FormatError::corrupt("duplicate source cache owner"));
+                }
+                let len = photocraft_doc::xcf_items::SourceCache::checked_descriptor_len(cache.width, cache.height, cache.format)
+                    .map_err(|e| FormatError::corrupt(e.to_string()))?;
+                total = total.checked_add(len).ok_or_else(|| FormatError::LimitExceeded("source cache bytes".into()))?;
+                if len != cache.byte_len || total > 256 << 20 {
+                    return Err(FormatError::LimitExceeded("source cache bytes".into()));
+                }
+                let source = state
+                    .source_items
+                    .iter_mut()
+                    .find(|source| source.owner == cache.owner)
+                    .ok_or_else(|| FormatError::corrupt("missing source cache owner"))?;
+                if source.cache.is_some() {
+                    return Err(FormatError::corrupt("source cache has both inline and blob payloads"));
+                }
+            }
+            // Keep all legacy inline payloads out of transactional identity remapping.
+            let mut inline_caches = self.model_vec(state.source_items.len())?;
+            for (index, source) in state.source_items.iter_mut().enumerate() {
+                if control.cancelled() {
+                    return Err(FormatError::Cancelled);
+                }
+                if let Some(cache) = source.cache.take() {
+                    inline_caches.push((index, cache));
+                }
+            }
+            if hierarchy.is_none() && coverage_control.is_some() && set_quota.is_none() && m.xcf_filter_masks.len() > 1 {
+                return Err(FormatError::corrupt("coverage purpose requires at most one actual mask"));
+            }
+            for mask in &m.xcf_filter_masks {
+                let surface = self.surface(&mask.surface)?;
+                let current = if coverage_control.is_some() {
+                    // Private candidate only. The closed actual-mask scan and full
+                    // Doc validation below precede any returned archive.
+                    photocraft_doc::FilterMask { id: mask.id, owner: mask.owner, surface, bounds: mask.bounds }
+                } else {
+                    photocraft_doc::FilterMask::try_new(mask.id, mask.owner, surface, mask.bounds).map_err(|e| FormatError::corrupt(e.to_string()))?
+                };
+                state.filter_masks.push(current);
+            }
+            if control.cancelled() {
+                return Err(FormatError::Cancelled);
+            }
+            state.remap_layers(|id| self.id_map.get(&id.0).copied()).map_err(|e| FormatError::corrupt(e.to_string()))?;
+            if control.cancelled() {
+                return Err(FormatError::Cancelled);
+            }
+            state.remap_channels(|id| self.channel_map.get(&id).copied()).map_err(|e| FormatError::corrupt(e.to_string()))?;
+            if control.cancelled() {
+                return Err(FormatError::Cancelled);
+            }
+            state.remap_paths(|id| self.path_map.get(&id).copied()).map_err(|e| FormatError::corrupt(e.to_string()))?;
+            for (index, cache) in inline_caches {
+                if control.cancelled() {
+                    return Err(FormatError::Cancelled);
+                }
+                state.source_items.get_mut(index).ok_or_else(|| FormatError::corrupt("source order changed during remapping"))?.cache = Some(cache);
+            }
+            // Every descriptor/owner and the combined inline/blob budget was qualified above.
+            for cache in &m.xcf_source_caches {
+                if control.cancelled() {
+                    return Err(FormatError::Cancelled);
+                }
+                let photocraft_doc::item_identity::ItemRef::Layer(raw) = cache.owner else {
+                    return Err(FormatError::corrupt("invalid source cache owner"));
+                };
+                let owner =
+                    photocraft_doc::item_identity::ItemRef::Layer(*self.id_map.get(&raw.0).ok_or_else(|| FormatError::corrupt("missing source cache layer"))?);
+                let source = state
+                    .source_items
+                    .iter_mut()
+                    .find(|source| source.owner == owner)
+                    .ok_or_else(|| FormatError::corrupt("missing remapped source cache owner"))?;
+                let bytes = self.fetch.source_cache_bytes(&cache.blob, cache.byte_len, control)?;
+                if bytes.len() != cache.byte_len {
+                    return Err(FormatError::corrupt("source cache blob length mismatch"));
+                }
+                source.cache = Some(photocraft_doc::xcf_items::SourceCache {
+                    bytes,
+                    blake3: self.model_clone(&cache.blob)?,
+                    width: cache.width,
+                    height: cache.height,
+                    format: cache.format,
+                });
+            }
+        }
+        let document = Document {
+            physical_resolution: self.model_clone(&m.physical_resolution)?,
+            working_profile_interpretation: self.model_clone(&m.working_profile_interpretation)?,
+            xcf_state,
+            sample_encoding: m.sample_encoding,
+            source_color_context: m
+                .source_color_context
+                .as_ref()
+                .map(|c| -> Result<_> {
+                    let original_icc = self.opt_blob(&c.original_icc)?;
+                    if original_icc.as_ref().is_some_and(|p| p.len() > 16 << 20) {
+                        return Err(FormatError::LimitExceeded("source ICC profile".into()));
+                    }
+                    Ok(photocraft_doc::SourceColorContext { original_icc, source_precision: c.source_precision })
+                })
+                .transpose()?,
             id,
             name: self.model_clone(&m.name)?,
             size: m.size,
@@ -1366,10 +1669,10 @@ impl Loader<'_> {
             quick_mask,
             quick_mask_unselected: m.quick_mask_unselected,
             patterns,
-            color_table: m.color_table.clone(),
-            duotone: m.duotone.clone(),
+            color_table: self.model_clone(&m.color_table)?,
+            duotone: self.model_clone(&m.duotone)?,
             variables,
-            timeline: m.timeline.clone(),
+            timeline: self.model_clone(&m.timeline)?,
             file_encoding: m.file_encoding,
             layer_comps,
             last_applied_comp: m.last_applied_comp,
@@ -1379,16 +1682,25 @@ impl Loader<'_> {
             text_styles: self.model_clone(&m.text_styles)?,
             slices,
         };
-        if let Some((q,c))=hierarchy{document.checked_normal_hierarchy_mask_index_with(photocraft_doc::normal_hierarchy_index::NormalHierarchyLimits::STANDARD,q,c).map_err(crate::owned_document::error)?;}else if let (Some(q),Some(c))=(set_quota,coverage_control){
-            let set=document.checked_f32_filter_mask_coverages_with(photocraft_doc::xcf_filter_masks::MaskCoverageSetLimits::STANDARD,q,c).map_err(crate::owned_document::error)?;
-            document.validate_xcf_state_with_checked_filter_masks(&set,control).map_err(|e|if e.code=="cancelled"{FormatError::Cancelled}else{FormatError::corrupt(e.to_string())})?;
-        }else{
-        let proof = coverage_control.map(|c| document.checked_f32_filter_mask_coverage_with(c)).transpose().map_err(crate::owned_document::error)?.flatten();
-        match proof.as_ref() {
-            Some(proof) => document.validate_xcf_state_with_checked_filter_mask(proof, control),
-            None => document.validate_xcf_state_with(control),
-        }
-        .map_err(|e| if e.code == "cancelled" { FormatError::Cancelled } else { FormatError::corrupt(e.to_string()) })?;
+        if let Some((q, c)) = hierarchy {
+            document
+                .checked_normal_hierarchy_mask_index_with(photocraft_doc::normal_hierarchy_index::NormalHierarchyLimits::STANDARD, q, c)
+                .map_err(crate::owned_document::error)?;
+        } else if let (Some(q), Some(c)) = (set_quota, coverage_control) {
+            let set = document
+                .checked_f32_filter_mask_coverages_with(photocraft_doc::xcf_filter_masks::MaskCoverageSetLimits::STANDARD, q, c)
+                .map_err(crate::owned_document::error)?;
+            document
+                .validate_xcf_state_with_checked_filter_masks(&set, control)
+                .map_err(|e| if e.code == "cancelled" { FormatError::Cancelled } else { FormatError::corrupt(e.to_string()) })?;
+        } else {
+            let proof =
+                coverage_control.map(|c| document.checked_f32_filter_mask_coverage_with(c)).transpose().map_err(crate::owned_document::error)?.flatten();
+            match proof.as_ref() {
+                Some(proof) => document.validate_xcf_state_with_checked_filter_mask(proof, control),
+                None => document.validate_xcf_state_with(control),
+            }
+            .map_err(|e| if e.code == "cancelled" { FormatError::Cancelled } else { FormatError::corrupt(e.to_string()) })?;
         }
         Ok(document)
     }
@@ -1821,7 +2133,9 @@ mod tests {
     fn brown_feature_scan_preserves_the_existing_empty_deepest_group_boundary() {
         let mut doc = Document::new("existing depth boundary", photocraft_geom::Size::new(1, 1), photocraft_color::ColorMode::Rgb, SampleType::U8);
         let mut layers = vec![Layer::group("empty deepest group", Vec::new())];
-        for _ in 0..MAX_GROUP_DEPTH { layers = vec![Layer::group("ancestor", layers)]; }
+        for _ in 0..MAX_GROUP_DEPTH {
+            layers = vec![Layer::group("ancestor", layers)];
+        }
         doc.layers = layers;
         check_nesting(&doc.layers, photocraft_raster::Interrupt::NONE).unwrap();
         assert!(!requires_reader_v8_state_with(&doc, photocraft_raster::Interrupt::NONE).unwrap());
@@ -1842,5 +2156,58 @@ mod tests {
     fn unhex_rejects_odd_length() {
         assert!(unhex("0").is_err());
         assert!(unhex("abc").is_err());
+    }
+}
+
+#[cfg(test)]
+mod destination_title_tests {
+    use super::*;
+    struct Admission<'a> {
+        remaining: usize,
+        control: photocraft_raster::Interrupt<'a>,
+    }
+    impl<'doc> Sink<'doc> for Admission<'_> {
+        fn poll(&self) -> Result<()> {
+            if self.control.cancelled() { Err(FormatError::Cancelled) } else { Ok(()) }
+        }
+        fn reserve(&mut self, bytes: usize) -> Result<()> {
+            self.remaining = self.remaining.checked_sub(bytes).ok_or_else(|| FormatError::LimitExceeded("title fixture".into()))?;
+            Ok(())
+        }
+        fn release(&mut self, _: usize) {}
+        fn max_manifest_bytes(&self) -> usize {
+            1 << 20
+        }
+        fn control(&self) -> photocraft_raster::Interrupt<'_> {
+            self.control
+        }
+        fn tile(&mut self, _: PixelFormat, _: &Arc<Tile>) -> Result<Hash> {
+            Err(FormatError::Unsupported("not a tile fixture".into()))
+        }
+        fn blob(&mut self, _: &Arc<Vec<u8>>) -> Result<Hash> {
+            Err(FormatError::Unsupported("not a blob fixture".into()))
+        }
+        fn borrowed_blob(&mut self, _: &'doc [u8]) -> Result<Hash> {
+            Err(FormatError::Unsupported("not a blob fixture".into()))
+        }
+    }
+    #[test]
+    fn destination_title_exact_admission_and_last_poll() {
+        let name = "native-Ω.pcraft";
+        let bytes = 2 * name.len() + 128;
+        let mut exact = Admission { remaining: bytes, control: photocraft_raster::Interrupt::NONE };
+        assert_eq!(document_name("source.xcf", Some(name), &mut exact).unwrap(), name);
+        assert_eq!(exact.remaining, 0);
+        let mut short = Admission { remaining: bytes - 1, control: photocraft_raster::Interrupt::NONE };
+        assert!(matches!(document_name("source.xcf", Some(name), &mut short), Err(FormatError::LimitExceeded(_))));
+        let polls = std::sync::atomic::AtomicUsize::new(0);
+        let stop = || polls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 2;
+        let mut late = Admission { remaining: bytes, control: photocraft_raster::Interrupt::cancel_only(&stop) };
+        assert!(matches!(document_name("source.xcf", Some(name), &mut late), Err(FormatError::Cancelled)));
+        assert_eq!(late.remaining, 0); // allocation/copy occurred; final fence refused it.
+        for bad in ["", "a/b.pcraft", "a\\b.pcraft", "bad\0.pcraft"] {
+            let mut sink = Admission { remaining: usize::MAX, control: photocraft_raster::Interrupt::NONE };
+            assert!(document_name("source.xcf", Some(bad), &mut sink).is_err());
+        }
     }
 }

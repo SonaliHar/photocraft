@@ -18,6 +18,43 @@ fn quota(resident: u64) -> BackingQuota {
     BackingQuota::new(QuotaLimits { resident, scratch: 0, index: resident.min(8 << 20) })
 }
 
+#[derive(Debug)]
+struct DefaultNativeStore {
+    descriptor: photocraft_raster::backing::NativePlaneDescriptor,
+    _fee: photocraft_raster::backing::quota::QuotaLease,
+}
+impl photocraft_raster::backing::NativePlaneStore for DefaultNativeStore {
+    fn descriptor(&self) -> photocraft_raster::backing::NativePlaneDescriptor {
+        self.descriptor
+    }
+    fn read_exact_at(&self, offset: u64, out: &mut [u8], c: &ReadControl<'_>) -> Result<(), BackingError> {
+        c.check(out.len() as u64)?;
+        let end = offset.checked_add(out.len() as u64).ok_or(BackingError::Bounds)?;
+        if end > self.descriptor.logical_bytes() {
+            return Err(BackingError::Bounds);
+        }
+        let pixel = self.descriptor.default_bytes();
+        for (i, value) in out.iter_mut().enumerate() {
+            *value = pixel[(offset as usize + i) % pixel.len()];
+        }
+        Ok(())
+    }
+}
+fn read_backed_default(layer: &Layer, bounds: photocraft_geom::Rect) -> Vec<u8> {
+    let LayerContent::BackedRaster(backed) = &layer.content else { panic!("genuine native descriptor not retained") };
+    let view = backed.checked_view();
+    let mut output = Vec::new(); // External assertion buffer, not a publication receipt.
+    let mut pixel = [0u8; 40];
+    let n = backed.format().bytes_per_pixel();
+    for y in bounds.y0..bounds.y1 {
+        for x in bounds.x0..bounds.x1 {
+            view.read_logical_pixel_native_into(x, y, &mut pixel[..n], &control()).unwrap();
+            output.extend_from_slice(&pixel[..n]);
+        }
+    }
+    output
+}
+
 struct Partial {
     source: Cursor<Vec<u8>>,
     calls: usize,
@@ -171,19 +208,37 @@ fn real_native_wire_load_retains_storage_after_source_drop_and_preserves_native_
         let mut doc = Document::new("held reader native", Size::new(2, 1), ColorMode::Rgb, sample);
         doc.layers.push(Layer::new("exact words", LayerContent::Raster(Surface::try_with_default_bytes(format, &pixel).unwrap())));
         doc.selection = Some(Surface::try_with_default_bytes(PixelFormat::GRAY8, &[127]).unwrap());
-        let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+        // Resident native serialization keeps default-only pixels too; this
+        // separate positive is not a backed-storage or Source authority claim.
+        let resident_wire = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+        let resident = photocraft_format::load_from_bytes(&resident_wire).unwrap();
+        assert_eq!(resident.layers[0].surface().unwrap().try_read_interleaved(doc.bounds()).unwrap(), pixel.repeat(2));
+        assert_eq!(resident.selection.as_ref().unwrap().try_read_interleaved(doc.bounds()).unwrap(), vec![127, 127]);
+        // The selected native handoff requires a real native descriptor/store,
+        // rather than treating the unrelated resident Surface as such a token.
+        let input_quota = quota(64 << 20);
+        let descriptor = photocraft_raster::backing::NativePlaneDescriptor::new(format, doc.bounds(), &pixel).unwrap();
+        let fee =
+            input_quota.reserve(photocraft_raster::backing::quota::QuotaKind::Resident, (std::mem::size_of::<DefaultNativeStore>() + 128) as u64).unwrap();
+        let store = std::sync::Arc::new(DefaultNativeStore { descriptor, _fee: fee });
+        let raster = photocraft_raster::backing::BackedRaster::new(store, input_quota.clone(), 1, &control()).unwrap();
+        doc.layers[0].content = LayerContent::BackedRaster(photocraft_doc::BackedLayer::new(raster, descriptor, &control()).unwrap());
+        let bytes =
+            photocraft_format::owned_document::save_current_document_archive(&doc, Cursor::new(Vec::new()), Default::default(), &input_quota, &control())
+                .unwrap()
+                .into_inner(); // External encoded input; the real producer keeps its same-quota native store.
         let q = quota(64 << 20);
         let mut source = Cursor::new(bytes);
         let length = source.get_ref().len() as u64;
         let owned = open_accounted_native_from_reader(&mut source, length, Default::default(), q.clone(), &control()).unwrap();
         drop(source);
         assert_eq!(owned.document().name, doc.name);
-        assert_eq!(owned.document().layers[0].surface().unwrap().try_read_interleaved(doc.bounds()).unwrap(), pixel.repeat(2));
+        assert_eq!(read_backed_default(&owned.document().layers[0], doc.bounds()), pixel.repeat(2));
         assert_eq!(owned.document().selection.as_ref().unwrap().try_read_interleaved(doc.bounds()).unwrap(), vec![127, 127]);
         assert!(q.usage().unwrap().resident >= length);
         let accounted = owned.into_accounted_document(&control()).unwrap();
         assert!(accounted.quota().shares_ledger(&q));
-        assert_eq!(accounted.document().layers[0].surface().unwrap().try_read_interleaved(doc.bounds()).unwrap(), pixel.repeat(2));
+        assert_eq!(read_backed_default(&accounted.document().layers[0], doc.bounds()), pixel.repeat(2));
         drop(accounted);
         assert_eq!(q.usage().unwrap(), QuotaUsage::default());
     }

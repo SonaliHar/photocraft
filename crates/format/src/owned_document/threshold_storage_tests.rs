@@ -169,8 +169,8 @@ fn explicit_handoff_keeps_actual_archive_native_mask_words_and_legacy_route_clos
     let original_tile = state.filter_masks[0].surface.tiles().next().unwrap().1;
     let tile_pointer = Arc::as_ptr(original_tile);
     assert_eq!(original_tile.bytes().get(..8), Some((0.5 + 2f64.powi(-40)).to_ne_bytes().as_slice()));
-    for word in original_tile.bytes().chunks_exact(8).skip(1) {
-        assert_eq!(word, (-0.0f64).to_ne_bytes());
+    for word in original_tile.bytes().as_chunks::<8>().0.iter().skip(1) {
+        assert_eq!(*word, (-0.0f64).to_ne_bytes());
     }
     assert_eq!(state.filter_masks[0].surface.default_bytes(), (-0.0f64).to_ne_bytes());
     assert_eq!(state.filter_stacks[0].nodes[0].arguments[0].value, FilterValue::Number(ExactNumber::Float32Bits((-0.0f32).to_bits())));
@@ -196,7 +196,7 @@ fn explicit_handoff_keeps_actual_archive_native_mask_words_and_legacy_route_clos
 }
 
 #[test]
-fn selection_and_unsupported_recipe_fail_without_restoring_runtime_authority() {
+fn anonymous_selection_rehydrates_but_unsupported_recipe_stays_closed() {
     let q = quota();
     let original = source(&q);
     let baseline = q.usage().unwrap();
@@ -208,7 +208,18 @@ fn selection_and_unsupported_recipe_fail_without_restoring_runtime_authority() {
         } else {
             native.document.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0].operation.name = "unsupported:retained".into();
         }
-        assert!(native.into_accounted_readonly_threshold_storage(&ctl()).is_err());
+        let result = native.into_accounted_readonly_threshold_storage(&ctl());
+        if selected {
+            let owner = result.unwrap();
+            assert!(owner.is_readonly_threshold_storage());
+            let proof = owner.checked_programme_selection(&ctl()).unwrap();
+            assert!(proof.matches_owner(&owner));
+            assert!(proof.selection().is_some());
+            drop(proof);
+            drop(owner);
+        } else {
+            assert!(result.is_err());
+        }
         drop(edit_fee);
         assert_eq!(q.usage().unwrap(), baseline);
     }

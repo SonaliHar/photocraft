@@ -218,7 +218,7 @@ fn legacy_migrations_and_closed_hint_schema() {
     for version in [8, 9] {
         let mut v = serde_json::json!({"format_version":version,"minimum_reader_version":2,"document":{}});
         crate::migrate::migrate(&mut v).unwrap();
-        assert_eq!(v["format_version"], 11);
+        assert_eq!(v["format_version"], crate::FORMAT_VERSION);
         assert!(v.get("current_storage_hint").is_none());
         assert!(crate::migrate::migrate(&mut serde_json::json!({"format_version":version})).is_err());
     }

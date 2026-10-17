@@ -30,6 +30,7 @@ struct Walk<'a, 'c, 'i> {
 }
 impl Walk<'_, '_, '_> {
     fn visit(&mut self, depth: usize) -> Result<(), IoError> {
+        self.counter.debit(64)?;
         if self.control.cancelled() {
             return Err(IoError::Cancelled);
         }

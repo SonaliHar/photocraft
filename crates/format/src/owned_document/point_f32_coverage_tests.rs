@@ -145,7 +145,7 @@ fn floor11_is_not_recovered_by_migration_or_a_name_hint() {
     assert!(load(unmarked, &q).is_err());
     let mut v = serde_json::json!({"format_version":10,"minimum_reader_version":2,"document":{}});
     crate::migrate::migrate(&mut v).unwrap();
-    assert_eq!(v["format_version"], 11);
+    assert_eq!(v["format_version"], crate::FORMAT_VERSION);
     assert!(v.get("current_storage_hint").is_none());
     let before = &owner.document().xcf_state.as_ref().unwrap().filter_stacks[0];
     let empty = owner
@@ -200,5 +200,5 @@ fn selected_writer_and_loader_preserve_external_controls() {
 #[path = "masked_filtered_flat_tests.rs"]
 mod masked_filtered_flat_tests;
 
-#[path="normal_hierarchy_tests.rs"]
+#[path = "normal_hierarchy_tests.rs"]
 mod normal_hierarchy_tests;

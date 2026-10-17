@@ -101,7 +101,7 @@ fn current_geometry_requires_seven_without_changing_original_transform_cache_or_
         let doc = document(true, transformed);
         let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
         let wire = photocraft_format::read_manifest(&bytes).unwrap();
-        assert_eq!((wire.format_version, wire.minimum_reader_version), (7, 7));
+        assert_eq!((wire.format_version, wire.minimum_reader_version), (photocraft_format::FORMAT_VERSION, 7));
         assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
     }
 }

@@ -463,7 +463,7 @@ mod tests {
     #[test]
     fn malformed_store_and_payload_offset_refuse_before_copy() {
         let bytes = [7; 512];
-        let reader = ZipReader { bytes: &bytes, entries: Vec::new() };
+        let reader = ZipReader { bytes: &bytes, entries: Vec::new(), by_name: HashMap::new() };
         let mut entry = Entry { name: "own".into(), method: 0, crc: 0, compressed: 512, uncompressed: 1, data_offset: 0 };
         assert!(matches!(reader.read(&entry, 1), Err(FormatError::Corrupt(_))));
         entry.compressed = 1;
@@ -477,7 +477,7 @@ mod tests {
         let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::fast());
         std::io::Write::write_all(&mut encoder, &input).unwrap();
         let encoded = encoder.finish().unwrap();
-        let reader = ZipReader { bytes: &encoded, entries: Vec::new() };
+        let reader = ZipReader { bytes: &encoded, entries: Vec::new(), by_name: HashMap::new() };
         let mut entry = Entry { name: "own".into(), method: 8, crc: crc32(&input), compressed: encoded.len(), uncompressed: input.len(), data_offset: 0 };
         assert_eq!(reader.read(&entry, usize::MAX).unwrap(), input);
         entry.uncompressed -= 1;
@@ -487,7 +487,7 @@ mod tests {
         assert!(reader.read(&entry, usize::MAX).is_err());
         let mut trailing = encoded.clone();
         trailing.push(0);
-        let trailing_reader = ZipReader { bytes: &trailing, entries: Vec::new() };
+        let trailing_reader = ZipReader { bytes: &trailing, entries: Vec::new(), by_name: HashMap::new() };
         entry.compressed = trailing.len();
         assert!(trailing_reader.read(&entry, usize::MAX).is_err());
     }
@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn store_copy_observes_late_cancellation() {
         let input = vec![29; 200_000];
-        let reader = ZipReader { bytes: &input, entries: Vec::new() };
+        let reader = ZipReader { bytes: &input, entries: Vec::new(), by_name: HashMap::new() };
         let entry = Entry { name: "own".into(), method: 0, crc: crc32(&input), compressed: input.len(), uncompressed: input.len(), data_offset: 0 };
         let calls = std::sync::atomic::AtomicUsize::new(0);
         let cancel = || calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 2;

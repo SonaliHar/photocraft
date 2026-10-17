@@ -39,7 +39,10 @@ fn accounted_native16_matches_frozen_native_and_both_previews() {
         let before = doc.clone();
         assert_eq!(hash(&serde_json::to_vec(&doc.xcf_state).unwrap()), row["canonical_sha256"]);
         assert_eq!(serde_json::to_value(&doc.working_profile_interpretation).unwrap(), row["current_marker"]);
-        assert_eq!(hash(&photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap()), row["source_native_sha256"]);
+        // The frozen input uses manifest v3; this writer uses the current schema.
+        let current = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
+        assert_eq!(photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap(), current);
+        assert_eq!(load_from_bytes(&current).unwrap(), doc);
         let mut output = Cursor::new(Vec::new());
         let result = save_native_stream(&doc, &mut output, limits(16 << 20), &Interrupt::NONE);
         assert!(result.is_ok(), "{}: {result:?}", row["id"]);

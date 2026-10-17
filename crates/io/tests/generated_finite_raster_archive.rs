@@ -206,7 +206,11 @@ fn creation_denial_and_authentication_failure_never_publish_or_retain_storage() 
     let zero = BackingQuota::new(QuotaLimits { resident: 0, scratch: 1 << 20, index: 1 << 20 });
     assert!(matches!(service.create_generated_archive_destination(1 << 20, &zero, &control), Err(BackingError::Quota)));
     assert_eq!(root.entries(), 0);
-    for size in [0, (256 << 20) + 1, u64::MAX] {
+    for size in [
+        0,
+        u64::from(photocraft_io::native_plane_store::NATIVE_STORE_MAX_BLOCKS) * photocraft_io::native_plane_store::NATIVE_STORE_BLOCK_BYTES as u64 + 1,
+        u64::MAX,
+    ] {
         assert!(matches!(service.create_generated_archive_destination(size, &q(), &control), Err(BackingError::Bounds)));
     }
     let quota = BackingQuota::new(QuotaLimits { resident: 1 << 20, scratch: 1 << 20, index: 0 });

@@ -61,6 +61,28 @@ pub fn save_accounted_current_archive<W: Write + Seek>(
     quota: &BackingQuota,
     control: &ReadControl<'_>,
 ) -> Result<W, FormatError> {
+    save_accounted_current_archive_with_name(owner, None, output, limits, quota, control)
+}
+/// Serialize a path destination's title through the same complete CURRENT proof.
+/// The codec owns and charges the copied manifest string; this borrows the name.
+pub fn save_accounted_current_archive_named<W: Write + Seek>(
+    owner: &AccountedDocument,
+    destination_name: &str,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<W, FormatError> {
+    save_accounted_current_archive_with_name(owner, Some(destination_name), output, limits, quota, control)
+}
+fn save_accounted_current_archive_with_name<W: Write + Seek>(
+    owner: &AccountedDocument,
+    destination_name: Option<&str>,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<W, FormatError> {
     if !owner.quota().shares_ledger(quota) {
         return Err(backing(BackingError::Quota));
     }
@@ -68,15 +90,13 @@ pub fn save_accounted_current_archive<W: Write + Seek>(
     // Only the actual programme owner can supply this proof. Every semantic
     // context below still proves the complete CURRENT recipe on this owner.
     if owner.document().selection.is_some() && !owner.is_legacy_storage() {
-        let selection = owner.checked_programme_selection(control).map_err(|error| {
-            if error == BackingError::Cancelled { FormatError::Cancelled } else { backing(error) }
-        })?;
+        let selection = owner
+            .checked_programme_selection(control)
+            .map_err(|error| if error == BackingError::Cancelled { FormatError::Cancelled } else { backing(error) })?;
         if !selection.matches_owner(owner) || selection.selection().is_none() {
             return Err(backing(BackingError::Integrity));
         }
-        control.check(1).map_err(|error| {
-            if error == BackingError::Cancelled { FormatError::Cancelled } else { backing(error) }
-        })?;
+        control.check(1).map_err(|error| if error == BackingError::Cancelled { FormatError::Cancelled } else { backing(error) })?;
     }
     // Structural intent comes from the actual retained runtime owner, including
     // a derived empty stack. Epoch inference cannot grant this separate class.
@@ -86,7 +106,10 @@ pub fn save_accounted_current_archive<W: Write + Seek>(
         control.check(1).map_err(backing)?;
     }
     if !hierarchy && !masked_flat && !claims(owner, control)? {
-        return photocraft_format::owned_document::save_accounted_current_document_archive(owner, output, limits, quota, control);
+        return match destination_name {
+            Some(name) => photocraft_format::owned_document::save_accounted_current_document_archive_named(owner, name, output, limits, quota, control),
+            None => photocraft_format::owned_document::save_accounted_current_document_archive(owner, output, limits, quota, control),
+        };
     }
     // Covers the fixed relay/first-error witness and error/header stack. The
     // actual current context and serializer reserve their own independent fees.
@@ -124,24 +147,27 @@ pub fn save_accounted_current_archive<W: Write + Seek>(
     };
     c.check(1).map_err(backing)?;
     if hierarchy {
-        let prepared = photocraft_compose::backed_normal_hierarchy_document::PreparedBackedNormalHierarchyDocument::new(owner, Default::default(), &c)
-            .map_err(&map)?;
-        prepared.validate_operative(&c).map_err(&map)?;
+        let prepared =
+            photocraft_compose::backed_normal_hierarchy_document::PreparedBackedNormalHierarchyDocument::new(owner, Default::default(), &c).map_err(map)?;
+        prepared.validate_operative(&c).map_err(map)?;
         drop(prepared);
         c.check(1).map_err(backing)?;
-        return photocraft_format::owned_document::save_accounted_normal_hierarchy_document_archive(owner, output, limits, quota, &c);
+        return match destination_name {
+            Some(name) => photocraft_format::owned_document::save_accounted_normal_hierarchy_document_archive_named(owner, name, output, limits, quota, &c),
+            None => photocraft_format::owned_document::save_accounted_normal_hierarchy_document_archive(owner, output, limits, quota, &c),
+        };
     }
     if masked_flat {
-        let prepared = photocraft_compose::backed_masked_filtered_flat_point_document::PreparedBackedMaskedFilteredFlatPointDocument::new(
-            owner,
-            Default::default(),
-            &c,
-        )
-        .map_err(&map)?;
-        prepared.validate_operative(&c).map_err(&map)?;
+        let prepared =
+            photocraft_compose::backed_masked_filtered_flat_point_document::PreparedBackedMaskedFilteredFlatPointDocument::new(owner, Default::default(), &c)
+                .map_err(map)?;
+        prepared.validate_operative(&c).map_err(map)?;
         drop(prepared);
         c.check(1).map_err(backing)?;
-        return photocraft_format::owned_document::save_accounted_masked_filtered_flat_document_archive(owner, output, limits, quota, &c);
+        return match destination_name {
+            Some(name) => photocraft_format::owned_document::save_accounted_masked_filtered_flat_document_archive_named(owner, name, output, limits, quota, &c),
+            None => photocraft_format::owned_document::save_accounted_masked_filtered_flat_document_archive(owner, output, limits, quota, &c),
+        };
     }
     let prepared = photocraft_compose::backed_stock_point_context::PreparedBackedStockPointContext::new(
         owner,
@@ -149,9 +175,12 @@ pub fn save_accounted_current_archive<W: Write + Seek>(
         Default::default(),
         &c,
     )
-    .map_err(&map)?;
-    prepared.validate_operative(&c).map_err(&map)?;
+    .map_err(map)?;
+    prepared.validate_operative(&c).map_err(map)?;
     drop(prepared);
     c.check(1).map_err(backing)?;
-    photocraft_format::owned_document::save_accounted_point_f32_coverage_document_archive(owner, output, limits, quota, &c)
+    match destination_name {
+        Some(name) => photocraft_format::owned_document::save_accounted_point_f32_coverage_document_archive_named(owner, name, output, limits, quota, &c),
+        None => photocraft_format::owned_document::save_accounted_point_f32_coverage_document_archive(owner, output, limits, quota, &c),
+    }
 }

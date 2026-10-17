@@ -8,7 +8,7 @@ use photocraft_doc::{
     xcf_filters::FilterStack,
     xcf_state::ItemState,
 };
-use photocraft_geom::{Rect, Size, TileCoord};
+use photocraft_geom::{Size, TileCoord};
 use photocraft_raster::{
     Interrupt,
     backing::{
@@ -241,4 +241,51 @@ fn selected_handoff_controls_and_unmarked_source_fail_closed() {
     assert!(load(raw.clone(), &q, &ctl()).unwrap().into_accounted_readonly_filtered_flat_storage(&ctl()).is_err());
     assert!(load(raw, &q, &ctl()).unwrap().into_accounted_document(&ctl()).is_err());
     assert!(owner.checked_programme_selection(&ctl()).is_ok());
+}
+
+#[test]
+fn named_selected_archive_preserves_class_selection_source_and_unnamed_save() {
+    for sample in [SampleType::F32, SampleType::F64] {
+        let q = quota();
+        let owner = selected(&q, sample, false);
+        let original_name = owner.document().name.clone();
+        let memory =
+            save_accounted_current_document_archive_named(&owner, "selected-native.pcraft", Writer::new(&q), Default::default(), &q, &ctl()).unwrap().finish();
+        let archive = load(memory.clone(), &q, &ctl()).unwrap();
+        assert_eq!(archive.current_storage_hint(), Some(crate::NativeCurrentStorageHint::FilteredFlatPoint));
+        assert_eq!(archive.document().name, "selected-native.pcraft");
+        assert_eq!(archive.document().selection, owner.document().selection);
+        assert_eq!(archive.document().xcf_state, owner.document().xcf_state);
+        assert_eq!(archive.document().source_color_context, owner.document().source_color_context);
+        let reopened = archive.into_accounted_readonly_filtered_flat_storage(&ctl()).unwrap();
+        assert!(reopened.checked_programme_selection(&ctl()).unwrap().matches_owner(&reopened));
+        assert!(reopened.is_readonly_filtered_flat_point_storage());
+        // Complete semantic storage equality with only the intended title restored.
+        let _comparison = q.reserve(QuotaKind::Resident, 8 << 20).unwrap();
+        let _comparison_index = q.reserve(QuotaKind::Index, 1 << 20).unwrap();
+        let mut comparison = reopened.document().clone();
+        comparison.name = original_name.clone();
+        let LayerContent::BackedRaster(actual) = &comparison.layers[0].content else {
+            panic!("missing reopened native");
+        };
+        let LayerContent::BackedRaster(expected) = &owner.document().layers[0].content else {
+            panic!("missing original native");
+        };
+        assert!(actual.try_content_equal(expected, &ctl()).unwrap());
+        // BackedLayer PartialEq is provider identity. Native content was checked
+        // above; normalize only that independently recreated provider for full metadata Eq.
+        comparison.layers[0].content = owner.document().layers[0].content.clone();
+        assert_eq!(&comparison, owner.document());
+        assert_eq!(owner.document().name, original_name);
+        let unchanged = save_accounted_current_document_archive(&owner, Writer::new(&q), Default::default(), &q, &ctl()).unwrap().finish();
+        assert_eq!(load(unchanged, &q, &ctl()).unwrap().document().name, original_name);
+        drop(comparison);
+        drop(_comparison_index);
+        drop(_comparison);
+        drop(reopened);
+        drop(memory);
+        drop(owner);
+        assert_eq!(q.usage().unwrap().resident, 0);
+        assert_eq!(q.usage().unwrap().index, 0);
+    }
 }

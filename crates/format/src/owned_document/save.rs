@@ -15,9 +15,13 @@ use std::io::{Read, Seek, Write};
 /// Actual runtime programme selection custody, never a raw Document grant.
 /// Strict selection-free writers retain their existing class checks unchanged.
 fn programme_selection(owner: &photocraft_doc::accounted_document::AccountedDocument, control: &ReadControl<'_>) -> Result<bool> {
-    if owner.document().selection.is_none() || owner.is_legacy_storage() { return Ok(false); }
+    if owner.document().selection.is_none() || owner.is_legacy_storage() {
+        return Ok(false);
+    }
     let proof = owner.checked_programme_selection(control).map_err(error)?;
-    if !proof.matches_owner(owner) || proof.selection().is_none() { return Err(error(BackingError::Integrity)); }
+    if !proof.matches_owner(owner) || proof.selection().is_none() {
+        return Err(error(BackingError::Integrity));
+    }
     control.check(1).map_err(error)?;
     Ok(true)
 }
@@ -190,7 +194,7 @@ impl<'a> Sink<'a> for OwnedSink<'a, '_, '_> {
 impl OwnedDocumentArchive {
     /// Same-ledger save of the retained current model; output storage is external.
     pub fn save_archive<W: Write + Seek>(&self, output: W, limits: OwnedDocumentLimits, control: &ReadControl<'_>) -> Result<W> {
-        save_current_document_archive_with_hint(&self.document, output, limits, self._model.quota(), control, self.current_storage_hint)
+        save_current_document_archive_with_hint(&self.document, output, limits, self._model.quota(), control, self.current_storage_hint, None)
     }
 }
 /// Additional preparation is accounted here. The borrowed input model and
@@ -205,7 +209,28 @@ pub fn save_current_document_archive<W: Write + Seek>(
     quota: &BackingQuota,
     control: &ReadControl<'_>,
 ) -> Result<W> {
-    save_current_document_archive_with_hint(doc, output, limits, quota, control, None)
+    save_current_document_archive_with_name(doc, None, output, limits, quota, control)
+}
+/// Serialize a bounded destination leaf; preserve the actual storage proof and live model.
+pub fn save_current_document_archive_named<W: Write + Seek>(
+    doc: &Document,
+    destination_name: &str,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<W> {
+    save_current_document_archive_with_name(doc, Some(destination_name), output, limits, quota, control)
+}
+fn save_current_document_archive_with_name<W: Write + Seek>(
+    doc: &Document,
+    destination_name: Option<&str>,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<W> {
+    save_current_document_archive_with_hint(doc, output, limits, quota, control, None, destination_name)
 }
 
 /// Save the actual runtime CURRENT class, retaining its closed handoff selector.
@@ -217,13 +242,38 @@ pub fn save_accounted_current_document_archive<W: Write + Seek>(
     quota: &BackingQuota,
     control: &ReadControl<'_>,
 ) -> Result<W> {
+    save_accounted_current_document_archive_with_name(owner, None, output, limits, quota, control)
+}
+/// Serialize a bounded destination leaf; preserve the actual storage proof and live model.
+pub fn save_accounted_current_document_archive_named<W: Write + Seek>(
+    owner: &photocraft_doc::accounted_document::AccountedDocument,
+    destination_name: &str,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<W> {
+    save_accounted_current_document_archive_with_name(owner, Some(destination_name), output, limits, quota, control)
+}
+fn save_accounted_current_document_archive_with_name<W: Write + Seek>(
+    owner: &photocraft_doc::accounted_document::AccountedDocument,
+    destination_name: Option<&str>,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<W> {
     control.check(0).map_err(error)?;
     if !owner.quota().shares_ledger(quota) {
         return Err(error(BackingError::Quota));
     }
     programme_selection(owner, control)?;
-    if owner.is_readonly_normal_hierarchy_storage(){return save_accounted_normal_hierarchy_document_archive(owner,output,limits,quota,control)}
-    if owner.is_readonly_masked_filtered_flat_point_storage(){return save_accounted_masked_filtered_flat_document_archive(owner,output,limits,quota,control)}
+    if owner.is_readonly_normal_hierarchy_storage() {
+        return save_accounted_normal_hierarchy_document_archive_with_name(owner, destination_name, output, limits, quota, control);
+    }
+    if owner.is_readonly_masked_filtered_flat_point_storage() {
+        return save_accounted_masked_filtered_flat_document_archive_with_name(owner, destination_name, output, limits, quota, control);
+    }
     let hint = if owner.is_readonly_filtered_flat_point_storage() {
         if !programme_selection(owner, control)? {
             owner.validate_readonly_filtered_flat_point_storage(control).map_err(error)?;
@@ -232,7 +282,7 @@ pub fn save_accounted_current_document_archive<W: Write + Seek>(
     } else {
         None
     };
-    save_current_document_archive_with_hint(owner.document(), output, limits, quota, control, hint)
+    save_current_document_archive_with_hint(owner.document(), output, limits, quota, control, hint, destination_name)
 }
 
 /// Explicit structural coverage writer. Caller must first prove the complete
@@ -240,6 +290,27 @@ pub fn save_accounted_current_document_archive<W: Write + Seek>(
 /// Empty continuation uses the ordinary strict path with no coverage hint.
 pub fn save_accounted_point_f32_coverage_document_archive<W: Write + Seek>(
     owner: &photocraft_doc::accounted_document::AccountedDocument,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<W> {
+    save_accounted_point_f32_coverage_document_archive_with_name(owner, None, output, limits, quota, control)
+}
+/// Serialize a bounded destination leaf; preserve the actual storage proof and live model.
+pub fn save_accounted_point_f32_coverage_document_archive_named<W: Write + Seek>(
+    owner: &photocraft_doc::accounted_document::AccountedDocument,
+    destination_name: &str,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<W> {
+    save_accounted_point_f32_coverage_document_archive_with_name(owner, Some(destination_name), output, limits, quota, control)
+}
+fn save_accounted_point_f32_coverage_document_archive_with_name<W: Write + Seek>(
+    owner: &photocraft_doc::accounted_document::AccountedDocument,
+    destination_name: Option<&str>,
     output: W,
     limits: OwnedDocumentLimits,
     quota: &BackingQuota,
@@ -254,26 +325,100 @@ pub fn save_accounted_point_f32_coverage_document_archive<W: Write + Seek>(
     }
     let proof = owner.document().checked_f32_filter_mask_coverage_with(control).map_err(error)?;
     let hint = proof.as_ref().map(|_| crate::NativeCurrentStorageHint::PointF32Coverage);
-    save_current_document_archive_with_hint(owner.document(), output, limits, quota, control, hint)
+    save_current_document_archive_with_hint(owner.document(), output, limits, quota, control, hint, destination_name)
 }
 
 /// Exact structural selected mixed writer; caller proves complete CURRENT.
-pub fn save_accounted_masked_filtered_flat_document_archive<W:Write+Seek>(owner:&photocraft_doc::accounted_document::AccountedDocument,output:W,limits:OwnedDocumentLimits,quota:&BackingQuota,control:&ReadControl<'_>)->Result<W>{
+pub fn save_accounted_masked_filtered_flat_document_archive<W: Write + Seek>(
+    owner: &photocraft_doc::accounted_document::AccountedDocument,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<W> {
+    save_accounted_masked_filtered_flat_document_archive_with_name(owner, None, output, limits, quota, control)
+}
+/// Serialize a bounded destination leaf; preserve the actual storage proof and live model.
+pub fn save_accounted_masked_filtered_flat_document_archive_named<W: Write + Seek>(
+    owner: &photocraft_doc::accounted_document::AccountedDocument,
+    destination_name: &str,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<W> {
+    save_accounted_masked_filtered_flat_document_archive_with_name(owner, Some(destination_name), output, limits, quota, control)
+}
+fn save_accounted_masked_filtered_flat_document_archive_with_name<W: Write + Seek>(
+    owner: &photocraft_doc::accounted_document::AccountedDocument,
+    destination_name: Option<&str>,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<W> {
     control.check(0).map_err(error)?;
-    if !owner.is_readonly_masked_filtered_flat_point_storage() || !owner.quota().shares_ledger(quota){return Err(error(BackingError::Unsupported))}
+    if !owner.is_readonly_masked_filtered_flat_point_storage() || !owner.quota().shares_ledger(quota) {
+        return Err(error(BackingError::Unsupported));
+    }
     if !programme_selection(owner, control)? {
         owner.validate_readonly_masked_filtered_flat_point_storage(control).map_err(error)?;
     }
-    save_current_document_archive_with_hint(owner.document(),output,limits,quota,control,Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint))
+    save_current_document_archive_with_hint(
+        owner.document(),
+        output,
+        limits,
+        quota,
+        control,
+        Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint),
+        destination_name,
+    )
 }
 /// Explicit actual-class hierarchy writer; complete semantic CURRENT proof belongs to caller.
-pub fn save_accounted_normal_hierarchy_document_archive<W:Write+Seek>(owner:&photocraft_doc::accounted_document::AccountedDocument,output:W,limits:OwnedDocumentLimits,quota:&BackingQuota,control:&ReadControl<'_>)->Result<W>{
+pub fn save_accounted_normal_hierarchy_document_archive<W: Write + Seek>(
+    owner: &photocraft_doc::accounted_document::AccountedDocument,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<W> {
+    save_accounted_normal_hierarchy_document_archive_with_name(owner, None, output, limits, quota, control)
+}
+/// Serialize a bounded destination leaf; preserve the actual storage proof and live model.
+pub fn save_accounted_normal_hierarchy_document_archive_named<W: Write + Seek>(
+    owner: &photocraft_doc::accounted_document::AccountedDocument,
+    destination_name: &str,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<W> {
+    save_accounted_normal_hierarchy_document_archive_with_name(owner, Some(destination_name), output, limits, quota, control)
+}
+fn save_accounted_normal_hierarchy_document_archive_with_name<W: Write + Seek>(
+    owner: &photocraft_doc::accounted_document::AccountedDocument,
+    destination_name: Option<&str>,
+    output: W,
+    limits: OwnedDocumentLimits,
+    quota: &BackingQuota,
+    control: &ReadControl<'_>,
+) -> Result<W> {
     control.check(0).map_err(error)?;
-    if !owner.is_readonly_normal_hierarchy_storage()||!owner.quota().shares_ledger(quota){return Err(error(BackingError::Unsupported))}
+    if !owner.is_readonly_normal_hierarchy_storage() || !owner.quota().shares_ledger(quota) {
+        return Err(error(BackingError::Unsupported));
+    }
     if !programme_selection(owner, control)? {
         owner.validate_readonly_normal_hierarchy_current_storage(control).map_err(error)?;
     }
-    save_current_document_archive_with_hint(owner.document(),output,limits,quota,control,Some(crate::NativeCurrentStorageHint::NormalHierarchy))
+    save_current_document_archive_with_hint(
+        owner.document(),
+        output,
+        limits,
+        quota,
+        control,
+        Some(crate::NativeCurrentStorageHint::NormalHierarchy),
+        destination_name,
+    )
 }
 fn save_current_document_archive_with_hint<W: Write + Seek>(
     doc: &Document,
@@ -282,6 +427,7 @@ fn save_current_document_archive_with_hint<W: Write + Seek>(
     quota: &BackingQuota,
     control: &ReadControl<'_>,
     current_storage_hint: Option<crate::NativeCurrentStorageHint>,
+    destination_name: Option<&str>,
 ) -> Result<W> {
     limits.validate()?;
     control.check(0).map_err(error)?;
@@ -312,15 +458,49 @@ fn save_current_document_archive_with_hint<W: Write + Seek>(
     } else {
         None
     };
-    let set=if current_storage_hint==Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint){Some(doc.checked_f32_filter_mask_coverages_with(photocraft_doc::xcf_filter_masks::MaskCoverageSetLimits::STANDARD,quota,control).map_err(error)?)}else{None};
-    let hierarchy=if current_storage_hint==Some(crate::NativeCurrentStorageHint::NormalHierarchy){Some(doc.checked_normal_hierarchy_mask_index_with(photocraft_doc::normal_hierarchy_index::NormalHierarchyLimits::STANDARD,quota,control).map_err(error)?)}else{None};
-    let document = if let Some(index)=hierarchy.as_ref(){crate::convert::doc_m_with_normal_hierarchy_mask_index(doc,&mut sink,index)?}else if let Some(set)=set.as_ref(){crate::convert::doc_m_with_checked_filter_masks(doc,&mut sink,set)?}else if current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
-        crate::convert::doc_m_with_checked_filter_mask(doc, &mut sink, coverage.as_ref())?
+    let set = if current_storage_hint == Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint) {
+        Some(doc.checked_f32_filter_mask_coverages_with(photocraft_doc::xcf_filter_masks::MaskCoverageSetLimits::STANDARD, quota, control).map_err(error)?)
     } else {
-        crate::convert::doc_m(doc, &mut sink)?
+        None
+    };
+    let hierarchy = if current_storage_hint == Some(crate::NativeCurrentStorageHint::NormalHierarchy) {
+        Some(
+            doc.checked_normal_hierarchy_mask_index_with(photocraft_doc::normal_hierarchy_index::NormalHierarchyLimits::STANDARD, quota, control)
+                .map_err(error)?,
+        )
+    } else {
+        None
+    };
+    let document = match destination_name {
+        Some(name) => {
+            if let Some(index) = hierarchy.as_ref() {
+                crate::convert::doc_m_with_normal_hierarchy_mask_index_named(doc, &mut sink, index, name)?
+            } else if let Some(set) = set.as_ref() {
+                crate::convert::doc_m_with_checked_filter_masks_named(doc, &mut sink, set, name)?
+            } else if current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
+                crate::convert::doc_m_with_checked_filter_mask_named(doc, &mut sink, coverage.as_ref(), name)?
+            } else {
+                crate::convert::doc_m_named(doc, &mut sink, name)?
+            }
+        }
+        None => {
+            if let Some(index) = hierarchy.as_ref() {
+                crate::convert::doc_m_with_normal_hierarchy_mask_index(doc, &mut sink, index)?
+            } else if let Some(set) = set.as_ref() {
+                crate::convert::doc_m_with_checked_filter_masks(doc, &mut sink, set)?
+            } else if current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
+                crate::convert::doc_m_with_checked_filter_mask(doc, &mut sink, coverage.as_ref())?
+            } else {
+                crate::convert::doc_m(doc, &mut sink)?
+            }
+        }
     };
     let requires_v9 = super::requires_reader_v9_after_validation(doc, quota, control)?;
-    let version = if current_storage_hint==Some(crate::NativeCurrentStorageHint::NormalHierarchy){13}else if current_storage_hint==Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint){12}else if current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
+    let version = if current_storage_hint == Some(crate::NativeCurrentStorageHint::NormalHierarchy) {
+        13
+    } else if current_storage_hint == Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint) {
+        12
+    } else if current_storage_hint == Some(crate::NativeCurrentStorageHint::PointF32Coverage) {
         11
     } else if current_storage_hint.is_some() {
         10

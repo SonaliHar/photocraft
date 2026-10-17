@@ -54,23 +54,37 @@ pub struct NativePayloadCensus<'d> {
 macro_rules! census_accessors {
     ($ty:ident) => {
         impl<'d> $ty<'d> {
-            pub fn document(&self) -> &'d Document { self.document }
-            pub fn belongs_to(&self, document: &Document) -> bool { std::ptr::eq(self.document, document) }
-            pub fn retained_bytes(&self) -> usize { self.retained }
+            pub fn document(&self) -> &'d Document {
+                self.document
+            }
+            pub fn belongs_to(&self, document: &Document) -> bool {
+                std::ptr::eq(self.document, document)
+            }
+            pub fn retained_bytes(&self) -> usize {
+                self.retained
+            }
             /// Conservative identity-index reservation, not measured HashSet allocation.
-            pub fn known_index_reservation_bytes(&self) -> usize { self.index }
-            pub fn visit_scope(&self) -> NativeCensusVisits { self.visits }
+            pub fn known_index_reservation_bytes(&self) -> usize {
+                self.index
+            }
+            pub fn visit_scope(&self) -> NativeCensusVisits {
+                self.visits
+            }
         }
     };
 }
 census_accessors!(NativeModelCensus);
 census_accessors!(NativePayloadCensus);
 impl NativeModelCensus<'_> {
-    pub fn known_map_reservation_bytes(&self) -> usize { 0 }
+    pub fn known_map_reservation_bytes(&self) -> usize {
+        0
+    }
 }
 impl NativePayloadCensus<'_> {
     /// Conservative raster-map reservation (256 bytes per observed tile), not private node capacity.
-    pub fn known_map_reservation_bytes(&self) -> usize { self.maps }
+    pub fn known_map_reservation_bytes(&self) -> usize {
+        self.maps
+    }
 }
 /// Two authentic receipts for the same immutable current Document.
 /// The slices preserve their old scopes; this does not measure total private heap/RSS.
@@ -97,14 +111,30 @@ impl<'d> NativeCurrentCensus<'d> {
         };
         Ok(Self { model, payload, retained, index, visits })
     }
-    pub fn document(&self) -> &'d Document { self.model.document }
-    pub fn belongs_to(&self, document: &Document) -> bool { std::ptr::eq(self.document(), document) }
-    pub fn retained_bytes(&self) -> usize { self.retained }
-    pub fn model_retained_bytes(&self) -> usize { self.model.retained }
-    pub fn payload_retained_bytes(&self) -> usize { self.payload.retained }
-    pub fn known_index_reservation_bytes(&self) -> usize { self.index }
-    pub fn known_map_reservation_bytes(&self) -> usize { self.payload.maps }
-    pub fn visit_scope(&self) -> NativeCensusVisits { self.visits }
+    pub fn document(&self) -> &'d Document {
+        self.model.document
+    }
+    pub fn belongs_to(&self, document: &Document) -> bool {
+        std::ptr::eq(self.document(), document)
+    }
+    pub fn retained_bytes(&self) -> usize {
+        self.retained
+    }
+    pub fn model_retained_bytes(&self) -> usize {
+        self.model.retained
+    }
+    pub fn payload_retained_bytes(&self) -> usize {
+        self.payload.retained
+    }
+    pub fn known_index_reservation_bytes(&self) -> usize {
+        self.index
+    }
+    pub fn known_map_reservation_bytes(&self) -> usize {
+        self.payload.maps
+    }
+    pub fn visit_scope(&self) -> NativeCensusVisits {
+        self.visits
+    }
 }
 pub(super) struct Payloads<'a, 'i> {
     seen: HashSet<(u8, usize)>,
@@ -114,10 +144,19 @@ pub(super) struct Payloads<'a, 'i> {
     limits: PreparationLimits,
     control: &'a Interrupt<'i>,
     visits: NativeCensusVisits,
+    work: Option<&'a dyn Fn(u64) -> Result<(), IoError>>,
 }
 impl Payloads<'_, '_> {
+    pub(super) fn debit(&self, units: u64) -> Result<(), IoError> {
+        if let Some(work) = self.work {
+            poll(self.control)?;
+            work(units)?;
+        }
+        Ok(())
+    }
     pub(super) fn add(&mut self, tag: u8, pointer: usize, bytes: usize) -> Result<(), IoError> {
         poll(self.control)?;
+        self.debit(64)?;
         self.visits.identity_visits = self.visits.identity_visits.checked_add(1).ok_or_else(|| limit("native census visit overflow"))?;
         if bytes == 0 || self.seen.contains(&(tag, pointer)) {
             return Ok(());
@@ -143,12 +182,25 @@ impl Payloads<'_, '_> {
         self.add(2, bytes.as_ptr() as usize, bytes.capacity())
     }
     fn surface(&mut self, surface: &Surface) -> Result<(), IoError> {
+        // Origin validation performs two checked coordinate products per retained
+        // tile, independently of the following identity traversal; no pixel read.
+        if self.work.is_some() {
+            let origins = u64::try_from(surface.tile_count())
+                .ok()
+                .and_then(|n| n.checked_add(1))
+                .and_then(|n| n.checked_mul(64))
+                .ok_or_else(|| limit("native census origin work overflow"))?;
+            self.debit(origins)?;
+        }
         self.visits.surface_visits = self.visits.surface_visits.checked_add(1).ok_or_else(|| limit("native census visit overflow"))?;
         surface.try_validate_tile_origins_with(self.control).map_err(|e| match e {
             photocraft_raster::RasterInputError::Cancelled => IoError::Cancelled,
             other => IoError::Unsupported(other.to_string()),
         })?;
-        self.map_bytes = self.map_bytes.checked_add(surface.tile_count().checked_mul(256).ok_or_else(|| limit("native raster map overflow"))?).ok_or_else(|| limit("native raster map overflow"))?;
+        self.map_bytes = self
+            .map_bytes
+            .checked_add(surface.tile_count().checked_mul(256).ok_or_else(|| limit("native raster map overflow"))?)
+            .ok_or_else(|| limit("native raster map overflow"))?;
         self.add(3, surface.default_bytes().as_ptr() as usize, surface.default_bytes().len())?;
         for (_, tile) in surface.tiles() {
             self.add(4, Arc::as_ptr(tile) as usize, tile.bytes().len())?;
@@ -156,6 +208,7 @@ impl Payloads<'_, '_> {
         Ok(())
     }
     fn layer(&mut self, layer: &Layer, depth: usize) -> Result<(), IoError> {
+        self.debit(64)?;
         self.visits.layer_visits = self.visits.layer_visits.checked_add(1).ok_or_else(|| limit("native census visit overflow"))?;
         poll(self.control)?;
         if depth > photocraft_doc::MAX_GROUP_DEPTH {
@@ -186,8 +239,10 @@ impl Payloads<'_, '_> {
             for surface in &video.frames {
                 self.surface(surface)?;
             }
-            if let Some(original)=&video.original_frames {
-                for surface in original {self.surface(surface)?;}
+            if let Some(original) = &video.original_frames {
+                for surface in original {
+                    self.surface(surface)?;
+                }
             }
         }
         match &layer.content {
@@ -228,10 +283,34 @@ impl Payloads<'_, '_> {
 /// Unique retained raster/source payloads, including hidden layers and immutable caches.
 /// This measures payload capacity, not every model container or arbitrary metadata allocation.
 pub fn retained_native_payload_census<'d>(doc: &'d Document, limits: PreparationLimits, control: &Interrupt<'_>) -> Result<NativePayloadCensus<'d>, IoError> {
+    retained_native_payload_census_inner(doc, limits, control, None)
+}
+/// Same borrowed receipt and admission scope, with prospective original-operation
+/// Work at actual bounded visitor steps. Does not price private provider work.
+pub fn retained_native_payload_census_with_work<'d>(
+    doc: &'d Document,
+    limits: PreparationLimits,
+    control: &Interrupt<'_>,
+    work: &dyn Fn(u64) -> Result<(), IoError>,
+) -> Result<NativePayloadCensus<'d>, IoError> {
+    retained_native_payload_census_inner(doc, limits, control, Some(work))
+}
+fn retained_native_payload_census_inner<'d>(
+    doc: &'d Document,
+    limits: PreparationLimits,
+    control: &Interrupt<'_>,
+    work: Option<&dyn Fn(u64) -> Result<(), IoError>>,
+) -> Result<NativePayloadCensus<'d>, IoError> {
+    // Selected-only fixed setup is paid before constructing writer/visitor
+    // headers, including empty payload censuses with no identity records.
+    if let Some(work) = work {
+        poll(control)?;
+        work(64)?;
+    }
     let mut check = PcraftWriter::new();
     check.set_preparation_limits(limits)?;
     poll(control)?;
-    let mut payloads = Payloads { seen: HashSet::new(), bytes: 0, index: 0, map_bytes: 0, limits, control, visits: NativeCensusVisits::default() };
+    let mut payloads = Payloads { seen: HashSet::new(), bytes: 0, index: 0, map_bytes: 0, limits, control, visits: NativeCensusVisits::default(), work };
     for bytes in
         [doc.icc_profile.as_ref(), doc.metadata.exif.as_ref(), doc.source_color_context.as_ref().and_then(|c| c.original_icc.as_ref())].into_iter().flatten()
     {
@@ -256,22 +335,26 @@ pub fn retained_native_payload_census<'d>(doc: &'d Document, limits: Preparation
         payloads.surface(&pattern.surface)?;
     }
     for path in &doc.paths {
+        payloads.debit(64)?;
         if let Some(bytes) = &path.psd_raw {
             payloads.blob(bytes)?;
         }
     }
     if let Some(state) = &doc.xcf_state {
         for resource in &state.resources {
+            payloads.debit(64)?;
             if let Some(bytes) = &resource.owned_bytes {
                 payloads.owned(bytes.as_ref())?;
             }
         }
         for source in &state.source_items {
+            payloads.debit(64)?;
             if let Some(cache) = &source.cache {
                 payloads.owned(cache.bytes.as_ref())?;
             }
         }
         for record in &state.opaque {
+            payloads.debit(64)?;
             payloads.owned(record.bytes.as_ref())?;
         }
         for mask in &state.filter_masks {
@@ -303,10 +386,34 @@ pub(crate) fn retained_native_map_bytes(doc: &Document, limits: PreparationLimit
 /// Limits apply to this slice and its bounded identity index only; callers must
 /// admit raster/COW work and immutable retained payloads separately.
 pub fn retained_native_model_census<'d>(doc: &'d Document, limits: PreparationLimits, control: &Interrupt<'_>) -> Result<NativeModelCensus<'d>, IoError> {
+    retained_native_model_census_inner(doc, limits, control, None)
+}
+/// Same borrowed receipt and admission scope, with prospective original-operation
+/// Work at actual bounded visitor steps. Does not price private provider work.
+pub fn retained_native_model_census_with_work<'d>(
+    doc: &'d Document,
+    limits: PreparationLimits,
+    control: &Interrupt<'_>,
+    work: &dyn Fn(u64) -> Result<(), IoError>,
+) -> Result<NativeModelCensus<'d>, IoError> {
+    retained_native_model_census_inner(doc, limits, control, Some(work))
+}
+fn retained_native_model_census_inner<'d>(
+    doc: &'d Document,
+    limits: PreparationLimits,
+    control: &Interrupt<'_>,
+    work: Option<&dyn Fn(u64) -> Result<(), IoError>>,
+) -> Result<NativeModelCensus<'d>, IoError> {
+    // Selected-only fixed setup is paid before constructing writer/visitor
+    // headers, including empty payload censuses with no identity records.
+    if let Some(work) = work {
+        poll(control)?;
+        work(64)?;
+    }
     let mut check = PcraftWriter::new();
     check.set_preparation_limits(limits)?;
     poll(control)?;
-    let mut counter = Payloads { seen: HashSet::new(), bytes: 0, index: 0, map_bytes: 0, limits, control, visits: NativeCensusVisits::default() };
+    let mut counter = Payloads { seen: HashSet::new(), bytes: 0, index: 0, map_bytes: 0, limits, control, visits: NativeCensusVisits::default(), work };
     counter.visits.model_visits = super::native_save_model::measure(doc, &mut counter, control)?;
     poll(control)?;
     Ok(NativeModelCensus { document: doc, retained: counter.bytes, index: counter.index, visits: counter.visits })
@@ -319,7 +426,8 @@ pub fn retained_native_model_bytes(doc: &Document, limits: PreparationLimits, co
 /// Legacy text/effect/vector/private map allocations and allocator overhead remain unmeasured.
 pub fn retained_native_input_bytes(doc: &Document, limits: PreparationLimits, control: &Interrupt<'_>) -> Result<usize, IoError> {
     let payload = retained_native_payload_bytes(doc, limits, control)?;
-    let mut counter = Payloads { seen: HashSet::new(), bytes: payload, index: 0, map_bytes: 0, limits, control, visits: NativeCensusVisits::default() };
+    let mut counter =
+        Payloads { seen: HashSet::new(), bytes: payload, index: 0, map_bytes: 0, limits, control, visits: NativeCensusVisits::default(), work: None };
     super::native_save_model::measure(doc, &mut counter, control)?;
     Ok(counter.bytes)
 }
@@ -480,7 +588,11 @@ impl Seek for MemoryOutput<'_, '_> {
 /// ZIP framing is deterministic; raw-Zstd streaming encoding differs from the legacy
 /// compressed archive, while manifest, object and preview decoded contents are unchanged.
 pub fn save_native_bytes(doc: &Document, limits: NativeSaveLimits, control: &Interrupt<'_>) -> Result<(Vec<u8>, NativeSaveResult), IoError> {
+    poll(control)?;
+    control.progress(0.05);
     let (writer, previews, warnings, retained_payload_bytes, retained_model_slice_bytes) = prepare(doc, limits, control)?;
+    control.progress(0.7);
+    poll(control)?;
     let preparation = writer.preparation_limits();
     let base = limits.preparation.resident_bytes.checked_sub(preparation.resident_bytes).ok_or_else(|| limit("native byte-export budget"))?;
     drop(writer);
@@ -491,6 +603,8 @@ pub fn save_native_bytes(doc: &Document, limits: NativeSaveLimits, control: &Int
         return Err(IoError::Cancelled);
     }
     let (output, stats) = result.map_err(|error| if matches!(error, FormatError::Cancelled) { IoError::Cancelled } else { error.into() })?;
+    control.progress(0.95);
+    poll(control)?;
     Ok((output.bytes, NativeSaveResult { warnings, stats, retained_payload_bytes, retained_model_slice_bytes }))
 }
 /// Ephemeral standard-profile preparation for a caller-owned staged sink.
@@ -528,11 +642,55 @@ impl PreparedNativeStream<'_, '_, '_> {
     /// Vec. Callback/capability publication authority belongs to the caller.
     pub fn write<W: Write + Seek>(mut self, output: W) -> Result<(W, NativeSaveResult), IoError> {
         poll(self.control)?;
-        let (output, stats) = self.writer
+        let (output, stats) = self
+            .writer
             .save_zip_stream(self.document, &self.previews, output, self.limits.archive, self.limits.preparation.object_bytes, self.control)
             .map_err(|error| if matches!(error, FormatError::Cancelled) { IoError::Cancelled } else { error.into() })?;
         poll(self.control)?;
-        Ok((output, NativeSaveResult { warnings: self.warnings, stats, retained_payload_bytes: self.retained_payload_bytes, retained_model_slice_bytes: self.retained_model_slice_bytes }))
+        Ok((
+            output,
+            NativeSaveResult {
+                warnings: self.warnings,
+                stats,
+                retained_payload_bytes: self.retained_payload_bytes,
+                retained_model_slice_bytes: self.retained_model_slice_bytes,
+            },
+        ))
+    }
+
+    /// Consume the same prepared plan for an actual UTF-8 destination basename.
+    /// Serialization owns the paid title string; publication remains caller-owned.
+    pub fn write_named<W: Write + Seek>(mut self, destination_name: &str, output: W) -> Result<(W, NativeSaveResult), IoError> {
+        poll(self.control)?;
+        if destination_name.is_empty()
+            || destination_name.len() > 4096
+            || matches!(destination_name, "." | "..")
+            || destination_name.contains(['/', '\\', '\0'])
+        {
+            return Err(IoError::Unsupported("native destination requires a bounded UTF-8 file name".into()));
+        }
+        let (output, stats) = self
+            .writer
+            .save_zip_stream_named(
+                self.document,
+                destination_name,
+                &self.previews,
+                output,
+                self.limits.archive,
+                self.limits.preparation.object_bytes,
+                self.control,
+            )
+            .map_err(|error| if matches!(error, FormatError::Cancelled) { IoError::Cancelled } else { error.into() })?;
+        poll(self.control)?;
+        Ok((
+            output,
+            NativeSaveResult {
+                warnings: self.warnings,
+                stats,
+                retained_payload_bytes: self.retained_payload_bytes,
+                retained_model_slice_bytes: self.retained_model_slice_bytes,
+            },
+        ))
     }
 
     /// Consume the same admitted document/previews into a caller-owned native
@@ -544,15 +702,17 @@ impl PreparedNativeStream<'_, '_, '_> {
         let scratch = usize::try_from(sink.resident_scratch_bytes()).map_err(|_| limit("native directory sink scratch"))?;
         let remaining = previous.resident_bytes.checked_sub(scratch).ok_or_else(|| limit("native directory sink resident envelope"))?;
         self.writer.set_preparation_limits(PreparationLimits { resident_bytes: remaining, ..previous })?;
-        let plan = self.writer.prepare_directory_stream(
-            self.document, &self.previews, self.limits.preparation.object_bytes, self.control,
-        );
+        let plan = self.writer.prepare_directory_stream(self.document, &self.previews, self.limits.preparation.object_bytes, self.control);
         self.writer.set_preparation_limits(previous)?;
         let plan = plan.map_err(|error| if matches!(error, FormatError::Cancelled) { IoError::Cancelled } else { error.into() })?;
-        let stats = plan.write(sink)
-            .map_err(|error| if matches!(error, FormatError::Cancelled) { IoError::Cancelled } else { error.into() })?;
+        let stats = plan.write(sink).map_err(|error| if matches!(error, FormatError::Cancelled) { IoError::Cancelled } else { error.into() })?;
         // Manifest commit is success. No cancellation/error work follows it.
-        Ok(NativeSaveResult { warnings: self.warnings, stats, retained_payload_bytes: self.retained_payload_bytes, retained_model_slice_bytes: self.retained_model_slice_bytes })
+        Ok(NativeSaveResult {
+            warnings: self.warnings,
+            stats,
+            retained_payload_bytes: self.retained_payload_bytes,
+            retained_model_slice_bytes: self.retained_model_slice_bytes,
+        })
     }
 }
 
@@ -601,6 +761,11 @@ pub fn save_native_path_guarded_with_resident_guard(
     before_commit: &dyn Fn(&std::path::Path, u64) -> Result<(), IoError>,
 ) -> Result<NativeSaveResult, IoError> {
     poll(control)?;
+    let destination_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty() && name.len() <= 4096)
+        .ok_or_else(|| IoError::Unsupported("native destination requires a bounded UTF-8 file name".into()))?;
     if path.as_os_str().len() > 4096 || crate::is_xcf_filename(&path.to_string_lossy()) {
         return Err(IoError::Unsupported("source-protection.destination: choose a writable native destination".into()));
     }
@@ -610,27 +775,34 @@ pub fn save_native_path_guarded_with_resident_guard(
     limit_check.set_preparation_limits(limits.preparation)?;
     drop(limit_check);
     let retained_input = retained_native_input_bytes(doc, limits.preparation, control)?;
-    let collection_resident = limits.preparation.resident_bytes.checked_sub(retained_input)
+    let collection_resident = limits
+        .preparation
+        .resident_bytes
+        .checked_sub(retained_input)
         .ok_or_else(|| limit("source-protection.resident-limit: retained document leaves no fingerprint headroom"))?;
     let fingerprints = crate::source_protection::document_fingerprints_with_resident_limit(
         doc,
-        u64::try_from(collection_resident).map_err(|_| limit("source-protection.resident-limit"))?
-            .min(crate::source_protection::resident_ceiling()),
+        u64::try_from(collection_resident).map_err(|_| limit("source-protection.resident-limit"))?.min(crate::source_protection::resident_ceiling()),
         control,
-    ).map_err(|error| if matches!(error, crate::source_protection::SourceProtectionError::Cancelled) {
-        IoError::Cancelled
-    } else { IoError::Unsupported(error.to_string()) })?;
-    let mut fingerprint_bytes = fingerprints.capacity().checked_mul(std::mem::size_of::<String>())
+    )
+    .map_err(|error| {
+        if matches!(error, crate::source_protection::SourceProtectionError::Cancelled) { IoError::Cancelled } else { IoError::Unsupported(error.to_string()) }
+    })?;
+    let mut fingerprint_bytes = fingerprints
+        .capacity()
+        .checked_mul(std::mem::size_of::<String>())
         .and_then(|n| n.checked_add(std::mem::size_of::<Vec<String>>()))
         .ok_or_else(|| limit("source-protection.fingerprint resident overflow"))?;
     for fingerprint in &fingerprints {
         poll(control)?;
-        fingerprint_bytes = fingerprint_bytes.checked_add(fingerprint.capacity())
-            .ok_or_else(|| limit("source-protection.fingerprint resident overflow"))?;
+        fingerprint_bytes = fingerprint_bytes.checked_add(fingerprint.capacity()).ok_or_else(|| limit("source-protection.fingerprint resident overflow"))?;
     }
     let prepared_limits = NativeSaveLimits {
         preparation: PreparationLimits {
-            resident_bytes: limits.preparation.resident_bytes.checked_sub(fingerprint_bytes)
+            resident_bytes: limits
+                .preparation
+                .resident_bytes
+                .checked_sub(fingerprint_bytes)
                 .ok_or_else(|| limit("source-protection.resident-limit: fingerprint owners exceed save envelope"))?,
             ..limits.preparation
         },
@@ -661,8 +833,15 @@ pub fn save_native_path_guarded_with_resident_guard(
                 if !metadata.is_file() {
                     return Err(IoError::Unsupported("source-protection.destination: not a regular file".into()));
                 }
-                crate::source_protection::check_reader_with_resident_limit(&mut file, metadata.len(), &fingerprints, inspection_resident, control)
-                    .map_err(|error| if matches!(error, crate::source_protection::SourceProtectionError::Cancelled) { IoError::Cancelled } else { IoError::Unsupported(error.to_string()) })?;
+                crate::source_protection::check_reader_with_resident_limit(&mut file, metadata.len(), &fingerprints, inspection_resident, control).map_err(
+                    |error| {
+                        if matches!(error, crate::source_protection::SourceProtectionError::Cancelled) {
+                            IoError::Cancelled
+                        } else {
+                            IoError::Unsupported(error.to_string())
+                        }
+                    },
+                )?;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(FormatError::Io(error).into()),
@@ -676,7 +855,7 @@ pub fn save_native_path_guarded_with_resident_guard(
         path,
         move |file| {
             let result = writer
-                .save_zip_stream(doc, &previews, file, limits.archive, limits.preparation.object_bytes, control)
+                .save_zip_stream_named(doc, destination_name, &previews, file, limits.archive, limits.preparation.object_bytes, control)
                 .map(|(_, stats)| stats)
                 .map_err(|error| NativeSaveCommitError(if matches!(error, FormatError::Cancelled) { IoError::Cancelled } else { error.into() }));
             // Atomic's final guard runs only after this closure returns. Retained
@@ -723,7 +902,11 @@ mod tests {
     #[test]
     fn shared_inspection_allowance_refusal_precedes_output_creation() {
         let doc = Document::new("guard", photocraft_doc::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
-        let dir = std::env::temp_dir().join(format!("photocraft-native-guard-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let dir = std::env::temp_dir().join(format!(
+            "photocraft-native-guard-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
         std::fs::create_dir(&dir).unwrap();
         let path = dir.join("output.pcraft");
         let limits = NativeSaveLimits::default();
@@ -745,14 +928,20 @@ mod tests {
     #[test]
     fn final_shared_guard_cancellation_keeps_original_destination() {
         let doc = Document::new("guard", photocraft_doc::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
-        let dir = std::env::temp_dir().join(format!("photocraft-native-final-guard-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let dir = std::env::temp_dir().join(format!(
+            "photocraft-native-final-guard-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
         std::fs::create_dir(&dir).unwrap();
         let path = dir.join("output.pcraft");
         std::fs::write(&path, b"own unrelated original").unwrap();
         let calls = std::cell::Cell::new(0usize);
         let allowance = std::cell::Cell::new(None);
         let result = save_native_path_guarded_with_resident_guard(&doc, &path, NativeSaveLimits::default(), &Interrupt::NONE, &|_, resident| {
-            if let Some(previous) = allowance.get() { assert_eq!(resident, previous); }
+            if let Some(previous) = allowance.get() {
+                assert_eq!(resident, previous);
+            }
             allowance.set(Some(resident));
             calls.set(calls.get() + 1);
             if calls.get() >= 3 { Err(IoError::Cancelled) } else { Ok(()) }
@@ -763,6 +952,55 @@ mod tests {
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         std::fs::remove_file(&path).unwrap();
         std::fs::remove_dir(&dir).unwrap();
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn path_title_changes_only_serialized_name_while_anonymous_bytes_keep_original() {
+        let doc = Document::with_background(
+            "original imported title",
+            photocraft_doc::Size::new(2, 1),
+            photocraft_doc::ColorMode::Rgb,
+            photocraft_doc::SampleType::F64,
+            photocraft_color::Color::WHITE,
+        );
+        let original = doc.clone(); // External assertion snapshot, not a publication receipt.
+        let dir = std::env::temp_dir().join(format!(
+            "photocraft-native-title-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("named output.pcraft");
+        let guards = std::cell::Cell::new(0usize);
+        save_native_path_guarded(&doc, &path, NativeSaveLimits::default(), &Interrupt::NONE, &|_| {
+            guards.set(guards.get() + 1);
+            Ok(())
+        })
+        .unwrap();
+        assert!(guards.get() >= 2);
+        let reopened = photocraft_format::load_from_bytes(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(reopened, *crate::named_for_file(&doc, "named output.pcraft"));
+        let (bytes, _) = save_native_bytes(&doc, NativeSaveLimits::default(), &Interrupt::NONE).unwrap();
+        assert_eq!(photocraft_format::load_from_bytes(&bytes).unwrap(), original);
+        assert_eq!(doc, original);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(dir).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn non_utf8_destination_title_refuses_before_output_after_initial_guard() {
+        use std::os::windows::ffi::OsStringExt;
+        let doc = Document::new("unchanged", photocraft_doc::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        let name = std::ffi::OsString::from_wide(&[0xd800, b'.' as u16, b'p' as u16]);
+        let path = std::env::temp_dir().join(name);
+        let calls = std::cell::Cell::new(0usize);
+        let result = save_native_path_guarded(&doc, &path, NativeSaveLimits::default(), &Interrupt::NONE, &|_| {
+            calls.set(calls.get() + 1);
+            Ok(())
+        });
+        assert!(matches!(result, Err(IoError::Unsupported(_))));
+        assert_eq!(calls.get(), 1, "the established outer guard runs once; preparation/output/final guards are not reached");
+        assert!(!path.exists());
     }
     #[test]
     fn controlled_previews_match_previous_native_save_values() {
@@ -814,12 +1052,21 @@ mod census_receipt_tests {
         let format = photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, photocraft_color::SampleType::U8, false);
         let mut surface = Surface::try_with_default_bytes(format, &[0]).unwrap();
         surface.try_write_pixel_f64(0, 0, &[1.0]).unwrap();
-        let calls = std::cell::Cell::new(0usize);
-        let cancelled = || { calls.set(calls.get() + 1); calls.get() > 1 };
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let cancelled = || calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1 > 1;
         let control = Interrupt::cancel_only(&cancelled);
-        let mut counter = Payloads { seen: HashSet::new(), bytes: 0, index: 0, map_bytes: 0, limits: PreparationLimits::default(), control: &control, visits: NativeCensusVisits::default() };
+        let mut counter = Payloads {
+            seen: HashSet::new(),
+            bytes: 0,
+            index: 0,
+            map_bytes: 0,
+            limits: PreparationLimits::default(),
+            control: &control,
+            visits: NativeCensusVisits::default(),
+            work: None,
+        };
         assert!(matches!(counter.surface(&surface), Err(IoError::Cancelled)));
-        assert!(calls.get() >= 2);
+        assert!(calls.load(std::sync::atomic::Ordering::Relaxed) >= 2);
         assert_eq!(counter.visits.identity_visits, 0);
         assert_eq!(counter.bytes, 0);
         assert_eq!(counter.map_bytes, 0);
@@ -833,3 +1080,7 @@ mod census_receipt_tests {
         assert!(matches!(retained_native_payload_census(&doc, PreparationLimits::default(), &control), Err(IoError::Cancelled)));
     }
 }
+
+#[cfg(test)]
+#[path = "native_save_census_work_tests.rs"]
+mod census_work_tests;

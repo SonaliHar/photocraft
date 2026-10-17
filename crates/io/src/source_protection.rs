@@ -9,16 +9,13 @@ pub fn resident_ceiling() -> u64 {
 }
 /// Actual retained owned hash storage, including caller-known Vec capacity.
 /// This performs no IO and grants no source authority.
-pub fn fingerprint_resident_bytes(
-    values: &[String],
-    slots: usize,
-    interrupt: &photocraft_raster::Interrupt<'_>,
-) -> Result<usize, SourceProtectionError> {
+pub fn fingerprint_resident_bytes(values: &[String], slots: usize, interrupt: &photocraft_raster::Interrupt<'_>) -> Result<usize, SourceProtectionError> {
     validate_fingerprints_with_interrupt(values, interrupt)?;
     if slots < values.len() {
         return Err(SourceProtectionError::InvalidFingerprint);
     }
-    let mut bytes = slots.checked_mul(std::mem::size_of::<String>())
+    let mut bytes = slots
+        .checked_mul(std::mem::size_of::<String>())
         .and_then(|n| n.checked_add(std::mem::size_of::<Vec<String>>()))
         .ok_or(SourceProtectionError::ResidentLimit)?;
     for value in values {
@@ -388,13 +385,20 @@ pub fn document_fingerprints_with_resident_limit(
     interrupt: &photocraft_raster::Interrupt<'_>,
 ) -> Result<Vec<String>, SourceProtectionError> {
     poll(interrupt)?;
-    if resident_limit > resident_ceiling() { return Err(SourceProtectionError::ResidentLimit); }
-    let Some(state) = &document.xcf_state else { poll(interrupt)?; return Ok(Vec::new()); };
+    if resident_limit > resident_ceiling() {
+        return Err(SourceProtectionError::ResidentLimit);
+    }
+    let Some(state) = &document.xcf_state else {
+        poll(interrupt)?;
+        return Ok(Vec::new());
+    };
     let provenance = &state.provenance;
     if provenance.protected_source_fingerprints.len() > MAX_FINGERPRINTS - 1 {
         return Err(SourceProtectionError::FingerprintLimit);
     }
-    let count = provenance.protected_source_fingerprints.len()
+    let count = provenance
+        .protected_source_fingerprints
+        .len()
         .checked_add(usize::from(provenance.source_hash.is_some()))
         .ok_or(SourceProtectionError::FingerprintLimit)?;
     // Validate every literal before allocation, even duplicate entries.
@@ -405,25 +409,36 @@ pub fn document_fingerprints_with_resident_limit(
         }
     }
     let headers = std::mem::size_of::<Vec<String>>() + std::mem::size_of::<Vec<[u8; 32]>>();
-    let requested = count.checked_mul(std::mem::size_of::<String>() + 32 + 64)
-        .and_then(|n| n.checked_add(headers)).ok_or(SourceProtectionError::ResidentLimit)?;
+    let requested =
+        count.checked_mul(std::mem::size_of::<String>() + 32 + 64).and_then(|n| n.checked_add(headers)).ok_or(SourceProtectionError::ResidentLimit)?;
     let maximum = usize::try_from(resident_limit).map_err(|_| SourceProtectionError::ResidentLimit)?;
-    if requested > maximum { return Err(SourceProtectionError::ResidentLimit); }
+    if requested > maximum {
+        return Err(SourceProtectionError::ResidentLimit);
+    }
     poll(interrupt)?;
     let mut values: Vec<String> = Vec::new();
     let mut seen: Vec<[u8; 32]> = Vec::new();
     values.try_reserve_exact(count).map_err(|_| SourceProtectionError::Allocation)?;
-    let after_values = values.capacity().checked_mul(std::mem::size_of::<String>())
+    let after_values = values
+        .capacity()
+        .checked_mul(std::mem::size_of::<String>())
         .and_then(|n| count.checked_mul(32 + 64).and_then(|v| n.checked_add(v)))
-        .and_then(|n| n.checked_add(headers)).ok_or(SourceProtectionError::ResidentLimit)?;
-    if after_values > maximum { return Err(SourceProtectionError::ResidentLimit); }
+        .and_then(|n| n.checked_add(headers))
+        .ok_or(SourceProtectionError::ResidentLimit)?;
+    if after_values > maximum {
+        return Err(SourceProtectionError::ResidentLimit);
+    }
     poll(interrupt)?;
     seen.try_reserve_exact(count).map_err(|_| SourceProtectionError::Allocation)?;
-    let base = values.capacity().checked_mul(std::mem::size_of::<String>())
+    let base = values
+        .capacity()
+        .checked_mul(std::mem::size_of::<String>())
         .and_then(|n| seen.capacity().checked_mul(32).and_then(|v| n.checked_add(v)))
-        .and_then(|n| n.checked_add(headers)).ok_or(SourceProtectionError::ResidentLimit)?;
-    if base.checked_add(count.checked_mul(64).ok_or(SourceProtectionError::ResidentLimit)?)
-        .is_none_or(|n| n > maximum) { return Err(SourceProtectionError::ResidentLimit); }
+        .and_then(|n| n.checked_add(headers))
+        .ok_or(SourceProtectionError::ResidentLimit)?;
+    if base.checked_add(count.checked_mul(64).ok_or(SourceProtectionError::ResidentLimit)?).is_none_or(|n| n > maximum) {
+        return Err(SourceProtectionError::ResidentLimit);
+    }
     let mut payload = 0usize;
     for value in provenance.source_hash.iter().chain(&provenance.protected_source_fingerprints) {
         poll(interrupt)?;
@@ -431,15 +446,24 @@ pub fn document_fingerprints_with_resident_limit(
         let mut duplicate = false;
         for previous in &seen {
             poll(interrupt)?;
-            if previous == hash.as_bytes() { duplicate = true; break; }
+            if previous == hash.as_bytes() {
+                duplicate = true;
+                break;
+            }
         }
-        if duplicate { continue; }
+        if duplicate {
+            continue;
+        }
         let prospective = payload.checked_add(64).and_then(|n| n.checked_add(base)).ok_or(SourceProtectionError::ResidentLimit)?;
-        if prospective > maximum { return Err(SourceProtectionError::ResidentLimit); }
+        if prospective > maximum {
+            return Err(SourceProtectionError::ResidentLimit);
+        }
         let mut copy = String::new();
         copy.try_reserve_exact(64).map_err(|_| SourceProtectionError::Allocation)?;
         payload = payload.checked_add(copy.capacity()).ok_or(SourceProtectionError::ResidentLimit)?;
-        if base.checked_add(payload).is_none_or(|n| n > maximum) { return Err(SourceProtectionError::ResidentLimit); }
+        if base.checked_add(payload).is_none_or(|n| n > maximum) {
+            return Err(SourceProtectionError::ResidentLimit);
+        }
         poll(interrupt)?;
         copy.push_str(value);
         seen.push(*hash.as_bytes());
@@ -536,7 +560,7 @@ mod bounded_reader_drafts {
     #[test]
     fn hash_owner_admission_counts_capacity_and_rejects_invalid_slots() {
         let mut hash = String::with_capacity(256);
-        hash.push_str(&blake3::hash(b"own fingerprint input").to_hex().to_string());
+        hash.push_str(blake3::hash(b"own fingerprint input").to_hex().as_ref());
         let values = vec![hash];
         let bytes = fingerprint_resident_bytes(&values, 8, &photocraft_raster::Interrupt::NONE).unwrap();
         assert!(bytes >= 256 + 8 * std::mem::size_of::<String>());
@@ -558,7 +582,7 @@ mod bounded_reader_drafts {
             }
         }
         let mut bytes = vec![0u8; HEADER_BYTES];
-        bytes[..4].copy_from_slice(&[0x28, 0xb5, 0x2f, 0xfd]);
+        bytes[..3].copy_from_slice(&[0x1f, 0x8b, 0x08]);
         let mut reader = Count { calls: 0, bytes: io::Cursor::new(bytes.clone()) };
         let result = check_reader_with_resident_limit(&mut reader, 1 << 20, &[], SOURCE_PROTECTION_FIXED_BYTES + 16, &photocraft_raster::Interrupt::NONE);
         assert!(matches!(result, Err(SourceProtectionError::ResidentLimit)));
@@ -616,15 +640,22 @@ mod bounded_reader_drafts {
 mod resident_collector_tests {
     use super::*;
     fn document(hash: &str) -> photocraft_doc::Document {
-        let mut doc = photocraft_doc::Document::new("own collector", photocraft_doc::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        let mut doc =
+            photocraft_doc::Document::new("own collector", photocraft_doc::Size::new(1, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
         doc.xcf_state = Some(photocraft_doc::XcfState::default());
         doc.xcf_state.as_mut().unwrap().provenance.source_hash = Some(hash.into());
         doc
     }
     #[test]
     fn malformed_precedes_zero_budget_and_valid_zero_refuses() {
-        assert!(matches!(document_fingerprints_with_resident_limit(&document("not a hash"), 0, &photocraft_raster::Interrupt::NONE), Err(SourceProtectionError::InvalidFingerprint)));
-        assert!(matches!(document_fingerprints_with_resident_limit(&document(&"ab".repeat(32)), 0, &photocraft_raster::Interrupt::NONE), Err(SourceProtectionError::ResidentLimit)));
+        assert!(matches!(
+            document_fingerprints_with_resident_limit(&document("not a hash"), 0, &photocraft_raster::Interrupt::NONE),
+            Err(SourceProtectionError::InvalidFingerprint)
+        ));
+        assert!(matches!(
+            document_fingerprints_with_resident_limit(&document(&"ab".repeat(32)), 0, &photocraft_raster::Interrupt::NONE),
+            Err(SourceProtectionError::ResidentLimit)
+        ));
     }
     #[test]
     fn exact_lower_envelope_case_dedup_and_cancel_preserve_original() {
@@ -632,12 +663,21 @@ mod resident_collector_tests {
         let mut doc = document(&original);
         doc.xcf_state.as_mut().unwrap().provenance.protected_source_fingerprints = vec![original.to_uppercase(), "Cd".repeat(32)];
         let before = doc.clone();
-        let requested = 3 * (std::mem::size_of::<String>() + 32 + 64) + std::mem::size_of::<Vec<String>>() + std::mem::size_of::<Vec<[u8;32]>>();
-        assert!(matches!(document_fingerprints_with_resident_limit(&doc, requested as u64 - 1, &photocraft_raster::Interrupt::NONE), Err(SourceProtectionError::ResidentLimit)));
-        assert_eq!(document_fingerprints_with_resident_limit(&doc, requested as u64, &photocraft_raster::Interrupt::NONE).unwrap(), vec![original, "Cd".repeat(32)]);
+        let requested = 3 * (std::mem::size_of::<String>() + 32 + 64) + std::mem::size_of::<Vec<String>>() + std::mem::size_of::<Vec<[u8; 32]>>();
+        assert!(matches!(
+            document_fingerprints_with_resident_limit(&doc, requested as u64 - 1, &photocraft_raster::Interrupt::NONE),
+            Err(SourceProtectionError::ResidentLimit)
+        ));
+        assert_eq!(
+            document_fingerprints_with_resident_limit(&doc, requested as u64, &photocraft_raster::Interrupt::NONE).unwrap(),
+            vec![original, "Cd".repeat(32)]
+        );
         let calls = std::sync::atomic::AtomicUsize::new(0);
         let cancelled = || calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 10;
-        assert!(matches!(document_fingerprints_with_resident_limit(&doc, requested as u64, &photocraft_raster::Interrupt::cancel_only(&cancelled)), Err(SourceProtectionError::Cancelled)));
+        assert!(matches!(
+            document_fingerprints_with_resident_limit(&doc, requested as u64, &photocraft_raster::Interrupt::cancel_only(&cancelled)),
+            Err(SourceProtectionError::Cancelled)
+        ));
         assert_eq!(doc, before);
     }
 }

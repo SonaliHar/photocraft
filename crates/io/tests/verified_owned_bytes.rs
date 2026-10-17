@@ -137,7 +137,11 @@ fn late_io_hash_cancel_and_work_failures_leave_caller_output_and_quota_unchanged
 }
 #[test]
 fn capture_length_index_limit_and_late_source_error_refund_all_storage() {
-    for length in [0, u64::MAX, (256 << 20) + 1] {
+    for length in [
+        0,
+        u64::MAX,
+        u64::from(photocraft_io::native_plane_store::NATIVE_STORE_MAX_BLOCKS) * photocraft_io::native_plane_store::NATIVE_STORE_BLOCK_BYTES as u64 + 1,
+    ] {
         let q = quota();
         assert_eq!(
             VerifiedOwnedBytes::capture(

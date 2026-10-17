@@ -220,6 +220,14 @@ fn save_native_path_with(
 ) -> Result<(), AccountedNativeError> {
     capability.0.validate(quota)?;
     control.check(0)?;
+    let destination_name = capability
+        .0
+        .path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty() && name.len() <= 4096)
+        .ok_or(AccountedNativeError::Unsupported("native destination requires a bounded UTF-8 file name"))?;
+    control.check(destination_name.len() as u64 + 1)?;
     // Prepay bounded atomic path/handle staging before target resolution creates
     // derived path strings. The atomic helper caps its temporary stem to64chars.
     let _atomic_lease = quota.reserve(QuotaKind::Resident, 65536).map_err(|_| BackingError::Quota)?;
@@ -227,8 +235,12 @@ fn save_native_path_with(
         &capability.0.path,
         |file| {
             match document {
-                NativeSaveModel::Document(document) => { photocraft_format::owned_document::save_current_document_archive(document, file, limits, quota, control)?; }
-                NativeSaveModel::Accounted(document) => { crate::accounted_current_native::save_accounted_current_archive(document, file, limits, quota, control)?; }
+                NativeSaveModel::Document(document) => {
+                    photocraft_format::owned_document::save_current_document_archive_named(document, destination_name, file, limits, quota, control)?;
+                }
+                NativeSaveModel::Accounted(document) => {
+                    crate::accounted_current_native::save_accounted_current_archive_named(document, destination_name, file, limits, quota, control)?;
+                }
             }
             Ok(())
         },

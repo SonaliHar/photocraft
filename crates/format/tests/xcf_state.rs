@@ -112,3 +112,45 @@ fn indexed_provenance_verification_is_interruptible() {
     assert_eq!(s, before);
     assert!(IndexedSource::new(Arc::new(vec![0; 257]), None, vec![[10, 20, 30]], r, &s).is_ok());
 }
+
+/// Native transport must retain stored Auto independently from its resolved snapshot.
+/// This is data equality, not composition or producer qualification.
+#[test]
+fn stored_auto_and_resolved_composition_snapshot_roundtrip_all_depths() {
+    use photocraft_doc::{
+        XcfState,
+        import_compositing::{GimpComposition, GimpOperator, GimpSpace, ResolvedGimpComposition},
+    };
+    for depth in SampleType::ALL {
+        for space in [GimpSpace::LinearRgb, GimpSpace::ProfileRgb, GimpSpace::Lab, GimpSpace::PerceptualRgb] {
+            let mut doc = Document::new("Retained Auto policy", Size::new(1, 1), ColorMode::Rgb, depth);
+            doc.sample_encoding = Some(SampleEncoding::NonlinearProfile);
+            doc.layers.push(Layer::raster("Unrelated layer metadata", doc.pixel_format()));
+            doc.layers[0].visible = false;
+            doc.layers[0].opacity = 0.375;
+            let mut state = XcfState::default();
+            state.reconcile_layers(&doc).unwrap();
+            state.items[0].composition = Some(GimpComposition {
+                compatibility_epoch: "synthetic-native-storage-contract".into(),
+                source_mode: 28,
+                legacy: false,
+                stored_blend_space: 0,
+                stored_composite_space: 0,
+                stored_operator: 0,
+                resolved: Some(ResolvedGimpComposition { blend_space: space, composite_space: space, operator: GimpOperator::Union }),
+                pass_through: false,
+            });
+            let expected = state.items[0].composition.clone().unwrap();
+            expected.checked_resolved().unwrap();
+            doc.xcf_state = Some(state);
+            let saved = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+            let loaded = load_from_bytes(&saved).unwrap();
+            assert_eq!(loaded, doc);
+            let actual = loaded.xcf_state.as_ref().unwrap().items[0].composition.as_ref().unwrap();
+            assert_eq!(actual, &expected);
+            assert_eq!((actual.stored_blend_space, actual.stored_composite_space, actual.stored_operator), (0, 0, 0));
+            assert_eq!(actual.checked_resolved().unwrap(), expected.resolved.as_ref().unwrap());
+            assert_eq!(load_from_bytes(&save_to_bytes(&loaded, &SaveOptions::default()).unwrap()).unwrap(), doc);
+        }
+    }
+}

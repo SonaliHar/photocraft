@@ -280,7 +280,12 @@ fn read_manifest_with_interrupt(src: &dyn Source, opts: &LoadOptions, interrupt:
         }
     }
     if let Some(hint) = v.get("current_storage_hint").filter(|hint| !hint.is_null()) {
-        let floor = match hint.as_str(){Some("normal_hierarchy")=>13,Some("masked_filtered_flat_point")=>12,Some("point_f32_coverage")=>11,_=>10};
+        let floor = match hint.as_str() {
+            Some("normal_hierarchy") => 13,
+            Some("masked_filtered_flat_point") => 12,
+            Some("point_f32_coverage") => 11,
+            _ => 10,
+        };
         if v.get("format_version").and_then(serde_json::Value::as_u64).is_none_or(|version| version < floor)
             || v.get("minimum_reader_version").and_then(serde_json::Value::as_u64).is_none_or(|version| version < floor)
         {
@@ -297,7 +302,7 @@ fn read_manifest_with_interrupt(src: &dyn Source, opts: &LoadOptions, interrupt:
         return Err(FormatError::TooNew { found: m.minimum_reader_version, supported: FORMAT_VERSION });
     }
     let hint_floor = match m.current_storage_hint {
-        Some(crate::NativeCurrentStorageHint::NormalHierarchy)=>13,
+        Some(crate::NativeCurrentStorageHint::NormalHierarchy) => 13,
         Some(crate::NativeCurrentStorageHint::MaskedFilteredFlatPoint) => 12,
         Some(crate::NativeCurrentStorageHint::PointF32Coverage) => 11,
         Some(crate::NativeCurrentStorageHint::FilteredFlatPoint) => 10,
@@ -1213,6 +1218,7 @@ impl PcraftWriter {
         control: photocraft_raster::Interrupt<'_>,
         object_limit: Option<usize>,
         observer: Option<&dyn PreparationObserver>,
+        destination_name: Option<&str>,
     ) -> Result<Prepared<'doc>> {
         let mut cancelled = false;
         self.hash_cache.retain(|_, (w, _)| {
@@ -1237,7 +1243,7 @@ impl PcraftWriter {
             resident: 0,
             index: 0,
         };
-        let document = convert::doc_m(doc, &mut c)?;
+        let document = if let Some(name) = destination_name { convert::doc_m_named(doc, &mut c, name)? } else { convert::doc_m(doc, &mut c)? };
         let mut previews = Vec::new();
         if let Some(t) = &opts.thumbnail {
             c.poll()?;
@@ -1306,7 +1312,7 @@ impl PcraftWriter {
 
     /// Save as a ZIP bundle in memory.
     pub fn save_zip(&mut self, doc: &Document, opts: &SaveOptions) -> Result<(Vec<u8>, SaveStats)> {
-        let p = self.prepare(doc, opts, photocraft_raster::Interrupt::NONE, None, None)?;
+        let p = self.prepare(doc, opts, photocraft_raster::Interrupt::NONE, None, None, None)?;
         let mut stats = p.stats;
         let mut z = ZipWriter::new();
         z.add(MANIFEST, &p.manifest)?;
@@ -1355,7 +1361,22 @@ impl PcraftWriter {
         max_object_bytes: usize,
         control: &photocraft_raster::Interrupt<'_>,
     ) -> Result<(W, SaveStats)> {
-        self.save_zip_stream_inner(doc, opts, output, limits, control, (max_object_bytes, None))
+        self.save_zip_stream_inner(doc, opts, output, limits, control, (max_object_bytes, None, None))
+    }
+
+    /// Serialize a destination leaf as the archive title without changing the model.
+    #[expect(clippy::too_many_arguments, reason = "Named counterpart retains the established stream writer arguments plus borrowed destination title")]
+    pub fn save_zip_stream_named<W: std::io::Write + std::io::Seek>(
+        &mut self,
+        doc: &Document,
+        destination_name: &str,
+        opts: &SaveOptions,
+        output: W,
+        limits: crate::zip::stream::Limits,
+        max_object_bytes: usize,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<(W, SaveStats)> {
+        self.save_zip_stream_inner(doc, opts, output, limits, control, (max_object_bytes, None, Some(destination_name)))
     }
 
     /// Fresh writer with shared accounting. Preparation reservations remain live until
@@ -1373,7 +1394,7 @@ impl PcraftWriter {
         let mut writer = Self::new();
         writer.set_preparation_limits(preparation)?;
         // writer drops before scope, including on error; no live cache is refunded.
-        writer.save_zip_stream_inner(doc, opts, output, limits, control, (preparation.object_bytes, Some(&scope)))
+        writer.save_zip_stream_inner(doc, opts, output, limits, control, (preparation.object_bytes, Some(&scope), None))
     }
     fn save_zip_stream_inner<W: std::io::Write + std::io::Seek>(
         &mut self,
@@ -1382,12 +1403,12 @@ impl PcraftWriter {
         output: W,
         limits: crate::zip::stream::Limits,
         control: &photocraft_raster::Interrupt<'_>,
-        (max_object_bytes, observer): (usize, Option<&dyn PreparationObserver>),
+        (max_object_bytes, observer, destination_name): (usize, Option<&dyn PreparationObserver>, Option<&str>),
     ) -> Result<(W, SaveStats)> {
         if control.cancelled() {
             return Err(FormatError::Cancelled);
         }
-        let prepared = self.prepare(doc, opts, *control, Some(max_object_bytes), observer)?;
+        let prepared = self.prepare(doc, opts, *control, Some(max_object_bytes), observer, destination_name)?;
         if control.cancelled() {
             return Err(FormatError::Cancelled);
         }
@@ -1463,7 +1484,7 @@ impl PcraftWriter {
         for path in [MANIFEST, THUMB, COMPOSITE] {
             validate_bundle_file(dir, &dir.join(path))?;
         }
-        let p = self.prepare(doc, opts, photocraft_raster::Interrupt::NONE, None, None)?;
+        let p = self.prepare(doc, opts, photocraft_raster::Interrupt::NONE, None, None, None)?;
         let mut stats = p.stats;
         if self.verified_directory.as_ref().is_none_or(|cache| cache.directory != canonical_dir) {
             self.verified_directory = Some(DirectoryVerificationCache { directory: canonical_dir.clone(), ..Default::default() });

@@ -1,5 +1,6 @@
 //! UNRUN sparse logical-size continuation, not dense-input or performance proof.
 use super::*;
+use photocraft_geom::TileCoord;
 use photocraft_raster::backing::NativeTileVisitor;
 
 #[derive(Debug)]

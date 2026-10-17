@@ -103,6 +103,6 @@ fn original_floor_and_unmarked_intent_remain_closed() {
     assert!(archive.into_accounted_readonly_masked_filtered_flat_storage(&ctl()).is_err());
     let mut raw = serde_json::json!({"format_version":11,"minimum_reader_version":11,"document":{}});
     crate::migrate::migrate(&mut raw).unwrap();
-    assert_eq!(raw["format_version"], 12);
+    assert_eq!(raw["format_version"], crate::FORMAT_VERSION);
     assert!(raw.get("current_storage_hint").is_none());
 }

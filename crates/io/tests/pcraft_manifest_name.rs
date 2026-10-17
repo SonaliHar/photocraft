@@ -5,8 +5,10 @@ mod common;
 
 use common::*;
 use photocraft_color::{ColorMode, SampleType};
-use photocraft_format::zip::ZipReader;
+use photocraft_format::zip::stream::{Limits, Reader};
 use photocraft_io::*;
+use photocraft_raster::Interrupt;
+use std::io::Cursor;
 
 fn doc() -> photocraft_doc::Document {
     let mut d = gen_doc(ColorMode::Rgb, SampleType::U8, Features::PIXELS);
@@ -16,8 +18,9 @@ fn doc() -> photocraft_doc::Document {
 
 /// `document.name` as the bundle actually stores it.
 fn manifest_name(bytes: &[u8]) -> String {
-    let archive = ZipReader::new(bytes).expect("zip");
-    let manifest: serde_json::Value = serde_json::from_slice(&archive.read_by_name("manifest.json", usize::MAX).expect("manifest")).expect("manifest json");
+    let mut archive = Reader::new(Cursor::new(bytes), Limits::default(), &Interrupt::NONE).expect("ZIP64 stream");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&archive.read_by_name("manifest.json", 1 << 20, &Interrupt::NONE).expect("manifest")).expect("manifest json");
     manifest["document"]["name"].as_str().expect("document.name").to_string()
 }
 

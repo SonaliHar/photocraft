@@ -156,7 +156,7 @@ impl PcraftWriter {
         let saved_limits = self.preparation_limits;
         let remaining = saved_limits.resident_bytes.checked_sub(DIRECTORY_STREAM_SCRATCH_BYTES).ok_or_else(length)?;
         self.preparation_limits.resident_bytes = remaining;
-        let prepared = self.prepare(document, options, *control, Some(max_object_bytes), None);
+        let prepared = self.prepare(document, options, *control, Some(max_object_bytes), None, None);
         self.preparation_limits = saved_limits;
         let prepared = prepared?;
         let maximum = max_object_bytes as u64;
@@ -644,7 +644,7 @@ mod tests {
             decoded_length: raw.len() as u64,
             decoded_hash: *blake3::hash(&raw).as_bytes(),
         };
-        let legacy = ruzstd::encoding::compress_to_vec(&raw, ruzstd::encoding::CompressionLevel::Fastest);
+        let legacy = ruzstd::encoding::compress_to_vec(raw.as_slice(), ruzstd::encoding::CompressionLevel::Fastest);
         let mut reader = io::Cursor::new(legacy.clone());
         reader.set_position(7);
         assert!(verify_existing_directory_entry(&entry, &mut reader, &Interrupt::NONE).unwrap());
@@ -657,7 +657,7 @@ mod tests {
             assert!(!verify_existing_directory_entry(&entry, &mut reader, &Interrupt::NONE).unwrap());
             assert_eq!(reader.position(), 3);
         }
-        let changed = ruzstd::encoding::compress_to_vec(&vec![17; raw.len()], ruzstd::encoding::CompressionLevel::Fastest);
+        let changed = ruzstd::encoding::compress_to_vec(vec![17u8; raw.len()].as_slice(), ruzstd::encoding::CompressionLevel::Fastest);
         assert!(!verify_existing_directory_entry(&entry, &mut io::Cursor::new(changed), &Interrupt::NONE).unwrap());
         let mut truncated = legacy;
         truncated.pop();
@@ -677,7 +677,7 @@ mod tests {
             decoded_length: raw.len() as u64,
             decoded_hash: *blake3::hash(&raw).as_bytes(),
         };
-        let legacy = ruzstd::encoding::compress_to_vec(&raw, ruzstd::encoding::CompressionLevel::Fastest);
+        let legacy = ruzstd::encoding::compress_to_vec(raw.as_slice(), ruzstd::encoding::CompressionLevel::Fastest);
         let mut reader = io::Cursor::new(legacy.clone());
         reader.set_position(2);
         let limits = DirectoryVerificationLimits { work_units: 0, ..Default::default() };
