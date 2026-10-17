@@ -37,7 +37,7 @@ fn original_multiline_native_cache_whole_doc_and_projection() {
         println!("{name}: {delta}/255");
         assert!(delta <= 2);
         let saved = photocraft_io::export(&doc, "placed.pcraft", &Default::default()).unwrap();
-        assert_eq!(photocraft_io::import("placed.pcraft", &saved.bytes).unwrap().document, doc);
+        assert_eq!(photocraft_io::import("placed.pcraft", &saved.bytes).unwrap().document, *photocraft_io::named_for_file(&doc, "placed.pcraft"));
         assert_eq!(sha(&std::fs::read(root.join(format!("{name}.xcf"))).unwrap()), row["source_sha256"].as_str().unwrap());
     }
 }

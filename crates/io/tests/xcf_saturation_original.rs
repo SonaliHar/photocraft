@@ -78,7 +78,7 @@ fn check_original_states(gray_scope: bool) {
         assert_eq!(state.filter_masks[0].surface.try_read_interleaved(doc.bounds()).unwrap(), mask.bytes);
         let native = photocraft_io::export(&doc, "saturation.pcraft", &Default::default()).unwrap();
         let reopened = photocraft_io::import("saturation.pcraft", &native.bytes).unwrap().document;
-        assert_eq!(reopened, doc);
+        assert_eq!(reopened, *photocraft_io::named_for_file(&doc, "saturation.pcraft"));
         let (stream, _) = photocraft_format::PcraftWriter::new()
             .save_zip_stream(&doc, &Default::default(), Cursor::new(Vec::new()), Default::default(), 64 << 20, &photocraft_raster::Interrupt::NONE)
             .unwrap();

@@ -42,7 +42,7 @@ fn original_aa_canonical_configuration_qualifies_without_source_cache_rendering(
         let request = photocraft_text::xcf::qualify_outline_source(&mapped.item, &mapped.resources[0], [8, 4], &Interrupt::NONE).unwrap();
         assert_eq!(request.content, row["text"].as_str().unwrap());
         photocraft_text::xcf::outline::qualify_outline_geometry(&font, request, &Interrupt::NONE).unwrap();
-        assert_eq!(mapped.item.cache.as_ref().unwrap().bytes, std::fs::read(root.join(row["state"]["native"]["file"].as_str().unwrap())).unwrap());
+        assert_eq!(mapped.item.cache.as_ref().unwrap().bytes.as_slice(), std::fs::read(root.join(row["state"]["native"]["file"].as_str().unwrap())).unwrap());
         count += 1;
     }
     assert_eq!(count, 24);

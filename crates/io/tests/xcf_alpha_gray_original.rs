@@ -51,7 +51,7 @@ fn gray_alpha_import_retains_source_native_state_and_independent_projection() {
         let before = doc.clone();
         let saved = photocraft_io::export(&doc, "gray.pcraft", &Default::default()).unwrap();
         let reopened = photocraft_io::import("gray.pcraft", &saved.bytes).unwrap().document;
-        assert_eq!(doc, reopened);
+        assert_eq!(*photocraft_io::named_for_file(&doc, "gray.pcraft"), reopened);
         let reference = photocraft_codecs::decode(&read(&root, &row["reference"])).unwrap();
         let native = read(&root, &row["projection"]["nonlinear_double"]);
         for candidate in [&doc, &reopened] {

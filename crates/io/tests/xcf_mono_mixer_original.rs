@@ -32,7 +32,7 @@ fn verify(root: &Path, input: &str, state: &Value, png: Option<&str>, projection
     }
     let saved = photocraft_io::export(&doc, "mixer.pcraft", &Default::default()).unwrap();
     let reopened = photocraft_io::import("mixer.pcraft", &saved.bytes).unwrap().document;
-    assert_eq!(reopened, doc);
+    assert_eq!(reopened, *photocraft_io::named_for_file(&doc, "mixer.pcraft"));
     let png = png.map(|name| photocraft_codecs::decode(&fs::read(root.join(name)).unwrap()).unwrap());
     let projection: Option<Vec<f64>> = projection.map(|name| {
         fs::read(root.join(name))

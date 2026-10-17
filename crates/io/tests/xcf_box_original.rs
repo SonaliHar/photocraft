@@ -21,7 +21,7 @@ fn reopen(doc: &photocraft_doc::Document) -> photocraft_doc::Document {
     let saved = photocraft_io::export(doc, "box.pcraft", &Default::default()).unwrap();
     assert!(saved.warnings.is_empty());
     let reopened = photocraft_io::import("box.pcraft", &saved.bytes).unwrap().document;
-    assert_eq!(&reopened, doc);
+    assert_eq!(&reopened, photocraft_io::named_for_file(doc, "box.pcraft").as_ref());
     reopened
 }
 #[test]

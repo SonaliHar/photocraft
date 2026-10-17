@@ -52,7 +52,7 @@ fn original_legacy_blends_import_reopen_and_render() {
             let native = photocraft_io::export(&source, "legacy.pcraft", &Default::default()).unwrap();
             assert!(native.warnings.is_empty());
             let reopened = photocraft_io::import("legacy.pcraft", &native.bytes).unwrap().document;
-            assert_eq!(source, reopened);
+            assert_eq!(*photocraft_io::named_for_file(&source, "legacy.pcraft"), reopened);
             let expected = photocraft_codecs::decode(&read(&root, &format!("mode-{case}.fresh-{phase}.ref.png"), hashes)).unwrap();
             let mut worst = 0.0_f64;
             for doc in [&source, &reopened] {
@@ -88,7 +88,7 @@ fn original_multiply_explicit_spaces_import_reopen_and_render() {
             let native = photocraft_io::export(&source, "spaces.pcraft", &Default::default()).unwrap();
             assert!(native.warnings.is_empty(), "{:?}", native.warnings);
             let reopened = photocraft_io::import("spaces.pcraft", &native.bytes).unwrap().document;
-            assert_eq!(source, reopened);
+            assert_eq!(*photocraft_io::named_for_file(&source, "spaces.pcraft"), reopened);
             let mut worst = 0.0_f64;
             for doc in [&source, &reopened] {
                 let actual = photocraft_compose::gimp_render::try_render(doc, doc.bounds(), &mut |_| Ok(())).unwrap();
@@ -148,7 +148,7 @@ fn original_masked_groups_import_reopen_and_render() {
             let native = photocraft_io::export(&source, "group.pcraft", &Default::default()).unwrap();
             assert!(native.warnings.is_empty(), "{:?}", native.warnings);
             let reopened = photocraft_io::import("group.pcraft", &native.bytes).unwrap().document;
-            assert_eq!(source, reopened);
+            assert_eq!(*photocraft_io::named_for_file(&source, "group.pcraft"), reopened);
             let mut worst = 0.0_f64;
             for doc in [&source, &reopened] {
                 let actual = photocraft_compose::gimp_render::try_render(doc, doc.bounds(), &mut |_| Ok(())).unwrap();
@@ -186,7 +186,7 @@ fn original_gaussian_groups_import_reopen_and_render() {
             let native = photocraft_io::export(&doc, "filtered-group.pcraft", &Default::default()).unwrap();
             assert!(native.warnings.is_empty());
             let reopened = photocraft_io::import("filtered-group.pcraft", &native.bytes).unwrap().document;
-            assert_eq!(doc, reopened);
+            assert_eq!(*photocraft_io::named_for_file(&doc, "filtered-group.pcraft"), reopened);
             let expected = photocraft_codecs::decode(&read(&root, &format!("{case}.fresh-{phase}.ref.png"), &hashes)).unwrap();
             for source in [&doc, &reopened] {
                 let actual = photocraft_compose::gimp_render::try_render(source, source.bounds(), &mut |_| Ok(())).unwrap();
@@ -242,7 +242,7 @@ fn original_gray_masked_normal_and_multiply_import_and_reopen() {
             let native = photocraft_io::export(&source, "gray.pcraft", &Default::default()).unwrap();
             assert!(native.warnings.is_empty(), "{:?}", native.warnings);
             let reopened = photocraft_io::import("gray.pcraft", &native.bytes).unwrap().document;
-            assert_eq!(source, reopened);
+            assert_eq!(*photocraft_io::named_for_file(&source, "gray.pcraft"), reopened);
             let mut worst = 0.0_f64;
             for doc in [&source, &reopened] {
                 let actual = photocraft_compose::gimp_render::try_render(doc, doc.bounds(), &mut |_| Ok(())).unwrap();

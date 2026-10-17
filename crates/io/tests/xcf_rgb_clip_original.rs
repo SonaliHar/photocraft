@@ -49,7 +49,7 @@ fn hdr_clip_sources_limits_boolean_edits_native_and_fresh_projection() {
         assert_eq!(retained.filter_masks[0].surface.try_read_interleaved(doc.bounds()).unwrap(), plane.bytes);
         let saved = photocraft_io::export(&doc, "clip.pcraft", &Default::default()).unwrap();
         let reopened = photocraft_io::import("clip.pcraft", &saved.bytes).unwrap().document;
-        assert_eq!(reopened, doc);
+        assert_eq!(reopened, *photocraft_io::named_for_file(&doc, "clip.pcraft"));
         let projection = fs::read(root.join(state["projection"]["file"].as_str().unwrap())).unwrap();
         assert_eq!(hash(&projection), state["projection"]["sha256"]);
         use photocraft_cms::xcf_color::{Encoding, convert_encoding_f64, implicit_source_profile};

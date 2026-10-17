@@ -138,7 +138,7 @@ fn hidden_channels_import_native_and_match_independent_projection() {
         native_roundtrip(&doc);
         let native = photocraft_io::export(&doc, "channels.pcraft", &Default::default()).unwrap();
         let reopened = photocraft_io::import("channels.pcraft", &native.bytes).unwrap().document;
-        assert_eq!(doc, reopened);
+        assert_eq!(*photocraft_io::named_for_file(&doc, "channels.pcraft"), reopened);
         let expected = photocraft_codecs::decode(&checked(&sidecars.join(stage["render"].as_str().unwrap()), &stage["render_sha256"])).unwrap();
         for source in [&doc, &reopened] {
             let actual = photocraft_compose::gimp_render::try_render(source, source.bounds(), &mut |_| Ok(())).unwrap();

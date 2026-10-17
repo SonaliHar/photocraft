@@ -90,7 +90,7 @@ fn malformed_group_membership_and_mask_dimensions_reject_atomically() {
     // Source fixture uses RLE; two repeated mask pixels.
     bytes.extend([1, 255]);
     let error = photocraft_io::import("mask.xcf", &bytes).unwrap_err().to_string();
-    assert!(error.contains("mask/layer dimensions differ"), "{error}");
+    assert!(error.contains("unequal layer-mask geometry"), "{error}");
 }
 #[test]
 fn cancellation_after_decode_during_mapping_returns_no_document() {

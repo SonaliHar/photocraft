@@ -54,7 +54,7 @@ fn floating_sources_import_reopen_and_match_native_projection() {
         let native = photocraft_io::export(&doc, "floating.pcraft", &Default::default()).unwrap();
         assert!(native.warnings.is_empty());
         let reopened = photocraft_io::import("floating.pcraft", &native.bytes).unwrap().document;
-        assert_eq!(doc, reopened);
+        assert_eq!(*photocraft_io::named_for_file(&doc, "floating.pcraft"), reopened);
         let descriptor = &record["source_reopened"]["projection"];
         let reference = checked(&root, descriptor["file"].as_str().unwrap(), descriptor["sha256"].as_str().unwrap());
         let tolerance = match doc.depth {

@@ -47,7 +47,7 @@ fn fifteen_aa_original_states_source_cache_native_and_projection() {
         assert!(max <= 2, "{name}: {max}/255 exceeds unchanged display bound");
         let saved = photocraft_io::export(&doc, "text.pcraft", &Default::default()).unwrap();
         let reopened = photocraft_io::import("text.pcraft", &saved.bytes).unwrap().document;
-        assert_eq!(reopened, doc);
+        assert_eq!(reopened, *photocraft_io::named_for_file(&doc, "text.pcraft"));
         assert_eq!(projection(&reopened), actual);
         assert_eq!(std::fs::read(root.join(format!("{name}.xcf"))).unwrap(), bytes);
         println!("{name}: max {max}/255, exact immutable cache/native document");

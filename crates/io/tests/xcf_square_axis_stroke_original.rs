@@ -89,7 +89,7 @@ fn check_family(family: &str) {
         assert_eq!(doc, before, "regeneration must not mutate original cache/raster/source evidence");
         let encoded = photocraft_io::export(&doc, "square.pcraft", &Default::default()).unwrap();
         let reopened = photocraft_io::import("square.pcraft", &encoded.bytes).unwrap().document;
-        assert_eq!(reopened, doc);
+        assert_eq!(reopened, *photocraft_io::named_for_file(&doc, "square.pcraft"));
         let fresh = photocraft_compose::gimp_render::try_render(&reopened, reopened.bounds(), &mut |_| Ok(())).unwrap();
         let display: Vec<u8> = fresh.px.iter().flat_map(|p| p.iter().map(|v| (v * 255.).round().clamp(0., 255.) as u8)).collect();
         assert_eq!(display, expected);
@@ -155,5 +155,5 @@ fn modified_declaration_uses_current_raster_without_source_regeneration_or_cache
     assert!(sample.iter().zip([0., 1., 0., 1.]).all(|(a, b)| (a - b).abs() <= 1. / 255.));
     assert_eq!(doc, before);
     let bytes = photocraft_io::export(&doc, "square.pcraft", &Default::default()).unwrap().bytes;
-    assert_eq!(photocraft_io::import("square.pcraft", &bytes).unwrap().document, doc);
+    assert_eq!(photocraft_io::import("square.pcraft", &bytes).unwrap().document, *photocraft_io::named_for_file(&doc, "square.pcraft"));
 }

@@ -28,7 +28,7 @@ fn inert_link_cache_flags_transform_and_authority_are_exact() {
     )
     .unwrap()
     .unwrap();
-    assert_eq!(output.item.cache.as_ref().unwrap().bytes, [1, 2, 3, 4]);
+    assert_eq!(output.item.cache.as_ref().unwrap().bytes.as_slice(), [1, 2, 3, 4]);
     assert_eq!(output.resources[0].locator.as_deref(), Some("../../missing-Ω.png"));
     assert!(output.resources[0].owned_bytes.is_none());
     assert!(output.resources[0].content_hash.is_none());
@@ -193,7 +193,7 @@ fn cancelled_mapping_and_nonfinite_raw_cache_never_activate_resources() {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(output.item.cache.as_ref().unwrap().bytes, bytes);
+        assert_eq!(output.item.cache.as_ref().unwrap().bytes.as_slice(), bytes);
         output.item.cache.as_ref().unwrap().validate().unwrap();
     }
 }

@@ -64,7 +64,7 @@ fn color_pipeline(subtree: &str, observations_hash: &str, count: usize, gray: bo
         let saved = photocraft_io::export(&doc, "literal-gaussian.pcraft", &Default::default()).unwrap();
         assert!(saved.warnings.is_empty());
         let reopened = photocraft_io::import("literal-gaussian.pcraft", &saved.bytes).unwrap().document;
-        assert_eq!(doc, reopened);
+        assert_eq!(*photocraft_io::named_for_file(&doc, "literal-gaussian.pcraft"), reopened);
         let reference = if gray {
             record["merged_layer"]["reads"]
                 .as_array()

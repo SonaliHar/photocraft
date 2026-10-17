@@ -85,7 +85,7 @@ fn check_family(family: &str) {
         assert_eq!(doc, before, "regeneration must not mutate original cache/raster/source evidence");
         let encoded = photocraft_io::export(&doc, "round.pcraft", &Default::default()).unwrap();
         let reopened = photocraft_io::import("round.pcraft", &encoded.bytes).unwrap().document;
-        assert_eq!(reopened, doc);
+        assert_eq!(reopened, *photocraft_io::named_for_file(&doc, "round.pcraft"));
         let fresh = photocraft_compose::gimp_render::try_render(&reopened, reopened.bounds(), &mut |_| Ok(())).unwrap();
         let display: Vec<u8> = fresh.px.iter().flat_map(|p| p.iter().map(|v| (v * 255.).round().clamp(0., 255.) as u8)).collect();
         assert_eq!(display, expected);

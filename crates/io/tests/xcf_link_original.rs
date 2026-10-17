@@ -29,7 +29,7 @@ fn import_preserves(kind: &str, oracle_hash: &str, edited: bool) {
     let oracle = std::fs::read(root.join(format!("link-{kind}.{phase}.0.native.bin"))).unwrap();
     assert_eq!(Sha256::digest(&oracle).iter().map(|b| format!("{b:02x}")).collect::<String>(), oracle_hash);
     assert_eq!(doc.layer(id).unwrap().surface().unwrap().try_read_interleaved(bounds).unwrap(), oracle);
-    assert_eq!(linked.cache.as_ref().unwrap().bytes, oracle);
+    assert_eq!(linked.cache.as_ref().unwrap().bytes.as_slice(), oracle);
     let EditableSource::Linked { resource, last_verified_hash, .. } = &linked.source else { panic!("expected linked source") };
     assert!(last_verified_hash.is_none());
     let dependency = state.resources.iter().find(|entry| entry.id == *resource).unwrap();

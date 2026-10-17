@@ -51,7 +51,7 @@ fn scoped_point_original(directory: &str, operation: &str, proof_hashes: [&str; 
                     .iter()
                     .find(|record| record.owner.is_none() && record.namespace == "gimp/xcf/source-property" && record.identity == identity)
                     .unwrap();
-                assert_eq!(retained.bytes, property.payload);
+                assert_eq!(retained.bytes.as_slice(), property.payload);
                 assert_eq!(retained.blake3, blake3::hash(&property.payload).to_hex().to_string());
                 assert!(!retained.rendering_required);
             }
@@ -79,7 +79,7 @@ fn scoped_point_original(directory: &str, operation: &str, proof_hashes: [&str; 
             let reference = photocraft_codecs::decode(&png).unwrap();
             let saved = photocraft_io::export(&doc, "posterize.pcraft", &Default::default()).unwrap();
             let reopened = photocraft_io::import("posterize.pcraft", &saved.bytes).unwrap().document;
-            assert_eq!(reopened, doc);
+            assert_eq!(reopened, *photocraft_io::named_for_file(&doc, "posterize.pcraft"));
             for candidate in [&doc, &reopened] {
                 let rendered = photocraft_compose::gimp_render::try_render(candidate, candidate.bounds(), &mut |_| Ok(())).unwrap();
                 for (index, pixel) in rendered.px.iter().enumerate() {

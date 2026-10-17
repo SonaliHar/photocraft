@@ -88,12 +88,12 @@ fn solid_stroke_import_preserves_source_and_regenerates_current_geometry() {
         let before = doc.clone();
         let source = &doc.xcf_state.as_ref().unwrap().source_items[0];
         assert!(matches!(source.source, photocraft_doc::xcf_items::EditableSource::Vector { source_modified: false, .. }));
-        assert_eq!(source.cache.as_ref().unwrap().bytes, native);
+        assert_eq!(source.cache.as_ref().unwrap().bytes.as_slice(), native);
         assert_eq!(doc.layers[0].surface().unwrap().try_read_interleaved(rect).unwrap(), native);
         assert_eq!(rendered(&doc), expected);
         let saved = photocraft_io::export(&doc, "stroke.pcraft", &Default::default()).unwrap();
         let reopened = photocraft_io::import("stroke.pcraft", &saved.bytes).unwrap().document;
-        assert_eq!(reopened, doc);
+        assert_eq!(reopened, *photocraft_io::named_for_file(&doc, "stroke.pcraft"));
         assert_eq!(rendered(&reopened), expected);
         assert_eq!(doc, before);
         assert_eq!(std::fs::read(root.join(format!("{phase}.xcf"))).unwrap(), bytes);
@@ -144,12 +144,12 @@ fn aa_stroke_pipeline(subtree: &str, manifest_hash: &str, cases: [(&str, photocr
         let before = doc.clone();
         let source = &doc.xcf_state.as_ref().unwrap().source_items[0];
         assert!(matches!(source.source, photocraft_doc::xcf_items::EditableSource::Vector { source_modified: false, .. }));
-        assert_eq!(source.cache.as_ref().unwrap().bytes, native);
+        assert_eq!(source.cache.as_ref().unwrap().bytes.as_slice(), native);
         assert_eq!(doc.layers[0].surface().unwrap().try_read_interleaved(rect).unwrap(), native);
         assert_eq!(rendered(&doc), expected);
         let saved = photocraft_io::export(&doc, "aa-stroke.pcraft", &Default::default()).unwrap();
         let reopened = photocraft_io::import("aa-stroke.pcraft", &saved.bytes).unwrap().document;
-        assert_eq!(reopened, doc);
+        assert_eq!(reopened, *photocraft_io::named_for_file(&doc, "aa-stroke.pcraft"));
         assert_eq!(rendered(&reopened), expected);
         assert_eq!(doc, before);
         assert_eq!(checked(&format!("{phase}.xcf")), bytes);
@@ -185,7 +185,7 @@ fn vector_pipeline_edit(
         assert_eq!(rendered(&doc), expected);
         let saved = photocraft_io::export(&doc, "vector.pcraft", &Default::default()).unwrap();
         let reopened = photocraft_io::import("vector.pcraft", &saved.bytes).unwrap().document;
-        assert_eq!(reopened, doc);
+        assert_eq!(reopened, *photocraft_io::named_for_file(&doc, "vector.pcraft"));
         assert_eq!(rendered(&reopened), expected);
         assert_eq!(doc, before);
         assert_eq!(hash(&std::fs::read(root.join(format!("{phase}.xcf"))).unwrap()), source_hash);
@@ -204,6 +204,6 @@ fn vector_pipeline_edit(
     assert_eq!(moved.layers, original.layers, "geometry editing leaves immutable raster/cache evidence intact");
     let saved = photocraft_io::export(&moved, "moved.pcraft", &Default::default()).unwrap();
     let reopened = photocraft_io::import("moved.pcraft", &saved.bytes).unwrap().document;
-    assert_eq!(reopened, moved);
+    assert_eq!(reopened, *photocraft_io::named_for_file(&moved, "moved.pcraft"));
     assert_eq!(rendered(&reopened), rendered(&sources[1]));
 }

@@ -58,7 +58,7 @@ fn disabled_gaussian_group_import_native_planes_and_render() {
         let saved = photocraft_io::export(&doc, "disabled.pcraft", &Default::default()).unwrap();
         assert!(saved.warnings.is_empty());
         let reopened = photocraft_io::import("disabled.pcraft", &saved.bytes).unwrap().document;
-        assert_eq!(doc, reopened);
+        assert_eq!(*photocraft_io::named_for_file(&doc, "disabled.pcraft"), reopened);
         let descriptor = captured["projection"]["reads"]
             .as_array()
             .unwrap()

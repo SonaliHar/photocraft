@@ -13,7 +13,7 @@ fn original_underline_run_source_edit_and_native_pipeline() {
             assert_eq!(Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect::<String>(), state["source_sha256"].as_str().unwrap());
             let doc = photocraft_io::import(name, &bytes).unwrap_or_else(|e| panic!("{name}: actual original import: {e}")).document;
             let source = &doc.xcf_state.as_ref().unwrap().source_items[0];
-            assert_eq!(source.cache.as_ref().unwrap().bytes, std::fs::read(root.join(state["state"]["native"]["file"].as_str().unwrap())).unwrap());
+            assert_eq!(source.cache.as_ref().unwrap().bytes.as_slice(), std::fs::read(root.join(state["state"]["native"]["file"].as_str().unwrap())).unwrap());
             let render = photocraft_compose::gimp_render::try_render(&doc, doc.bounds(), &mut |_| Ok(())).unwrap();
             let expected = std::fs::read(root.join(state["state"]["projection"]["file"].as_str().unwrap())).unwrap();
             let actual: Vec<u8> = render.px.iter().flat_map(|p| p.iter().map(|v| (v * 255.).round().clamp(0., 255.) as u8)).collect();
@@ -21,7 +21,7 @@ fn original_underline_run_source_edit_and_native_pipeline() {
             let max = actual.iter().zip(&expected).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
             assert!(max <= 2, "{name}: {max}/255");
             let saved = photocraft_io::export(&doc, "underline.pcraft", &Default::default()).unwrap();
-            assert_eq!(photocraft_io::import("underline.pcraft", &saved.bytes).unwrap().document, doc);
+            assert_eq!(photocraft_io::import("underline.pcraft", &saved.bytes).unwrap().document, *photocraft_io::named_for_file(&doc, "underline.pcraft"));
             assert_eq!(std::fs::read(root.join(name)).unwrap(), bytes);
             count += 1;
         }

@@ -57,7 +57,7 @@ fn saved_stack_order_enable_remove_opacity_import_and_native_projection() {
         let before = doc.clone();
         let saved = photocraft_io::export(&doc, "stack.pcraft", &Default::default()).unwrap();
         let reopened = photocraft_io::import("stack.pcraft", &saved.bytes).unwrap().document;
-        assert_eq!(doc, reopened);
+        assert_eq!(*photocraft_io::named_for_file(&doc, "stack.pcraft"), reopened);
         let expected = read(&root, &fresh["fresh"]["projection"]);
         assert_eq!(expected.len(), 8 * 6 * 4 * 8);
         for candidate in [&doc, &reopened] {

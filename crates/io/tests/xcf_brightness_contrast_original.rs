@@ -52,7 +52,7 @@ fn original_precision_model_states_native_projection_and_streaming_reopen() {
         assert_eq!(state.filter_masks[0].surface.try_read_interleaved(doc.bounds()).unwrap(), mask.bytes);
         let native = photocraft_io::export(&doc, "brightness-contrast.pcraft", &Default::default()).unwrap();
         let reopened = photocraft_io::import("brightness-contrast.pcraft", &native.bytes).unwrap().document;
-        assert_eq!(reopened, doc);
+        assert_eq!(reopened, *photocraft_io::named_for_file(&doc, "brightness-contrast.pcraft"));
         let (stream, _) = photocraft_format::PcraftWriter::new()
             .save_zip_stream(&doc, &Default::default(), Cursor::new(Vec::new()), Default::default(), 64 << 20, &photocraft_raster::Interrupt::NONE)
             .unwrap();

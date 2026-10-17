@@ -40,7 +40,7 @@ fn modified_source_originals_require_independent_pixel_authority() {
             assert_eq!(layer.surface().unwrap().try_read_interleaved(bounds).unwrap(), cache.bytes.as_slice());
             let native = photocraft_io::export(&source, "modified.pcraft", &Default::default()).unwrap();
             let reopened = photocraft_io::import("modified.pcraft", &native.bytes).unwrap().document;
-            assert_eq!(source, reopened);
+            assert_eq!(*photocraft_io::named_for_file(&source, "modified.pcraft"), reopened);
             let expected = photocraft_codecs::decode(&artifact(&base, fixture, reference_role)).unwrap();
             for doc in [&source, &reopened] {
                 let actual = photocraft_compose::gimp_render::try_render(doc, doc.bounds(), &mut |_| Ok(())).unwrap();

@@ -99,7 +99,7 @@ fn verify_packet(directory: &str, hashes: &str, linear: bool, assigned: bool, in
         }
         let saved = photocraft_io::export(&doc, "normal-mask.pcraft", &Default::default()).unwrap();
         let reopened = photocraft_io::import("normal-mask.pcraft", &saved.bytes).unwrap().document;
-        assert_eq!(reopened, doc);
+        assert_eq!(reopened, *photocraft_io::named_for_file(&doc, "normal-mask.pcraft"));
         let reference = read(&root, &row["projection"]["nonlinear_double"]);
         let faithful_row = faithful["records"].as_array().unwrap().iter().find(|r| r["id"] == row["id"]).unwrap();
         let png = photocraft_codecs::decode(&read(&root, &faithful_row["reference"])).unwrap();

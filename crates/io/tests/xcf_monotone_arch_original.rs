@@ -51,7 +51,7 @@ fn all_eight_arch_sources_import_preserve_cache_and_native_exactly() {
             assert_eq!(*path, doc.paths[0].id);
             assert_eq!(item.owner, ItemRef::Layer(doc.layers[0].id));
             assert_eq!(doc.paths[0].path.subpaths[0].knots.len(), 2);
-            assert_eq!(item.cache.as_ref().unwrap().bytes, native);
+            assert_eq!(item.cache.as_ref().unwrap().bytes.as_slice(), native);
             item.cache.as_ref().unwrap().validate().unwrap();
             assert_eq!(doc.layers[0].surface().unwrap().try_read_interleaved(bounds).unwrap(), native);
             assert!(state.resources.iter().all(|r| r.owned_bytes.is_none()));
@@ -59,7 +59,7 @@ fn all_eight_arch_sources_import_preserve_cache_and_native_exactly() {
             assert_eq!(doc, before);
             let encoded = photocraft_io::export(&doc, "arch.pcraft", &Default::default()).unwrap();
             let reopened = photocraft_io::import("arch.pcraft", &encoded.bytes).unwrap().document;
-            assert_eq!(reopened, doc);
+            assert_eq!(reopened, *photocraft_io::named_for_file(&doc, "arch.pcraft"));
             assert_eq!(projection(&reopened), expected);
         }
     }

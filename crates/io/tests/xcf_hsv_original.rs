@@ -148,7 +148,7 @@ fn component_pipeline(manifest: &str, cases: &[(&str, i32)], blend_raw: i32, ble
             }
             let saved = photocraft_io::export(&doc, "hsv.pcraft", &Default::default()).unwrap();
             let reopened = photocraft_io::import("hsv.pcraft", &saved.bytes).unwrap().document;
-            assert_eq!(doc, reopened);
+            assert_eq!(*photocraft_io::named_for_file(&doc, "hsv.pcraft"), reopened);
             let reference = photocraft_codecs::decode(&read(&root, &format!("mode-{case}.fresh-{phase}.ref.png"), &hashes)).unwrap();
             for candidate in [&doc, &reopened] {
                 let rendered = photocraft_compose::gimp_render::try_render(candidate, candidate.bounds(), &mut |_| Ok(())).unwrap();

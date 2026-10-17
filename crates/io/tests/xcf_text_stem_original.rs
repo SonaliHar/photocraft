@@ -45,7 +45,7 @@ fn ten_actual_sources_cache_native_whole_doc_and_current_regeneration() {
         );
         let native = photocraft_io::export(&doc, "text.pcraft", &Default::default()).unwrap();
         let reopened = photocraft_io::import("text.pcraft", &native.bytes).unwrap().document;
-        assert_eq!(doc, reopened);
+        assert_eq!(*photocraft_io::named_for_file(&doc, "text.pcraft"), reopened);
         assert_eq!(projection(&reopened), expected);
     }
 }
