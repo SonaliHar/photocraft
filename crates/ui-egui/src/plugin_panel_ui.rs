@@ -129,11 +129,18 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Interactions are collected and sent after drawing: a click may redraw the whole panel, and the
     // panel's own lock cannot be taken while its snapshot is being drawn from.
     let mut pending = Pending::default();
+    // Which panels were drawn last frame: a panel that was not (it was closed, or the app has just
+    // started) is opening now, and opens at the top of its body. egui persists a scroll area's
+    // offset by id, and the app persists egui's memory to `ui.ron`, so without this a panel scrolls
+    // to where it was left — including a scroll left over from yesterday — the moment it appears.
+    let seen_id = egui::Id::new("plugin-panel-seen");
+    let mut seen: std::collections::HashSet<String> = ctx.data(|d| d.get_temp(seen_id).unwrap_or_default());
     for (i, panel) in panels.iter().enumerate() {
         if !panel.visible {
             continue;
         }
-        let asked = window(ctx, &t, panel, i, canvas, &mut pending);
+        let opening = seen.insert(panel.id.clone());
+        let asked = window(ctx, &t, panel, i, canvas, &mut pending, opening);
         if asked.close {
             closed.push(panel.id.clone());
         }
@@ -147,6 +154,8 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     for id in closed {
         let _ = app.run("plugin.panel.close", json!({"id": id}));
     }
+    seen.retain(|id| panels.iter().any(|p| p.visible && id == &p.id));
+    ctx.data_mut(|d| d.insert_temp(seen_id, seen));
     for id in restarted {
         let result = app.run("plugin.panel.restart", json!({"id": id})).map(|_| ());
         status(app, result);
@@ -177,16 +186,28 @@ struct AskedFor {
 /// Split out of [`windows`] so a test can drive the window a plug-in's view is really drawn in,
 /// rather than a copy of it: the width rule below is easy to break and hard to see (`window_widths`
 /// in the tests).
-fn window(ctx: &egui::Context, t: &Tokens, panel: &PanelDraw, index: usize, canvas: egui::Rect, pending: &mut Pending) -> AskedFor {
+///
+/// `opening` says the panel was not drawn last frame: its body is then put back at the top (see the
+/// comment in [`windows`]).
+fn window(ctx: &egui::Context, t: &Tokens, panel: &PanelDraw, index: usize, canvas: egui::Rect, pending: &mut Pending, opening: bool) -> AskedFor {
     let mut asked = AskedFor::default();
+    // Where the window starts and how tall it starts: as tall as the screen leaves room for, so a
+    // panel with a page of styles in it shows them, rather than opening at egui's 420 px default
+    // with the rest below the fold.
+    let default_pos = pos2(canvas.left() + 40.0 + 22.0 * index as f32, canvas.top() + 60.0 + 22.0 * index as f32);
+    let default_height = (canvas.bottom() - default_pos.y - 32.0).clamp(320.0, 720.0);
     egui::Window::new(&panel.title)
-        .id(egui::Id::new(("plugin-panel", panel.id.as_str())))
+        // Versioned: the id is what eframe keeps a window's saved size under, in `ui.ron`. Bumping
+        // it is how a panel that was saved at the old 420 px opens at the new default instead. It
+        // also moves the body's scroll area to a fresh id, so an old saved offset cannot return.
+        .id(egui::Id::new(("plugin-panel-v2", panel.id.as_str())))
         .title_bar(false)
         .resizable(true)
-        .default_width(panel.min_width as f32)
+        .default_size(vec2(panel.min_width as f32, default_height))
         .min_width(panel.min_width as f32)
+        .min_height(320.0)
         // Cascade, so two panels do not open one exactly on top of the other.
-        .default_pos(pos2(canvas.left() + 40.0 + 22.0 * index as f32, canvas.top() + 60.0 + 22.0 * index as f32))
+        .default_pos(default_pos)
         .frame(float_frame(t))
         .show(ctx, |ui| {
             ui.set_min_width(panel.min_width as f32);
@@ -198,22 +219,42 @@ fn window(ctx: &egui::Context, t: &Tokens, panel: &PanelDraw, index: usize, canv
             match &panel.error {
                 Some(error) => stopped(ui, t, error, &mut asked),
                 None => {
-                    egui::ScrollArea::vertical().id_salt(("plugin-panel-body", panel.id.as_str())).max_height(600.0).auto_shrink([false, true]).show(
-                        ui,
-                        |ui| {
-                            match &panel.view {
-                                // Everything the plug-in sent is drawn inside the panel's own width (see
-                                // `at_panel_width`): a window is sized from its content every frame, so a
-                                // body that sticks out makes it wider, and wider again the next frame.
-                                Some(view) => at_panel_width(ui, |ui| body(ui, t, panel, view, pending)),
-                                // A panel that has not answered `init` yet, or answered with no view.
-                                None => {
-                                    ui.label(RichText::new(tl!("This plug-in has not drawn anything yet.")).color(t.text_faint).size(11.5));
+                    // The plug-in's own footer (Settings/Help in the TyperTools page) is part of its
+                    // view and scrolls with it. This one is the host's (progress and notices), and it
+                    // stays put at the bottom of the window while the body above it takes the rest:
+                    // a body that only took the height of its content left the window's lower half
+                    // empty, with the styles cut off above it.
+                    let has_footer = panel.progress.is_some() || !panel.notices.is_empty();
+                    if has_footer {
+                        egui::Panel::bottom(egui::Id::new(("plugin-panel-footer", panel.id.as_str())))
+                            .frame(egui::Frame::NONE)
+                            .show(ui, |ui| footer(ui, t, panel, &mut asked));
+                    }
+                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+                        if opening {
+                            // The same id `ScrollArea::id_salt` derives (an `IdSalt` is hashed once
+                            // more when it becomes an id), so this is the body's saved offset.
+                            let salt = egui::IdSalt::new(("plugin-panel-body", panel.id.as_str()));
+                            let body = ui.make_persistent_id(salt);
+                            egui::scroll_area::State::default().store(ui.ctx(), body);
+                        }
+                        egui::ScrollArea::vertical()
+                            .id_salt(("plugin-panel-body", panel.id.as_str()))
+                            .max_height(ui.available_height())
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                match &panel.view {
+                                    // Everything the plug-in sent is drawn inside the panel's own width (see
+                                    // `at_panel_width`): a window is sized from its content every frame, so a
+                                    // body that sticks out makes it wider, and wider again the next frame.
+                                    Some(view) => at_panel_width(ui, |ui| body(ui, t, panel, view, pending)),
+                                    // A panel that has not answered `init` yet, or answered with no view.
+                                    None => {
+                                        ui.label(RichText::new(tl!("This plug-in has not drawn anything yet.")).color(t.text_faint).size(11.5));
+                                    }
                                 }
-                            }
-                        },
-                    );
-                    footer(ui, t, panel, &mut asked);
+                            });
+                    });
                 }
             }
         });

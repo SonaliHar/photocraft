@@ -280,13 +280,137 @@ fn window_widths(view: Value, frames: usize) -> Vec<f32> {
             let ctx = root.ctx().clone();
             let t = Tokens::get(&ctx);
             let mut pending = Pending::default();
-            let _ = super::window(&ctx, &t, &panel, 0, canvas, &mut pending);
+            let _ = super::window(&ctx, &t, &panel, 0, canvas, &mut pending, false);
         });
         // The panel is really drawn; its pixels are not what is being measured.
         out.textures_delta.clear();
-        widths.push(ctx.memory(|m| m.area_rect(egui::Id::new(("plugin-panel", "test.widening")))).map_or(0.0, |rect| rect.width()));
+        widths.push(ctx.memory(|m| m.area_rect(egui::Id::new(("plugin-panel-v2", "test.widening")))).map_or(0.0, |rect| rect.width()));
     }
     widths
+}
+
+/// The screen the window tests lay a panel out in: only its size matters here.
+fn canvas() -> egui::Rect {
+    egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1100.0, 760.0))
+}
+
+/// One panel, as the window tests draw it, with no engine behind it.
+fn test_panel(id: &str, view: Value) -> PanelDraw {
+    PanelDraw {
+        id: id.into(),
+        title: "TyperTools".into(),
+        min_width: 400,
+        error: None,
+        visible: true,
+        view: Some(serde_json::from_value(view).expect("a view the host accepts")),
+        values: Map::new(),
+        progress: None,
+        notices: Vec::new(),
+    }
+}
+
+/// The panel window's outer rectangle, as egui has it after the frame.
+fn panel_window_rect(ctx: &egui::Context, id: &str) -> Option<egui::Rect> {
+    ctx.memory(|m| m.area_rect(egui::Id::new(("plugin-panel-v2", id))))
+}
+
+/// Draws one frame of the panel's real window, with the input egui would have received.
+fn draw_panel(ctx: &egui::Context, panel: &PanelDraw, input: egui::RawInput, opening: bool) -> Vec<egui::epaint::ClippedShape> {
+    let mut out = ctx.run_ui(input, |root| {
+        let ctx = root.ctx().clone();
+        let t = Tokens::get(&ctx);
+        let mut pending = Pending::default();
+        let _ = super::window(&ctx, &t, panel, 0, canvas(), &mut pending, opening);
+    });
+    out.textures_delta.clear();
+    out.shapes
+}
+
+/// Where a piece of painted text starts, if it was painted at all.
+fn painted_y(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
+    shapes.iter().find_map(|shape| match &shape.shape {
+        egui::Shape::Text(text) if text.galley.job.text.contains(needle) => Some(text.pos.y),
+        _ => None,
+    })
+}
+
+/// A page of `rows` plain labels: tall enough to scroll, with nothing in it that scrolls on its own.
+fn tall_page(rows: usize) -> Value {
+    let children: Vec<Value> = (0..rows).map(|i| json!({"type":"label","text":format!("Row {i}")})).collect();
+    json!({"type":"column","children":children})
+}
+
+#[test]
+fn a_panel_body_fills_the_window_and_its_footer_stays_at_the_bottom() {
+    // A page shorter than the window, and something in the host's footer. The body used to take
+    // only the height of its content (egui's `auto_shrink`), so the window opened at egui's 420 px
+    // default with the progress row right under the body and the lower half empty — the styles
+    // below the fold with a large empty area under them.
+    let mut panel = test_panel("test.fill", json!({"type":"column","children":[
+        {"type":"label","text":"A short page"},
+        {"type":"label","text":"with two lines in it","level":"muted"}]}));
+    panel.progress = Some(Progress { fraction: Some(0.5), text: Some("Rendering".into()), cancellable: false, done: false });
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    let mut shapes = Vec::new();
+    for _ in 0..6 {
+        let input = egui::RawInput { screen_rect: Some(canvas()), ..Default::default() };
+        shapes = draw_panel(&ctx, &panel, input, true);
+    }
+    let window = panel_window_rect(&ctx, "test.fill").expect("the panel's window is drawn");
+    assert!(window.height() >= 600.0, "the panel opens at {} px tall on a 760 px screen: {window:?}", window.height());
+    assert!(window.bottom() <= canvas().bottom() + 1.0, "and it fits on the screen: {window:?}");
+    let footer = painted_y(&shapes, "Rendering").expect("the progress text is drawn");
+    assert!(
+        footer > window.bottom() - 90.0,
+        "the host's footer is at the bottom of the window, not under the body: {footer} in {window:?}"
+    );
+}
+
+#[test]
+fn a_reopened_panel_starts_at_the_top_of_its_body() {
+    // The offset of a scroll area is saved with its id, and egui's memory is saved to `ui.ron`, so
+    // a panel used yesterday could open scrolled into the middle of its script. Opening is what
+    // resets it: close the panel (a frame it is not drawn in), open it again, and the first line is
+    // at the top where it belongs.
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    let panel = test_panel("test.scroll", tall_page(60));
+    let mut shapes = Vec::new();
+    for _ in 0..4 {
+        let frame = egui::RawInput { screen_rect: Some(canvas()), ..Default::default() };
+        shapes = draw_panel(&ctx, &panel, frame, true);
+    }
+    let window = panel_window_rect(&ctx, "test.scroll").expect("the panel's window is drawn");
+    let first = painted_y(&shapes, "Row 0").expect("the first row is drawn when the panel opens");
+    let top = window.top() + 40.0;
+    assert!((first - top).abs() < 120.0, "the panel opens at its first row: {first} vs {top}");
+
+    // Scroll the body to its end with the wheel over it.
+    let pointer = window.center();
+    for _ in 0..10 {
+        let mut frame = egui::RawInput { screen_rect: Some(canvas()), ..Default::default() };
+        frame.events.push(egui::Event::PointerMoved(pointer));
+        frame.events.push(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -240.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::default(),
+        });
+        shapes = draw_panel(&ctx, &panel, frame, false);
+    }
+    let scrolled = painted_y(&shapes, "Row 0");
+    assert!(scrolled.is_none_or(|y| y < top - 20.0), "the wheel scrolled the body: {scrolled:?}");
+
+    // Close it: a frame no panel is drawn in, as `windows` does for a closed panel.
+    let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+    let frame = egui::RawInput { screen_rect: Some(canvas()), ..Default::default() };
+    let reopened = draw_panel(&ctx, &panel, frame, true);
+    let first = painted_y(&reopened, "Row 0").expect("the first row is drawn again");
+    assert!(
+        (first - top).abs() < 120.0,
+        "a reopened panel starts at its first row, not at the old offset: {first} vs {top}"
+    );
 }
 
 /// How far right the tree is drawn when the panel gives it `width` pixels.
