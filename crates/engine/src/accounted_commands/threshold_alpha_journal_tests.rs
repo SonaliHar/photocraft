@@ -6,6 +6,8 @@ use serde_json::json;
 use std::sync::Arc;
 
 #[path = "../../../xcf/tests/common/mod.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod xcf;
 
 fn ctl() -> ReadControl<'static> {
@@ -25,8 +27,13 @@ fn exact_filter_wire_depth_is_scoped_per_entry_in_both_retained_and_copy_censuse
         visit(&mut census, "xcf.filter.set", &wire()).unwrap();
         // An unrelated entry cannot inherit the preceding scalar exception.
         assert!(visit(&mut census, "layer.setProps", &wire()).is_err());
+        // The ThresholdAlpha-specific parser stays narrow; the later Point
+        // metadata adapter admits bounded names before actual target eligibility.
+        let point_wire = json!({"filterId":"1","arguments":[{"name":"other","value":{"Number":{"Float32Bits":0}}}]});
+        assert_eq!(threshold_alpha::journal_depth("xcf.filter.set", &point_wire), 4);
+        visit(&mut Census::default(), "xcf.filter.set", &point_wire).unwrap();
         for value in [
-            json!({"filterId":"1","arguments":[{"name":"other","value":{"Number":{"Float32Bits":0}}}]}),
+            json!({"filterId":"1","arguments":[{"name":"","value":{"Number":{"Float32Bits":0}}}]}),
             json!({"filterId":"1","arguments":[{"name":"value","value":{"Number":{"Float32Bits":f32::NAN.to_bits()}}}]}),
             json!({"filterId":"1","arguments":[{"name":"value","value":{"Number":{"Float64Bits":0}}}]}),
         ] {
@@ -90,8 +97,7 @@ fn registered_dispatch_keeps_nonfilter_routes_and_refuses_filter_background_befo
     assert_eq!(fixture.session.journal.last().unwrap().0, "layer.select");
     let before = fixture.session.active().unwrap().doc.clone();
     let journal = fixture.session.journal.clone();
-    fixture.session.jobs.spawn = true;
-    let error = fixture.session.execute("xcf.filter.enable", json!({"filterId":"1","enabled":false})).unwrap_err();
+    let error = fixture.session.start("xcf.filter.enable", json!({"filterId":"1","enabled":false})).unwrap_err();
     assert!(error.to_string().contains("synchronous"));
     assert!(fixture.session.active().unwrap().doc.shares_state(&before));
     assert_eq!(fixture.session.journal, journal);

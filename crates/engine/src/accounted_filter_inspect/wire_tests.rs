@@ -65,8 +65,9 @@ fn exact_newline_limit_hostile_ids_and_quota_work_cancel_fail_closed() {
     }
     assert!(encode_rpc(reply(&q), &deep, 65536, &ctl()).is_err());
     assert!(encode_rpc(reply(&q), &json!("x".repeat((1 << 20) + 1)), 2 << 20, &ctl()).is_err());
-    let blocked = q.reserve(QuotaKind::Resident, 1 << 20).unwrap();
-    assert!(encode_cli(reply(&q), true, 65536, &ctl()).is_err());
+    let input = reply(&q);
+    let blocked = q.reserve(QuotaKind::Resident, (1 << 20) - q.usage().unwrap().resident).unwrap();
+    assert!(encode_cli(input, true, 65536, &ctl()).is_err());
     drop(blocked);
     let deny = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(BackingError::Work) };
     assert!(encode_cli(reply(&q), true, 65536, &deny).is_err());

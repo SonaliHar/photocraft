@@ -177,4 +177,71 @@ mod actual_source {
         assert!(Request::parse(&s, "xcf.filter.set", &p, &ReadControl { interrupt: &Interrupt::NONE, work: &work }).is_err());
         assert!(s.active().unwrap().doc.shares_state(&before));
     }
+    #[test]
+    #[ignore = "pinned actual Histogram Threshold F64 Source; changed history must use actual prepaid quota"]
+    fn changed_f64_enable_default_preferences_native_and_state_limits_keep_actual_quota() {
+        let mut s = session();
+        assert!(s.prefs().performance.history_budget_bytes() > 0, "the default resident preference must not disable accounted changes");
+        let before = s.active().unwrap().doc.clone();
+        assert_eq!(before.depth, photocraft_doc::SampleType::F64);
+        let q = before.accounted().unwrap().quota().clone();
+        let filter = id(&s);
+        let p = json!({"filterId":filter,"enabled":false});
+        assert_eq!(s.execute("xcf.filter.enable", p.clone()).unwrap()["updated"], true);
+        let changed = s.active().unwrap().doc.clone();
+        let history = s.active().unwrap().history.clone();
+        let revision = s.active().unwrap().revision;
+        assert_eq!(history.max_bytes, 0);
+        assert_eq!(s.execute("xcf.filter.enable", p.clone()).unwrap()["updated"], false);
+        assert_eq!(s.active().unwrap().revision, revision);
+        assert!(s.active().unwrap().history.shares_accounted_history(&history));
+        assert!(s.undo_with_control(&ctl()).unwrap());
+        assert!(s.active().unwrap().doc.shares_state(&before));
+        assert!(s.redo_with_control(&ctl()).unwrap());
+        assert!(s.active().unwrap().doc.shares_state(&changed));
+        let history = s.active().unwrap().history.clone();
+        let owner = changed.accounted().unwrap();
+        // Encoded output is external test harness storage; the real native reader owns its receipts.
+        let encoded =
+            photocraft_io::accounted_current_native::save_accounted_current_archive(owner, std::io::Cursor::new(Vec::new()), Default::default(), &q, &ctl())
+                .unwrap()
+                .into_inner();
+        let archive = photocraft_io::accounted_native::open_accounted_native_from_reader(
+            &mut std::io::Cursor::new(&encoded),
+            encoded.len() as u64,
+            Default::default(),
+            q.clone(),
+            &ctl(),
+        )
+        .unwrap();
+        let mut reopened = Session::new();
+        reopened.add_owned_native_threshold_archive(archive, "history.pcraft", None, &ctl()).unwrap();
+        let restored = reopened.active().unwrap().doc.accounted().unwrap();
+        assert!(restored.is_readonly_threshold_storage());
+        assert!(restored.quota().shares_ledger(&q));
+        assert_eq!(restored.document().xcf_state, changed.xcf_state);
+        assert_eq!(restored.document().source_color_context, before.source_color_context);
+        assert_eq!(restored.document().icc_profile, before.icc_profile);
+        assert_eq!(s.active().unwrap().history.max_bytes, 0);
+        let baseline = q.usage().unwrap();
+        let deny = q.reserve(photocraft_raster::backing::quota::QuotaKind::Index, (32 << 20) - baseline.index).unwrap();
+        let enable = json!({"filterId":filter,"enabled":true});
+        assert!(crate::accounted_commands::PreparedAccountedCommand::prepare(&s, "xcf.filter.enable", &enable, &ctl()).is_err());
+        assert!(s.active().unwrap().doc.shares_state(&changed));
+        assert!(s.active().unwrap().history.shares_accounted_history(&history));
+        drop(deny);
+        assert_eq!(q.usage().unwrap(), baseline);
+        let stopped = Interrupt::cancel_only(&|| true);
+        assert!(matches!(
+            crate::accounted_commands::PreparedAccountedCommand::prepare(
+                &s,
+                "xcf.filter.enable",
+                &enable,
+                &ReadControl { interrupt: &stopped, work: &|_| Ok(()) }
+            ),
+            Err(EngineError::Cancelled)
+        ));
+        assert!(s.active().unwrap().doc.shares_state(&changed));
+        assert!(s.active().unwrap().history.shares_accounted_history(&history));
+    }
 }

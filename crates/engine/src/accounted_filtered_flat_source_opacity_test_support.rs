@@ -1,8 +1,12 @@
 //! Deferred Source-opacity contracts; execution remains UNRUN after explicit Source release.
 #![allow(dead_code, unused_imports)]
 #[path = "accounted_filtered_flat_invert_test_support.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod native;
 #[path = "../../ui-egui/src/filtered_flat_fixture.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod planes;
 pub use native::{archive, ctl, payload, same, storage};
 use photocraft_doc::{Document, item_identity::ItemRef};
@@ -36,7 +40,10 @@ pub fn import(c: &Value) -> photocraft_io::OwnedXcfImport {
         "original-opacity.xcf",
         Arc::new(bytes(c)),
         &Default::default(),
-        &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+        &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap(),
         q,
         &ctl(),
     )

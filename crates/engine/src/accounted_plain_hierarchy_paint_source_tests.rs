@@ -65,9 +65,11 @@ fn generated_all_depth_sources_keep_exact_words_and_real_custody() {
         drop(source);
         assert!(q.usage().unwrap().resident > 0);
         assert_eq!(fixture::payload(owner.document()), payload);
+        // The retained q ledger still owns its aggregate header; all payload/owner fees must refund.
         drop(owner);
-        assert_eq!(q.usage().unwrap().resident, 0);
-        assert_eq!(q.usage().unwrap().index, 0);
+        assert_eq!(q.usage().unwrap().resident, BackingQuota::aggregate_header_bytes());
+        assert_eq!(q.usage().unwrap().index, BackingQuota::aggregate_header_bytes());
+        assert_eq!(q.usage().unwrap().scratch, 0);
         assert_eq!(encoded, original);
     }
 }
@@ -78,7 +80,10 @@ fn source_control_and_quota_remain_original() {
         let bytes = Arc::new(fixture::bytes(depth));
         let original = bytes.as_ref().clone();
         let q = BackingQuota::new(QuotaLimits { resident: 512 << 20, index: 64 << 20, scratch: 0 });
-        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap();
         let used = AtomicU64::new(0);
         let work = |n| {
             used.fetch_add(n, Ordering::Relaxed);

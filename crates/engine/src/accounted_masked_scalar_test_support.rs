@@ -1,9 +1,15 @@
 //! Genuine sixteen nonempty authored mask sources. Captured bytes are external harness evidence, not a numerical output oracle.
 #![allow(dead_code, unused_imports)]
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_filtered_flat_current_test_support.rs"]
 mod native;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../../ui-egui/src/filtered_flat_fixture.rs"]
 mod planes;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_exposure_loaded_test_support.rs"]
 mod shared;
 use photocraft_doc::{Document, accounted_document::AccountedDocument};
@@ -48,7 +54,10 @@ pub fn import(case: &Value) -> photocraft_io::OwnedXcfImport {
         index: 64 << 20,
         scratch: 0,
     });
-    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+        .unwrap()
+        .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+        .unwrap();
     let input = photocraft_io::import_owned_xcf_bytes_in_quota("masked-stock.xcf", Arc::new(bytes(case)), &Default::default(), &limits, q, &ctl()).unwrap();
     assert!(matches!(input, photocraft_io::OwnedXcfImport::Point(_)));
     observed(input.document().document(), case);
@@ -92,7 +101,7 @@ pub fn observed(d: &Document, case: &Value) {
         let tag = row[0].as_u64().unwrap();
         let at = usize::try_from(row[1].as_u64().unwrap()).unwrap();
         let hex = row[3].as_str().unwrap();
-        let expected: Vec<u8> = hex.as_bytes().chunks_exact(2).map(|c| u8::from_str_radix(std::str::from_utf8(c).unwrap(), 16).unwrap()).collect();
+        let expected: Vec<u8> = hex.as_bytes().as_chunks::<2>().0.iter().map(|c| u8::from_str_radix(std::str::from_utf8(c).unwrap(), 16).unwrap()).collect();
         assert_eq!(source.get(at..at.checked_add(expected.len()).unwrap()).unwrap(), expected);
         let identity = format!("{tag}@{at}:{}", expected.len());
         assert!(x.opaque.iter().any(|r| r.namespace == "gimp/xcf/source-property" && r.identity == identity && r.bytes.as_slice() == expected.as_slice()));

@@ -94,7 +94,7 @@ fn archive(s: &Session) -> OwnedDocumentArchive {
 #[test]
 #[ignore = "UNRUN: two independently pinned original Gaussian packets enter genuine Point class, paid inspect/edit/activation/history/native continuation"]
 fn original_gaussian_current_commands_keep_exact_source_and_native_payloads() {
-    for case in 0..2 {
+    for (case, entry) in CASES.iter().enumerate().take(2) {
         let mut s = session(case);
         let initial = s.active().unwrap().doc.clone();
         let raw = native(&s);
@@ -102,7 +102,7 @@ fn original_gaussian_current_commands_keep_exact_source_and_native_payloads() {
             Sha256::digest(&raw).iter().map(|b| format!("{b:02x}")).collect::<String>(),
             "7b675a5f14a4f41487dec96442b9495bed9c80d33c4a9576b169d80ce466704a"
         );
-        assert!(raw.chunks_exact(4).all(|p| p[3] == 255));
+        assert!(raw.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
         let source = s.active().unwrap().source.clone();
         let state = initial.xcf_state.as_ref().unwrap();
         let node = &state.filter_stacks[0].nodes[0];
@@ -131,7 +131,7 @@ fn original_gaussian_current_commands_keep_exact_source_and_native_payloads() {
         assert_eq!(s.active().unwrap().revision, revision);
         assert!(s.undo_with_control(&ctl()).unwrap());
         let history = s.active().unwrap().history.clone();
-        let same = wire(&s, CASES[case].2);
+        let same = wire(&s, entry.2);
         assert_eq!(s.execute("xcf.filter.set", same).unwrap()["updated"], false);
         assert!(s.active().unwrap().history.shares_accounted_history(&history));
         assert!(s.active().unwrap().history.can_redo());

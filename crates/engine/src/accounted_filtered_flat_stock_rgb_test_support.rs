@@ -2,8 +2,12 @@
 //! remains retained; new typed operations are not GIMP-authored mixed evidence.
 #![allow(dead_code, unused_imports)]
 #[path = "accounted_filtered_flat_current_test_support.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod native;
 #[path = "accounted_filtered_flat_ordered_test_support.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod source;
 use photocraft_doc::{
     Document,

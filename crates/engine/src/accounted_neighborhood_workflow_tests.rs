@@ -2,6 +2,7 @@
 //! Cursor buffers are external harness captures, not claims of paid production
 //! buffer ownership. The reader, typed model and native provider remain paid.
 use crate::Session;
+use crate::accounted_native_open::is_current_point_candidate;
 use photocraft_doc::{LayerContent, xcf_filters::FilterValue};
 use photocraft_raster::{
     Interrupt,

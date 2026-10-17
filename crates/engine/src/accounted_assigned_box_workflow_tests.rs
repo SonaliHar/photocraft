@@ -85,9 +85,9 @@ fn assigned_source_native_and_query_continuation() {
         let raw = native(&s);
         assert_eq!(hash(&raw), "3102cfa5ba9eb6cf718b767257d474fc865e0b5fa93e8b3622adeebd7fefaadf");
         let mut hdr = 0;
-        for pixel in raw.chunks_exact(16) {
-            for w in pixel[..12].chunks_exact(4) {
-                let v = f32::from_ne_bytes(w.try_into().unwrap());
+        for pixel in raw.as_chunks::<16>().0.iter() {
+            for w in pixel[..12].as_chunks::<4>().0.iter() {
+                let v = f32::from_ne_bytes(*w);
                 assert!(v.is_finite());
                 hdr += usize::from(!(0.0..=1.0).contains(&v));
             }

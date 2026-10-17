@@ -1,8 +1,12 @@
 //! Genuine +1 original packets -> derived CURRENT opacity; no partial-opacity producer source claim.
 #![allow(dead_code, unused_imports)]
 #[path = "accounted_exposure_loaded_test_support.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod loaded;
 #[path = "accounted_filtered_flat_invert_test_support.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod originals;
 pub use loaded::mixed_current as loaded_mixed_current;
 pub use originals::{CASES, Case, archive, bytes, ctl, current, import, observed, payload, same, storage, workspace};

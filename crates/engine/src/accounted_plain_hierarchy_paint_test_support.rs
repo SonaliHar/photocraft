@@ -2,8 +2,12 @@
 //! Encoded/native/comparison buffers are external harness data; genuine reader
 //! owners retain actual decoder/model/native quota receipts.
 #![allow(dead_code, unused_imports)]
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../../io/src/xcf_import/plain_quantized_hierarchy_fixture.rs"]
 pub mod data;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_normal_hierarchy_test_support.rs"]
 mod old;
 pub use old::{archive, ctl, encoded, raw, same, storage};
@@ -40,7 +44,10 @@ pub fn import(depth: usize) -> photocraft_io::OwnedXcfImport {
         "generated-plain-hierarchy.xcf",
         Arc::new(bytes(depth)),
         &Default::default(),
-        &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+        &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap(),
         q,
         &ctl(),
     )

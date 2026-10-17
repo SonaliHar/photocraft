@@ -2,10 +2,16 @@
 //! Import workflows are deferred until explicit IO admission; no numerical oracle.
 #![allow(dead_code, unused_imports)]
 #[path = "../../ui-egui/src/filtered_flat_fixture.rs"]
-mod native;
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
+mod native_fixture;
 #[path = "accounted_filtered_flat_current_test_support.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod owned;
 #[path = "accounted_filtered_flat_ordered_test_support.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod retained;
 pub use owned::{archive, ctl, current, encoded, same, storage, unmarked_archive, workspace};
 use photocraft_doc::{
@@ -99,7 +105,7 @@ pub fn import(case: &Case) -> photocraft_io::OwnedXcfImport {
     value
 }
 fn hex(s: &str) -> Vec<u8> {
-    s.as_bytes().chunks_exact(2).map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap()).collect()
+    s.as_bytes().as_chunks::<2>().0.iter().map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap()).collect()
 }
 fn scalar(raw: &[u8]) -> (String, u32) {
     let n = u32::from_be_bytes(raw[..4].try_into().unwrap()) as usize;
@@ -142,7 +148,7 @@ pub fn observed(d: &Document, case: &Case) {
         let blob = &row["stored_source"];
         let b = std::fs::read(directory.join(blob["file"].as_str().unwrap())).unwrap();
         assert_eq!(format!("{:x}", Sha256::digest(&b)), blob["sha256"].as_str().unwrap());
-        assert_eq!(native::raw(layer), b);
+        assert_eq!(native_fixture::raw(layer), b);
         let stack = x.filter_stacks.iter().find(|s| s.owner == ItemRef::Layer(layer.id));
         if index == 0 {
             assert!(stack.is_none());

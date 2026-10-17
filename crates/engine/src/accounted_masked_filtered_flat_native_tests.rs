@@ -1,6 +1,8 @@
 //! Deferred genuine-source portable native writer and retained empty-purpose contracts.
 use super::*;
 #[path = "accounted_masked_filtered_flat_test_support.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 use photocraft_doc::{accounted_document::PointFilterRemovePatch, item_identity::ItemRef};
 use std::{
@@ -124,7 +126,7 @@ fn masked_mixed_general_renderer_requires_its_actual_owner_and_basis() {
         assert!(
             photocraft_compose::backed_document::PreparedBackedDocument::new_accounted(
                 owner,
-                &photocraft_cms::Builtin::DisplayP3.profile(),
+                photocraft_cms::Builtin::DisplayP3.profile(),
                 Default::default(),
                 &fixture::ctl(),
             )
@@ -133,7 +135,7 @@ fn masked_mixed_general_renderer_requires_its_actual_owner_and_basis() {
         assert_eq!(owner.quota().usage().unwrap(), before);
         {
             let general =
-                photocraft_compose::backed_document::PreparedBackedDocument::new_accounted(owner, &profile, Default::default(), &fixture::ctl()).unwrap();
+                photocraft_compose::backed_document::PreparedBackedDocument::new_accounted(owner, profile, Default::default(), &fixture::ctl()).unwrap();
             let direct = photocraft_compose::backed_masked_filtered_flat_point_document::PreparedBackedMaskedFilteredFlatPointDocument::new(
                 owner,
                 Default::default(),

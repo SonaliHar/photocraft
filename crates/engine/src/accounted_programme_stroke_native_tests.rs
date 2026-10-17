@@ -1,6 +1,7 @@
 //! Deferred programme-preserving native brush and protected-save contracts.
 //! Comparison/encoded buffers belong to the external harness, not receipts.
 use super::*;
+use crate::accounted_native_save::PreparedAccountedNativeSave;
 #[path = "accounted_programme_paint_test_support.rs"]
 mod f;
 use serde_json::json;

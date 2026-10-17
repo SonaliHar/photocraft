@@ -135,12 +135,12 @@ fn native(s: &Session) -> (Vec<NativePlaneDescriptor>, String) {
 #[test]
 #[ignore = "UNRUN: all50 genuine source/title/native/current project paths retain raw native, source/current profiles and canonical policies; no GIMP numeric claim"]
 fn genuine_readonly_source_title_native_and_project() {
-    for i in 0..CASES.len() {
+    for (i, entry) in CASES.iter().enumerate() {
         let q = quota();
         let imported = source(i, &q);
         let original = imported.document().clone();
         let mut s = Session::new();
-        s.add_owned_separable_blend_xcf_import(&imported, "flat", Some(CASES[i].0), &ctl()).unwrap();
+        s.add_owned_separable_blend_xcf_import(&imported, "flat", Some(entry.0), &ctl()).unwrap();
         drop(imported);
         let raw = native(&s);
         assert!(s.active().unwrap().doc.accounted().unwrap().is_readonly_flat_composite_storage());

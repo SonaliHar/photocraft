@@ -1,6 +1,7 @@
 //! Deferred generated-source hierarchy painting/native workflow contracts.
 //! Encoded/comparison buffers are external harness allocations, never receipts.
 use super::*;
+use crate::accounted_native_save::PreparedAccountedNativeSave;
 #[path = "accounted_plain_hierarchy_paint_test_support.rs"]
 mod f;
 use serde_json::json;

@@ -186,7 +186,7 @@ fn inherited_group_locks_follow_the_actual_owner_tree() {
         for enabled in [original, !original] {
             let mask = mask_id(&s).unwrap();
             let result = s.execute("xcf.mask.enabled.set", json!({"maskId":mask.0.to_string(),"enabled":enabled}));
-            if matches!(kind, 1 | 2 | 3) {
+            if matches!(kind, 1..=3) {
                 assert!(result.is_err());
                 assert!(s.active().unwrap().doc.shares_state(&before));
             } else {

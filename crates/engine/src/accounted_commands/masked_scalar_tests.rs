@@ -1,5 +1,7 @@
 //! Deferred genuine-source command contracts; no producer numerical output assertion.
 use super::*;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../accounted_masked_scalar_test_support.rs"]
 mod fixture;
 fn session(case: &serde_json::Value) -> Session {

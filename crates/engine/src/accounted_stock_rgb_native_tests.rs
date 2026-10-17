@@ -1,6 +1,8 @@
 //! Deferred native routing for declared three-kind CURRENT adapters.
 use super::*;
 #[path = "accounted_filtered_flat_stock_rgb_test_support.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 
 #[test]

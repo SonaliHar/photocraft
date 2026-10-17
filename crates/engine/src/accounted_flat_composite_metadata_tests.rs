@@ -23,7 +23,7 @@ fn current_control(lock: usize) -> (Session, BackingQuota) {
     let original = s.active().unwrap().doc.accounted().unwrap().clone();
     let measured = photocraft_io::retained_native_model_census(original.document(), Default::default(), &Interrupt::NONE).unwrap();
     let index = q.reserve(QuotaKind::Index, (measured.retained_bytes() as u64) * 2 + 8192).unwrap();
-    let resident = q.reserve(QuotaKind::Resident, (original.document().icc_profile.as_ref().map_or(0, Vec::capacity) as u64) * 2 + 8192).unwrap();
+    let resident = q.reserve(QuotaKind::Resident, (original.document().icc_profile.as_ref().map_or(0, |v| v.capacity()) as u64) * 2 + 8192).unwrap();
     let mut doc = original.document().clone();
     let id = doc.layers[1].id;
     match lock {
@@ -35,7 +35,7 @@ fn current_control(lock: usize) -> (Session, BackingQuota) {
     }
     let actual = photocraft_io::retained_native_model_census(&doc, Default::default(), &Interrupt::NONE).unwrap();
     assert!(actual.retained_bytes() as u64 <= index.bytes());
-    assert!(doc.icc_profile.as_ref().map_or(0, Vec::capacity) as u64 <= resident.bytes());
+    assert!(doc.icc_profile.as_ref().map_or(0, |v| v.capacity()) as u64 <= resident.bytes());
     let owner = AccountedDocument::from_owned_readonly_flat_composite(doc, std::sync::Arc::new((original, index, resident)), q.clone(), &ctl()).unwrap();
     crate::accounted_xcf_open::separable_blend::validate_current_separable_blend_storage(&owner, &ctl()).unwrap();
     let mut current = Session::new();

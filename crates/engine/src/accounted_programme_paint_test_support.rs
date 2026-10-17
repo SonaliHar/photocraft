@@ -1,14 +1,24 @@
 //! Test-only delegating genuine Source / explicitly paid synthetic CURRENT cases.
 //! No source qualification, operation epoch or producer evidence is manufactured.
 #![allow(dead_code, unused_imports)]
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_normal_hierarchy_test_support.rs"]
 mod hierarchy;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_masked_filtered_flat_test_support.rs"]
 mod masked;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_masked_normal_hierarchy_test_support.rs"]
 mod masked_tree;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_filtered_flat_ordered_test_support.rs"]
 mod mixed;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_masked_scalar_test_support.rs"]
 mod point;
 // Each consumer parent supplies Session (engine crate or photocraft_engine).
@@ -94,7 +104,10 @@ fn read_source(path: &str, sha: &str, len: usize) -> photocraft_io::OwnedXcfImpo
         path,
         Arc::new(b),
         &Default::default(),
-        &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+        &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap(),
         q(),
         &ctl(),
     )
@@ -139,7 +152,10 @@ fn threshold(alpha: bool) -> photocraft_io::OwnedXcfImport {
             &name,
             Arc::new(b),
             &Default::default(),
-            &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+            &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+                .unwrap()
+                .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+                .unwrap(),
             q(),
             &ctl(),
         )
@@ -294,7 +310,6 @@ pub fn patch(doc: &Document, id: LayerId) -> serde_json::Value {
 }
 /// Borrowed programme observation: retaining the real owner shares immutable
 /// model/native/mask providers, with no deep snapshot or fake incoming receipts.
-
 fn compare_surface(a: &photocraft_raster::Surface, b: &photocraft_raster::Surface, c: &ReadControl<'_>) {
     c.check(64).unwrap();
     assert_eq!(a.format(), b.format());

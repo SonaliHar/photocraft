@@ -1,6 +1,8 @@
 //! Deferred wide plain Source fixture. This creates a real paid Legacy owner
 //! through the unchanged plain XCF reader, never a copied/fake Source Document.
 #![allow(dead_code)]
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_wide_plain_xcf_fixture.rs"]
 pub mod data;
 use photocraft_color::SampleType;
@@ -35,7 +37,10 @@ pub fn import(gray: bool, sample: SampleType, alpha_lock: bool) -> photocraft_io
         "legacy-wide.xcf",
         std::sync::Arc::new(encoded(gray, sample, alpha_lock)),
         &Default::default(),
-        &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+        &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap(),
         q,
         &ctl(),
     )

@@ -83,8 +83,8 @@ fn native(s: &Session) -> Vec<u8> {
                 let n = (y * 16 + x) as usize * 16;
                 let mut pixel = [0u8; 16];
                 pin.read_pixel_native_into(x, y, &mut pixel, &ctl()).unwrap();
-                for (channel, word) in pixel.chunks_exact(4).enumerate() {
-                    b[n + channel * 4..n + channel * 4 + 4].copy_from_slice(&u32::from_ne_bytes(word.try_into().unwrap()).to_le_bytes());
+                for (channel, word) in pixel.as_chunks::<4>().0.iter().enumerate() {
+                    b[n + channel * 4..n + channel * 4 + 4].copy_from_slice(&u32::from_ne_bytes(*word).to_le_bytes());
                 }
             }
         }
@@ -101,7 +101,7 @@ fn archive(s: &Session) -> OwnedDocumentArchive {
 #[test]
 #[ignore = "UNRUN: four actual named-unit/HDR assigned Gaussian sources, exact HDR native/profile/mask, paid queries/title and typed native continuation"]
 fn assigned_gaussian_source_native_and_query_continuation() {
-    for case in 0..4 {
+    for (case, entry) in CASES.iter().enumerate().take(4) {
         let s = session(case);
         let initial = s.active().unwrap().doc.clone();
         let owner = initial.accounted().unwrap();
@@ -112,11 +112,11 @@ fn assigned_gaussian_source_native_and_query_continuation() {
             photocraft_compose::backed_neighborhood_context::PreparedBackedNeighborhoodContext::new_assigned_box(owner, Default::default(), &ctl()).is_err()
         );
         let raw = native(&s);
-        assert_eq!(hash(&raw), CASES[case].3);
+        assert_eq!(hash(&raw), entry.3);
         let mut hdr = 0;
-        for pixel in raw.chunks_exact(16) {
-            for w in pixel[..12].chunks_exact(4) {
-                let v = f32::from_le_bytes(w.try_into().unwrap());
+        for pixel in raw.as_chunks::<16>().0.iter() {
+            for w in pixel[..12].as_chunks::<4>().0.iter() {
+                let v = f32::from_le_bytes(*w);
                 assert!(v.is_finite());
                 hdr += usize::from(!(0.0..=1.0).contains(&v));
             }

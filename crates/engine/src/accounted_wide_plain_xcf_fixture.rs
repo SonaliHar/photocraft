@@ -31,7 +31,7 @@ pub fn words(depth: usize, gray: bool, x: u32, y: u32) -> ([u64; 4], usize) {
             },
         ),
         1 => (
-            if n % 13 == 0 { (-0f64).to_bits() } else { 0x3fd0000000000001 + u64::from(n % 11) },
+            if n.is_multiple_of(13) { (-0f64).to_bits() } else { 0x3fd0000000000001 + u64::from(n % 11) },
             0x3fe0000000002001 + u64::from(n % 7),
             0x3fe8000000000001 + u64::from(n % 5),
             match n % 8 {

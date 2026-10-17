@@ -1,6 +1,8 @@
 //! Deferred genuine hierarchy Source portable writer/native13 and complete-tree
 //! internal renderer continuity contracts. No producer numerical acceptance.
 use super::*;
+use crate::accounted_native_open::{AccountedNativeOpenPolicy, is_owned_current_filtered_flat_candidate, is_owned_current_normal_hierarchy_candidate};
+use photocraft_raster::backing::{BackingError, ReadControl};
 #[path = "accounted_normal_hierarchy_test_support.rs"]
 mod fixture;
 use photocraft_doc::{accounted_document::PointFilterRemovePatch, item_identity::ItemRef};
@@ -123,7 +125,7 @@ fn normal_hierarchy_general_renderer_requires_its_actual_owner_and_basis() {
         assert!(
             photocraft_compose::backed_document::PreparedBackedDocument::new_accounted(
                 owner,
-                &photocraft_cms::Builtin::DisplayP3.profile(),
+                photocraft_cms::Builtin::DisplayP3.profile(),
                 Default::default(),
                 &fixture::ctl(),
             )
@@ -132,7 +134,7 @@ fn normal_hierarchy_general_renderer_requires_its_actual_owner_and_basis() {
         assert_eq!(owner.quota().usage().unwrap(), before);
         {
             let general =
-                photocraft_compose::backed_document::PreparedBackedDocument::new_accounted(owner, &profile, Default::default(), &fixture::ctl()).unwrap();
+                photocraft_compose::backed_document::PreparedBackedDocument::new_accounted(owner, profile, Default::default(), &fixture::ctl()).unwrap();
             let direct =
                 photocraft_compose::backed_normal_hierarchy_document::PreparedBackedNormalHierarchyDocument::new(owner, Default::default(), &fixture::ctl())
                     .unwrap();

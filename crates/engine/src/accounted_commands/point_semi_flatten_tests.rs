@@ -79,8 +79,9 @@ fn patch(s: &Session, bits: [u32; 4], encoding: SampleEncoding) -> Value {
 fn reopen(s: &Session) -> Session {
     let owner = s.active().unwrap().doc.accounted().unwrap();
     let q = owner.quota().clone();
-    let bytes =
-        photocraft_format::owned_document::save_current_document_archive(owner, Cursor::new(Vec::new()), Default::default(), &q, &ctl()).unwrap().into_inner();
+    let bytes = photocraft_format::owned_document::save_current_document_archive(owner.document(), Cursor::new(Vec::new()), Default::default(), &q, &ctl())
+        .unwrap()
+        .into_inner();
     let archive = photocraft_io::accounted_native::open_accounted_native_from_reader(
         &mut Cursor::new(bytes.as_slice()),
         bytes.len() as u64,
@@ -196,19 +197,24 @@ fn current_archive(case: usize, change: impl FnOnce(&mut photocraft_doc::Documen
     let current =
         AccountedDocument::new_readonly_point_storage(doc, Arc::new(CurrentRetention { _owner: owner, _index: index, _resident: resident }), q, &ctl())
             .unwrap();
-    let bytes =
-        photocraft_format::owned_document::save_current_document_archive(&current, Cursor::new(Vec::new()), Default::default(), current.quota(), &ctl())
-            .unwrap()
-            .into_inner();
-    let archive = photocraft_io::accounted_native::open_accounted_native_from_reader(
+    let bytes = photocraft_format::owned_document::save_current_document_archive(
+        current.document(),
+        Cursor::new(Vec::new()),
+        Default::default(),
+        current.quota(),
+        &ctl(),
+    )
+    .unwrap()
+    .into_inner();
+
+    photocraft_io::accounted_native::open_accounted_native_from_reader(
         &mut Cursor::new(bytes.as_slice()),
         bytes.len() as u64,
         Default::default(),
         current.quota().clone(),
         &ctl(),
     )
-    .unwrap();
-    archive
+    .unwrap()
 }
 fn controlled_current(case: usize, change: impl FnOnce(&mut photocraft_doc::Document)) -> Session {
     let archive = current_archive(case, change);
@@ -220,17 +226,39 @@ fn controlled_current(case: usize, change: impl FnOnce(&mut photocraft_doc::Docu
 #[ignore = "UNRUN: content/all/pixels before no-op and changed-only visibility, tag-changing one revision, semantic roles andMAX are independent"]
 fn locks_and_typed_encoding_policy() {
     for lock in 0..4 {
-        let mut s = controlled_current(0, |d| match lock {
-            0 => d.layers[0].locks.all = true,
-            1 => d.layers[0].locks.pixels = true,
-            2 => d.xcf_state.as_mut().unwrap().items[0].locks.content = true,
-            _ => d.xcf_state.as_mut().unwrap().items[0].locks.visibility = true,
+        let mut s = controlled_current(0, |d| {
+            let owner = d.xcf_state.as_ref().unwrap().filter_stacks[0].owner;
+            assert_eq!(owner, photocraft_doc::item_identity::ItemRef::Layer(d.layers[0].id));
+            match lock {
+                0 => d.layers[0].locks.all = true,
+                1 => d.layers[0].locks.pixels = true,
+                _ => {
+                    // Canonical item order also contains effect masks; lock the actual stack owner.
+                    let item = d.xcf_state.as_mut().unwrap().items.iter_mut().find(|item| item.item == owner).unwrap();
+                    if lock == 2 {
+                        item.locks.content = true;
+                    } else {
+                        item.locks.visibility = true;
+                    }
+                }
+            }
         });
+        let doc = &s.active().unwrap().doc;
+        let state = doc.xcf_state.as_ref().unwrap();
+        let owner = state.filter_stacks[0].owner;
+        assert_eq!(owner, photocraft_doc::item_identity::ItemRef::Layer(doc.layers[0].id));
+        let owner_item = state.items.iter().find(|item| item.item == owner).unwrap();
+        match lock {
+            0 => assert!(doc.layers[0].locks.all),
+            1 => assert!(doc.layers[0].locks.pixels),
+            2 => assert!(owner_item.locks.content),
+            _ => assert!(owner_item.locks.visibility),
+        }
         let before = s.active().unwrap().doc.clone();
         let (bits, enc) = words(&s);
         let p = patch(&s, bits, enc);
         if lock < 3 {
-            assert!(s.execute("xcf.filter.set", p).is_err());
+            assert!(s.execute("xcf.filter.set", p).is_err(), "lock={lock}, owner={owner:?}");
             assert!(s.active().unwrap().doc.shares_state(&before));
         } else {
             assert_eq!(s.execute("xcf.filter.set", p).unwrap()["updated"], false);

@@ -1,6 +1,7 @@
 //! Deferred native continuation of shared editing consumers. No producer oracle.
 //! Encoded/comparison buffers are external harness allocations, not receipts.
 use super::*;
+use crate::accounted_native_open::AccountedNativeOpenPolicy;
 #[path = "accounted_native_stroke_test_support.rs"]
 mod narrow;
 #[path = "accounted_programme_paint_test_support.rs"]
@@ -64,7 +65,6 @@ fn selection_word(sample: SampleType) -> Vec<u8> {
         SampleType::U32 => 0x80000001u32.to_ne_bytes().to_vec(),
         SampleType::F32 => 0.50000006f32.to_ne_bytes().to_vec(),
         SampleType::F64 => (0.5 + 2f64.powi(-45)).to_ne_bytes().to_vec(),
-        _ => panic!("five native selection depths"),
     }
 }
 fn plain_session(sample: SampleType, locked: bool) -> Session {
@@ -96,7 +96,10 @@ fn plain_session(sample: SampleType, locked: bool) -> Session {
         "selected-source.xcf",
         std::sync::Arc::new(bytes),
         &Default::default(),
-        &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+        &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap(),
         quota,
         &programme::ctl(),
     )

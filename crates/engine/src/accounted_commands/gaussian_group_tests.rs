@@ -185,8 +185,8 @@ fn current_control(lock: usize, alternate: bool) -> (Session, BackingQuota) {
     let masks = &original.document().xcf_state.as_ref().unwrap().filter_masks;
     let maps = masks.iter().map(|m| m.surface.tile_count() as u64).sum::<u64>() * 256;
     let index_envelope = (model.retained_bytes() as u64).checked_mul(2).and_then(|n| n.checked_add(maps * 2 + 8192)).unwrap();
-    let payload_envelope = (original.document().icc_profile.as_ref().map_or(0, Vec::capacity) as u64)
-        .checked_add(masks.iter().map(|m| m.surface.resident_payload_bytes().unwrap() as u64).sum::<u64>())
+    let payload_envelope = (original.document().icc_profile.as_ref().map_or(0, |v| v.capacity()) as u64)
+        .checked_add(masks.iter().map(|m| m.surface.resident_payload_bytes().unwrap()).sum::<u64>())
         .and_then(|n| n.checked_mul(2))
         .and_then(|n| n.checked_add(8192))
         .unwrap();
@@ -195,7 +195,7 @@ fn current_control(lock: usize, alternate: bool) -> (Session, BackingQuota) {
     let mut doc = original.document().clone();
     let actual = photocraft_io::retained_native_model_census(&doc, Default::default(), &Interrupt::NONE).unwrap();
     assert!((actual.retained_bytes() as u64).checked_add(maps).unwrap() <= clone_index.bytes());
-    assert!(doc.icc_profile.as_ref().map_or(0, Vec::capacity) as u64 <= clone_payload.bytes());
+    assert!(doc.icc_profile.as_ref().map_or(0, |v| v.capacity()) as u64 <= clone_payload.bytes());
     let group = doc.layers[1].id;
     match lock {
         1 => doc.layers[1].locks.all = true,

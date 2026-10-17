@@ -110,12 +110,13 @@ fn operative(snapshot: &DocumentSnapshot) -> Vec<u8> {
     }
     bytes
 }
+type MaskStorage = (photocraft_raster::backing::NativePlaneDescriptor, Option<(photocraft_geom::TileCoord, Vec<u8>)>);
 #[derive(Debug, PartialEq, Eq)]
 struct RawStorage {
     layer: photocraft_raster::backing::NativePlaneDescriptor,
     layer_full_tile: bool,
     layer_bytes: Vec<u8>,
-    masks: Vec<(photocraft_raster::backing::NativePlaneDescriptor, Option<(photocraft_geom::TileCoord, Vec<u8>)>)>,
+    masks: Vec<MaskStorage>,
 }
 #[derive(Debug)]
 struct NativeSnapshot {
@@ -306,7 +307,9 @@ fn generic_reopen_and_mutations_refuse_without_fallback_or_changed_history() {
     let journal = s.journal.clone();
     let revision = s.active().unwrap().revision;
     let raw = native(&before);
-    for (command, params) in [("edit.clear", json!({"target":"mask"})), ("edit.fill", json!({"target":"mask","contents":"white"})), ("layer.setProps", json!({"fill":0.5}))] {
+    for (command, params) in
+        [("edit.clear", json!({"target":"mask"})), ("edit.fill", json!({"target":"mask","contents":"white"})), ("layer.setProps", json!({"fill":0.5}))]
+    {
         assert!(s.execute(command, params).is_err());
         assert!(before.shares_state(&s.active().unwrap().doc));
         assert!(history.shares_accounted_history(&s.active().unwrap().history));

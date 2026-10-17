@@ -1,5 +1,7 @@
 //! Genuine-source masked-mixed transaction contracts, all UNRUN; no producer pixel oracle.
 use super::*;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../accounted_masked_filtered_flat_test_support.rs"]
 mod fixture;
 fn session(c: &serde_json::Value) -> Session {
@@ -138,10 +140,10 @@ fn masked_mixed_refusals_keep_current_atomic() {
         let mut blocked = session(&c);
         install(&mut blocked, locked);
         assert!(blocked.execute("xcf.filter.enable", equal.clone()).is_err());
-        let mut mismatch=session(&c);
-        let titled=before.accounted().unwrap().try_with_document_name("external title",&fixture::ctl()).unwrap();
-        mismatch.active_mut().unwrap().doc=DocumentSnapshot::from_accounted(titled).unwrap();
-        assert!(mismatch.execute("xcf.filter.enable",equal.clone()).is_err());
+        let mut mismatch = session(&c);
+        let titled = before.accounted().unwrap().try_with_document_name("external title", &fixture::ctl()).unwrap();
+        mismatch.active_mut().unwrap().doc = DocumentSnapshot::from_accounted(titled).unwrap();
+        assert!(mismatch.execute("xcf.filter.enable", equal.clone()).is_err());
         let deny = |_| Err(BackingError::Work);
         let ctl = ReadControl { interrupt: &photocraft_raster::Interrupt::NONE, work: &deny };
         assert!(Request::parse(&s, "xcf.filter.enable", &equal, &ctl).is_err());

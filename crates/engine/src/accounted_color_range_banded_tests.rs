@@ -28,7 +28,7 @@ impl NativePlaneStore for Store {
     }
 }
 fn fixture_depth(depth: SampleType) -> (Session, BackingQuota, Arc<AtomicUsize>) {
-    let raw = [0.23456789f32, 0.5, 0.7, 1., 0.8, 0.125, 0.3, 0.5];
+    let raw = [0.234_567_9_f32, 0.5, 0.7, 1., 0.8, 0.125, 0.3, 0.5];
     let mut doc = Document::new("current", Size::new(2, 65), ColorMode::Rgb, depth);
     doc.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
     doc.sample_encoding = Some(SampleEncoding::NonlinearProfile);

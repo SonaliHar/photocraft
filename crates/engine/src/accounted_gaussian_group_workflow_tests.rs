@@ -97,7 +97,7 @@ fn archive(bytes: &[u8], q: &BackingQuota) -> OwnedDocumentArchive {
 #[test]
 #[ignore = "UNRUN: genuine mode28 Gaussian groups typed source/title/native continuation and paid six-item stable-filter discovery"]
 fn gaussian_groups_preserve_original_owners_and_current_metadata() {
-    for case in 0..CASES.len() {
+    for (case, entry) in CASES.iter().enumerate() {
         let q = quota();
         let imported = imported(case, &q);
         let owner = imported.document();
@@ -106,7 +106,7 @@ fn gaussian_groups_preserve_original_owners_and_current_metadata() {
         let mut bypass = Session::new();
         assert!(bypass.add_accounted_document(owner.clone(), None, &ctl()).is_err());
         let mut s = Session::new();
-        s.add_owned_isolated_gaussian_group_xcf_import(&imported, CASES[case].0, Some(CASES[case].0), &ctl()).unwrap();
+        s.add_owned_isolated_gaussian_group_xcf_import(&imported, entry.0, Some(entry.0), &ctl()).unwrap();
         drop(imported);
         let initial = s.active().unwrap().doc.clone();
         let words = native(&s);

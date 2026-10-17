@@ -1,8 +1,12 @@
 //! Test-only actual storage bindings and prospectively paid CURRENT subset.
 //! No engine functions, source grant, numeric or operative-order oracle.
 #![allow(dead_code)]
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_filtered_flat_ordered_fixture.rs"]
 pub mod data;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../../ui-egui/src/filtered_flat_fixture.rs"]
 #[allow(dead_code)]
 mod native;
@@ -45,20 +49,28 @@ pub fn import(case: &data::Case) -> photocraft_io::OwnedXcfImport {
         index: 64 << 20,
         scratch: 0,
     });
-    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
-        .unwrap()
-        .lowered(&[("residentBytes", 64 << 20), ("indexBytes", 8 << 20), ("scratchBytes", 0)])
-        .unwrap();
-    let mut options = photocraft_xcf::DecodeOptions::default();
-    options.limits.resident_bytes = 64 << 20;
-    options.limits.input_bytes = 16 << 20;
-    let value = photocraft_io::import_owned_xcf_bytes_in_quota("ordered.xcf", Arc::new(bytes(case.source)), &options, &limits, q, &ctl()).unwrap();
+    let value = try_import_with_resident(case, 128 << 20, q).unwrap();
     assert!(matches!(value, photocraft_io::OwnedXcfImport::FilteredFlat(_)));
     observed(value.document().document(), case);
     value
 }
+pub fn try_import_with_resident(
+    case: &data::Case,
+    resident: u64,
+    q: photocraft_raster::backing::quota::BackingQuota,
+) -> Result<photocraft_io::OwnedXcfImport, photocraft_io::IoError> {
+    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+        .unwrap()
+        .lowered(&[("residentBytes", resident), ("indexBytes", 8 << 20), ("scratchBytes", 0)])
+        .unwrap();
+    let mut options = photocraft_xcf::DecodeOptions::default();
+    options.limits.resident_bytes = usize::try_from(resident).unwrap();
+    options.limits.input_bytes = 16 << 20;
+    photocraft_io::import_owned_xcf_bytes_in_quota("ordered.xcf", Arc::new(bytes(case.source)), &options, &limits, q, &ctl())
+}
+
 fn hex(s: &str) -> Vec<u8> {
-    s.as_bytes().chunks_exact(2).map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap()).collect()
+    s.as_bytes().as_chunks::<2>().0.iter().map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap()).collect()
 }
 fn word(b: &[u8], at: &mut usize) -> u32 {
     let v = u32::from_be_bytes(b.get(*at..*at + 4).unwrap().try_into().unwrap());

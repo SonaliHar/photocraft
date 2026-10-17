@@ -1,6 +1,8 @@
 //! Deferred host fixture: genuine retained native leaves wrapped in a synthetic
 //! CURRENT tree under prospective metadata guards. Never a hierarchy Source claim.
 #![allow(dead_code, unused_imports)]
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_filtered_flat_ordered_test_support.rs"]
 mod base;
 pub use base::{ctl, workspace};
@@ -209,7 +211,10 @@ pub fn import(c: &serde_json::Value) -> photocraft_io::OwnedXcfImport {
         index: 64 << 20,
         scratch: 0,
     });
-    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+        .unwrap()
+        .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+        .unwrap();
     let mut options = photocraft_xcf::DecodeOptions::default();
     options.limits.resident_bytes = 256 << 20;
     options.limits.input_bytes = 16 << 20;
@@ -254,7 +259,8 @@ pub fn observed(d: &Document, c: &serde_json::Value) {
             let record =
                 x.opaque.iter().find(|r| r.owner == Some(ItemRef::Layer(l.id)) && r.namespace == "gimp/xcf/source-property" && r.identity == identity).unwrap();
             let hex = property["hex"].as_str().unwrap();
-            let expected: Vec<u8> = hex.as_bytes().chunks_exact(2).map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap()).collect();
+            let expected: Vec<u8> =
+                hex.as_bytes().as_chunks::<2>().0.iter().map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap()).collect();
             assert_eq!(record.bytes.as_slice(), expected);
             assert!(!record.rendering_required);
             assert_eq!(record.source_version, x.provenance.format_version);

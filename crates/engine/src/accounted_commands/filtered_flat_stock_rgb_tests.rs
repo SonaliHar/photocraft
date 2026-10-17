@@ -1,5 +1,7 @@
 //! Deferred target-aware primitive patch proof; synthetic CURRENT, not producer Source evidence.
 use super::*;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../accounted_filtered_flat_stock_rgb_test_support.rs"]
 mod fixture;
 use fixture::Kind;

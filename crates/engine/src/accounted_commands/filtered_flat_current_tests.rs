@@ -1,6 +1,8 @@
 //! Deferred full-removal CURRENT class/native intent, no empty original-source grant.
 use super::*;
 #[path = "../accounted_filtered_flat_current_test_support.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 fn session(case: &fixture::data::Case) -> Session {
     let input = fixture::import(case);

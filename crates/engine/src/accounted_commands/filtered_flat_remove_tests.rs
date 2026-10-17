@@ -30,7 +30,7 @@ fn safe_remove_keeps_exact_custody_and_native() {
             assert!(s.active().unwrap().doc.shares_state(&removed));
             let query = crate::accounted_xcf_inspect::prepare(&s, &serde_json::json!({"limit":128}), &fixture::ctl()).unwrap();
             assert_eq!(query.value()["filters"]["total"], 8);
-            assert!(!query.value()["filters"]["entries"].as_array().unwrap().iter().any(|v| v["id"] == id.0.to_string()));
+            assert!(!query.value()["filters"]["entries"].as_array().unwrap().iter().any(|v| v["id"] == id.0));
             drop(query);
             let mut native = Session::new();
             native.add_owned_native_filtered_flat_archive(fixture::archive(removed.accounted().unwrap()), "removed.pcraft", None, &fixture::ctl()).unwrap();

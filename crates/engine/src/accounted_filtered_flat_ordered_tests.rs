@@ -1,6 +1,8 @@
 //! UNRUN storage/target/order continuity; no producer arithmetic oracle.
 use super::*;
 #[path = "accounted_filtered_flat_ordered_test_support.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 use photocraft_doc::{
     item_identity::ItemRef,

@@ -1,9 +1,15 @@
 //! Genuine six nonempty scalar-mask sources; all captured blobs are external harness evidence.
 #![allow(dead_code, unused_imports)]
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_filtered_flat_current_test_support.rs"]
 mod native;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../../ui-egui/src/filtered_flat_fixture.rs"]
 mod planes;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_exposure_loaded_test_support.rs"]
 mod shared;
 use photocraft_doc::{Document, accounted_document::AccountedDocument};
@@ -28,7 +34,10 @@ pub fn import(case: &Value) -> photocraft_io::OwnedXcfImport {
         index: 64 << 20,
         scratch: 0,
     });
-    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+        .unwrap()
+        .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+        .unwrap();
     let input = photocraft_io::import_owned_xcf_bytes_in_quota("masked.xcf", Arc::new(bytes(case)), &Default::default(), &limits, q, &ctl()).unwrap();
     assert!(matches!(input, photocraft_io::OwnedXcfImport::Point(_)));
     observed(input.document().document(), case);

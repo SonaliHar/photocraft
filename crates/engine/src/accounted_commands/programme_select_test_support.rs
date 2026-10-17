@@ -1,10 +1,16 @@
 //! Test-only genuine multiroot Source loaders; no new Source or pixel grant.
 #![allow(dead_code, unused_imports)]
 use super::Session;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../accounted_masked_filtered_flat_test_support.rs"]
 mod masked;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../accounted_filtered_flat_ordered_test_support.rs"]
 mod ordered;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../accounted_programme_paint_test_support.rs"]
 pub mod programmes;
 pub use programmes::{Witness, ctl};

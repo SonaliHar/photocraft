@@ -1,8 +1,12 @@
 //! Genuine affine source packets; helpers do not stand in for numerical oracles.
 #![allow(dead_code, unused_imports)]
 #[path = "accounted_filtered_flat_current_test_support.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod native;
 #[path = "accounted_filtered_flat_ordered_test_support.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod retained;
 pub use native::{archive, ctl, same, storage, workspace};
 use photocraft_doc::{Document, xcf_filters::FilterNode};
@@ -104,7 +108,10 @@ pub fn import(c: &Case) -> photocraft_io::OwnedXcfImport {
         "affine.xcf",
         Arc::new(bytes(c)),
         &Default::default(),
-        &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+        &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap(),
         q,
         &ctl(),
     )

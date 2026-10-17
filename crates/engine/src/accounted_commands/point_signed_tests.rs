@@ -64,6 +64,9 @@ fn posterize_session() -> (Session, BackingQuota) {
     let owner = AccountedDocument::new_readonly_point_storage(doc, Arc::new((guard, metadata)), q.clone(), &ctl()).unwrap();
     validate_recipe(&owner, &ctl()).unwrap();
     let mut s = Session::new();
+    // This fixture explicitly prepays sixteen history states; preferences must
+    // request that same admitted policy rather than the unrelated default100.
+    s.edit_prefs(|p| p.performance.history_states = 16).unwrap();
     let state = crate::DocState::new_accounted(owner, None, 16, &ctl()).unwrap();
     s.publish_document_state(state, &ctl()).unwrap();
     (s, q)

@@ -1,8 +1,12 @@
 //! UNRUN paid synthetic CURRENT Move, not a GIMP-authored translation oracle.
 use super::*;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../../../ui-egui/src/canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
 mod fixture;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../../../ui-egui/src/canvas_observed_box_fixture.rs"]
 #[allow(dead_code)]
 mod observed;

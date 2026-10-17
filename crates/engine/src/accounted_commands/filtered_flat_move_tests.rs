@@ -1,6 +1,8 @@
 //! Deferred move transport/custody; no producer arithmetic oracle.
 use super::*;
 #[path = "../accounted_filtered_flat_ordered_test_support.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 fn session(case: &fixture::data::Case) -> Session {
     let input = fixture::import(case);
@@ -96,6 +98,8 @@ fn mixed_move_equal_requests_keep_all_fences() {
     assert!(Request::parse(&s, "xcf.filter.move", &equal, &c).is_err());
     // This paid native CURRENT variant changes only an inherited native owner lock.
     #[path = "../../../ui-egui/src/filtered_flat_fixture.rs"]
+    // Keep this test fixture local to its consumer namespace.
+    #[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
     mod native;
     let ItemRef::Layer(root) = stack.owner else { panic!("root") };
     let locked = native::current(before.accounted().unwrap(), |d| d.layer_mut(root).unwrap().locks.pixels = true);

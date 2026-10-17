@@ -1,5 +1,6 @@
 //! Deferred generated-source native continuation. No external numerical oracle.
 use super::*;
+use crate::accounted_native_open::AccountedNativeOpenPolicy;
 #[path = "accounted_wide_plain_xcf_test_support.rs"]
 mod f;
 use photocraft_color::SampleType;

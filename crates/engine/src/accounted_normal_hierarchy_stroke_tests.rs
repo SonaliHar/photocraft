@@ -1,10 +1,14 @@
 //! Deferred actual generated hierarchy Source to named native leaf COW.
 //! No GIMP brush oracle, runtime, or performance acceptance.
 use super::*;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_plain_hierarchy_paint_test_support.rs"]
 mod f;
 use photocraft_doc::item_identity::ItemRef;
 use serde_json::json;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_normal_hierarchy_test_support.rs"]
 mod filtered_fixture;
 fn patch() -> Value {

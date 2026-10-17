@@ -1,5 +1,7 @@
 //! Deferred real mixed invert transport/native lifecycle; no producer numeric oracle.
 use super::*;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../accounted_filtered_flat_invert_test_support.rs"]
 mod fixture;
 fn session(case: &fixture::Case) -> Session {
@@ -113,7 +115,8 @@ fn invert_guards_and_fullproof_refuse_atomically() {
     let case = &fixture::CASES[0];
     let mut s = session(case);
     let before = s.active().unwrap().doc.clone();
-    let node = before.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].clone();
+    let invert_owner = before.layers.iter().find(|layer| layer.name == "Own root 1").unwrap().id;
+    let node = before.xcf_state.as_ref().unwrap().filter_stacks.iter().find(|stack| stack.owner == ItemRef::Layer(invert_owner)).unwrap().nodes[0].clone();
     let id = node.id;
     assert_eq!(family(&node), Some(4));
     for edit in 0..3 {
@@ -127,7 +130,7 @@ fn invert_guards_and_fullproof_refuse_atomically() {
     }
     // Paid synthetic CURRENT retains real original provider/fees, not a Source witness.
     let sole = fixture::derived_current(before.accounted().unwrap(), |d| {
-        let root = d.layers[1].id;
+        let root = invert_owner;
         d.layers.retain(|l| l.id == root);
         let x = d.xcf_state.as_mut().unwrap();
         x.filter_stacks.retain(|st| st.owner == ItemRef::Layer(root));
@@ -195,7 +198,7 @@ fn invert_guards_and_fullproof_refuse_atomically() {
     mismatch.active_mut().unwrap().doc = DocumentSnapshot::from_accounted(paid).unwrap();
     mismatch.active_mut().unwrap().accounted_view = Some(view);
     assert!(Request::parse(&mismatch, "xcf.filter.enable", &p, &fixture::ctl()).unwrap().prepare(&mismatch, &fixture::ctl()).is_err());
-    let locked = fixture::current(before.accounted().unwrap(), |d| d.layers[1].locks.pixels = true);
+    let locked = fixture::current(before.accounted().unwrap(), |d| d.layer_mut(invert_owner).unwrap().locks.pixels = true);
     let mut locked_session = Session::new();
     locked_session.add_owned_native_filtered_flat_archive(fixture::archive(&locked), "locked.pcraft", None, &fixture::ctl()).unwrap();
     let locked_before = locked_session.active().unwrap().doc.clone();

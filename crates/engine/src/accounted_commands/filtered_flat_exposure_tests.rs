@@ -194,3 +194,23 @@ fn exposure_domains_and_family_guards_are_exact() {
     let c = ReadControl { interrupt: &interrupt, work: &|_| Ok(()) };
     assert!(Request::parse(&s, "xcf.filter.set", &p, &c).is_err());
 }
+
+#[test]
+#[ignore = "Requires pinned genuine ordered F32 and Exposure F64 sources; explicit64MiB caller refusal/refund, not a Source-domain or128MiB acceptance claim."]
+fn source_preparation_caller_64m_refuses_without_publishing_or_leaking() {
+    for ordered in [true, false] {
+        let q = photocraft_raster::backing::quota::BackingQuota::new(photocraft_raster::backing::quota::QuotaLimits {
+            resident: 256 << 20,
+            index: 64 << 20,
+            scratch: 0,
+        });
+        let before = q.usage().unwrap();
+        let result = if ordered {
+            fixture::ordered_f32_with_resident(64 << 20, q.clone())
+        } else {
+            fixture::try_import_with_resident(&fixture::CASES[1], 64 << 20, q.clone())
+        };
+        assert!(matches!(result, Err(photocraft_io::IoError::Xcf(ref e)) if e.kind == photocraft_xcf::ErrorKind::Limit && e.message.contains("residentBytes")));
+        assert_eq!(q.usage().unwrap(), before);
+    }
+}

@@ -1,10 +1,16 @@
 //! Actual mixed Exposure8x6 source bindings, independent transport/native checks only.
 #![allow(dead_code, unused_imports)]
 #[path = "../../ui-egui/src/filtered_flat_fixture.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod native;
 #[path = "accounted_filtered_flat_current_test_support.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned;
 #[path = "accounted_filtered_flat_ordered_test_support.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod retained;
 pub use owned::{archive, ctl, current, encoded, same, storage, unmarked_archive, workspace};
 use photocraft_doc::{
@@ -57,20 +63,28 @@ pub fn import(case: &Case) -> photocraft_io::OwnedXcfImport {
         index: 64 << 20,
         scratch: 0,
     });
-    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
-        .unwrap()
-        .lowered(&[("residentBytes", 64 << 20), ("indexBytes", 8 << 20), ("scratchBytes", 0)])
-        .unwrap();
-    let mut options = photocraft_xcf::DecodeOptions::default();
-    options.limits.resident_bytes = 64 << 20;
-    options.limits.input_bytes = 16 << 20;
-    let value = photocraft_io::import_owned_xcf_bytes_in_quota("exposure.xcf", Arc::new(bytes(case)), &options, &limits, q, &ctl()).unwrap();
+    let value = try_import_with_resident(case, 128 << 20, q).unwrap();
     assert!(matches!(value, photocraft_io::OwnedXcfImport::FilteredFlat(_)));
     observed(value.document().document(), case);
     value
 }
+pub fn try_import_with_resident(
+    case: &Case,
+    resident: u64,
+    q: photocraft_raster::backing::quota::BackingQuota,
+) -> Result<photocraft_io::OwnedXcfImport, photocraft_io::IoError> {
+    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+        .unwrap()
+        .lowered(&[("residentBytes", resident), ("indexBytes", 8 << 20), ("scratchBytes", 0)])
+        .unwrap();
+    let mut options = photocraft_xcf::DecodeOptions::default();
+    options.limits.resident_bytes = usize::try_from(resident).unwrap();
+    options.limits.input_bytes = 16 << 20;
+    photocraft_io::import_owned_xcf_bytes_in_quota("exposure.xcf", Arc::new(bytes(case)), &options, &limits, q, &ctl())
+}
+
 fn hex(s: &str) -> Vec<u8> {
-    s.as_bytes().chunks_exact(2).map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap()).collect()
+    s.as_bytes().as_chunks::<2>().0.iter().map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap()).collect()
 }
 fn scalar(raw: &[u8]) -> (String, u32) {
     let n = u32::from_be_bytes(raw[..4].try_into().unwrap()) as usize;
@@ -217,4 +231,12 @@ pub fn exposure_pair(owner: &photocraft_doc::accounted_document::AccountedDocume
         x.selection.selected.retain(|i| *i == ItemRef::Layer(root));
         x.selection.active = Some(ItemRef::Layer(root));
     })
+}
+
+// Test-only request for the independently pinned ordered F32 source.
+pub fn ordered_f32_with_resident(
+    resident: u64,
+    q: photocraft_raster::backing::quota::BackingQuota,
+) -> Result<photocraft_io::OwnedXcfImport, photocraft_io::IoError> {
+    retained::try_import_with_resident(&retained::data::CASES[0], resident, q)
 }

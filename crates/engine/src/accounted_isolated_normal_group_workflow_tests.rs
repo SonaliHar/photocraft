@@ -122,7 +122,7 @@ fn archive(bytes: &[u8], q: &BackingQuota) -> OwnedDocumentArchive {
 fn original_groups_require_typed_adoption_and_preserve_current_identity_through_native() {
     let proof = std::fs::read(root().join("accounted-normal-group-evidence/observations.json")).unwrap();
     assert_eq!(hash(&proof), "2ec12176aa53eed6a4d65e21802b1ef8c2075613a14101beaf5ccba478e46b53");
-    for case in 0..CASES.len() {
+    for (case, entry) in CASES.iter().enumerate() {
         let q = quota();
         let imported = imported(case, &q);
         let owner = imported.document();
@@ -131,7 +131,7 @@ fn original_groups_require_typed_adoption_and_preserve_current_identity_through_
         assert!(bypass.add_accounted_document(owner.clone(), None, &ctl()).is_err());
         assert!(bypass.documents().is_empty());
         let mut s = Session::new();
-        s.add_owned_isolated_normal_group_xcf_import(&imported, CASES[case].0, Some(CASES[case].0), &ctl()).unwrap();
+        s.add_owned_isolated_normal_group_xcf_import(&imported, entry.0, Some(entry.0), &ctl()).unwrap();
         drop(imported);
         let initial = s.active().unwrap().doc.clone();
         let words = native(&s);

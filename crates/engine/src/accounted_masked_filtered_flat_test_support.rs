@@ -1,9 +1,15 @@
 //! Genuine eight authored masked-mixed sources; raw captures are custody evidence, never a numerical oracle.
 #![allow(dead_code, unused_imports)]
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_filtered_flat_current_test_support.rs"]
 mod native;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_filtered_flat_ordered_test_support.rs"]
 mod old;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../../ui-egui/src/filtered_flat_fixture.rs"]
 mod planes;
 pub use old::{ctl, payload, same, storage, workspace};
@@ -47,7 +53,10 @@ pub fn import(c: &Value) -> photocraft_io::OwnedXcfImport {
         index: 64 << 20,
         scratch: 0,
     });
-    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+        .unwrap()
+        .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+        .unwrap();
     let i = photocraft_io::import_owned_xcf_bytes_in_quota("masked-mixed.xcf", Arc::new(bytes(c)), &Default::default(), &limits, q, &ctl()).unwrap();
     assert!(matches!(i, photocraft_io::OwnedXcfImport::MaskedFilteredFlat(_)));
     observed(i.document().document(), c);
@@ -56,7 +65,7 @@ pub fn import(c: &Value) -> photocraft_io::OwnedXcfImport {
 fn props(d: &Document, owner: ItemRef, rows: &Value, source: &[u8]) {
     for p in rows.as_array().unwrap() {
         let hex = p["hex"].as_str().unwrap();
-        let b: Vec<u8> = hex.as_bytes().chunks_exact(2).map(|s| u8::from_str_radix(std::str::from_utf8(s).unwrap(), 16).unwrap()).collect();
+        let b: Vec<u8> = hex.as_bytes().as_chunks::<2>().0.iter().map(|s| u8::from_str_radix(std::str::from_utf8(s).unwrap(), 16).unwrap()).collect();
         let at = usize::try_from(p["offset"].as_u64().unwrap()).unwrap();
         assert_eq!(source.get(at..at.checked_add(b.len()).unwrap()).unwrap(), b);
         let identity = format!("{}@{}:{}", p["tag"].as_u64().unwrap(), at, b.len());

@@ -1,5 +1,7 @@
 //! Test-only class-aware native10 writer/reader; encoded Vec is external harness output.
 #![allow(dead_code, unused_imports)]
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_filtered_flat_remove_test_support.rs"]
 mod old;
 pub use old::{bytes, ctl, current, data, import, observed, preserved, same, single_root_three, storage, workspace};

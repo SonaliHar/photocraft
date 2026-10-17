@@ -2,6 +2,8 @@
 use super::*;
 #[path = "../../../ui-egui/src/canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod fixture;
 #[path = "../../../ui-egui/src/canvas_observed_box_fixture.rs"]
 #[allow(dead_code)]
@@ -120,7 +122,11 @@ fn observed_wire_and_noop_cannot_bypass_current_state_or_control() {
         assert!(Request::parse_observed_box(&s, "xcf.filter.set", &p, &ReadControl { interrupt: &interrupt, work: &|_| Ok(()) }).is_err());
         assert!(s.start("xcf.filter.set", p).is_err());
         assert!(!s.has_jobs());
-        for (id, p) in [("layer.setProps", json!({"blend":"multiply"})), ("layer.translate", json!({"dx":1,"target":"mask"})), ("xcf.filter.remove", json!({"filterId":"1"}))] {
+        for (id, p) in [
+            ("layer.setProps", json!({"blend":"multiply"})),
+            ("layer.translate", json!({"dx":1,"target":"mask"})),
+            ("xcf.filter.remove", json!({"filterId":"1"})),
+        ] {
             assert!(s.execute(id, p).is_err());
         }
         s.active_mut().unwrap().revision = u64::MAX;

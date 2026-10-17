@@ -50,10 +50,10 @@ impl NativePlaneStore for Store {
     fn descriptor(&self) -> NativePlaneDescriptor {
         self.descriptor
     }
-    fn validate_quota(&self, q: &BackingQuota) -> Result<(), BackingError> {
+    fn validate_quota(&self, q: &BackingQuota) -> std::result::Result<(), BackingError> {
         if q.shares_ledger(&self.quota) { Ok(()) } else { Err(BackingError::Quota) }
     }
-    fn read_exact_at(&self, at: u64, out: &mut [u8], c: &ReadControl<'_>) -> Result<(), BackingError> {
+    fn read_exact_at(&self, at: u64, out: &mut [u8], c: &ReadControl<'_>) -> std::result::Result<(), BackingError> {
         c.check(out.len() as u64)?;
         self.reads.fetch_add(1, Ordering::Relaxed);
         let at = usize::try_from(at).map_err(|_| BackingError::Bounds)?;
@@ -62,11 +62,8 @@ impl NativePlaneStore for Store {
         Ok(())
     }
 }
-pub(super) fn fixture(
-    mode: ColorMode,
-    sample: SampleType,
-    stored: SampleEncoding,
-) -> (Document, BackingQuota, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>, &'static Profile, Vec<u8>) {
+type NativeFixture = (Document, BackingQuota, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>, &'static Profile, Vec<u8>);
+pub(super) fn fixture(mode: ColorMode, sample: SampleType, stored: SampleEncoding) -> NativeFixture {
     let quota = BackingQuota::new(QuotaLimits { resident: 64 << 20, scratch: 0, index: 16 << 20 });
     // Actual source/map/default/model fixture allocation is prospectively paid.
     let guard: Arc<dyn Any + Send + Sync> = Arc::new(quota.reserve(QuotaKind::Resident, 2 << 20).unwrap());

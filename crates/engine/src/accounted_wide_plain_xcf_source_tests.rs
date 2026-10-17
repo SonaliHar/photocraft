@@ -78,7 +78,7 @@ fn actual_plain_sources_retain_wide_native_words_and_legacy_class() {
                         let words = fixture::data::words(1, gray, 1, 0).0;
                         let word = words[0];
                         assert_ne!(f64::from_bits(word).to_bits(), (f64::from_bits(word) as f32 as f64).to_bits());
-                        assert!(expected.chunks_exact(8).any(|w| u64::from_ne_bytes(w.try_into().unwrap()) == (-0f64).to_bits()));
+                        assert!(expected.as_chunks::<8>().0.iter().any(|w| u64::from_ne_bytes(*w) == (-0f64).to_bits()));
                     } else {
                         let word = u32::from_ne_bytes(expected[..4].try_into().unwrap());
                         assert_eq!(word, 0x80000001);
@@ -90,9 +90,11 @@ fn actual_plain_sources_retain_wide_native_words_and_legacy_class() {
                 drop(imported);
                 assert!(q.usage().unwrap().resident > 0);
                 assert_eq!(fixture::payload(retained.document()), expected);
+                // The retained q ledger still owns its aggregate header; all payload/owner fees must refund.
                 drop(retained);
-                assert_eq!(q.usage().unwrap().resident, 0);
-                assert_eq!(q.usage().unwrap().index, 0);
+                assert_eq!(q.usage().unwrap().resident, BackingQuota::aggregate_header_bytes());
+                assert_eq!(q.usage().unwrap().index, BackingQuota::aggregate_header_bytes());
+                assert_eq!(q.usage().unwrap().scratch, 0);
                 assert_eq!(encoded, before);
             }
         }
@@ -105,7 +107,10 @@ fn original_wide_source_controls_and_low_quota_fail_closed() {
         for sample in [SampleType::U32, SampleType::F64] {
             let bytes = Arc::new(fixture::encoded(gray, sample, false));
             let before = bytes.as_ref().clone();
-            let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+            let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+                .unwrap()
+                .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+                .unwrap();
             let q = BackingQuota::new(QuotaLimits { resident: 512 << 20, index: 64 << 20, scratch: 0 });
             let spent = AtomicU64::new(0);
             let work = |n| {

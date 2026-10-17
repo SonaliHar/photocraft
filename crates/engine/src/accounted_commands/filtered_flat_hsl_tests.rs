@@ -1,7 +1,11 @@
 //! Deferred fixed-HSL typed target proof. Synthetic CURRENT; no producer Source or HDR completeness claim.
 use super::*;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../accounted_filtered_flat_hsl_test_support.rs"]
 mod fixture;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../accounted_filtered_flat_stock_rgb_test_support.rs"]
 mod rgb;
 #[test]

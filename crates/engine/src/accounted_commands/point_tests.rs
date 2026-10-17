@@ -62,11 +62,8 @@ impl NativePlaneStore for Store {
         Ok(())
     }
 }
-fn fixture(
-    mode: ColorMode,
-    sample: SampleType,
-    stored: SampleEncoding,
-) -> (Document, BackingQuota, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>, &'static Profile, Vec<u8>) {
+type NativeFixture = (Document, BackingQuota, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>, &'static Profile, Vec<u8>);
+fn fixture(mode: ColorMode, sample: SampleType, stored: SampleEncoding) -> NativeFixture {
     let quota = BackingQuota::new(QuotaLimits { resident: 64 << 20, scratch: 0, index: 16 << 20 });
     // Actual source/map/default/model fixture allocation is prospectively paid.
     let guard: Arc<dyn Any + Send + Sync> = Arc::new(quota.reserve(QuotaKind::Resident, 2 << 20).unwrap());
@@ -221,21 +218,15 @@ fn session_member(alien: bool, lock: usize, color: bool) -> (Session, BackingQuo
     }
 
     let node = &mut doc.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[0];
-    node.operation = OperationIdentity {
-        name: "gegl:exposure".into(),
-        stored_version: "1:0".into(),
-        schema_epoch: photocraft_compose::gimp_filters::EXPOSURE_BLACK_PRECISION_EPOCH.into(),
-    };
+    node.operation =
+        OperationIdentity { name: "gegl:exposure".into(), stored_version: "1:0".into(), schema_epoch: "xcf-22-stock-exposure-black-level-precision-v1".into() };
     node.arguments = vec![
         FilterArgument { name: "exposure".into(), value: FilterValue::Number(ExactNumber::Float32Bits(0.5f32.to_bits())) },
         FilterArgument { name: "black-level".into(), value: FilterValue::Number(ExactNumber::Float32Bits(0.03125f32.to_bits())) },
     ];
     if alien {
-        node.operation = OperationIdentity {
-            name: "gegl:alien-map".into(),
-            stored_version: "0:0".into(),
-            schema_epoch: photocraft_compose::gimp_filters::ALIEN_MAP_PRECISION_EPOCH.into(),
-        };
+        node.operation =
+            OperationIdentity { name: "gegl:alien-map".into(), stored_version: "0:0".into(), schema_epoch: "xcf-22-stock-alien-map-precision-v1".into() };
         node.arguments =
             vec![FilterArgument { name: "color-model".into(), value: FilterValue::Enum { domain: "gegl:alien-map/color-model".into(), value: 0 } }];
         for name in ["cpn-1-frequency", "cpn-2-frequency", "cpn-3-frequency"] {
@@ -252,7 +243,7 @@ fn session_member(alien: bool, lock: usize, color: bool) -> (Session, BackingQuo
         node.operation = OperationIdentity {
             name: "gegl:color-overlay".into(),
             stored_version: "0:0".into(),
-            schema_epoch: photocraft_compose::gimp_filters::COLOR_OVERLAY_PRECISION_EPOCH.into(),
+            schema_epoch: "xcf-22-stock-color-overlay-six-precision-v1".into(),
         };
         node.arguments = vec![
             FilterArgument {
@@ -270,7 +261,7 @@ fn session_member(alien: bool, lock: usize, color: bool) -> (Session, BackingQuo
         policy.stored_composite_space = 1435337297;
         policy.stored_operator = 1435337297;
     }
-    node.composition.as_mut().unwrap().compatibility_epoch = photocraft_compose::gimp_filters::POINT_REPLACE_COMPATIBILITY_EPOCH.into();
+    node.composition.as_mut().unwrap().compatibility_epoch = "xcf-22-stock-point-replace-fields-v1".into();
     let owner = AccountedDocument::new_readonly_point_storage(doc, Arc::new((guard, extra)), q.clone(), &ctl()).unwrap();
     validate_recipe(&owner, &ctl()).unwrap();
     let mut s = Session::new();
@@ -419,7 +410,14 @@ fn exact_literal_color_has_depth_seven_only_for_its_closed_command_entry() {
             _ => color["components"] = json!([]),
         }
         assert!(wire("xcf.filter.set", &bad).is_none());
-        assert_eq!(journal_depth("xcf.filter.set", &bad), 4);
+        if mode == 3 {
+            // The later literal-color metadata wire admits Linear encoding;
+            // strict ordinary Point requests still require actual target eligibility.
+            assert_eq!(journal_depth("xcf.filter.set", &bad), 7);
+            super::super::Census::default().command_value("xcf.filter.set", &bad, &ctl()).unwrap();
+        } else {
+            assert_eq!(journal_depth("xcf.filter.set", &bad), 4);
+        }
     }
 }
 #[test]

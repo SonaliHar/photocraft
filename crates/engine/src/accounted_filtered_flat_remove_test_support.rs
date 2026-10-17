@@ -1,7 +1,11 @@
 //! Test-only exact removal custody, no engine functions or numerical oracle.
 #![allow(dead_code, unused_imports)]
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../../ui-egui/src/filtered_flat_fixture.rs"]
 mod native;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_filtered_flat_ordered_test_support.rs"]
 mod observed;
 pub use observed::{archive, bytes, ctl, data, encoded, import, observed, same, single_root_two, storage, workspace};

@@ -4,11 +4,7 @@
 //! harness data; production owners retain their actual ledger receipts.
 use super::*;
 use crate::{DocumentSnapshot, accounted_commands::PreparedAccountedCommand};
-use photocraft_doc::{
-    LayerContent,
-    accounted_document::{AccountedDocument, AccountedEdit},
-    item_identity::ItemRef,
-};
+use photocraft_doc::{LayerContent, accounted_document::AccountedDocument, item_identity::ItemRef};
 use photocraft_raster::{
     Interrupt,
     backing::quota::{BackingQuota, QuotaLimits},
@@ -158,7 +154,7 @@ fn raw(s: &Session) -> (photocraft_geom::Rect, Vec<u8>) {
     }
     (area, out)
 }
-fn mask_raw(s: &Session) -> (Vec<u8>, Vec<(photocraft_raster::TileCoord, Vec<u8>)>) {
+fn mask_raw(s: &Session) -> (Vec<u8>, Vec<(photocraft_geom::TileCoord, Vec<u8>)>) {
     let mask = &s.active().unwrap().doc.layers[1].mask.as_ref().unwrap().surface;
     (mask.default_bytes().to_vec(), mask.tiles().map(|(c, t)| (*c, t.bytes().to_vec())).collect())
 }
@@ -167,7 +163,7 @@ fn mask_logical(s: &Session) -> Vec<u8> {
     let extent = doc.xcf_state.as_ref().unwrap().items.iter().find_map(|i| i.mask.as_ref().map(|m| m.bounds)).unwrap();
     doc.layers[1].mask.as_ref().unwrap().surface.try_read_interleaved_with(extent, &Interrupt::NONE).unwrap()
 }
-fn assert_original_mask_values(s: &Session, original: &(Vec<u8>, Vec<(photocraft_raster::TileCoord, Vec<u8>)>)) {
+fn assert_original_mask_values(s: &Session, original: &(Vec<u8>, Vec<(photocraft_geom::TileCoord, Vec<u8>)>)) {
     let mask = &s.active().unwrap().doc.layers[1].mask.as_ref().unwrap().surface;
     assert_eq!(mask.default_bytes(), original.0);
     for (coordinate, bytes) in &original.1 {

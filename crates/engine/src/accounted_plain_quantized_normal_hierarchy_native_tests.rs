@@ -1,5 +1,7 @@
 //! Deferred generated integer Source continuity; no GIMP/numerical oracle.
 use super::*;
+use crate::accounted_native_open::{AccountedNativeOpenPolicy, is_owned_current_filtered_flat_candidate, is_owned_current_normal_hierarchy_candidate};
+use photocraft_raster::backing::{BackingError, ReadControl};
 #[path = "accounted_plain_integer_hierarchy_test_support.rs"]
 mod f;
 use std::{
@@ -92,10 +94,10 @@ fn integer_plain_general_renderer_preserves_basis_and_tiny_quantum() {
         warm.validate_operative(&f::ctl()).unwrap();
         drop(warm);
         let before = owner.quota().usage().unwrap();
-        assert!(PreparedBackedDocument::new_accounted(owner, &photocraft_cms::Builtin::DisplayP3.profile(), Default::default(), &f::ctl()).is_err());
+        assert!(PreparedBackedDocument::new_accounted(owner, photocraft_cms::Builtin::DisplayP3.profile(), Default::default(), &f::ctl()).is_err());
         assert_eq!(owner.quota().usage().unwrap(), before);
         {
-            let general = PreparedBackedDocument::new_accounted(owner, &photocraft_cms::Builtin::Srgb.profile(), Default::default(), &f::ctl()).unwrap();
+            let general = PreparedBackedDocument::new_accounted(owner, photocraft_cms::Builtin::Srgb.profile(), Default::default(), &f::ctl()).unwrap();
             let direct = PreparedBackedNormalHierarchyDocument::new(owner, Default::default(), &f::ctl()).unwrap();
             let bounds = owner.document().bounds();
             let a = general.render_band(bounds, &f::ctl()).unwrap();

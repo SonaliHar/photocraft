@@ -19,6 +19,8 @@ use std::{
     },
 };
 #[path = "../../../xcf/tests/common/mod.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod xcf;
 fn ctl() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
@@ -30,7 +32,6 @@ fn fixture(depth: SampleType) -> Session {
         SampleType::U32 => (350, 0x80000001u32.to_be_bytes().to_vec()),
         SampleType::F32 => (650, (0.5 + 2f32.powi(-23)).to_be_bytes().to_vec()),
         SampleType::F64 => (750, (0.5 + 2f64.powi(-40)).to_be_bytes().to_vec()),
-        _ => panic!(),
     };
     let mut raw = word.repeat(257 * 3 * 4);
     if depth == SampleType::F64 {

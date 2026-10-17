@@ -10,6 +10,7 @@ use photocraft_raster::{
         quota::{BackingQuota, QuotaKind, QuotaLease, QuotaLimits},
     },
 };
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     io::Cursor,
@@ -152,9 +153,10 @@ fn fixture_owner(family: usize, depth: usize, size: Size) -> AccountedDocument {
     AccountedDocument::new_readonly_point_storage(doc, Arc::new(FixtureRetention { _original: old, _index: index, _resident: resident }), q, &ctl()).unwrap()
 }
 fn archive(owner: &AccountedDocument) -> photocraft_format::owned_document::OwnedDocumentArchive {
-    let bytes = photocraft_format::owned_document::save_current_document_archive(owner, Cursor::new(Vec::new()), Default::default(), owner.quota(), &ctl())
-        .unwrap()
-        .into_inner();
+    let bytes =
+        photocraft_format::owned_document::save_current_document_archive(owner.document(), Cursor::new(Vec::new()), Default::default(), owner.quota(), &ctl())
+            .unwrap()
+            .into_inner();
     photocraft_io::accounted_native::open_accounted_native_from_reader(
         &mut Cursor::new(bytes.as_slice()),
         bytes.len() as u64,
@@ -174,7 +176,8 @@ fn node(s: &Session) -> &FilterNode {
 }
 fn patch(s: &Session, family: usize) -> Value {
     let value = if family == 0 {
-        json!({"name":"color","value":{"Color":{"components":[0.25f32,0.5,0.75,0.375].map(|v| json!({"Float32Bits":v.to_bits()})),"encoding":"nonlinear_profile","profile":null}}})
+        let components = [0.25f32, 0.5, 0.75, 0.375].map(|v| json!({"Float32Bits":v.to_bits()}));
+        json!({"name":"color","value":{"Color":{"components":components,"encoding":"nonlinear_profile","profile":null}}})
     } else {
         json!({"name":if family == 1 {"hue"} else {"vibrance"},"value":{"Number":{"Float32Bits":15f32.to_bits()}}})
     };
@@ -302,7 +305,7 @@ fn wrong_geometry_profile_refuses_before_publication() {
             // A malformed profile may be refused by the native writer/loader
             // invariants before typed adoption; every phase must fail closed.
             let saved = photocraft_format::owned_document::save_current_document_archive(
-                &malformed,
+                malformed.document(),
                 Cursor::new(Vec::new()),
                 Default::default(),
                 malformed.quota(),

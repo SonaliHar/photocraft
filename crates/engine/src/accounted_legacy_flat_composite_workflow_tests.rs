@@ -363,7 +363,7 @@ fn original(case: &Case, s: &Session) {
         let file = format!("composition-matrix/{}", blob["file"].as_str().unwrap());
         let bytes = checked(&file, blob["sha256"].as_str().unwrap());
         assert_eq!(bytes.len() as u64, blob["bytes"].as_u64().unwrap());
-        let native: Vec<u8> = bytes.chunks_exact(4).flat_map(|w| f32::from_le_bytes(w.try_into().unwrap()).to_ne_bytes()).collect();
+        let native: Vec<u8> = bytes.as_chunks::<4>().0.iter().flat_map(|w| f32::from_le_bytes(*w).to_ne_bytes()).collect();
         assert_eq!(captures[i].1, native);
         assert_eq!(doc.layers[i].name, row["name"].as_str().unwrap());
         let bounds = captures[i].0.bounds();
@@ -621,7 +621,7 @@ fn transaction_and_permission_failures_are_atomic() {
     assert!(PreparedAccountedCommand::prepare(&s, "layer.setProps", &p, &c).is_err());
     let left = std::sync::atomic::AtomicU64::new(32);
     let debit = |n| {
-        left.fetch_update(std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Relaxed, |v| v.checked_sub(n))
+        left.try_update(std::sync::atomic::Ordering::AcqRel, std::sync::atomic::Ordering::Relaxed, |v| v.checked_sub(n))
             .map(|_| ())
             .map_err(|_| BackingError::Work)
     };

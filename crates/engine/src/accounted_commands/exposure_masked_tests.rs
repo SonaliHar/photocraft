@@ -1,5 +1,7 @@
 //! Deferred actual source-first masked Point transaction contracts; no producer RGB oracle.
 use super::*;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../accounted_exposure_masked_test_support.rs"]
 mod fixture;
 fn session(case: &serde_json::Value) -> Session {

@@ -4,7 +4,7 @@
 //! Native capture buffers remain external harness data.
 use super::*;
 use crate::{accounted_commands::PreparedAccountedCommand, accounted_view::AccountedView};
-use photocraft_doc::{LayerContent, LayerId, item_identity::ItemRef};
+use photocraft_doc::{LayerContent, item_identity::ItemRef};
 use photocraft_raster::{
     Interrupt,
     backing::quota::{BackingQuota, QuotaLimits},
@@ -138,8 +138,8 @@ fn selected_move_and_native_continuation() {
         assert_eq!(raw(&reopened, i), raw(&s, i));
     }
     s.execute("edit.undo", json!({})).unwrap();
-    for i in 0..3 {
-        assert_eq!(raw(&s, i), original[i]);
+    for (i, expected) in original.iter().enumerate() {
+        assert_eq!(raw(&s, i), *expected);
     }
     s.execute("edit.redo", json!({})).unwrap();
 }
@@ -194,7 +194,7 @@ fn failed_work_and_prepared_fences() {
     let before = s.active().unwrap().doc.clone();
     let rev = s.active().unwrap().revision;
     let left = AtomicU64::new(32);
-    let debit = |n| left.fetch_update(Ordering::AcqRel, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
+    let debit = |n| left.try_update(Ordering::AcqRel, Ordering::Relaxed, |v| v.checked_sub(n)).map(|_| ()).map_err(|_| BackingError::Work);
     let c = ReadControl { interrupt: &Interrupt::NONE, work: &debit };
     assert!(PreparedAccountedCommand::prepare(&s, ID, &json!({"dx":1}), &c).is_err());
     assert!(s.active().unwrap().doc.shares_state(&before));

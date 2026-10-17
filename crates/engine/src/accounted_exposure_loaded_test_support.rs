@@ -1,9 +1,15 @@
 //! Genuine ordinary endpoint sources; mixed endpoint controls are synthetic CURRENT.
 #![allow(dead_code, unused_imports)]
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_filtered_flat_exposure_test_support.rs"]
 mod mixed;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "../../ui-egui/src/filtered_flat_fixture.rs"]
 mod native;
+// Shared fixture is intentionally instantiated in this test namespace.
+#[allow(clippy::duplicate_mod)]
 #[path = "accounted_filtered_flat_current_test_support.rs"]
 mod owned;
 pub use mixed::{ctl, payload, same, storage, workspace};
@@ -79,7 +85,10 @@ pub fn import(case: &Case) -> photocraft_io::OwnedXcfImport {
         "endpoint.xcf",
         Arc::new(bytes(case)),
         &Default::default(),
-        &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+        &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap(),
         q,
         &ctl(),
     )
@@ -125,7 +134,7 @@ pub fn observed(d: &Document, case: &Case) {
     assert_eq!(x.filter_masks[0].surface.try_read_interleaved(d.bounds()).unwrap(), mask);
     for prop in effect["properties"].as_array().unwrap() {
         let text = prop["hex"].as_str().unwrap();
-        let raw = text.as_bytes().chunks_exact(2).map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap()).collect::<Vec<_>>();
+        let raw = text.as_bytes().as_chunks::<2>().0.iter().map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap()).collect::<Vec<_>>();
         let identity = format!("{}@{}:{}", prop["tag"].as_u64().unwrap(), prop["offset"].as_u64().unwrap(), raw.len());
         assert!(x.opaque.iter().any(|r| r.owner == Some(ItemRef::Layer(d.layers[0].id))
             && r.namespace == "gimp/xcf/source-property"

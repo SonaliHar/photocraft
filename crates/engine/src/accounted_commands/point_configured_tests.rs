@@ -6,11 +6,34 @@ fn hex(v: f64) -> Value {
 }
 fn configuration(kind: u8, changed: bool) -> Value {
     let value = if kind == 0 {
-        json!({"Config":["shadows","midtones","highlights"].map(|range|json!({"name":range,"value":{"Config":["cyan-red","magenta-green","yellow-blue"].map(|axis|json!({"name":axis,"value":{"Number":{"Float64Bits":hex(if changed && range=="shadows" && axis=="cyan-red" {0.125} else if changed { -0.0 } else {0.0})}}}))}}))})
+        let ranges=["shadows","midtones","highlights"].map(|range| {
+            let axes=["cyan-red","magenta-green","yellow-blue"].map(|axis|json!({"name":axis,"value":{"Number":{"Float64Bits":hex(if changed && range=="shadows" && axis=="cyan-red" {0.125} else if changed {-0.0} else {0.0})}}}));
+            json!({"name":range,"value":{"Config":axes}})
+        });
+        json!({"Config":ranges})
     } else if kind == 1 {
-        json!({"Config":["value","red","green","blue","alpha"].map(|channel|json!({"name":channel,"value":{"Config":[("low-input",0.),("high-input",1.),("gamma",if changed {1.25} else {1.}), ("low-output",0.),("high-output",1.)].map(|(name,v)|json!({"name":name,"value":{"Number":{"Float64Bits":hex(v)}}}))}}))})
+        let channels = ["value", "red", "green", "blue", "alpha"].map(|channel| {
+            let values = [("low-input", 0.), ("high-input", 1.), ("gamma", if changed { 1.25 } else { 1. }), ("low-output", 0.), ("high-output", 1.)]
+                .map(|(name, v)| json!({"name":name,"value":{"Number":{"Float64Bits":hex(v)}}}));
+            json!({"name":channel,"value":{"Config":values}})
+        });
+        json!({"Config":channels})
     } else {
-        json!({"Config":["value","red","green","blue","alpha"].map(|channel|json!({"name":channel,"value":{"Curve":{"free":true,"points_f64_bits":[],"point_types":[],"samples_f64_bits":(0..256).map(|i|hex(if changed && i==0 {-0.0} else if changed && i==128 {0.25} else {f64::from(i)/255.})).collect::<Vec<_>>()}}}))})
+        let channels = ["value", "red", "green", "blue", "alpha"].map(|channel| {
+            let samples = (0..256)
+                .map(|i| {
+                    hex(if changed && i == 0 {
+                        -0.0
+                    } else if changed && i == 128 {
+                        0.25
+                    } else {
+                        f64::from(i) / 255.
+                    })
+                })
+                .collect::<Vec<_>>();
+            json!({"name":channel,"value":{"Curve":{"free":true,"points_f64_bits":[],"point_types":[],"samples_f64_bits":samples}}})
+        });
+        json!({"Config":channels})
     };
     json!({"filterId":"100","arguments":[{"name":"config","value":value}]})
 }
@@ -97,6 +120,9 @@ fn session_balance() -> (Session, BackingQuota) {
     let owner = AccountedDocument::new_readonly_point_storage(doc, Arc::new((guard, metadata)), q.clone(), &ctl()).unwrap();
     validate_recipe(&owner, &ctl()).unwrap();
     let mut s = Session::new();
+    // This fixture explicitly prepays sixteen history states; preferences must
+    // request that same admitted policy rather than the unrelated default100.
+    s.edit_prefs(|p| p.performance.history_states = 16).unwrap();
     let state = crate::DocState::new_accounted(owner, None, 16, &ctl()).unwrap();
     s.publish_document_state(state, &ctl()).unwrap();
     (s, q)

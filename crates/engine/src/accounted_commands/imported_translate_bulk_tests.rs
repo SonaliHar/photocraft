@@ -165,8 +165,8 @@ fn bulk_selection_is_one_history_revision_and_preserves_unselected_native_words(
         assert_eq!(reopened.active().unwrap().doc.layers[i].effects.reference, s.active().unwrap().doc.layers[i].effects.reference);
     }
     assert!(s.undo_with_control(&ctl()).unwrap());
-    for i in 0..3 {
-        assert_eq!(raw(&s, i), original[i]);
+    for (i, expected) in original.iter().enumerate() {
+        assert_eq!(raw(&s, i), *expected);
     }
     assert!(s.redo_with_control(&ctl()).unwrap());
 }
@@ -200,8 +200,8 @@ fn bulk_coalescing_and_prepared_fences_use_the_actual_view_owner() {
     assert_eq!(s.active().unwrap().history.past_len(), 1);
     assert_eq!(s.active().unwrap().history.undo_label(), Some("Layer Properties"));
     assert!(s.undo_with_control(&ctl()).unwrap());
-    for i in 0..3 {
-        assert_eq!(raw(&s, i), before[i]);
+    for (i, expected) in before.iter().enumerate() {
+        assert_eq!(raw(&s, i), *expected);
     }
     let history = s.active().unwrap().history.clone();
     s.execute(ID, json!({"layer":{},"dx":0.1,"dy":false,"coalesce":"other"})).unwrap();
