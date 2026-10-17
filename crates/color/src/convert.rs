@@ -17,12 +17,12 @@ use photocraft_cms::{Builtin, ColorSpace, Intent, Profile, Transform};
 /// the built-in defaults). While a space is active on a thread ([`with_cmyk_space`]),
 /// [`cmyk_to_rgb`] and [`rgb_to_cmyk`] (and so `Surface::rgba`, the compositor's reads of CMYK
 /// layers and CMYK fill colours) use it instead of the built-in coated CMYK.
-type CmykProfileCache=Mutex<Vec<(Weak<Vec<u8>>,Option<Arc<CmykSpace>>)>>;
-static CMYK_PROFILE_CACHE:OnceLock<CmykProfileCache>=OnceLock::new();
-static DEFAULT_CMYK_TO_SRGB:OnceLock<Option<Transform>>=OnceLock::new();
-static DEFAULT_SRGB_TO_CMYK:OnceLock<Option<Transform>>=OnceLock::new();
+type CmykProfileCache = Mutex<Vec<(Weak<Vec<u8>>, Option<Arc<CmykSpace>>)>>;
+static CMYK_PROFILE_CACHE: OnceLock<CmykProfileCache> = OnceLock::new();
+static DEFAULT_CMYK_TO_SRGB: OnceLock<Option<Transform>> = OnceLock::new();
+static DEFAULT_SRGB_TO_CMYK: OnceLock<Option<Transform>> = OnceLock::new();
 mod controlled_cmyk;
-pub use controlled_cmyk::{CmykSpaceRequirements,DefaultCmykRequirements};
+pub use controlled_cmyk::{CmykSpaceRequirements, DefaultCmykRequirements};
 
 #[derive(Debug)]
 pub struct CmykSpace {
@@ -97,11 +97,15 @@ pub fn active_cmyk_space() -> Option<Arc<CmykSpace>> {
 // The built-in profiles always link (the tests use these transforms); `None` only guards
 // against a cms regression, and then the conversions fall back to the naive formulas.
 fn cmyk_to_srgb_transform() -> Option<&'static Transform> {
-    DEFAULT_CMYK_TO_SRGB.get_or_init(|| Transform::new(Builtin::CoatedCmyk.profile(), Builtin::Srgb.profile(), Intent::RelativeColorimetric, true).ok()).as_ref()
+    DEFAULT_CMYK_TO_SRGB
+        .get_or_init(|| Transform::new(Builtin::CoatedCmyk.profile(), Builtin::Srgb.profile(), Intent::RelativeColorimetric, true).ok())
+        .as_ref()
 }
 
 fn srgb_to_cmyk_transform() -> Option<&'static Transform> {
-    DEFAULT_SRGB_TO_CMYK.get_or_init(|| Transform::new(Builtin::Srgb.profile(), Builtin::CoatedCmyk.profile(), Intent::RelativeColorimetric, true).ok()).as_ref()
+    DEFAULT_SRGB_TO_CMYK
+        .get_or_init(|| Transform::new(Builtin::Srgb.profile(), Builtin::CoatedCmyk.profile(), Intent::RelativeColorimetric, true).ok())
+        .as_ref()
 }
 
 /// Colour-managed CMYK → sRGB (the active document CMYK profile, else the built-in coated
@@ -216,6 +220,43 @@ pub fn rgb_to_gray(rgb: [f32; 3]) -> f32 {
     0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2]
 }
 
+impl CmykSpace {
+    /// Cooperative read-only-cache/private-preparation companion. Cold
+    /// requirements reserve the supplied lower envelope until decoded recipes
+    /// can be measured. Invalid/non-CMYK/default profiles retain None semantics.
+    pub fn profile_requirements_with_control(
+        icc: Option<&Arc<Vec<u8>>>,
+        limits: photocraft_cms::control::Limits,
+        cancelled: &dyn Fn() -> bool,
+    ) -> photocraft_cms::control::Result<CmykSpaceRequirements> {
+        controlled_cmyk::requirements(icc, limits, cancelled)
+    }
+    /// No controlled cache insertion; resource/cancellation failures never
+    /// become the legacy compatibility fallback. Builtin initialization and
+    /// fixed Arc wrapper allocation remain explicit library/provider boundaries.
+    pub fn for_profile_with_control(
+        icc: Option<&Arc<Vec<u8>>>,
+        limits: photocraft_cms::control::Limits,
+        cancelled: &dyn Fn() -> bool,
+    ) -> photocraft_cms::control::Result<Option<Arc<Self>>> {
+        controlled_cmyk::prepare(icc, limits, cancelled)
+    }
+}
+
+/// Paired default-cache preparation cost. Existing None CMYK scope/id remain
+/// unchanged; this merely prewarms the lazy providers before pixel conversion.
+pub fn default_cmyk_requirements_with_control(
+    limits: photocraft_cms::control::Limits,
+    cancelled: &dyn Fn() -> bool,
+) -> photocraft_cms::control::Result<DefaultCmykRequirements> {
+    controlled_cmyk::default_requirements(limits, cancelled)
+}
+/// Prepare missing default transforms privately, then publish after one final
+/// cancellation fence. Resource/cancel failures never initialize either cache.
+pub fn warm_default_cmyk_with_control(limits: photocraft_cms::control::Limits, cancelled: &dyn Fn() -> bool) -> photocraft_cms::control::Result<()> {
+    controlled_cmyk::warm_defaults(limits, cancelled)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,30 +351,4 @@ mod tests {
             }
         }
     }
-}
-
-impl CmykSpace {
-    /// Cooperative read-only-cache/private-preparation companion. Cold
-    /// requirements reserve the supplied lower envelope until decoded recipes
-    /// can be measured. Invalid/non-CMYK/default profiles retain None semantics.
-    pub fn profile_requirements_with_control(icc:Option<&Arc<Vec<u8>>>,limits:photocraft_cms::control::Limits,cancelled:&dyn Fn()->bool)->photocraft_cms::control::Result<CmykSpaceRequirements>{
-        controlled_cmyk::requirements(icc,limits,cancelled)
-    }
-    /// No controlled cache insertion; resource/cancellation failures never
-    /// become the legacy compatibility fallback. Builtin initialization and
-    /// fixed Arc wrapper allocation remain explicit library/provider boundaries.
-    pub fn for_profile_with_control(icc:Option<&Arc<Vec<u8>>>,limits:photocraft_cms::control::Limits,cancelled:&dyn Fn()->bool)->photocraft_cms::control::Result<Option<Arc<Self>>>{
-        controlled_cmyk::prepare(icc,limits,cancelled)
-    }
-}
-
-/// Paired default-cache preparation cost. Existing None CMYK scope/id remain
-/// unchanged; this merely prewarms the lazy providers before pixel conversion.
-pub fn default_cmyk_requirements_with_control(limits:photocraft_cms::control::Limits,cancelled:&dyn Fn()->bool)->photocraft_cms::control::Result<DefaultCmykRequirements>{
-    controlled_cmyk::default_requirements(limits,cancelled)
-}
-/// Prepare missing default transforms privately, then publish after one final
-/// cancellation fence. Resource/cancel failures never initialize either cache.
-pub fn warm_default_cmyk_with_control(limits:photocraft_cms::control::Limits,cancelled:&dyn Fn()->bool)->photocraft_cms::control::Result<()>{
-    controlled_cmyk::warm_defaults(limits,cancelled)
 }
