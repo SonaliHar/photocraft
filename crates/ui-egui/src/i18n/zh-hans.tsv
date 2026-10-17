@@ -2827,3 +2827,48 @@ curves	Smooth	平滑
 	Replace	替换
 	{name} was changed by another app after it was opened or saved here.	{name} 在此处打开或存储后已被其他应用更改。
 	Replace it with this document, or cancel and use File › Save As to keep both.	用此文档替换它，或取消并使用“文件 › 另存为”以保留两者。
+	API key	API 密钥
+	Kept in the system credential store, never in the preferences file.	保存在系统凭据存储中，绝不会写入首选项文件。
+	Paste the API key	粘贴 API 密钥
+	Save Key	保存密钥
+	Key saved.	密钥已保存。
+	It is used for this session only.	仅在本次会话中使用。
+	Remove Key	删除密钥
+	Key removed.	密钥已删除。
+	A key is set.	已设置密钥。
+	No key is set.	未设置密钥。
+	Test Connection	测试连接
+	Testing…	正在测试…
+	Could not start the test.	无法开始测试。
+	Remote services are not available in the web build.	网页版不支持远程服务。
+	Service URL	服务 URL
+	Use for Object Selection	用于对象选择
+	Use for Decompose into Layers	用于“分解为图层”
+	Layers to create	要创建的图层数
+	Layer detail (pixels)	图层细节（像素）
+	Quality steps	质量步数
+	Layer type	图层类型
+	Generative	生成式
+	Decompose into Layers	分解为图层
+	640	640
+	1024	1024
+	Mask	蒙版
+	Object to Layer	对象转图层
+	Fast	快速
+	Fill method	填充方式
+	Use for Object to Layer fill	用于“对象转图层”的填充
+	Quick fill	快速填充
+	Clean fill	干净填充
+	Clean fill + detail	干净填充 + 细节
+	Prompted fill	按提示词填充
+	Prompt	提示词
+	Describe what to paint (optional)	描述要绘制的内容（可选）
+	Enhance	优化
+	Enhancing…	正在优化…
+	Improve detail	提升细节
+	Surrounding context	周围上下文
+	Object to Layer…	对象转图层…
+	Prompt enhancer URL	提示词优化器 URL
+	Prompt enhancer model	提示词优化器模型
+	Prompt enhancer key	提示词优化器密钥
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	可选。用于改写提示词的语言模型：只发送提示词文本。本地服务器无需设置。

@@ -211,6 +211,8 @@ pub const SELECTION_MENU: &[Row] = &[
     None,
     Some(("Layer via Copy", "layer.new.layerViaCopy")),
     Some(("Layer via Cut", "layer.new.layerViaCut")),
+    Some(("Object to Layer", "layer.objectToLayer")),
+    Some(("Object to Layer…", "layer.objectToLayerOptions")),
     Some(("New Layer…", "layer.new.layer")),
     None,
     Some(("Free Transform", "edit.freeTransform")),
@@ -1209,6 +1211,9 @@ mod tests {
                 None,
                 Some("Layer via Copy"),
                 Some("Layer via Cut"),
+                // PhotoCraft's own row (the AI service fills the hole), not one of Photoshop's.
+                Some("Object to Layer"),
+                Some("Object to Layer…"),
                 Some("New Layer…"),
                 None,
                 Some("Free Transform"),

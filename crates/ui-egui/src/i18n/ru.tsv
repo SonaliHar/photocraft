@@ -3181,3 +3181,46 @@ curves	Smooth	Сгладить
 	Replace	Заменить
 	{name} was changed by another app after it was opened or saved here.	Файл {name} был изменён другим приложением после того, как его открыли или сохранили здесь.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Замените его этим документом или отмените и используйте Файл › Сохранить как, чтобы сохранить оба.
+	API key	Ключ API
+	Kept in the system credential store, never in the preferences file.	Хранится в системном хранилище учётных данных, а не в файле настроек.
+	Paste the API key	Вставьте ключ API
+	Save Key	Сохранить ключ
+	Key saved.	Ключ сохранён.
+	It is used for this session only.	Используется только в этом сеансе.
+	Remove Key	Удалить ключ
+	Key removed.	Ключ удалён.
+	A key is set.	Ключ задан.
+	No key is set.	Ключ не задан.
+	Test Connection	Проверить подключение
+	Testing…	Проверка…
+	Could not start the test.	Не удалось запустить проверку.
+	Remote services are not available in the web build.	Удалённые службы недоступны в веб-версии.
+	Service URL	URL службы
+	Use for Object Selection	Использовать для выделения объекта
+	Use for Decompose into Layers	Использовать для «Разложить на слои»
+	Layers to create	Количество слоёв
+	Layer detail (pixels)	Детализация слоёв (пикселей)
+	Quality steps	Шаги качества
+	Layer type	Тип слоёв
+	Generative	Генеративный
+	Decompose into Layers	Разложить на слои
+	640	640
+	1024	1024
+	Object to Layer	Объект на слой
+	Fill method	Способ заливки
+	Use for Object to Layer fill	Использовать для заливки при «Объект на слой»
+	Quick fill	Быстрая заливка
+	Clean fill	Чистая заливка
+	Clean fill + detail	Чистая заливка + детали
+	Prompted fill	Заливка по описанию
+	Prompt	Описание (промпт)
+	Describe what to paint (optional)	Опишите, что нарисовать (необязательно)
+	Enhance	Улучшить
+	Enhancing…	Улучшение…
+	Improve detail	Улучшить детали
+	Surrounding context	Окружающий контекст
+	Object to Layer…	Объект на слой…
+	Prompt enhancer URL	URL улучшителя описаний
+	Prompt enhancer model	Модель улучшителя описаний
+	Prompt enhancer key	Ключ улучшителя описаний
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	Необязательно. Языковая модель, переписывающая описания: отправляется только текст описания. Для локального сервера не нужна.

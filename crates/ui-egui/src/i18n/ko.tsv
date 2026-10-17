@@ -3389,3 +3389,48 @@ curves	Smooth	매끄럽게
 	Replace	대치
 	{name} was changed by another app after it was opened or saved here.	{name}이(가) 여기서 열거나 저장한 뒤 다른 앱에서 변경되었습니다.
 	Replace it with this document, or cancel and use File › Save As to keep both.	이 문서로 대치하거나, 취소하고 파일 › 다른 이름으로 저장을 사용해 둘 다 보관하세요.
+	API key	API 키
+	Kept in the system credential store, never in the preferences file.	시스템 자격 증명 저장소에 보관되며 환경설정 파일에는 저장되지 않습니다.
+	Paste the API key	API 키 붙여넣기
+	Save Key	키 저장
+	Key saved.	키를 저장했습니다.
+	It is used for this session only.	이 세션에서만 사용됩니다.
+	Remove Key	키 삭제
+	Key removed.	키를 삭제했습니다.
+	A key is set.	키가 설정되어 있습니다.
+	No key is set.	키가 설정되어 있지 않습니다.
+	Test Connection	연결 테스트
+	Testing…	테스트 중…
+	Could not start the test.	테스트를 시작할 수 없습니다.
+	Remote services are not available in the web build.	웹 버전에서는 원격 서비스를 사용할 수 없습니다.
+	Service URL	서비스 URL
+	Use for Object Selection	개체 선택에 사용
+	Use for Decompose into Layers	‘레이어로 분해’에 사용
+	Layers to create	만들 레이어 수
+	Layer detail (pixels)	레이어 세부 수준(픽셀)
+	Quality steps	품질 단계
+	Layer type	레이어 유형
+	Generative	생성형
+	Decompose into Layers	레이어로 분해
+	640	640
+	1024	1024
+	Mask	마스크
+	Object to Layer	개체를 레이어로
+	Fast	빠름
+	Fill method	채우기 방식
+	Use for Object to Layer fill	‘개체를 레이어로’ 채우기에 사용
+	Quick fill	빠른 채우기
+	Clean fill	깔끔한 채우기
+	Clean fill + detail	깔끔한 채우기 + 디테일
+	Prompted fill	프롬프트 채우기
+	Prompt	프롬프트
+	Describe what to paint (optional)	그릴 내용을 설명하세요(선택 사항)
+	Enhance	개선
+	Enhancing…	개선 중…
+	Improve detail	디테일 개선
+	Surrounding context	주변 컨텍스트
+	Object to Layer…	개체를 레이어로…
+	Prompt enhancer URL	프롬프트 개선기 URL
+	Prompt enhancer model	프롬프트 개선기 모델
+	Prompt enhancer key	프롬프트 개선기 키
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	선택 사항. 프롬프트를 다시 써 주는 언어 모델로, 프롬프트 텍스트만 전송됩니다. 로컬 서버에는 필요하지 않습니다.

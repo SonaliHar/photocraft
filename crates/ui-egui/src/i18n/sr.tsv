@@ -4283,3 +4283,46 @@ shape	Appearance	Izgled
 	GPU Memory (MB, 0 = Automatic)	GPU memorija (MB, 0 = Automatski)
 	{name} was changed by another app after it was opened or saved here.	Datoteku {name} je izmenila druga aplikacija nakon što je ovde otvorena ili sačuvana.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Zameni je ovim dokumentom ili otkaži i koristi Datoteka › Sačuvaj kao da zadržiš obe.
+	API key	API ključ
+	Kept in the system credential store, never in the preferences file.	Čuva se u sistemskom skladištu akreditiva, nikada u datoteci podešavanja.
+	Paste the API key	Nalepite API ključ
+	Save Key	Sačuvaj ključ
+	Key saved.	Ključ je sačuvan.
+	It is used for this session only.	Koristi se samo u ovoj sesiji.
+	Remove Key	Ukloni ključ
+	Key removed.	Ključ je uklonjen.
+	A key is set.	Ključ je podešen.
+	No key is set.	Ključ nije podešen.
+	Test Connection	Testiraj vezu
+	Testing…	Testiranje…
+	Could not start the test.	Test nije moguće pokrenuti.
+	Remote services are not available in the web build.	Udaljene usluge nisu dostupne u veb verziji.
+	Service URL	URL usluge
+	Use for Object Selection	Koristi za izbor objekta
+	Use for Decompose into Layers	Koristi za „Razloži na slojeve“
+	Layers to create	Broj slojeva
+	Layer detail (pixels)	Detalji sloja (pikseli)
+	Quality steps	Koraci kvaliteta
+	Layer type	Vrsta sloja
+	Generative	Generativno
+	Decompose into Layers	Razloži na slojeve
+	640	640
+	1024	1024
+	Object to Layer	Objekat u sloj
+	Fill method	Način popunjavanja
+	Use for Object to Layer fill	Koristi za popunjavanje kod „Objekat u sloj“
+	Quick fill	Brzo popunjavanje
+	Clean fill	Čisto popunjavanje
+	Clean fill + detail	Čisto popunjavanje + detalji
+	Prompted fill	Popunjavanje po opisu
+	Prompt	Opis (prompt)
+	Describe what to paint (optional)	Opišite šta treba naslikati (opciono)
+	Enhance	Poboljšaj
+	Enhancing…	Poboljšavanje…
+	Improve detail	Poboljšaj detalje
+	Surrounding context	Okolni kontekst
+	Object to Layer…	Objekat u sloj…
+	Prompt enhancer URL	URL poboljšivača opisa
+	Prompt enhancer model	Model poboljšivača opisa
+	Prompt enhancer key	Ključ poboljšivača opisa
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	Opciono. Jezički model koji prepisuje opise: šalje se samo tekst opisa. Nije potreban za lokalni server.

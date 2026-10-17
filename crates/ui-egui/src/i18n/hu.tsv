@@ -4129,3 +4129,46 @@ cameraRaw	Yellow	Sárga
 	GPU Memory (MB, 0 = Automatic)	GPU-memória (MB, 0 = Automatikus)
 	{name} was changed by another app after it was opened or saved here.	A(z) {name} fájlt egy másik alkalmazás módosította, miután itt megnyitották vagy mentették.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Cserélje le erre a dokumentumra, vagy válassza a Mégse gombot, és a Fájl › Mentés másként paranccsal tartsa meg mindkettőt.
+	API key	API-kulcs
+	Kept in the system credential store, never in the preferences file.	A rendszer hitelesítőadat-tárolójában tárolódik, soha nem a beállításfájlban.
+	Paste the API key	Illessze be az API-kulcsot
+	Save Key	Kulcs mentése
+	Key saved.	Kulcs elmentve.
+	It is used for this session only.	Csak ebben a munkamenetben használatos.
+	Remove Key	Kulcs eltávolítása
+	Key removed.	Kulcs eltávolítva.
+	A key is set.	Van beállított kulcs.
+	No key is set.	Nincs beállított kulcs.
+	Test Connection	Kapcsolat tesztelése
+	Testing…	Tesztelés…
+	Could not start the test.	A tesztet nem sikerült elindítani.
+	Remote services are not available in the web build.	A távoli szolgáltatások nem érhetők el a webes változatban.
+	Service URL	Szolgáltatás URL-je
+	Use for Object Selection	Használat az Objektumkijelöléshez
+	Use for Decompose into Layers	Használat a „Felbontás rétegekre” funkcióhoz
+	Layers to create	Létrehozandó rétegek
+	Layer detail (pixels)	Rétegrészletesség (képpont)
+	Quality steps	Minőségi lépések
+	Layer type	Réteg típusa
+	Generative	Generatív
+	Decompose into Layers	Felbontás rétegekre
+	640	640
+	1024	1024
+	Object to Layer	Objektum rétegbe
+	Fill method	Kitöltési módszer
+	Use for Object to Layer fill	Használat az „Objektum rétegbe” kitöltéséhez
+	Quick fill	Gyors kitöltés
+	Clean fill	Tiszta kitöltés
+	Clean fill + detail	Tiszta kitöltés + részletek
+	Prompted fill	Leírás szerinti kitöltés
+	Prompt	Leírás (prompt)
+	Describe what to paint (optional)	Írja le, mit fessen (nem kötelező)
+	Enhance	Javítás
+	Enhancing…	Javítás…
+	Improve detail	Részletek javítása
+	Surrounding context	Környező kontextus
+	Object to Layer…	Objektum rétegbe…
+	Prompt enhancer URL	A leírásjavító URL-je
+	Prompt enhancer model	A leírásjavító modellje
+	Prompt enhancer key	A leírásjavító kulcsa
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	Nem kötelező. Egy nyelvi modell, amely átírja a leírásokat: csak a leírás szövege kerül elküldésre. Helyi szervernél nem szükséges.

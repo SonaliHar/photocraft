@@ -3212,3 +3212,47 @@ curves	Smooth	Glätten
 	GPU Memory (MB, 0 = Automatic)	GPU-Speicher (MB, 0 = Automatisch)
 	{name} was changed by another app after it was opened or saved here.	{name} wurde von einer anderen App geändert, nachdem es hier geöffnet oder gespeichert wurde.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Ersetze die Datei durch dieses Dokument oder brich ab und nutze Datei › Speichern unter, um beide zu behalten.
+	API key	API-Schlüssel
+	Kept in the system credential store, never in the preferences file.	Wird im Anmeldeinformationsspeicher des Systems abgelegt, nie in der Voreinstellungsdatei.
+	Paste the API key	API-Schlüssel einfügen
+	Save Key	Schlüssel speichern
+	Key saved.	Schlüssel gespeichert.
+	It is used for this session only.	Er wird nur für diese Sitzung verwendet.
+	Remove Key	Schlüssel entfernen
+	Key removed.	Schlüssel entfernt.
+	A key is set.	Ein Schlüssel ist festgelegt.
+	No key is set.	Es ist kein Schlüssel festgelegt.
+	Test Connection	Verbindung testen
+	Testing…	Test läuft…
+	Could not start the test.	Der Test konnte nicht gestartet werden.
+	Remote services are not available in the web build.	Remote-Dienste sind in der Web-Version nicht verfügbar.
+	Service URL	Dienst-URL
+	Use for Object Selection	Für Objektauswahl verwenden
+	Use for Decompose into Layers	Für „In Ebenen zerlegen“ verwenden
+	Layers to create	Anzahl der Ebenen
+	Layer detail (pixels)	Ebenendetail (Pixel)
+	Quality steps	Qualitätsschritte
+	Layer type	Ebenentyp
+	Generative	Generativ
+	Decompose into Layers	In Ebenen zerlegen
+	640	640
+	1024	1024
+	Object to Layer	Objekt in Ebene
+	Fast	Schnell
+	Fill method	Füllmethode
+	Use for Object to Layer fill	Für die Füllung bei „Objekt in Ebene“ verwenden
+	Quick fill	Schnellfüllung
+	Clean fill	Saubere Füllung
+	Clean fill + detail	Saubere Füllung + Details
+	Prompted fill	Füllung nach Prompt
+	Prompt	Prompt
+	Describe what to paint (optional)	Beschreiben, was gemalt werden soll (optional)
+	Enhance	Verbessern
+	Enhancing…	Wird verbessert…
+	Improve detail	Details verbessern
+	Surrounding context	Umgebungskontext
+	Object to Layer…	Objekt in Ebene…
+	Prompt enhancer URL	URL des Prompt-Verbesserers
+	Prompt enhancer model	Modell des Prompt-Verbesserers
+	Prompt enhancer key	Schlüssel des Prompt-Verbesserers
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	Optional. Ein Sprachmodell, das Prompts umschreibt: Es wird nur der Prompt-Text gesendet. Für einen lokalen Server nicht nötig.

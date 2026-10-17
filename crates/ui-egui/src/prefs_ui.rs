@@ -239,6 +239,10 @@ pub fn load(app: &mut PhotocraftApp) {
         let template = "Preferences were reset: {error}";
         app.ui.status = crate::i18n::fmt(tl!(template), &[("error", &e)]);
     }
+    // The AI service key lives in the system credential store, not in the preferences.
+    if let Err(e) = crate::secrets::load_into_engine() {
+        log::warn!("AI service key: {e}");
+    }
     crate::dock::restore(app);
     crate::brush_picker::restore(app);
     crate::last_brush::restore(app);
@@ -1090,6 +1094,20 @@ fn gpu_memory_lines(app: &PhotocraftApp) -> Vec<String> {
 
 fn humanize(key: &str) -> String {
     match key {
+        // Integrations › remote AI service.
+        "remoteUrl" => return "Service URL".into(),
+        "useRemoteForSelection" => return "Use for Object Selection".into(),
+        "useRemoteForLayers" => return "Use for Decompose into Layers".into(),
+        "decomposeLayers" => return "Layers to create".into(),
+        "decomposeResolution" => return "Layer detail (pixels)".into(),
+        "decomposeSteps" => return "Quality steps".into(),
+        "decomposeMode" => return "Layer type".into(),
+        "useRemoteForFill" => return "Use for Object to Layer fill".into(),
+        "fillMethod" => return "Fill method".into(),
+        "fillImproveDetail" => return "Improve detail".into(),
+        "fillContext" => return "Surrounding context".into(),
+        "enhancerUrl" => return "Prompt enhancer URL".into(),
+        "enhancerModel" => return "Prompt enhancer model".into(),
         "appearanceMode" => return "Appearance Mode".into(),
         "exrAcesCg" => return "Open color-less EXR as ACEScg".into(),
         "darkTheme" => return "Dark Theme".into(),
@@ -1138,6 +1156,17 @@ fn humanize(key: &str) -> String {
         }
     }
     s.replace("Psd", "PSD").replace("Gpu", "GPU").replace("Ui ", "UI ").replace("Mb", "(MB)").replace("Exif", "EXIF").replace("Hud", "HUD")
+}
+
+/// How a fill method from the service reads in the picker.
+pub(crate) fn fill_method_label(id: &str) -> String {
+    match id {
+        "fast" => format!("{} (LaMa)", tl!("Fast")),
+        "sdxl" => "SDXL".into(),
+        "juggernaut" => "Juggernaut XL".into(),
+        "fooocus" => "Fooocus".into(),
+        other => other.to_string(),
+    }
 }
 
 fn choice_label(v: &str) -> String {
@@ -1595,6 +1624,178 @@ fn section_fields(
     }
     keys.retain(|k| field_visible(section, obj, k, &query));
     egui::Grid::new(("prefs-grid", section)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, section, obj, keys, lang));
+    if section == "integrations" && (query.is_empty() || ["api key", "key", "test connection", "service"].iter().any(|w| w.contains(&query) || query.contains(w))) {
+        ai_service_rows(ui, obj);
+    }
+}
+
+/// What the Integrations page remembers between frames: the key being typed (never saved in
+/// the preferences), the last messages, and a connection test in flight.
+/// A connection test's answer, filled in by its worker thread.
+type TestSlot = std::sync::Arc<std::sync::Mutex<Option<Result<String, String>>>>;
+
+#[derive(Clone, Default)]
+struct AiKeyUi {
+    typed: String,
+    /// The service has been asked which fill methods it offers (once per dialog open).
+    asked: bool,
+    key_status: Option<(bool, String)>,
+    test: Option<(bool, String)>,
+    pending: Option<TestSlot>,
+}
+
+/// Preferences › AI Integrations: the API key (system credential store) and Test Connection.
+fn ai_service_rows(ui: &mut egui::Ui, obj: &Map<String, Value>) {
+    use photocraft_engine::remote;
+    let t = Tokens::get(ui.ctx());
+    let id = egui::Id::new("prefs-ai-service");
+    let mut st: AiKeyUi = ui.ctx().data_mut(|d| d.get_temp(id)).unwrap_or_default();
+    if let Some(done) = st.pending.as_ref().and_then(|p| p.lock().ok().and_then(|mut g| g.take())) {
+        st.test = Some(match done {
+            Ok(text) => (true, text),
+            Err(e) => (false, e),
+        });
+        st.pending = None;
+    }
+    if !st.asked {
+        st.asked = true;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let ctx = ui.ctx().clone();
+            let _ = std::thread::Builder::new().name("ai-fill-methods".into()).spawn(move || {
+                remote::refresh_fill_methods();
+                ctx.request_repaint();
+            });
+        }
+    }
+    let msg = |ui: &mut egui::Ui, m: &Option<(bool, String)>| {
+        if let Some((ok, text)) = m {
+            ui.label(RichText::new(text).color(if *ok { t.text_dim } else { t.danger }));
+        }
+    };
+
+    ui.add_space(12.0);
+    ui.label(RichText::new(tl!("API key")).font(crate::theme::semibold(12.5)).color(t.text));
+    ui.label(RichText::new(tl!("Kept in the system credential store, never in the preferences file.")).color(t.text_faint));
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        crate::widgets::secret_field(ui, id.with("field"), &mut st.typed, tl!("Paste the API key"), 280.0);
+        let typed = !st.typed.trim().is_empty();
+        if ui.add_enabled_ui(typed, |ui| crate::widgets::secondary_button(ui, tl!("Save Key"), 84.0)).inner.clicked() {
+            let key = st.typed.trim().to_string();
+            // The key works for this session even if the store refuses it.
+            remote::set_key(Some(&key));
+            st.key_status = Some(match crate::secrets::save(&key) {
+                Ok(()) => (true, tl!("Key saved.").to_string()),
+                Err(e) => (false, format!("{e}. {}", tl!("It is used for this session only."))),
+            });
+            st.typed.clear();
+        }
+        if crate::widgets::secondary_button(ui, tl!("Remove Key"), 96.0).clicked() {
+            remote::set_key(None);
+            st.key_status = Some(match crate::secrets::delete() {
+                Ok(()) => (true, tl!("Key removed.").to_string()),
+                Err(e) => (false, e),
+            });
+            st.typed.clear();
+        }
+    });
+    if st.key_status.is_none() {
+        ui.label(RichText::new(if remote::has_key() { tl!("A key is set.") } else { tl!("No key is set.") }).color(t.text_dim));
+    }
+    msg(ui, &st.key_status);
+
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        let testing = st.pending.is_some();
+        if ui.add_enabled_ui(!testing, |ui| crate::widgets::secondary_button(ui, tl!("Test Connection"), 120.0)).inner.clicked() {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                st.test = None;
+                let url = obj.get("remoteUrl").and_then(Value::as_str).unwrap_or("").to_string();
+                // The key as typed, else the saved one.
+                let key = if st.typed.trim().is_empty() { crate::secrets::load().ok().flatten().unwrap_or_default() } else { st.typed.trim().to_string() };
+                let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+                let ctx = ui.ctx().clone();
+                let spawned = std::thread::Builder::new().name("ai-connection-test".into()).spawn({
+                    let slot = std::sync::Arc::clone(&slot);
+                    move || {
+                        let r = remote::test_connection(&url, &key);
+                        if let Ok(mut g) = slot.lock() {
+                            *g = Some(r);
+                        }
+                        ctx.request_repaint();
+                    }
+                });
+                match spawned {
+                    Ok(_) => st.pending = Some(slot),
+                    Err(_) => st.test = Some((false, tl!("Could not start the test.").to_string())),
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                let _ = obj;
+                st.test = Some((false, tl!("Remote services are not available in the web build.").to_string()));
+            }
+        }
+        if st.pending.is_some() {
+            ui.label(RichText::new(tl!("Testing…")).color(t.text_dim));
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+        }
+    });
+    msg(ui, &st.test);
+    ui.ctx().data_mut(|d| d.insert_temp(id, st));
+    enhancer_key_rows(ui);
+}
+
+/// What the language-model key row remembers between frames.
+#[derive(Clone, Default)]
+struct EnhancerKeyUi {
+    typed: String,
+    status: Option<(bool, String)>,
+}
+
+/// Preferences › AI Integrations: the key of the language model that improves prompts.
+fn enhancer_key_rows(ui: &mut egui::Ui) {
+    use photocraft_engine::remote;
+    let t = Tokens::get(ui.ctx());
+    let id = egui::Id::new("prefs-enhancer-key");
+    let mut st: EnhancerKeyUi = ui.ctx().data_mut(|d| d.get_temp(id)).unwrap_or_default();
+    ui.add_space(12.0);
+    ui.label(RichText::new(tl!("Prompt enhancer key")).font(crate::theme::semibold(12.5)).color(t.text));
+    ui.label(RichText::new(tl!("Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.")).color(t.text_faint));
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        crate::widgets::secret_field(ui, id.with("field"), &mut st.typed, tl!("Paste the API key"), 280.0);
+        let typed = !st.typed.trim().is_empty();
+        if ui.add_enabled_ui(typed, |ui| crate::widgets::secondary_button(ui, tl!("Save Key"), 84.0)).inner.clicked() {
+            let key = st.typed.trim().to_string();
+            // The key works for this session even if the store refuses it.
+            remote::set_enhancer_key(Some(&key));
+            st.status = Some(match crate::secrets::save_enhancer(&key) {
+                Ok(()) => (true, tl!("Key saved.").to_string()),
+                Err(e) => (false, format!("{e}. {}", tl!("It is used for this session only."))),
+            });
+            st.typed.clear();
+        }
+        if crate::widgets::secondary_button(ui, tl!("Remove Key"), 96.0).clicked() {
+            remote::set_enhancer_key(None);
+            st.status = Some(match crate::secrets::delete_enhancer() {
+                Ok(()) => (true, tl!("Key removed.").to_string()),
+                Err(e) => (false, e),
+            });
+            st.typed.clear();
+        }
+    });
+    match &st.status {
+        Some((ok, text)) => {
+            ui.label(RichText::new(text).color(if *ok { t.text_dim } else { t.danger }));
+        }
+        None => {
+            ui.label(RichText::new(if remote::has_enhancer_key() { tl!("A key is set.") } else { tl!("No key is set.") }).color(t.text_dim));
+        }
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(id, st));
 }
 
 /// One grid row per setting in `keys` (already filtered by `field_visible`).
@@ -1623,6 +1824,16 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                 ui.label(RichText::new(tl!(&label)).color(t.text_dim));
                 let mut pairs: Vec<(String, &str)> = vec![("auto".into(), tl!("Auto"))];
                 pairs.extend(crate::i18n::Lang::all().map(|l| (l.code().to_string(), l.name())));
+                let mut cur = s.clone();
+                crate::widgets::dropdown(ui, &format!("pref-{path}"), &mut cur, &pairs, 220.0);
+                obj.insert(k, json!(cur));
+            }
+            // The service says which fill models it has, so the list is not fixed.
+            Value::String(s) if path == "integrations.fillMethod" => {
+                ui.label(RichText::new(tl!(&label)).color(t.text_dim));
+                let methods = photocraft_engine::remote::fill_methods();
+                let labels: Vec<String> = methods.iter().map(|m| fill_method_label(m)).collect();
+                let pairs: Vec<(String, &str)> = methods.iter().cloned().zip(labels.iter().map(String::as_str)).collect();
                 let mut cur = s.clone();
                 crate::widgets::dropdown(ui, &format!("pref-{path}"), &mut cur, &pairs, 220.0);
                 obj.insert(k, json!(cur));
@@ -3476,10 +3687,12 @@ mod tests {
         let values = prefs::Preferences::default().to_json();
         assert!(has_visible_fields(&values, "general"));
         assert!(has_visible_fields(&values, "fileHandling"));
-        // Every setting of these sections is still unimplemented.
-        for section in ["integrations", "scratchDisks"] {
-            assert!(!has_visible_fields(&values, section), "{section}");
-        }
+        // Every setting of this section is still unimplemented.
+        assert!(!has_visible_fields(&values, "scratchDisks"));
+        // Integrations shows the AI service settings; the agent-control rows stay hidden.
+        assert!(has_visible_fields(&values, "integrations"));
+        assert!(prefs::is_hidden("integrations.allowAgentControl") && prefs::is_hidden("integrations.controlPort"));
+        assert!(!prefs::is_hidden("integrations.remoteUrl") && !prefs::is_hidden("integrations.decomposeLayers"));
         // "Fill new type layers with placeholder text" and "Use Escape to Commit" are live; other Type rows stay hidden.
         assert!(has_visible_fields(&values, "type"));
         assert!(!prefs::is_hidden("type.fillNewTypeLayersWithPlaceholder"));

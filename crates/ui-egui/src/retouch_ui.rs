@@ -383,6 +383,17 @@ pub fn finish_object_selection(app: &mut PhotocraftApp, start: [f64; 2], end: [f
     report_smart_result(app, r, tl!("Object Selection found nothing there — try a tighter rectangle"));
 }
 
+/// What the Object Selection options bar says about who finds the objects: the provider of the
+/// latest answer, or what is set up before the first one.
+fn object_selection_provider() -> String {
+    use photocraft_engine::sam_object::{Provider, last_provider};
+    match last_provider() {
+        Some(p) => format!("Last answered by: {}", p.label()),
+        None if photocraft_engine::remote::selection_config().is_some() => format!("Set up: {}", Provider::Remote.label()),
+        None => format!("Set up: {}", Provider::Local.label()),
+    }
+}
+
 /// Reports a smart-selection command result in the status bar. Engine errors are already
 /// reported by [`PhotocraftApp::run`], but an empty result (`changed: false`) is a silent
 /// success that looks like a dead button (Select Subject finding nothing on a busy photo,
@@ -624,6 +635,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 let r = app.run("select.subject", json!({}));
                 report_smart_result(app, r, tl!("No subject found — try a rectangle around the object"));
             }
+            crate::widgets::vline(ui, 22.0);
+            opt(ui, &object_selection_provider());
         }
         Tool::RedEye => {
             opt(ui, tl!("Pupil Size"));

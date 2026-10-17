@@ -55,6 +55,14 @@ choice!(TypeUnit { Points = "points", Pixels = "pixels", Millimeters = "mm" } de
 choice!(PointSize { PostScript = "postScript", Traditional = "traditional" } default PostScript);
 choice!(Interpolation { BicubicAutomatic = "bicubicAutomatic", Nearest = "nearestNeighbor", Bilinear = "bilinear", Bicubic = "bicubic", BicubicSmoother = "bicubicSmoother", BicubicSharper = "bicubicSharper", PreserveDetails = "preserveDetails" } default BicubicAutomatic);
 choice!(ColorPicker { Adobe = "adobe", System = "system" } default Adobe);
+choice!(
+    /// Generation size of Layer › Decompose into Layers (the long side, in pixels).
+    DecomposeResolution { Fast = "640", Detailed = "1024" } default Fast
+);
+choice!(
+    /// What Decompose into Layers adds: the model's own layers, or masks over the original pixels.
+    DecomposeKind { Generative = "generative", Mask = "mask" } default Generative
+);
 choice!(Theme { Pro = "pro", ProMedium = "proMedium", ProLightGray = "proLightGray", ProLight = "proLight", Studio = "studio", StudioLight = "studioLight", Classic = "classic", SolarizedDark = "solarizedDark", Adwaita = "adwaita", AdwaitaDark = "adwaitaDark", BreezeLight = "breezeLight", BreezeDark = "breezeDark", SoftDark = "softDark", SoftLight = "softLight" } default ProMedium);
 choice!(AppearanceMode { Auto = "auto", Dark = "dark", Light = "light" } default Dark);
 choice!(DarkTheme { Pro = "pro", ProMedium = "proMedium", Studio = "studio", SolarizedDark = "solarizedDark", AdwaitaDark = "adwaitaDark", BreezeDark = "breezeDark", SoftDark = "softDark" } default ProMedium);
@@ -881,11 +889,64 @@ pub struct Integrations {
     pub allow_agent_control: bool,
     /// Default control port (0 = only when `--control` is given).
     pub control_port: u32,
+    /// Base URL of a remote AI service (`https://host/photocraft/v1`); empty = none. The API key
+    /// is never stored here: the desktop shell keeps it in the operating system's credential
+    /// store and hands it to [`crate::remote::set_key`].
+    pub remote_url: String,
+    /// Object Selection asks the remote service when one is set up (the local model answers if
+    /// it cannot be reached).
+    pub use_remote_for_selection: bool,
+    /// Decompose into Layers (Properties › Quick Actions) uses the remote service.
+    pub use_remote_for_layers: bool,
+    /// Object to Layer asks the remote service to fill the hole the object leaves (without it the
+    /// hole is left empty, as Layer via Cut does).
+    pub use_remote_for_fill: bool,
+    /// How that hole is filled: `fast` (a quick filler that invents nothing) or the id of one of
+    /// the service's generative models (`sdxl`, `juggernaut`, …). The Preferences picker lists
+    /// what the service offers.
+    pub fill_method: String,
+    /// Run the service's second "improve detail" pass over the filled area (generative methods;
+    /// slower, sharper).
+    pub fill_improve_detail: bool,
+    /// How much of the picture around the hole the generative models see, in percent (the
+    /// service's default is 62).
+    pub fill_context: u32,
+    /// Base URL of an OpenAI-compatible language model that improves prompts (Object to Layer…
+    /// › Enhance), e.g. `https://api.openai.com/v1` or a local server's
+    /// `http://127.0.0.1:11434/v1`; empty = none. Only the prompt text is sent. Its key is, like
+    /// the AI service's, kept in the system credential store and never here.
+    pub enhancer_url: String,
+    /// The model it asks for (a small one is plenty).
+    pub enhancer_model: String,
+    /// Number of layers Decompose into Layers asks for (2–10).
+    pub decompose_layers: u32,
+    /// Generation size of the layers: 640 is quick, 1024 takes several times longer.
+    pub decompose_resolution: DecomposeResolution,
+    /// Diffusion steps (10–60): fewer is faster and rougher.
+    pub decompose_steps: u32,
+    /// Add the model's own layers, or masks over the original pixels.
+    pub decompose_mode: DecomposeKind,
 }
 
 impl Default for Integrations {
     fn default() -> Self {
-        Self { allow_agent_control: true, control_port: 0 }
+        Self {
+            allow_agent_control: true,
+            control_port: 0,
+            remote_url: String::new(),
+            use_remote_for_selection: true,
+            use_remote_for_layers: true,
+            use_remote_for_fill: true,
+            fill_method: "fast".into(),
+            fill_improve_detail: false,
+            fill_context: 62,
+            enhancer_url: String::new(),
+            enhancer_model: "gpt-4.1-nano".into(),
+            decompose_layers: 4,
+            decompose_resolution: DecomposeResolution::default(),
+            decompose_steps: 40,
+            decompose_mode: DecomposeKind::default(),
+        }
     }
 }
 
@@ -1098,6 +1159,8 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "performance.gpuBackend" => GpuBackend::NAMES,
         "performance.linuxDisplayServer" => LinuxDisplayServer::NAMES,
         "performance.renderingMode" => RenderingMode::NAMES,
+        "integrations.decomposeResolution" => DecomposeResolution::NAMES,
+        "integrations.decomposeMode" => DecomposeKind::NAMES,
         _ => return None,
     })
 }
@@ -1124,6 +1187,9 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
         "guidesGridAndSlices.subdivisions" => (1.0, 100.0),
         "type.recentFonts" => (0.0, 50.0),
         "integrations.controlPort" => (0.0, 65535.0),
+        "integrations.decomposeLayers" => (2.0, 10.0),
+        "integrations.decomposeSteps" => (10.0, 60.0),
+        "integrations.fillContext" => (0.0, 100.0),
         _ => return None,
     })
 }
@@ -1633,6 +1699,7 @@ impl Session {
         // Without waiting for the system font scan: this runs on the UI thread at launch.
         photocraft_text::set_shared_missing_glyph_protection(self.prefs().type_.missing_glyph_protection());
         crate::plugin_cmds::sync_prefs(self);
+        crate::remote::sync_prefs(self);
     }
 
     /// Everything persisted as one JSON document: the preferences plus `colorSettings`.

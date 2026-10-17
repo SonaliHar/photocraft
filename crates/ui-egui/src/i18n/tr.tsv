@@ -3940,3 +3940,46 @@ cameraData	Lens	Lens
 	GPU Memory (MB, 0 = Automatic)	GPU Belleği (MB, 0 = Otomatik)
 	{name} was changed by another app after it was opened or saved here.	{name}, burada açıldıktan veya kaydedildikten sonra başka bir uygulama tarafından değiştirildi.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Bu belgeyle değiştirin ya da iptal edip ikisini de korumak için Dosya › Farklı Kaydet'i kullanın.
+	API key	API anahtarı
+	Kept in the system credential store, never in the preferences file.	Sistemin kimlik bilgisi deposunda saklanır, asla tercih dosyasında değil.
+	Paste the API key	API anahtarını yapıştırın
+	Save Key	Anahtarı kaydet
+	Key saved.	Anahtar kaydedildi.
+	It is used for this session only.	Yalnızca bu oturumda kullanılır.
+	Remove Key	Anahtarı kaldır
+	Key removed.	Anahtar kaldırıldı.
+	A key is set.	Bir anahtar ayarlı.
+	No key is set.	Anahtar ayarlı değil.
+	Test Connection	Bağlantıyı sına
+	Testing…	Sınanıyor…
+	Could not start the test.	Sınama başlatılamadı.
+	Remote services are not available in the web build.	Uzak hizmetler web sürümünde kullanılamaz.
+	Service URL	Hizmet URL’si
+	Use for Object Selection	Nesne Seçimi için kullan
+	Use for Decompose into Layers	“Katmanlara Ayır” için kullan
+	Layers to create	Oluşturulacak katman sayısı
+	Layer detail (pixels)	Katman ayrıntısı (piksel)
+	Quality steps	Kalite adımları
+	Layer type	Katman türü
+	Generative	Üretken
+	Decompose into Layers	Katmanlara Ayır
+	640	640
+	1024	1024
+	Object to Layer	Nesneyi Katmana
+	Fill method	Doldurma yöntemi
+	Use for Object to Layer fill	“Nesneyi Katmana” doldurması için kullan
+	Quick fill	Hızlı doldurma
+	Clean fill	Temiz doldurma
+	Clean fill + detail	Temiz doldurma + ayrıntı
+	Prompted fill	İstemli doldurma
+	Prompt	İstem
+	Describe what to paint (optional)	Neyin çizileceğini açıklayın (isteğe bağlı)
+	Enhance	Geliştir
+	Enhancing…	Geliştiriliyor…
+	Improve detail	Ayrıntıyı iyileştir
+	Surrounding context	Çevre bağlamı
+	Object to Layer…	Nesneyi Katmana…
+	Prompt enhancer URL	İstem geliştirici URL’si
+	Prompt enhancer model	İstem geliştirici modeli
+	Prompt enhancer key	İstem geliştirici anahtarı
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	İsteğe bağlı. İstemleri yeniden yazan bir dil modeli: yalnızca istem metni gönderilir. Yerel sunucu için gerekmez.

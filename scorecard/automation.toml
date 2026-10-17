@@ -56,9 +56,9 @@ note = "runtime.rs:15 ABI_VERSION = 1; manifest.rs:18 Kind::Filter only"
 [[item]]
 id = "AUTO-219-7"
 target = "Local ONNX models behind a flag, managed in Preferences; subject select, background removal"
-status = "missing"
+status = "partial"
 issue = 219
-note = "No ONNX runtime dependency"
+note = "photocraft-ml runs SAM 2 through ONNX Runtime (CUDA or CPU) behind Object Selection and can use a remote service (Preferences › AI Integrations, key in the system credential store) for Object Selection and Decompose into Layers; all optional. No local model manager, no background removal or ML Select Subject yet (docs/ml.md)"
 
 [[item]]
 id = "AUTO-219-8"

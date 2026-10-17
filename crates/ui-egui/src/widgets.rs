@@ -752,6 +752,16 @@ pub fn text_field(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, widt
 
 /// [`text_field`] limited to `char_limit` characters (a hex field's six digits, say).
 pub fn text_field_ex(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, width: f32, mono: bool, char_limit: Option<usize>) -> Response {
+    text_field_inner(ui, id, text, hint, width, mono, char_limit, false)
+}
+
+/// A [`text_field`] that shows dots instead of the text (API keys, passwords).
+pub fn secret_field(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, width: f32) -> Response {
+    text_field_inner(ui, id, text, hint, width, true, None, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn text_field_inner(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, width: f32, mono: bool, char_limit: Option<usize>, password: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let (rect, _) = ui.allocate_exact_size(vec2(width.max(16.0), TEXT_FIELD_H), Sense::hover());
     surface(ui, rect, t.field, false);
@@ -763,7 +773,7 @@ pub fn text_field_ex(ui: &mut Ui, id: egui::Id, text: &mut String, hint: &str, w
     // TextEdit draws its text at the top of its rect; fill the box and centre the line in it, so
     // the text sits on the field's middle like a dropdown's or value field's.
     let mut edit =
-        egui::TextEdit::singleline(text).id(id).hint_text(hint).frame(egui::Frame::NONE).font(font).min_size(inner.size()).vertical_align(egui::Align::Center);
+        egui::TextEdit::singleline(text).id(id).hint_text(hint).frame(egui::Frame::NONE).font(font).min_size(inner.size()).vertical_align(egui::Align::Center).password(password);
     if let Some(limit) = char_limit {
         edit = edit.char_limit(limit);
     }

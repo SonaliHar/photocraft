@@ -343,7 +343,17 @@ fn copy_mask(s: &mut Session) -> Result<Value> {
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()], "target": "mask"}))
 }
 
-fn clear_selected(doc: &mut Document, id: LayerId, background: [f32; 4]) -> Result<()> {
+/// The pixels of `src` inside the selection `sel` as a straight-alpha surface (what Layer via Copy
+/// puts on its new layer); an error when the selection holds none.
+pub(crate) fn lift_selection(src: &Surface, sel: &Surface, canvas: Rect) -> Result<Surface> {
+    let clip = lift(src, Some(sel), canvas)?;
+    if clip.bounds.is_empty() {
+        return Err(EngineError::Other("Could not complete the command: the selected area is empty".into()));
+    }
+    Ok(clip.surface)
+}
+
+pub(crate) fn clear_selected(doc: &mut Document, id: LayerId, background: [f32; 4]) -> Result<()> {
     let sel = doc.selection.clone();
     let canvas = doc.bounds();
     let area = sel.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas));

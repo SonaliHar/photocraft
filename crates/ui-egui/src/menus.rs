@@ -77,6 +77,10 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
         return Ok(Value::Null);
     }
     let r = invoke_unguarded(app, ctx, id, params)?;
+    // Object to Layer cuts the object out even when the fill fails; say so.
+    if id == "layer.objectToLayer" {
+        crate::fill_dialog::report(app, &r);
+    }
     // The palette's empty-query list (UI-217-7); opening the palette isn't a command to recall.
     if id != "edit.search" {
         crate::palette::note_recent(ctx, id);
@@ -432,6 +436,13 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         }
         // Edit › Stroke…: open its full options dialog when called from menus/context
         // menus. Explicit params from Actions, CLI, MCP and control channel execute directly.
+        // Selection menu › Object to Layer…: its options dialog (the plain row runs the command).
+        crate::fill_dialog::COMMAND => {
+            if let Err(why) = (|| photocraft_engine::commands::find("layer.objectToLayer").map_or(Ok(()), |c| (c.enabled)(&app.session)))() {
+                return Err(why);
+            }
+            Ok(json!({"dialog": crate::fill_dialog::open(app)}))
+        }
         crate::stroke_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
             if let Some(Err(why)) = photocraft_engine::commands::find(id).map(|c| (c.enabled)(&app.session)) {
                 return Err(why);
@@ -724,6 +735,7 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         "edit.paste" | "file.newFromClipboard" => app.session.is_enabled(id) || app.services.clipboard_get_image.is_some(),
         "edit.pasteSpecial.pasteInPlace" => app.session.is_enabled(id) || (app.services.clipboard_get_image.is_some() && app.session.active().is_some()),
         "select.selectAndMask" => app.session.is_enabled("select.refineEdge"),
+        crate::fill_dialog::COMMAND => app.session.is_enabled("layer.objectToLayer"),
         "type.editText" => app
             .session
             .active()

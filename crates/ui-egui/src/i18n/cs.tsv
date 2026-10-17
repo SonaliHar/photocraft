@@ -3818,3 +3818,46 @@ navigator	Zoom	Zvětšení
 	GPU Memory (MB, 0 = Automatic)	Paměť GPU (MB, 0 = Automaticky)
 	{name} was changed by another app after it was opened or saved here.	Soubor {name} změnila jiná aplikace poté, co byl zde otevřen nebo uložen.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Nahraďte ho tímto dokumentem, nebo zrušte a použijte Soubor › Uložit jako, abyste zachovali obojí.
+	API key	Klíč API
+	Kept in the system credential store, never in the preferences file.	Uložen v úložišti přihlašovacích údajů systému, nikdy v souboru předvoleb.
+	Paste the API key	Vložte klíč API
+	Save Key	Uložit klíč
+	Key saved.	Klíč uložen.
+	It is used for this session only.	Používá se jen pro tuto relaci.
+	Remove Key	Odebrat klíč
+	Key removed.	Klíč odebrán.
+	A key is set.	Klíč je nastaven.
+	No key is set.	Klíč není nastaven.
+	Test Connection	Otestovat připojení
+	Testing…	Probíhá test…
+	Could not start the test.	Test se nepodařilo spustit.
+	Remote services are not available in the web build.	Vzdálené služby nejsou ve webové verzi k dispozici.
+	Service URL	Adresa URL služby
+	Use for Object Selection	Použít pro výběr objektů
+	Use for Decompose into Layers	Použít pro „Rozložit do vrstev“
+	Layers to create	Počet vrstev
+	Layer detail (pixels)	Detail vrstev (pixely)
+	Quality steps	Kroky kvality
+	Layer type	Typ vrstvy
+	Generative	Generativní
+	Decompose into Layers	Rozložit do vrstev
+	640	640
+	1024	1024
+	Object to Layer	Objekt do vrstvy
+	Fill method	Metoda vyplnění
+	Use for Object to Layer fill	Použít pro vyplnění u „Objekt do vrstvy“
+	Quick fill	Rychlé vyplnění
+	Clean fill	Čisté vyplnění
+	Clean fill + detail	Čisté vyplnění + detail
+	Prompted fill	Vyplnění podle popisu
+	Prompt	Popis (prompt)
+	Describe what to paint (optional)	Popište, co namalovat (volitelné)
+	Enhance	Vylepšit
+	Enhancing…	Vylepšuji…
+	Improve detail	Vylepšit detail
+	Surrounding context	Okolní kontext
+	Object to Layer…	Objekt do vrstvy…
+	Prompt enhancer URL	Adresa URL vylepšovače popisu
+	Prompt enhancer model	Model vylepšovače popisu
+	Prompt enhancer key	Klíč vylepšovače popisu
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	Volitelné. Jazykový model, který přepisuje popisy: odesílá se jen text popisu. Pro místní server není potřeba.

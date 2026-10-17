@@ -3910,3 +3910,46 @@ curves	Smooth	Εξομάλυνση
 	GPU Memory (MB, 0 = Automatic)	Μνήμη GPU (MB, 0 = Αυτόματο)
 	{name} was changed by another app after it was opened or saved here.	Το {name} άλλαξε από άλλη εφαρμογή αφού ανοίχτηκε ή αποθηκεύτηκε εδώ.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Αντικαταστήστε το με αυτό το έγγραφο ή ακυρώστε και χρησιμοποιήστε Αρχείο › Αποθήκευση ως για να κρατήσετε και τα δύο.
+	API key	Κλειδί API
+	Kept in the system credential store, never in the preferences file.	Αποθηκεύεται στον χώρο διαπιστευτηρίων του συστήματος, ποτέ στο αρχείο προτιμήσεων.
+	Paste the API key	Επικολλήστε το κλειδί API
+	Save Key	Αποθήκευση κλειδιού
+	Key saved.	Το κλειδί αποθηκεύτηκε.
+	It is used for this session only.	Χρησιμοποιείται μόνο σε αυτή τη συνεδρία.
+	Remove Key	Κατάργηση κλειδιού
+	Key removed.	Το κλειδί καταργήθηκε.
+	A key is set.	Έχει οριστεί κλειδί.
+	No key is set.	Δεν έχει οριστεί κλειδί.
+	Test Connection	Δοκιμή σύνδεσης
+	Testing…	Δοκιμή…
+	Could not start the test.	Δεν ήταν δυνατή η έναρξη της δοκιμής.
+	Remote services are not available in the web build.	Οι απομακρυσμένες υπηρεσίες δεν είναι διαθέσιμες στην έκδοση web.
+	Service URL	URL υπηρεσίας
+	Use for Object Selection	Χρήση για Επιλογή αντικειμένου
+	Use for Decompose into Layers	Χρήση για «Διάσπαση σε στρώσεις»
+	Layers to create	Στρώσεις προς δημιουργία
+	Layer detail (pixels)	Λεπτομέρεια στρώσης (εικονοστοιχεία)
+	Quality steps	Βήματα ποιότητας
+	Layer type	Τύπος στρώσης
+	Generative	Παραγωγικός
+	Decompose into Layers	Διάσπαση σε στρώσεις
+	640	640
+	1024	1024
+	Object to Layer	Αντικείμενο σε στρώση
+	Fill method	Μέθοδος γεμίσματος
+	Use for Object to Layer fill	Χρήση για γέμισμα στο «Αντικείμενο σε στρώση»
+	Quick fill	Γρήγορο γέμισμα
+	Clean fill	Καθαρό γέμισμα
+	Clean fill + detail	Καθαρό γέμισμα + λεπτομέρεια
+	Prompted fill	Γέμισμα με περιγραφή
+	Prompt	Περιγραφή (prompt)
+	Describe what to paint (optional)	Περιγράψτε τι θα ζωγραφιστεί (προαιρετικό)
+	Enhance	Βελτίωση
+	Enhancing…	Βελτίωση…
+	Improve detail	Βελτίωση λεπτομέρειας
+	Surrounding context	Περιβάλλον πλαίσιο
+	Object to Layer…	Αντικείμενο σε στρώση…
+	Prompt enhancer URL	URL βελτιωτή περιγραφής
+	Prompt enhancer model	Μοντέλο βελτιωτή περιγραφής
+	Prompt enhancer key	Κλειδί βελτιωτή περιγραφής
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	Προαιρετικό. Ένα γλωσσικό μοντέλο που ξαναγράφει περιγραφές: στέλνεται μόνο το κείμενο. Δεν χρειάζεται για τοπικό διακομιστή.

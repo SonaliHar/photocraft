@@ -78,6 +78,8 @@ pub(crate) fn update(app: &mut PhotocraftApp, at: Option<[f64; 2]>, pressed: boo
         return Update::default();
     };
     let Some(st) = app.session.active() else { return Update::default() };
+    // Load the SAM 2 model (if installed) while the tool is first in use, not on the first click.
+    photocraft_engine::sam_object::warm_up();
     let all_layers = app.ui.tool_options.sample_all_layers;
     let target = sampled_target(&st.doc, st.active_layer, all_layers);
     let (doc, revision, layer) = (st.doc.id, st.revision, st.active_layer);

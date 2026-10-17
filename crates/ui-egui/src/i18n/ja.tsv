@@ -3887,3 +3887,46 @@ curves	Smooth	スムーズ
 	Replace	置き換え
 	{name} was changed by another app after it was opened or saved here.	{name} は、ここで開くか保存した後に別のアプリで変更されました。
 	Replace it with this document, or cancel and use File › Save As to keep both.	この書類で置き換えるか、キャンセルしてファイル › 名前を付けて保存で両方を残してください。
+	API key	APIキー
+	Kept in the system credential store, never in the preferences file.	システムの資格情報ストアに保存され、環境設定ファイルには保存されません。
+	Paste the API key	APIキーを貼り付け
+	Save Key	キーを保存
+	Key saved.	キーを保存しました。
+	It is used for this session only.	このセッションでのみ使用されます。
+	Remove Key	キーを削除
+	Key removed.	キーを削除しました。
+	A key is set.	キーが設定されています。
+	No key is set.	キーが設定されていません。
+	Test Connection	接続をテスト
+	Testing…	テスト中…
+	Could not start the test.	テストを開始できませんでした。
+	Remote services are not available in the web build.	リモートサービスはWeb版では利用できません。
+	Service URL	サービスURL
+	Use for Object Selection	オブジェクト選択に使用
+	Use for Decompose into Layers	「レイヤーに分解」に使用
+	Layers to create	作成するレイヤー数
+	Layer detail (pixels)	レイヤーの詳細度（ピクセル）
+	Quality steps	品質ステップ
+	Layer type	レイヤーの種類
+	Generative	生成
+	Decompose into Layers	レイヤーに分解
+	640	640
+	1024	1024
+	Object to Layer	オブジェクトをレイヤーに
+	Fill method	塗りつぶし方法
+	Use for Object to Layer fill	「オブジェクトをレイヤーに」の塗りつぶしに使用
+	Quick fill	クイック塗りつぶし
+	Clean fill	クリーン塗りつぶし
+	Clean fill + detail	クリーン塗りつぶし＋ディテール
+	Prompted fill	プロンプト指定の塗りつぶし
+	Prompt	プロンプト
+	Describe what to paint (optional)	描く内容を入力（任意）
+	Enhance	改善
+	Enhancing…	改善中…
+	Improve detail	ディテールを改善
+	Surrounding context	周囲のコンテキスト
+	Object to Layer…	オブジェクトをレイヤーに…
+	Prompt enhancer URL	プロンプト改善のURL
+	Prompt enhancer model	プロンプト改善のモデル
+	Prompt enhancer key	プロンプト改善のキー
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	任意。プロンプトを書き換える言語モデル。送信されるのはプロンプトのテキストだけです。ローカルサーバーでは不要です。

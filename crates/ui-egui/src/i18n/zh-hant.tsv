@@ -2812,3 +2812,48 @@ curves	Smooth	平滑
 	Replace	取代
 	{name} was changed by another app after it was opened or saved here.	{name} 在此處開啟或儲存後已被其他 App 更改。
 	Replace it with this document, or cancel and use File › Save As to keep both.	以此文件取代它，或取消並使用「檔案 › 另存新檔」以保留兩者。
+	API key	API 金鑰
+	Kept in the system credential store, never in the preferences file.	儲存在系統的認證資料存放區中，絕不會寫入偏好設定檔。
+	Paste the API key	貼上 API 金鑰
+	Save Key	儲存金鑰
+	Key saved.	金鑰已儲存。
+	It is used for this session only.	僅在本次工作階段中使用。
+	Remove Key	移除金鑰
+	Key removed.	金鑰已移除。
+	A key is set.	已設定金鑰。
+	No key is set.	尚未設定金鑰。
+	Test Connection	測試連線
+	Testing…	測試中…
+	Could not start the test.	無法開始測試。
+	Remote services are not available in the web build.	網頁版不支援遠端服務。
+	Service URL	服務 URL
+	Use for Object Selection	用於物件選取
+	Use for Decompose into Layers	用於「分解為圖層」
+	Layers to create	要建立的圖層數
+	Layer detail (pixels)	圖層細節（像素）
+	Quality steps	品質步數
+	Layer type	圖層類型
+	Generative	生成式
+	Decompose into Layers	分解為圖層
+	640	640
+	1024	1024
+	Mask	遮色片
+	Object to Layer	物件轉圖層
+	Fast	快速
+	Fill method	填滿方式
+	Use for Object to Layer fill	用於「物件轉圖層」的填滿
+	Quick fill	快速填滿
+	Clean fill	乾淨填滿
+	Clean fill + detail	乾淨填滿 + 細節
+	Prompted fill	依提示詞填滿
+	Prompt	提示詞
+	Describe what to paint (optional)	描述要繪製的內容（選填）
+	Enhance	優化
+	Enhancing…	正在優化…
+	Improve detail	提升細節
+	Surrounding context	周圍內容
+	Object to Layer…	物件轉圖層…
+	Prompt enhancer URL	提示詞優化器 URL
+	Prompt enhancer model	提示詞優化器模型
+	Prompt enhancer key	提示詞優化器金鑰
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	選填。用於改寫提示詞的語言模型：只會傳送提示詞文字。本機伺服器不需要。

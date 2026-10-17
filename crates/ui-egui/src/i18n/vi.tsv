@@ -3697,3 +3697,46 @@ curves	Smooth	Làm mượt
 	Replace	Thay thế
 	{name} was changed by another app after it was opened or saved here.	{name} đã bị một ứng dụng khác thay đổi sau khi được mở hoặc lưu ở đây.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Thay thế bằng tài liệu này, hoặc hủy và dùng Tệp › Lưu thành để giữ cả hai.
+	API key	Khóa API
+	Kept in the system credential store, never in the preferences file.	Được lưu trong kho thông tin xác thực của hệ thống, không bao giờ lưu trong tệp tùy chọn.
+	Paste the API key	Dán khóa API
+	Save Key	Lưu khóa
+	Key saved.	Đã lưu khóa.
+	It is used for this session only.	Chỉ dùng trong phiên này.
+	Remove Key	Xóa khóa
+	Key removed.	Đã xóa khóa.
+	A key is set.	Đã đặt một khóa.
+	No key is set.	Chưa đặt khóa.
+	Test Connection	Kiểm tra kết nối
+	Testing…	Đang kiểm tra…
+	Could not start the test.	Không thể bắt đầu kiểm tra.
+	Remote services are not available in the web build.	Dịch vụ từ xa không khả dụng trong bản web.
+	Service URL	URL dịch vụ
+	Use for Object Selection	Dùng cho Chọn đối tượng
+	Use for Decompose into Layers	Dùng cho “Tách thành lớp”
+	Layers to create	Số lớp cần tạo
+	Layer detail (pixels)	Độ chi tiết lớp (pixel)
+	Quality steps	Bước chất lượng
+	Layer type	Loại lớp
+	Generative	Tạo sinh
+	Decompose into Layers	Tách thành lớp
+	640	640
+	1024	1024
+	Object to Layer	Đối tượng thành lớp
+	Fill method	Cách tô nền
+	Use for Object to Layer fill	Dùng để tô nền cho “Đối tượng thành lớp”
+	Quick fill	Tô nhanh
+	Clean fill	Tô sạch
+	Clean fill + detail	Tô sạch + chi tiết
+	Prompted fill	Tô theo mô tả
+	Prompt	Mô tả (prompt)
+	Describe what to paint (optional)	Mô tả nội dung cần vẽ (tùy chọn)
+	Enhance	Cải thiện
+	Enhancing…	Đang cải thiện…
+	Improve detail	Cải thiện chi tiết
+	Surrounding context	Ngữ cảnh xung quanh
+	Object to Layer…	Đối tượng thành lớp…
+	Prompt enhancer URL	URL bộ cải thiện mô tả
+	Prompt enhancer model	Mô hình bộ cải thiện mô tả
+	Prompt enhancer key	Khóa bộ cải thiện mô tả
+	Optional. A language model that rewrites prompts: only the prompt text is sent. Not needed for a local server.	Tùy chọn. Một mô hình ngôn ngữ viết lại mô tả: chỉ gửi văn bản mô tả. Không cần cho máy chủ cục bộ.
