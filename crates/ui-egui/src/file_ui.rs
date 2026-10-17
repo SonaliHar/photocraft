@@ -1374,16 +1374,73 @@ mod tests {
         h.run_steps(3);
         assert_ne!(h.state().ui.dialogs[0].fields["__center"], json!([0.5, 0.5]));
         assert_eq!(h.state().session.active().unwrap().revision, revision);
-        // Enter while editing a swatch must not export and close the parent dialog.
+        // A click on a colour table entry selects it and opens nothing (no popup, no export).
         h.state_mut().ui.dialogs[0].fields.insert("format".into(), json!("gif"));
         h.run_steps(4);
         use egui_kittest::kittest::Queryable;
         h.get_by_role(egui::accesskit::Role::ColorWell).click();
         h.run_steps(3);
-        assert!(egui::Popup::is_any_open(&h.ctx));
+        assert!(!egui::Popup::is_any_open(&h.ctx) && crate::color_picker_ui::top(h.state()).is_none());
+        assert_eq!(h.state().ui.dialogs[0].fields.get("__selectedColor"), Some(&json!(0)));
+    }
+
+    /// Save for Web's colour table: a double-click on an entry opens the Color Picker on it, as in
+    /// Photoshop ("Color Picker"); Enter there confirms the picker only, and the entry takes the
+    /// colour while the dialog stays open. Cancel leaves the entry as it was.
+    #[test]
+    fn double_clicking_a_colour_table_entry_opens_the_color_picker() {
+        let (mut app, _) = app();
+        let id = open_web(&mut app);
+        app.ui.dialog_mut(id).unwrap().fields.insert("__view".into(), json!("optimized"));
+        app.ui.dialog_mut(id).unwrap().fields.insert("format".into(), json!("gif"));
+        // Short frames: a double-click needs its two clicks within egui's double-click time.
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1100.0)).with_step_dt(0.05).build_ui_state(
+            |ui, app| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                    crate::dialogs::show(app, ui.ctx());
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(8);
+        use egui_kittest::kittest::Queryable;
+        let field = |h: &egui_kittest::Harness<'_, PhotocraftApp>, id: u64, key: &str| {
+            h.state().ui.dialogs.iter().find(|d| d.id == id).and_then(|d| d.fields.get(key).cloned()).unwrap_or_default()
+        };
+        let double_click = |h: &mut egui_kittest::Harness<'_, PhotocraftApp>| {
+            // Well past the double-click time since the last click.
+            h.run_steps(40);
+            let at = h.get_by_role(egui::accesskit::Role::ColorWell).rect().center();
+            h.event(egui::Event::PointerMoved(at));
+            h.step();
+            for _ in 0..2 {
+                for pressed in [true, false] {
+                    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                    h.step();
+                }
+            }
+            h.run_steps(3);
+            crate::color_picker_ui::top(h.state()).expect("a double-click opens the Color Picker")
+        };
+        let picker = double_click(&mut h);
+        assert_eq!(field(&h, picker, "__label"), json!("Color Picker"));
+        let entry = field(&h, id, "colorTableEdits")["0"].clone();
+        assert!(entry.is_string(), "{entry}");
+        assert_eq!(field(&h, picker, "color"), entry, "on the entry's colour");
+        assert_eq!(field(&h, id, "__selectedColor"), json!(0));
+        // Cancel: the entry keeps its colour.
+        crate::dialogs::cancel(h.state_mut(), picker).unwrap();
+        h.run_steps(3);
+        assert_eq!(field(&h, id, "colorTableEdits")["0"], entry);
+        // OK (Enter): the entry takes the colour, and Save for Web stays open.
+        let picker = double_click(&mut h);
+        h.state_mut().ui.dialog_mut(picker).unwrap().fields.insert("color".into(), json!("#12ab34"));
         h.key_press(egui::Key::Enter);
         h.run_steps(3);
-        assert_eq!(h.state().ui.dialogs.len(), 1);
+        assert!(crate::color_picker_ui::top(h.state()).is_none());
+        assert_eq!(h.state().ui.dialogs.len(), 1, "Save for Web stays open");
+        assert_eq!(field(&h, id, "colorTableEdits")["0"], json!("#12ab34"));
     }
 
     #[test]
