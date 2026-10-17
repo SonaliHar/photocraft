@@ -1446,7 +1446,8 @@ mod tests {
             // prompt stands between the open and the Camera Raw dialog.
             assert!(app.ui.dialogs.is_empty());
             let update = json!({"id":"filter.cameraRaw","params":{"ui":{"set":{"exposure":0.5}}}});
-            let original = app.session.active().unwrap().doc.clone();
+            assert!(app.session.documents().is_empty(), "the raw isn't a document until Open");
+            let original = app.raw_shelf[0].doc.clone();
             let changed = call(&mut app, &ctx, "ui.menu.invoke", update.clone());
             let undone = call(&mut app, &ctx, "ui.menu.invoke", json!({"id":"filter.cameraRaw","params":{"ui":{"undo":true}}}));
             assert_eq!(undone["result"]["params"]["exposure"], 0.0, "{undone}");
@@ -1454,7 +1455,7 @@ mod tests {
             assert_eq!(redone["result"]["params"]["exposure"], 0.5, "{redone}");
             assert_eq!(changed["ok"], true, "{changed}");
             assert_eq!(changed["result"]["params"]["exposure"], 0.5);
-            assert!(std::sync::Arc::ptr_eq(&app.session.active().unwrap().doc, &original), "a preview must not commit");
+            assert!(std::sync::Arc::ptr_eq(&app.raw_shelf[0].doc, &original) && app.session.documents().is_empty(), "a preview must not commit");
             assert!(!crate::menus::modal_allows(&app, "filter.cameraRaw"), "native menu clicks stay blocked");
             let finished = call(&mut app, &ctx, "ui.menu.invoke", json!({"id":"filter.cameraRaw","params":{"ui":{finish:true}}}));
             assert_eq!(finished["ok"], true, "{finished}");

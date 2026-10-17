@@ -721,11 +721,10 @@ pub struct PhotocraftApp {
     pub(crate) gradient: gradient_ui::LiveGradient,
     /// Filter › Camera Raw Filter dialog (camera_raw_ui).
     pub(crate) camera_raw: Option<camera_raw_ui::CameraRawDialog>,
-    /// A raw file just opened interactively, waiting for the open-time Camera Raw dialog (shown
-    /// on the next frame, which has the egui context).
-    pub(crate) pending_raw_open: Option<camera_raw_ui::RawOpen>,
-    /// The open-time re-develop (or its Camera Raw step) running in the background.
-    pub(crate) raw_redevelop: Option<camera_raw_ui::Redevelop>,
+    /// Raws decoded for Camera Raw and not yet opened (its filmstrip).
+    pub(crate) raw_shelf: Vec<camera_raw_ui::HeldRaw>,
+    /// The open-time re-develops (or their Camera Raw steps) running in the background.
+    pub(crate) raw_redevelop: Vec<camera_raw_ui::Redevelop>,
     /// Filter › Adaptive Wide Angle dialog (wide_angle_ui).
     pub(crate) wide_angle: Option<wide_angle_ui::WideAngleDialog>,
     /// ⌘Z history of each open parameter dialog (edit_history).
@@ -923,8 +922,8 @@ impl PhotocraftApp {
             distort: Default::default(),
             gradient: Default::default(),
             camera_raw: None,
-            pending_raw_open: None,
-            raw_redevelop: None,
+            raw_shelf: Vec::new(),
+            raw_redevelop: Vec::new(),
             wide_angle: None,
             dialog_edits: Default::default(),
             pending_after_prompt: None,

@@ -580,15 +580,16 @@ pub(crate) fn after_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>
     let opened = crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]);
     app.ui.status = opened.clone();
     app.ui.status_error = false;
-    // A raw opens in Camera Raw first; the dialog says how it was developed.
+    // A raw goes to Camera Raw first and becomes a document only on Open (which fires the
+    // script events then); the dialog says how it was developed.
     if crate::camera_raw_ui::wants_open_dialog(app, warnings) {
         crate::camera_raw_ui::queue_open_dialog(app, name, path, bytes);
         notices::io_warnings(app, &opened, &crate::camera_raw_ui::without_develop_note(warnings));
     } else {
         notices::io_warnings(app, &opened, warnings);
+        // Script events bound to "Open Document".
+        photocraft_engine::automate_cmds::document_opened(&mut app.session);
     }
-    // Script events bound to "Open Document".
-    photocraft_engine::automate_cmds::document_opened(&mut app.session);
     app.sync_views();
 }
 
