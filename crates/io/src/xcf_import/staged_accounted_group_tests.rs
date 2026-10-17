@@ -31,10 +31,10 @@ fn find<'a>(layers: &'a [Layer], name: &str) -> Option<&'a Layer> {
         if layer.name == name {
             return Some(layer);
         }
-        if let LayerContent::Group(group) = &layer.content {
-            if let Some(found) = find(&group.children, name) {
-                return Some(found);
-            }
+        if let LayerContent::Group(group) = &layer.content
+            && let Some(found) = find(&group.children, name)
+        {
+            return Some(found);
         }
     }
     None
@@ -61,7 +61,7 @@ fn original_group_single_decode_and_authoritative_native_custody() {
         let options = DecodeOptions { progress: Some(&progress), ..Default::default() };
         let staged = staged_selected_source::import_staged_selected_bytes_with_budget("group.xcf", bytes, &Interrupt::NONE, &options, &budget).unwrap();
         assert_eq!(staged.family(), staged_source::SelectedStagedFamily::IsolatedNormalGroup);
-        assert_eq!(starts.load(Ordering::Relaxed), 1);
+        assert_eq!(starts.load(Ordering::Relaxed), 2, "immutable metadata preplan plus selected decode, without family retry");
         let doc = staged.document();
         let group = find(&doc.layers, &original.layers[0].name).unwrap();
         assert!(matches!(&group.content, LayerContent::Group(g) if g.children.len()==2));

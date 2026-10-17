@@ -5,14 +5,14 @@ use super::*;
 mod inputs;
 use photocraft_raster::backing::{
     ReadControl,
-    quota::{BackingQuota, QuotaKind, QuotaLimits},
+    quota::{BackingQuota, QuotaLimits},
 };
 use sha2::{Digest, Sha256};
 fn bytes(binding: inputs::Binding) -> Vec<u8> {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(binding.path);
     let b = std::fs::read(path).expect("explicit independent activity research input");
     assert_eq!(b.len(), binding.bytes);
-    assert_eq!(format!("{:x}", Sha256::digest(&b)), binding.sha256);
+    assert_eq!(Sha256::digest(&b).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), binding.sha256);
     b
 }
 fn file(case: &inputs::Case) -> XcfFile {
@@ -105,10 +105,10 @@ fn genuine_sources_preserve_effective_layer_and_explicit_filter_activity() {
                 assert!(stack.is_none());
             }
         }
-        assert!(q.used(QuotaKind::Resident) > 0);
+        assert!(q.usage().unwrap().resident > 0);
         drop(source);
-        assert_eq!(q.used(QuotaKind::Resident), 0);
-        assert_eq!(q.used(QuotaKind::Index), 0);
+        assert_eq!(q.usage().unwrap().resident, 0);
+        assert_eq!(q.usage().unwrap().index, 0);
     }
 }
 #[test]
@@ -165,7 +165,16 @@ fn inactive_roots_cannot_hide_invalid_source_or_refund_work() {
         let observe = |units| {
             let next = seen.get() + units;
             seen.set(next);
-            if next >= used { Err(photocraft_xcf::XcfError::new(ErrorKind::Cancelled, 0, "late inactive source test cancellation")) } else { Ok(()) }
+            if next >= used {
+                Err(photocraft_xcf::XcfError {
+                    kind: ErrorKind::Cancelled,
+                    offset: 0,
+                    item: String::new(),
+                    message: "late inactive source test cancellation".into(),
+                })
+            } else {
+                Ok(())
+            }
         };
         let cancelled =
             photocraft_xcf::Budget::new_persistent_with_work(photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(), None, Some(&observe))

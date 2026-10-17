@@ -1,6 +1,7 @@
 //! UNRUN contracts. Encoded source/decoded negative buffers are external test
 //! inputs; only real reader adoption claims actual same-quota custody.
 use super::*;
+use crate::xcf_import::plane::ParsedPlaneDescriptor;
 use photocraft_raster::backing::{
     ReadControl,
     quota::{BackingQuota, QuotaLimits},
@@ -8,7 +9,7 @@ use photocraft_raster::backing::{
 use photocraft_xcf::{BudgetKind, ByteSource, PlainSourceAccounting};
 use sha2::{Digest, Sha256};
 #[path = "plain_quantized_hierarchy_fixture.rs"]
-mod data;
+pub(super) mod data;
 fn budget() -> photocraft_xcf::Budget<'static> {
     photocraft_xcf::Budget::new(photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(), None)
 }
@@ -24,7 +25,10 @@ fn import(bytes: &[u8], q: BackingQuota) -> Result<crate::OwnedXcfImport, IoErro
         &mut std::io::Cursor::new(bytes),
         bytes.len() as u64,
         &Default::default(),
-        &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+        &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap(),
         q,
         &ctl(),
     )
@@ -33,7 +37,10 @@ fn old_point_stack() -> Vec<u8> {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/xcf/full/filter-stack-edits-evidence/stack.source.xcf");
     let b = std::fs::read(p).unwrap();
     assert_eq!(b.len(), 2348);
-    assert_eq!(format!("{:x}", Sha256::digest(&b)), "414a7c66f0cbb78d772b2766592472353acb2e520bec71c9f46daee3070c12f8");
+    assert_eq!(
+        Sha256::digest(&b).iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        "414a7c66f0cbb78d772b2766592472353acb2e520bec71c9f46daee3070c12f8"
+    );
     b
 }
 #[test]

@@ -3,7 +3,9 @@
 use super::super::{SelectedStagedFamily, SourceSelectedPolicy, StagePolicy};
 use super::*;
 use sha2::{Digest, Sha256};
-const CASES: &[(&str, &str, usize, &[(i32, i32, i32, i32, i32, i32, i32)])] = &[
+type CompositionTuple = (i32, i32, i32, i32, i32, i32, i32);
+type SourceCase = (&'static str, &'static str, usize, &'static [CompositionTuple]);
+const CASES: &[SourceCase] = &[
     (
         "temp/sol1-flat-multilayer-gimp-20261016/author-v1/outputs/three-auto.xcf",
         "547fccca9b828174af95882ac7ffd5c367fdfee1425f557b59d59168b00c0497",
@@ -73,12 +75,12 @@ fn operator(n: i32) -> photocraft_doc::import_compositing::GimpOperator {
 #[test]
 #[ignore = "UNRUN: six hash-bound research inputs; literal raw/resolved source policy only, profile-byte HOLD remains"]
 fn six_research_inputs_literal_policy() {
-    for i in 0..CASES.len() {
+    for (i, case_row) in CASES.iter().enumerate() {
         let f = source(i);
-        assert_eq!(f.layers.len(), CASES[i].3.len());
+        assert_eq!(f.layers.len(), case_row.3.len());
         assert_eq!(SourceSelectedPolicy::family_controlled(&f, &Interrupt::NONE, Some(&budget())).unwrap(), SelectedStagedFamily::SeparableBlend);
         assert_eq!(qualify_selected(&f, &Interrupt::NONE, &budget()).unwrap(), Some(SourceKind::General));
-        for (d, &(m, b, c, o, rb, rc, ro)) in f.layers.iter().zip(CASES[i].3) {
+        for (d, &(m, b, c, o, rb, rc, ro)) in f.layers.iter().zip(case_row.3) {
             assert_eq!((d.mode, d.blend_space, d.composite_space, d.composite_mode), (m, b, c, o));
             let actual = photocraft_doc::import_compositing::flat_modern_source_rule(f.version, m, b, c, o).unwrap().resolved();
             assert_eq!((actual.blend_space, actual.composite_space, actual.operator), (space(rb), space(rc), operator(ro)));
@@ -100,7 +102,10 @@ fn family_priority_and_strict_failure() {
         std::fs::read(std::path::PathBuf::from(std::env::var_os("PHOTOCRAFT_XCF_FULL_CORPUS").unwrap()).join("composition-matrix/mode-grain-merge.xcf"))
             .unwrap();
     assert_eq!(bytes.len(), 5542);
-    assert_eq!(Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect::<String>(), "c6d004d91d69fae7a76a7173d70f4f885e8a6d7cf2384b4de4582dec7f7f2c3f");
+    assert_eq!(
+        Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect::<String>(),
+        "c6d004d91d69fae7a76a7173d70f4f885e8a6d7cf2384b4de4582dec7f7f2c3f"
+    );
     let mut old = photocraft_xcf::decode(&bytes, &Default::default()).unwrap();
     assert_eq!(qualify_selected(&old, &Interrupt::NONE, &budget()).unwrap(), Some(SourceKind::Strict(Domain::Basic)));
     old.layers[1].plane.as_mut().unwrap().bytes[..4].copy_from_slice(&1.5f32.to_ne_bytes());

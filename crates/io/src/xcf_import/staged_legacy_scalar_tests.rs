@@ -112,7 +112,7 @@ fn six_pinned_sources_keep_old_qualifiers_distinct_epochs_and_owned_catalog() {
     let ctl = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) };
     for (path, sha, family) in fixtures {
         let bytes = Arc::new(std::fs::read(root.join(path)).unwrap());
-        assert_eq!(format!("{:x}", Sha256::digest(&*bytes)), sha);
+        assert_eq!(Sha256::digest(&*bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), sha);
         let f = photocraft_xcf::decode(&bytes, &DecodeOptions::default()).unwrap();
         assert!(family.qualify(&f, &Interrupt::NONE, None).unwrap());
         let old = match family {
@@ -159,6 +159,6 @@ fn six_pinned_sources_keep_old_qualifiers_distinct_epochs_and_owned_catalog() {
         assert_eq!(native, p.bytes);
         drop(selected);
         assert_eq!(q.usage().unwrap(), baseline);
-        assert_eq!(format!("{:x}", Sha256::digest(&*bytes)), sha);
+        assert_eq!(Sha256::digest(&*bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), sha);
     }
 }

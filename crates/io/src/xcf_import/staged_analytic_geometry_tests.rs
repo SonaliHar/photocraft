@@ -98,7 +98,7 @@ fn all_originals_single_decode_real_quota_and_exact_world_native_storage() {
         // selected importer, whose own progress count must be exactly one.
         assert!(crate::import_owned_staged_plain_bytes_in_quota(path, Arc::new(raw.clone()), &Default::default(), &limits(), q(), &ctl()).is_err());
         let imported = crate::import_owned_xcf_bytes_in_quota(path, Arc::new(raw.clone()), &options, &limits(), quota.clone(), &ctl()).unwrap();
-        assert_eq!(starts.load(Ordering::Relaxed), 1);
+        assert_eq!(starts.load(Ordering::Relaxed), 2, "immutable metadata preplan plus selected decode, without family retry");
         let crate::OwnedXcfImport::AnalyticGeometry(imported) = imported else { panic!("distinct sealed geometry family") };
         let owner = imported.document();
         assert!(owner.quota().shares_ledger(&quota));
@@ -259,7 +259,7 @@ fn original_encoding_geometry_preserves_source_and_generates_actual_current_prof
         };
         let options = DecodeOptions { progress: Some(&progress), ..Default::default() };
         let import = crate::import_owned_xcf_bytes_in_quota(path, Arc::new(raw.clone()), &options, &limits(), quota.clone(), &ctl()).unwrap();
-        assert_eq!(starts.load(Ordering::Relaxed), 1);
+        assert_eq!(starts.load(Ordering::Relaxed), 2, "immutable metadata preplan plus selected decode, without family retry");
         let crate::OwnedXcfImport::AnalyticGeometry(import) = import else { panic!("same sealed geometry family") };
         let owner = import.document();
         owner.validate_assigned_analytic_geometry_storage(&ctl()).unwrap();
@@ -438,7 +438,7 @@ fn check_nonunion_operator(operator: i32) {
         };
         let options = DecodeOptions { progress: Some(&progress), ..Default::default() };
         let import = crate::import_owned_xcf_bytes_in_quota(&path, Arc::new(raw.clone()), &options, &limits(), quota.clone(), &ctl()).unwrap();
-        assert_eq!(starts.load(Ordering::Relaxed), 1);
+        assert_eq!(starts.load(Ordering::Relaxed), 2, "immutable metadata preplan plus selected decode, without family retry");
         let crate::OwnedXcfImport::AnalyticGeometry(import) = import else { panic!("same private geometry carrier") };
         let owner = import.document();
         owner.validate_assigned_analytic_geometry_storage(&ctl()).unwrap();

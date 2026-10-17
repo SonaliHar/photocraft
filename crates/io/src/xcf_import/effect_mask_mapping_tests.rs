@@ -1,6 +1,9 @@
 //! UNRUN exact eager adapter/native-empty-mask mapping and failure drafts.
 use super::*;
-use photocraft_doc::item_identity::{FilterId, ItemRef, LayerId, MaskId};
+use photocraft_doc::{
+    LayerId,
+    item_identity::{FilterId, ItemRef, MaskId},
+};
 use photocraft_xcf::{Effect, EffectState};
 
 fn owner(sample: Sample, words: Vec<u8>) -> Drawable {

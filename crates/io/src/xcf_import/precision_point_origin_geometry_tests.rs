@@ -103,7 +103,7 @@ fn origin<P: ExactParsedPlane>(f: &XcfFile<P>, balance: bool) -> Result<bool, Io
 #[test]
 #[ignore = "UNRUN: staged-only seven geometry and precision matrix; external decoded harness"]
 fn seven_routes_keep_roles_while_frozen_eager_stays_small() {
-    use super::super::{staged_configured_point::ConfiguredPointFamily as C, staged_residual_point::ResidualPointFamily as R};
+    use super::super::staged_source::{test_configured_qualify, test_residual_qualify};
     for size in [(1, 1), (1, 257), (257, 259)] {
         for (op, model, sample, precision, encoding, balance) in [
             ("gimp:desaturate", Model::Rgb, Sample::F32, 650, Encoding::NonlinearProfile, false),
@@ -119,15 +119,15 @@ fn seven_routes_keep_roles_while_frozen_eager_stays_small() {
             assert!(origin(&f, balance).unwrap());
             assert!(!qualify(&f, op, balance, false, &Interrupt::NONE, None).unwrap());
             if op == "gimp:color-balance" {
-                assert!(C::hint(&f).unwrap().qualify(&f, &Interrupt::NONE, None).unwrap());
+                assert!(test_configured_qualify(&f).unwrap());
             } else {
-                assert!(R::hint(&f).unwrap().qualify(&f, &Interrupt::NONE, None).unwrap());
+                assert!(test_residual_qualify(&f, false).unwrap());
             }
             f.layers[0].effects[0].state.enabled = Some(false);
             assert!(origin(&f, balance).unwrap()); // PRESENT bool authority remains mapper, not native helper.
             if op == "gegl:saturation" && model == Model::Rgb {
                 f.layers[0].effects[0].arguments[0].value = ArgumentValue::Enum(2);
-                assert!(R::SaturationYuv.qualify(&f, &Interrupt::NONE, None).unwrap());
+                assert!(test_residual_qualify(&f, true).unwrap());
             }
         }
     }

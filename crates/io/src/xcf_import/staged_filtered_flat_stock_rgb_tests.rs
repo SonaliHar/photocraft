@@ -6,7 +6,10 @@ use crate::xcf_filters::{
     self as map, NeighborhoodDomain as D, PointReplaceFamily as F,
     mixed_stock_source::{self as stock, Kind},
 };
-use photocraft_raster::backing::{BackingQuota, QuotaKind, QuotaLimits, ReadControl};
+use photocraft_raster::backing::{
+    ReadControl,
+    quota::{BackingQuota, QuotaLimits},
+};
 use photocraft_xcf::ArgumentValue;
 use sha2::{Digest, Sha256};
 #[derive(Clone, Copy)]
@@ -57,7 +60,7 @@ const CASES: [Case; 6] = [
 fn bytes(c: Case) -> Vec<u8> {
     let b = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(c.path)).unwrap();
     assert_eq!(b.len(), c.bytes);
-    assert_eq!(format!("{:x}", Sha256::digest(&b)), c.sha256);
+    assert_eq!(Sha256::digest(&b).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), c.sha256);
     b
 }
 fn decoded(i: usize) -> XcfFile {
@@ -112,12 +115,75 @@ fn genuine_old_singletons_remain_original_routes() {
     for c in CASES {
         let encoded = bytes(c);
         let f = photocraft_xcf::decode(&encoded, &Default::default()).unwrap();
+        // This is a sibling envelope check on the genuine UNIT original,
+        // not whole-file SourceOpacity classification or a new producer packet.
+        let effect = &f.layers[0].effects[0];
+        if effect.operation == "gegl:alien-map" {
+            assert_eq!(effect.properties.len(), 18);
+            assert_eq!(effect.state.opacity_bits, Some(1f32.to_bits()));
+            assert!(effect.properties.iter().all(|property| property.tag != 6));
+            let opacity = effect.properties.iter().filter(|property| property.tag == 33).collect::<Vec<_>>();
+            assert_eq!(opacity.len(), 1);
+            assert_eq!(opacity[0].declared_bytes, 4);
+            assert_eq!(opacity[0].payload, 1f32.to_bits().to_be_bytes());
+            assert_eq!(crate::xcf_filters::filtered_flat_opacity_source::raw_opacity(effect), Some(1f32.to_bits()));
+            assert!(crate::xcf_filters::filtered_flat_opacity_source::envelope(effect));
+            // Decoded helper neighbors only; the original reader input below is
+            // unchanged. Cap tests retain all ten typed argument records.
+            let mut over = effect.clone();
+            over.properties.push(effect.properties.iter().find(|p| p.tag == 8).unwrap().clone());
+            assert_eq!(over.properties.len(), 19);
+            assert_eq!(crate::xcf_filters::filtered_flat_opacity_source::raw_opacity(&over), None);
+            assert!(!crate::xcf_filters::filtered_flat_opacity_source::envelope(&over));
+            let mut other = effect.clone();
+            other.operation = "gegl:invert-linear".into();
+            assert_eq!(other.properties.len(), 18);
+            assert_eq!(crate::xcf_filters::filtered_flat_opacity_source::raw_opacity(&other), None);
+            assert!(!crate::xcf_filters::filtered_flat_opacity_source::envelope(&other));
+            // Keep an independently accepted sibling strictly below the Alien
+            // cap so duplicate/width/state refusals cannot be cap-only failures.
+            let mut sibling = effect.clone();
+            sibling.properties.retain(|p| !matches!(p.tag, 7 | 8));
+            assert_eq!(sibling.properties.len(), 16);
+            assert_eq!(crate::xcf_filters::filtered_flat_opacity_source::raw_opacity(&sibling), Some(1f32.to_bits()));
+            assert!(crate::xcf_filters::filtered_flat_opacity_source::envelope(&sibling));
+            let mut duplicate = sibling.clone();
+            duplicate.properties.push(sibling.properties.iter().find(|p| p.tag == 33).unwrap().clone());
+            assert_eq!(duplicate.properties.len(), 17);
+            assert_eq!(crate::xcf_filters::filtered_flat_opacity_source::raw_opacity(&duplicate), None);
+            assert!(!crate::xcf_filters::filtered_flat_opacity_source::envelope(&duplicate));
+            let mut legacy = sibling.clone();
+            let mut property = sibling.properties.iter().find(|p| p.tag == 33).unwrap().clone();
+            property.tag = 6;
+            legacy.properties.push(property);
+            assert_eq!(legacy.properties.len(), 17);
+            assert_eq!(crate::xcf_filters::filtered_flat_opacity_source::raw_opacity(&legacy), None);
+            assert!(!crate::xcf_filters::filtered_flat_opacity_source::envelope(&legacy));
+            let mut short = sibling.clone();
+            short.properties.iter_mut().find(|p| p.tag == 33).unwrap().payload.pop();
+            assert_eq!(short.properties.len(), 16);
+            assert_eq!(crate::xcf_filters::filtered_flat_opacity_source::raw_opacity(&short), None);
+            assert!(!crate::xcf_filters::filtered_flat_opacity_source::envelope(&short));
+            let mut mismatch = sibling.clone();
+            mismatch.state.opacity_bits = Some(0f32.to_bits());
+            assert_eq!(crate::xcf_filters::filtered_flat_opacity_source::raw_opacity(&mismatch), None);
+            assert!(!crate::xcf_filters::filtered_flat_opacity_source::envelope(&mismatch));
+            let mut nonfinite = sibling;
+            let property = nonfinite.properties.iter_mut().find(|p| p.tag == 33).unwrap();
+            property.payload = f32::NAN.to_bits().to_be_bytes().to_vec();
+            nonfinite.state.opacity_bits = Some(f32::NAN.to_bits());
+            assert_eq!(crate::xcf_filters::filtered_flat_opacity_source::raw_opacity(&nonfinite), None);
+            assert!(!crate::xcf_filters::filtered_flat_opacity_source::envelope(&nonfinite));
+        }
         assert!(crate::xcf_point_replace_source::classify_family_hint(&f) == Some(c.family));
         assert!(!hint(&f, &Interrupt::NONE, &budget()).unwrap());
         assert!(crate::xcf_point_replace_source::classify(&f, &Interrupt::NONE, Some(&budget())).unwrap() == Some(D::PointReplace(c.family)));
         let q = BackingQuota::new(QuotaLimits { resident: 256 << 20, index: 64 << 20, scratch: 0 });
         let control = control();
-        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap();
         let source = crate::import_owned_xcf_from_reader_in_quota(
             "old singleton original",
             &mut std::io::Cursor::new(&encoded),
@@ -154,10 +220,10 @@ fn genuine_old_singletons_remain_original_routes() {
             let record = state.opaque.iter().find(|r| r.identity == identity && r.owner == Some(state.filter_stacks[0].owner)).unwrap();
             assert_eq!(record.bytes.as_slice(), p.payload.as_slice());
         }
-        assert!(q.used(QuotaKind::Resident) > 0);
+        assert!(q.usage().unwrap().resident > 0);
         drop(source);
-        assert_eq!(q.used(QuotaKind::Resident), 0);
-        assert_eq!(q.used(QuotaKind::Index), 0);
+        assert_eq!(q.usage().unwrap().resident, 0);
+        assert_eq!(q.usage().unwrap().index, 0);
     }
 }
 #[test]
@@ -231,6 +297,20 @@ fn cheap_shapes_domains_and_wrong_family_refuse() {
             assert!(stock::kind(&x).is_none());
         }
     }
+    // Exact ten-field AlienMap carries eight common plus ten argument records.
+    let alien = &f.layers[1].effects[2];
+    assert_eq!(alien.properties.len(), 18);
+    assert!(map::filtered_flat_source_family(alien).is_some());
+    let mut excess = alien.clone();
+    excess.properties.push(excess.properties[0].clone());
+    assert_eq!(excess.properties.len(), 19);
+    assert!(map::filtered_flat_source_family(&excess).is_none());
+    let mut duplicate = alien.clone();
+    duplicate.arguments.push(duplicate.arguments[0].clone());
+    assert!(map::filtered_flat_source_family(&duplicate).is_none());
+    let mut missing = alien.clone();
+    missing.arguments.pop();
+    assert!(map::filtered_flat_source_family(&missing).is_none());
     let mut temp = f.layers[1].effects[0].clone();
     temp.arguments[0].value = ArgumentValue::Float32Bits(999f32.to_bits());
     assert!(stock::kind(&temp).is_none());

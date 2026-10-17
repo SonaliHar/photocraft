@@ -205,7 +205,6 @@ fn whole_lower_reserve_work_precedes_source_scans_and_candidate_copy() {
         )
         .is_err()
     );
-    let mut limits = CheckerboardMappingLimits::default();
-    limits.work_units = 1;
+    let limits = CheckerboardMappingLimits { work_units: 1, ..Default::default() };
     assert!(map_retained_checkerboard_source(&s, &e, FilterId(7), None, identity(), limits, &Interrupt::NONE, &mut |_, _| Ok(()), &mut |_| Ok(())).is_err());
 }

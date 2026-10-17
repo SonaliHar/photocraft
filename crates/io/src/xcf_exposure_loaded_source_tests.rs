@@ -45,7 +45,7 @@ fn bytes(case: Case) -> Vec<u8> {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(case.path);
     let b = std::fs::read(p).unwrap();
     assert_eq!(b.len(), case.bytes);
-    assert_eq!(format!("{:x}", Sha256::digest(&b)), case.hash);
+    assert_eq!(Sha256::digest(&b).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), case.hash);
     b
 }
 fn decoded(case: Case) -> XcfFile {
@@ -62,7 +62,10 @@ fn genuine_ordinary_endpoint_sources_retain_point_class_and_raw_words() {
         item_identity::ItemRef,
         xcf_filters::{ExactNumber, FilterValue},
     };
-    use photocraft_raster::backing::{BackingQuota, QuotaKind, QuotaLimits, ReadControl};
+    use photocraft_raster::backing::{
+        ReadControl,
+        quota::{BackingQuota, QuotaLimits},
+    };
     for case in CASES {
         let encoded = bytes(case);
         let f = photocraft_xcf::decode(&encoded, &Default::default()).unwrap();
@@ -70,7 +73,10 @@ fn genuine_ordinary_endpoint_sources_retain_point_class_and_raw_words() {
         assert!(matches!(crate::xcf_point_replace_source::classify(&f, &Interrupt::NONE, Some(&budget())).unwrap(), Some(D::PointReplace(F::LoadedExposure))));
         let q = BackingQuota::new(QuotaLimits { resident: 128 << 20, index: 32 << 20, scratch: 0 });
         let c = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) };
-        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 64 << 20), ("indexBytes", 16 << 20), ("scratchBytes", 0)])
+            .unwrap();
         let imported = crate::import_owned_xcf_from_reader_in_quota(
             "endpointoriginal",
             &mut std::io::Cursor::new(&encoded),
@@ -123,10 +129,10 @@ fn genuine_ordinary_endpoint_sources_retain_point_class_and_raw_words() {
             }
             assert_eq!(all, raw.plane.as_ref().unwrap().bytes);
         }
-        assert!(q.used(QuotaKind::Resident) > 0);
+        assert!(q.usage().unwrap().resident > 0);
         drop(source);
-        assert_eq!(q.used(QuotaKind::Resident), 0);
-        assert_eq!(q.used(QuotaKind::Index), 0);
+        assert_eq!(q.usage().unwrap().resident, 0);
+        assert_eq!(q.usage().unwrap().index, 0);
     }
 }
 #[test]
@@ -165,7 +171,10 @@ fn endpoint_source_is_exact_and_old_routes_remain() {
     let p =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/xcf/full/exposure-black-level-precision-evidence/rgb-float_non_linear.source.xcf");
     let old = std::fs::read(p).unwrap();
-    assert_eq!(format!("{:x}", Sha256::digest(&old)), "11f0242cedd1e70854903f0d85868ae8d173666f6e6192d17616790d0b97bfa0");
+    assert_eq!(
+        Sha256::digest(&old).iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        "11f0242cedd1e70854903f0d85868ae8d173666f6e6192d17616790d0b97bfa0"
+    );
     let old = photocraft_xcf::decode(&old, &Default::default()).unwrap();
     assert!(matches!(crate::xcf_point_replace_source::classify(&old, &Interrupt::NONE, None).unwrap(), Some(D::PointReplace(F::Exposure))));
     // Existing old PointStack tuple remains selected before this Point hint.

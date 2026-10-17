@@ -13,10 +13,10 @@ fn fixture(empty_icon_nul: bool) -> (Vec<u8>, Effect<()>) {
             source.push(0);
         }
     }
-    let words = [(8, 1), (33, 1f32.to_bits()), (7, 62), (35, 239108689), (36, 239108689), (37, 239108689), (46, 0), (44, 1)];
+    let words: [(u32, u32); 8] = [(8, 1), (33, 1f32.to_bits()), (7, 62), (35, 239108689), (36, 239108689), (37, 239108689), (46, 0), (44, 1)];
     let mut properties = Vec::new();
     for (tag, value) in words {
-        source.extend_from_slice(&(tag as u32).to_be_bytes());
+        source.extend_from_slice(&tag.to_be_bytes());
         source.extend_from_slice(&4u32.to_be_bytes());
         let offset = source.len() as u64;
         let payload = value.to_be_bytes().to_vec();
@@ -136,8 +136,7 @@ fn source_callbacks_admit_before_scan_and_preserve_mask_association_refusal() {
         )
         .is_err()
     );
-    let mut small = StretchHsvMappingLimits::default();
-    small.resident_bytes = 1;
+    let small = StretchHsvMappingLimits { resident_bytes: 1, ..Default::default() };
     assert!(map_retained_stretch_hsv_source(&s, &e, FilterId(7), None, identity(), small, &Interrupt::NONE, &mut |_, _| Ok(()), &mut |_| Ok(())).is_err());
     let cancel = || true;
     assert!(matches!(

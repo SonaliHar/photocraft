@@ -1,7 +1,7 @@
 //! UNRUN generic retention-owner / exact native-store regression drafts.
 use super::*;
+use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_raster::backing::quota::{QuotaKind, QuotaLease, QuotaLimits};
-use photocraft_raster::{ColorMode, PixelFormat, SampleType};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct FirstOwner {

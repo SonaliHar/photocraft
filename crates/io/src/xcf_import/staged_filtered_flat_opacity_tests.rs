@@ -2,7 +2,10 @@
 //! mutations are external harness inputs, never producer or paid-owner evidence.
 use super::*;
 use crate::xcf_filters::filtered_flat_opacity_source as scalar;
-use photocraft_raster::backing::{BackingQuota, QuotaKind, QuotaLimits, ReadControl};
+use photocraft_raster::backing::{
+    ReadControl,
+    quota::{BackingQuota, QuotaLimits},
+};
 use sha2::{Digest, Sha256};
 #[derive(Clone, Copy)]
 struct Binding {
@@ -124,7 +127,7 @@ const CASES: [Case; 8] = [
 fn read(b: Binding) -> Vec<u8> {
     let bytes = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(b.path)).unwrap();
     assert_eq!(bytes.len(), b.bytes);
-    assert_eq!(format!("{:x}", Sha256::digest(&bytes)), b.sha256);
+    assert_eq!(Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), b.sha256);
     bytes
 }
 fn decoded(index: usize) -> XcfFile {
@@ -160,7 +163,10 @@ fn genuine_sources_keep_exact_words_and_paid_native_custody() {
             assert!(opacity::qualify(&parsed, &Interrupt::NONE, &budget()).is_err());
         }
         let q = BackingQuota::new(QuotaLimits { resident: 256 << 20, index: 64 << 20, scratch: 0 });
-        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap();
         let source = crate::import_owned_xcf_from_reader_in_quota(
             case.id,
             &mut std::io::Cursor::new(&bytes),
@@ -228,10 +234,10 @@ fn genuine_sources_keep_exact_words_and_paid_native_custody() {
             }
             assert_eq!(actual, raw.plane.as_ref().unwrap().bytes);
         }
-        assert!(q.used(QuotaKind::Resident) > 0);
+        assert!(q.usage().unwrap().resident > 0);
         drop(source);
-        assert_eq!(q.used(QuotaKind::Resident), 0);
-        assert_eq!(q.used(QuotaKind::Index), 0);
+        assert_eq!(q.usage().unwrap().resident, 0);
+        assert_eq!(q.usage().unwrap().index, 0);
     }
 }
 #[test]
@@ -240,12 +246,13 @@ fn raw_scalar_contract_and_old_routes_remain_distinct() {
     let base = decoded(1);
     let effect = base.layers.iter().flat_map(|d| &d.effects).next().unwrap();
     assert!(scalar::family(effect).is_some());
-    assert!(crate::xcf_filters::filtered_flat_source_family(effect).is_none());
+    assert_eq!(crate::xcf_filters::filtered_flat_source_family(effect).is_some(), scalar::raw_opacity(effect) == Some(1f32.to_bits()));
     for bits in [0u32, 0x80000000, 0.375f32.to_bits(), 1f32.to_bits()] {
         let mut e = effect.clone();
         set_opacity(&mut e, bits);
         assert_eq!(scalar::raw_opacity(&e), Some(bits));
         assert!(scalar::family(&e).is_some());
+        assert_eq!(crate::xcf_filters::filtered_flat_source_family(&e).is_some(), bits == 1f32.to_bits());
         let owner = photocraft_doc::item_identity::ItemRef::Layer(photocraft_doc::LayerId(1));
         let mapped = crate::xcf_filters::qualified_ordered_filtered_flat_opacity_source_stack(std::slice::from_ref(&e), &[None], owner, 1, 22).unwrap();
         assert_eq!(mapped.nodes[0].opacity_f64_bits, f64::from(f32::from_bits(bits)).to_bits());
@@ -286,7 +293,10 @@ fn raw_scalar_contract_and_old_routes_remain_distinct() {
                 p.tag = 6;
                 e.properties.push(p);
             }
-            5 => e.state.opacity_bits = Some(1f32.to_bits()),
+            5 => {
+                assert_eq!(effect.state.opacity_bits, Some(1f32.to_bits()));
+                e.state.opacity_bits = Some(0.5f32.to_bits());
+            }
             6 => e.state.opacity_u8 = Some(95),
             _ => e.state.opacity_bits = None,
         }
@@ -325,7 +335,10 @@ fn inactive_sources_pay_complete_logical_proof_and_cancel() {
         let q = BackingQuota::new(QuotaLimits { resident: if deny_work { 256 << 20 } else { 0 }, index: 64 << 20, scratch: 0 });
         let denied = |_| Err(photocraft_raster::backing::BackingError::Work);
         let c = if deny_work { ReadControl { interrupt: &Interrupt::NONE, work: &denied } } else { control() };
-        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap();
         assert!(
             crate::import_owned_xcf_from_reader_in_quota(
                 "denied inactive source",
@@ -338,8 +351,8 @@ fn inactive_sources_pay_complete_logical_proof_and_cancel() {
             )
             .is_err()
         );
-        assert_eq!(q.used(QuotaKind::Resident), 0);
-        assert_eq!(q.used(QuotaKind::Index), 0);
+        assert_eq!(q.usage().unwrap().resident, 0);
+        assert_eq!(q.usage().unwrap().index, 0);
     }
     let mut f = decoded(3);
     for d in &mut f.layers {

@@ -84,14 +84,17 @@ mod inputs {
 #[ignore = "UNRUN: genuine8x6/130x65 both-depth Exposure originals preserve canonical raw/public list, native planes and every own mask; not numerical order acceptance"]
 fn genuine_exposure_originals_preserve_each_node_and_all_native_custody() {
     use photocraft_doc::{LayerContent, item_identity::ItemRef};
-    use photocraft_raster::backing::{BackingQuota, QuotaKind, QuotaLimits, ReadControl};
+    use photocraft_raster::backing::{
+        ReadControl,
+        quota::{BackingQuota, QuotaLimits},
+    };
     use sha2::{Digest, Sha256};
     for case in inputs::CASES {
         let read = |binding: inputs::Binding| {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(binding.path);
             let bytes = std::fs::read(path).unwrap();
             assert_eq!(bytes.len(), binding.bytes);
-            assert_eq!(format!("{:x}", Sha256::digest(&bytes)), binding.sha256);
+            assert_eq!(Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), binding.sha256);
             bytes
         };
         let bytes = read(case.source);
@@ -176,10 +179,10 @@ fn genuine_exposure_originals_preserve_each_node_and_all_native_custody() {
             }
             assert_eq!(captured, raw.plane.as_ref().unwrap().bytes);
         }
-        assert!(q.used(QuotaKind::Resident) > 0);
+        assert!(q.usage().unwrap().resident > 0);
         drop(source);
-        assert_eq!(q.used(QuotaKind::Resident), 0);
-        assert_eq!(q.used(QuotaKind::Index), 0);
+        assert_eq!(q.usage().unwrap().resident, 0);
+        assert_eq!(q.usage().unwrap().index, 0);
     }
 }
 
@@ -226,7 +229,23 @@ fn independent_exposure_authority_and_old_identity() {
             _ => e.operation = "gegl:unknown".into(),
         }
         assert!(hint(&f, &Interrupt::NONE, &budget()).unwrap());
-        assert!(qualify(&f, &Interrupt::NONE, &budget()).is_err());
+        if matches!(kind, 4 | 5) {
+            // The independently released loaded endpoint is a distinct V2 role.
+            qualify(&f, &Interrupt::NONE, &budget()).unwrap();
+            let e = &f.layers[1].effects[3];
+            assert!(matches!(crate::xcf_filters::filtered_flat_source_family(e), Some(crate::xcf_filters::PointReplaceFamily::MixedLoadedExposure)));
+            let words = crate::xcf_point_replace_source::loaded_exposure_source::parameters(e).unwrap();
+            assert_eq!(words[1], if kind == 4 { 0x3dcccccd } else { 0xbdcccccd });
+            let exposure = e.arguments.iter().find(|a| a.name == "exposure").unwrap();
+            assert!(matches!(exposure.value, ArgumentValue::Float32Bits(bits) if bits == words[0]));
+            // A genuinely outside-domain neighbor still refuses while inactive.
+            let e = &mut f.layers[1].effects[3];
+            e.arguments.iter_mut().find(|a| a.name == "black-level").unwrap().value =
+                ArgumentValue::Float32Bits(if kind == 4 { 0.10001f32.to_bits() } else { (-0.10001f32).to_bits() });
+            assert!(qualify(&f, &Interrupt::NONE, &budget()).is_err());
+        } else {
+            assert!(qualify(&f, &Interrupt::NONE, &budget()).is_err());
+        }
     }
     let mut positive = decoded(0);
     positive.layers[0].visible = false;
@@ -251,7 +270,10 @@ fn independent_exposure_authority_and_old_identity() {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/xcf/full/exposure-black-level-precision-evidence/rgb-float_non_linear.source.xcf");
     let oldbytes = std::fs::read(path).unwrap();
     use sha2::{Digest, Sha256};
-    assert_eq!(format!("{:x}", Sha256::digest(&oldbytes)), "11f0242cedd1e70854903f0d85868ae8d173666f6e6192d17616790d0b97bfa0");
+    assert_eq!(
+        Sha256::digest(&oldbytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        "11f0242cedd1e70854903f0d85868ae8d173666f6e6192d17616790d0b97bfa0"
+    );
     let old = photocraft_xcf::decode(&oldbytes, &Default::default()).unwrap();
     assert!(!hint(&old, &Interrupt::NONE, &budget()).unwrap());
     assert!(matches!(

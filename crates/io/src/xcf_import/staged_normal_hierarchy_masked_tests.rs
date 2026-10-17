@@ -1,6 +1,8 @@
 //! UNRUN declared compatibility contracts. Synthetic decoded trees are external
 //! harness data, not producer-authored nested-mask files or incoming receipts.
 use super::*;
+use crate::xcf_import::plane::ParsedPlaneDescriptor;
+use photocraft_doc::LayerId;
 use photocraft_xcf::{BudgetKind, Effect, PlaneDescriptor, PlaneRole};
 use sha2::{Digest, Sha256};
 #[derive(Clone)]
@@ -30,7 +32,7 @@ fn root() -> std::path::PathBuf {
 }
 fn table(path: &str, hash: &str) -> serde_json::Value {
     let b = std::fs::read(root().join(path)).unwrap();
-    assert_eq!(format!("{:x}", Sha256::digest(&b)), hash);
+    assert_eq!(Sha256::digest(&b).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), hash);
     serde_json::from_slice(&b).unwrap()
 }
 fn bytes(v: &serde_json::Value) -> Vec<u8> {
@@ -38,7 +40,7 @@ fn bytes(v: &serde_json::Value) -> Vec<u8> {
     let p = raw.split_once("/temp/").unwrap().1;
     let b = std::fs::read(root().join("temp").join(p)).unwrap();
     assert_eq!(b.len() as u64, v["bytes"].as_u64().unwrap());
-    assert_eq!(format!("{:x}", Sha256::digest(&b)), v["sha256"].as_str().unwrap());
+    assert_eq!(Sha256::digest(&b).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), v["sha256"].as_str().unwrap());
     b
 }
 fn hierarchy_table() -> serde_json::Value {
@@ -167,7 +169,7 @@ fn fixture(op: &str, double: bool) -> XcfFile<Stamped> {
     }
     let mut f = remap_file(f, &|mut native: Plane| {
         if double {
-            native.bytes = native.bytes.chunks_exact(4).flat_map(|v| (f32::from_ne_bytes(v.try_into().unwrap()) as f64).to_ne_bytes()).collect();
+            native.bytes = native.bytes.as_chunks::<4>().0.iter().flat_map(|v| (f32::from_ne_bytes(*v) as f64).to_ne_bytes()).collect();
             native.sample = Sample::F64;
         }
         Stamped { native, coverage: true }
@@ -194,7 +196,7 @@ fn declared_nested_source_owns_each_node_domain() {
             assert!(super::super::staged_normal_hierarchy::qualify(&f, &Interrupt::NONE, &b).is_err());
             for d in f.layers.iter().filter(|d| !d.group) {
                 let domains = super::super::staged_masked_filtered_flat::domains(d, f.sample, f.width, f.height, &Interrupt::NONE, &b).unwrap();
-                assert_ne!(domains.values[0], domains.values[1]);
+                assert!(domains.values[0] != domains.values[1]);
                 let masks = vec![Some(ItemRef::Mask(MaskId(1))), Some(ItemRef::Mask(MaskId(2)))];
                 let stack = crate::xcf_filters::qualified_ordered_masked_normal_hierarchy_source_stack(
                     &d.effects,
@@ -377,7 +379,10 @@ fn genuine_baselines_keep_source_custody_and_priority() {
                 &mut std::io::Cursor::new(&original),
                 original.len() as u64,
                 &Default::default(),
-                &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+                &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+                    .unwrap()
+                    .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+                    .unwrap(),
                 q.clone(),
                 &ctl,
             )

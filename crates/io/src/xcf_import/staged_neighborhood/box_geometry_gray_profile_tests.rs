@@ -10,13 +10,15 @@ fn controlled_gray_profile_work_and_peak() {
     let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
     let small = limits.lowered(&[("sampleWorkUnits", 32)]).unwrap();
     let b = photocraft_xcf::Budget::new_persistent(small, None).unwrap();
+    let baseline = b.used(BudgetKind::Resident);
     assert!(implicit_box_effective(&f, photocraft_cms::ColorSpace::Gray, photocraft_cms::xcf_color::Encoding::NonlinearProfile, &Interrupt::NONE, &b).is_err());
-    assert_eq!(b.used(BudgetKind::Resident), 0);
+    assert_eq!(b.used(BudgetKind::Resident), baseline);
     let b = photocraft_xcf::Budget::new_persistent(limits, None).unwrap();
+    let baseline = b.used(BudgetKind::Resident);
     let effective =
         implicit_box_effective(&f, photocraft_cms::ColorSpace::Gray, photocraft_cms::xcf_color::Encoding::NonlinearProfile, &Interrupt::NONE, &b).unwrap();
     assert!(b.used(BudgetKind::Work) >= 65536 * 64);
-    assert_eq!(b.used(BudgetKind::Resident), 0);
+    assert_eq!(b.used(BudgetKind::Resident), baseline);
     assert_eq!(
         effective.to_bytes(),
         photocraft_cms::xcf_color::effective_profile(None, photocraft_cms::ColorSpace::Gray, photocraft_cms::xcf_color::Encoding::NonlinearProfile)

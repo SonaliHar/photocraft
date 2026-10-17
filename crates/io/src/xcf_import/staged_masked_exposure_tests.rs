@@ -3,7 +3,10 @@
 use super::*;
 use crate::xcf_filters::{NeighborhoodDomain as D, PointReplaceFamily as F};
 use crate::xcf_point_replace_source::masked_exposure_source as masked;
-use photocraft_raster::backing::{BackingQuota, QuotaKind, QuotaLimits, ReadControl};
+use photocraft_raster::backing::{
+    ReadControl,
+    quota::{BackingQuota, QuotaLimits},
+};
 use sha2::{Digest, Sha256};
 #[derive(Clone, Copy)]
 struct Binding {
@@ -173,11 +176,57 @@ const CASES: [Case; 10] = [
 fn read(b: Binding) -> Vec<u8> {
     let bytes = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(b.path)).unwrap();
     assert_eq!(bytes.len(), b.bytes);
-    assert_eq!(format!("{:x}", Sha256::digest(&bytes)), b.sha256);
+    assert_eq!(Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), b.sha256);
     bytes
 }
+// External decoded comparison harness. Parse permission is bound to the same
+// immutable source's complete paid descriptor plan, never bare Mask role.
+pub(super) fn decode_planned_coverage(bytes: &[u8]) -> XcfFile {
+    use photocraft_xcf::{
+        Budget, ByteSource, CollectingPlaneSink, MaskCoveragePolicy, PlainSourceAccounting, PlaneDescriptor, PlaneRole, PlaneSink, PlaneSinkControl,
+        ResourceLimits,
+    };
+    struct Sink<'b, 'a> {
+        inner: CollectingPlaneSink,
+        plan: super::staged_masked_filtered_flat::DescriptorPlan<'b, 'a>,
+        budget: &'b Budget<'a>,
+    }
+    impl PlaneSink for Sink<'_, '_> {
+        type Plane = photocraft_xcf::Plane;
+        fn validate_plane_descriptor(&mut self, d: &PlaneDescriptor, _: &mut PlaneSinkControl<'_, '_, '_>) -> Result<(), photocraft_xcf::XcfError> {
+            self.plan.verify(d, self.budget).unwrap();
+            Ok(())
+        }
+        fn mask_coverage_policy(&self, d: &PlaneDescriptor) -> MaskCoveragePolicy {
+            if d.role == PlaneRole::Mask { MaskCoveragePolicy::CheckedF32Preimage } else { MaskCoveragePolicy::StrictUnit }
+        }
+        fn begin(&mut self, d: &PlaneDescriptor, c: &mut PlaneSinkControl<'_, '_, '_>) -> Result<(), photocraft_xcf::XcfError> {
+            self.inner.begin(d, c)
+        }
+        fn tile(&mut self, x: u32, y: u32, w: u32, h: u32, b: &[u8], c: &mut PlaneSinkControl<'_, '_, '_>) -> Result<(), photocraft_xcf::XcfError> {
+            self.inner.tile(x, y, w, h, b, c)
+        }
+        fn finish(&mut self, c: &mut PlaneSinkControl<'_, '_, '_>) -> Result<Self::Plane, photocraft_xcf::XcfError> {
+            self.inner.finish(c)
+        }
+        fn abort(&mut self) {
+            self.inner.abort()
+        }
+    }
+    let b = Budget::new(ResourceLimits::for_policy(Default::default()).unwrap(), None);
+    let mut source = ByteSource::new(bytes);
+    let plan = super::staged_masked_filtered_flat::preplan(&mut source, &Default::default(), &b, PlainSourceAccounting::BorrowedMemory, &Interrupt::NONE)
+        .unwrap()
+        .unwrap();
+    let mut sink = Sink { inner: CollectingPlaneSink::default(), plan, budget: &b };
+    let parsed =
+        photocraft_xcf::decode_plain_source_into_sink_with_budget(&mut source, &Default::default(), &b, PlainSourceAccounting::BorrowedMemory, &mut sink)
+            .unwrap();
+    sink.plan.complete().unwrap();
+    parsed.decoded.file
+}
 fn decoded(i: usize) -> XcfFile {
-    photocraft_xcf::decode(&read(CASES[i].source), &Default::default()).unwrap()
+    decode_planned_coverage(&read(CASES[i].source))
 }
 fn budget() -> photocraft_xcf::Budget<'static> {
     photocraft_xcf::Budget::new(photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(), None)
@@ -195,13 +244,29 @@ fn genuine_sources_preserve_raw_masks_and_old_zero_priority() {
     for case in &CASES {
         let bytes = read(case.source);
         let _capture = read(case.capture);
-        let raw = photocraft_xcf::decode(&bytes, &Default::default()).unwrap();
+        // Comparison-only collector verifies this immutable source's complete
+        // descriptor plan; genuine selected import below retains Source authority.
+        let raw = decode_planned_coverage(&bytes);
+        if raw.sample == Sample::F64
+            && raw
+                .layers
+                .iter()
+                .flat_map(|d| &d.effects)
+                .filter_map(|e| e.mask.as_ref())
+                .filter_map(|m| m.plane.as_ref())
+                .any(|p| p.bytes.as_chunks::<8>().0.iter().any(|w| f64::from_ne_bytes(*w) > 1.0))
+        {
+            assert!(photocraft_xcf::decode(&bytes, &Default::default()).is_err(), "public default coverage remains strict unit");
+        }
         assert_eq!(masked::hint(&raw, &Interrupt::NONE, &budget()).unwrap(), case.masked);
         assert_eq!(selected(&raw), SelectedStagedFamily::Point(if case.masked { F::MaskedExposure } else { F::Exposure }));
         assert_eq!(masked::qualify(&raw, &Interrupt::NONE, Some(&budget())).unwrap(), case.masked);
         let q = BackingQuota::new(QuotaLimits { resident: 256 << 20, index: 64 << 20, scratch: 0 });
         let c = control();
-        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap();
         let source = crate::import_owned_xcf_from_reader_in_quota(
             case.id,
             &mut std::io::Cursor::new(&bytes),
@@ -255,7 +320,7 @@ fn genuine_sources_preserve_raw_masks_and_old_zero_priority() {
             doc.validate_xcf_state_with(&Interrupt::NONE).unwrap();
         }
         if case.id == "f64-all" {
-            assert!(expected.chunks_exact(8).all(|b| u64::from_ne_bytes(b.try_into().unwrap()) == 0x3ff0000009b25010));
+            assert!(expected.as_chunks::<8>().0.iter().all(|b| u64::from_ne_bytes(*b) == 0x3ff0000009b25010));
             assert!(mask.validate_with(&Interrupt::NONE).is_err());
         }
         let LayerContent::BackedRaster(native) = &layer.content else { panic!("original native") };
@@ -269,10 +334,10 @@ fn genuine_sources_preserve_raw_masks_and_old_zero_priority() {
             }
         }
         assert_eq!(actual, raw.layers[0].plane.as_ref().unwrap().bytes);
-        assert!(q.used(QuotaKind::Resident) > 0);
+        assert!(q.usage().unwrap().resident > 0);
         drop(source);
-        assert_eq!(q.used(QuotaKind::Resident), 0);
-        assert_eq!(q.used(QuotaKind::Index), 0);
+        assert_eq!(q.usage().unwrap().resident, 0);
+        assert_eq!(q.usage().unwrap().index, 0);
     }
 }
 fn mask_words(f: &mut XcfFile, bits: u64) {
@@ -381,7 +446,10 @@ fn same_work_control_and_inactive_bad_source_cannot_publish() {
         let q = BackingQuota::new(QuotaLimits { resident: if deny { 256 << 20 } else { 0 }, index: 64 << 20, scratch: 0 });
         let no = |_| Err(photocraft_raster::backing::BackingError::Work);
         let c = if deny { ReadControl { interrupt: &Interrupt::NONE, work: &no } } else { control() };
-        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap();
         assert!(
             crate::import_owned_xcf_from_reader_in_quota(
                 "denied masked source",
@@ -394,7 +462,7 @@ fn same_work_control_and_inactive_bad_source_cannot_publish() {
             )
             .is_err()
         );
-        assert_eq!(q.used(QuotaKind::Resident), 0);
-        assert_eq!(q.used(QuotaKind::Index), 0);
+        assert_eq!(q.usage().unwrap().resident, 0);
+        assert_eq!(q.usage().unwrap().index, 0);
     }
 }

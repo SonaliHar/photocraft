@@ -99,7 +99,7 @@ pub fn words_float(depth: usize, layout: usize, leaf: usize, x: u32, y: u32) -> 
     let n = x + y * w + leaf as u32 * 13;
     if depth == 3 {
         [
-            if n % 17 == 0 { 0x80000000 } else { 0x3e800001 + u64::from(n % 31) },
+            if n.is_multiple_of(17) { 0x80000000 } else { 0x3e800001 + u64::from(n % 31) },
             0x3f000001 + u64::from(n % 23),
             0x3f400001 + u64::from(n % 19),
             match n % 5 {
@@ -112,7 +112,7 @@ pub fn words_float(depth: usize, layout: usize, leaf: usize, x: u32, y: u32) -> 
         ]
     } else {
         [
-            if n % 17 == 0 { 0x8000000000000000 } else { 0x3fd0000000000001 + u64::from(n % 31) },
+            if n.is_multiple_of(17) { 0x8000000000000000 } else { 0x3fd0000000000001 + u64::from(n % 31) },
             0x3fe0000000002001 + u64::from(n % 23),
             0x3fe8000000000001 + u64::from(n % 19),
             match n % 5 {
@@ -182,16 +182,16 @@ fn hierarchy(v: &mut Vec<u8>, depth: usize, layout: usize, leaf: usize) {
                 if word == 1 {
                     v.extend_from_slice(bytes);
                 } else if word == 8 {
-                    for c in bytes.chunks_exact(8) {
-                        v.extend_from_slice(&u64::from_ne_bytes(c.try_into().unwrap()).to_be_bytes());
+                    for c in bytes.as_chunks::<8>().0 {
+                        v.extend_from_slice(&u64::from_ne_bytes(*c).to_be_bytes());
                     }
                 } else if word == 4 {
-                    for c in bytes.chunks_exact(4) {
-                        v.extend_from_slice(&u32::from_ne_bytes(c.try_into().unwrap()).to_be_bytes());
+                    for c in bytes.as_chunks::<4>().0 {
+                        v.extend_from_slice(&u32::from_ne_bytes(*c).to_be_bytes());
                     }
                 } else {
-                    for c in bytes.chunks_exact(2) {
-                        v.extend_from_slice(&u16::from_ne_bytes(c.try_into().unwrap()).to_be_bytes());
+                    for c in bytes.as_chunks::<2>().0 {
+                        v.extend_from_slice(&u16::from_ne_bytes(*c).to_be_bytes());
                     }
                 }
             }

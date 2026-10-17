@@ -68,7 +68,7 @@ fn actual_disabled_saved_sources_use_owned_only_mapping_and_preserve_all_native_
         };
         let options = DecodeOptions { progress: Some(&progress), ..Default::default() };
         let imported = crate::import_owned_xcf_bytes_in_quota(name, Arc::new(bytes.clone()), &options, &limits(), quota.clone(), &control()).unwrap();
-        assert_eq!(starts.load(Ordering::Relaxed), 1);
+        assert_eq!(starts.load(Ordering::Relaxed), 2);
         let crate::OwnedXcfImport::Point(imported) = imported else { panic!("same genuine structural holder") };
         let owner = imported.document();
         owner.validate_readonly_point_storage(&control()).unwrap();

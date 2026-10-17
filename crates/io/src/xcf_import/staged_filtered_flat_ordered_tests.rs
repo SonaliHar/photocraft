@@ -168,14 +168,17 @@ fn ordered(sample: Sample, count: usize) -> XcfFile {
 #[ignore = "UNRUN: genuine two-depth ordered originals preserve canonical raw/public list, native planes and every own mask; not numerical order acceptance"]
 fn genuine_ordered_originals_retain_actual_global_transport() {
     use photocraft_doc::{LayerContent, item_identity::ItemRef};
-    use photocraft_raster::backing::{BackingQuota, QuotaKind, QuotaLimits, ReadControl};
+    use photocraft_raster::backing::{
+        ReadControl,
+        quota::{BackingQuota, QuotaLimits},
+    };
     use sha2::{Digest, Sha256};
     for case in inputs::CASES {
         let read = |binding: inputs::Binding| {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(binding.path);
             let bytes = std::fs::read(path).unwrap();
             assert_eq!(bytes.len(), binding.bytes);
-            assert_eq!(format!("{:x}", Sha256::digest(&bytes)), binding.sha256);
+            assert_eq!(Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), binding.sha256);
             bytes
         };
         let bytes = read(case.source);
@@ -250,10 +253,10 @@ fn genuine_ordered_originals_retain_actual_global_transport() {
             }
             assert_eq!(captured, raw.plane.as_ref().unwrap().bytes);
         }
-        assert!(q.used(QuotaKind::Resident) > 0);
+        assert!(q.usage().unwrap().resident > 0);
         drop(source);
-        assert_eq!(q.used(QuotaKind::Resident), 0);
-        assert_eq!(q.used(QuotaKind::Index), 0);
+        assert_eq!(q.usage().unwrap().resident, 0);
+        assert_eq!(q.usage().unwrap().index, 0);
     }
 }
 #[test]

@@ -165,14 +165,14 @@ fn mixed_three_filters_plus_plain_keep_exact_root_local_domains() {
             assert!(hint(&f, &Interrupt::NONE, &b).unwrap());
             qualify(&f, &Interrupt::NONE, &b).unwrap();
             let domains = f.layers.iter().map(|d| root_domain(d, &Interrupt::NONE, &b).unwrap()).collect::<Vec<_>>();
-            assert_eq!(
-                domains,
-                vec![
-                    None,
-                    Some(NeighborhoodDomain::PointReplace(PointReplaceFamily::SemiFlatten)),
-                    Some(NeighborhoodDomain::PointReplace(PointReplaceFamily::HueChroma)),
-                    Some(NeighborhoodDomain::PointReplace(PointReplaceFamily::Vibrance))
-                ]
+            assert!(
+                domains
+                    == vec![
+                        None,
+                        Some(NeighborhoodDomain::PointReplace(PointReplaceFamily::SemiFlatten)),
+                        Some(NeighborhoodDomain::PointReplace(PointReplaceFamily::HueChroma)),
+                        Some(NeighborhoodDomain::PointReplace(PointReplaceFamily::Vibrance))
+                    ]
             );
             for root in f.layers.iter().skip(1) {
                 let e = &root.effects[0];
@@ -269,7 +269,7 @@ fn shared_control_is_cumulative_and_late_budget_refusal_is_final() {
 fn authored_four_root_sources_keep_native_filter_mask_and_profile_custody() {
     use photocraft_raster::backing::{
         ReadControl,
-        quota::{BackingQuota, QuotaKind, QuotaLimits},
+        quota::{BackingQuota, QuotaLimits},
     };
     use sha2::{Digest, Sha256};
     for (name, hash) in [
@@ -278,7 +278,7 @@ fn authored_four_root_sources_keep_native_filter_mask_and_profile_custody() {
     ] {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../temp/root-filtered-flat-gimp-20261016/author-v1/outputs").join(name);
         let bytes = std::fs::read(path).expect("explicit independent GIMP research input");
-        assert_eq!(format!("{:x}", Sha256::digest(&bytes)), hash);
+        assert_eq!(Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), hash);
         let f = photocraft_xcf::decode(&bytes, &Default::default()).unwrap();
         assert_eq!(f.layers.len(), 4);
         qualify(&f, &Interrupt::NONE, &budget()).unwrap();
@@ -334,9 +334,9 @@ fn authored_four_root_sources_keep_native_filter_mask_and_profile_custody() {
                 assert!(composition.resolved.is_none());
             }
         }
-        assert!(q.used(QuotaKind::Resident) > 0);
+        assert!(q.usage().unwrap().resident > 0);
         drop(source);
-        assert_eq!(q.used(QuotaKind::Resident), 0);
-        assert_eq!(q.used(QuotaKind::Index), 0);
+        assert_eq!(q.usage().unwrap().resident, 0);
+        assert_eq!(q.usage().unwrap().index, 0);
     }
 }

@@ -43,9 +43,8 @@ fn nonzero_offset_and_unequal_size_fail_admission_before_the_copy_stage() {
             _ => mask.height = 3,
         }
         let copied = std::cell::Cell::new(false);
-        let result = super::super::admit(&d, false, false, false, None, Sample::U8, &Interrupt::NONE).map(|placement| {
+        let result = super::super::admit(&d, false, false, false, false, None, Sample::U8, &Interrupt::NONE).inspect(|_| {
             copied.set(true);
-            placement
         });
         assert!(result.is_err());
         assert!(!copied.get());

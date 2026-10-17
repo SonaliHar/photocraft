@@ -1,7 +1,10 @@
 //! Ignored local witness contracts. Genuine encoded/capture/packet buffers are
 //! external test inputs; only actual reader publication claims paid custody.
 use super::*;
-use photocraft_raster::backing::{BackingQuota, QuotaKind, QuotaLimits, ReadControl};
+use photocraft_raster::backing::{
+    ReadControl,
+    quota::{BackingQuota, QuotaLimits},
+};
 use photocraft_xcf::{BudgetKind, ByteSource, PlainSourceAccounting};
 use sha2::{Digest, Sha256};
 fn root() -> std::path::PathBuf {
@@ -12,12 +15,15 @@ fn binding(v: &serde_json::Value) -> Vec<u8> {
     let suffix = raw.split_once("/temp/").unwrap().1;
     let bytes = std::fs::read(root().join("temp").join(suffix)).unwrap();
     assert_eq!(bytes.len() as u64, v["bytes"].as_u64().unwrap());
-    assert_eq!(format!("{:x}", Sha256::digest(&bytes)), v["sha256"].as_str().unwrap());
+    assert_eq!(Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), v["sha256"].as_str().unwrap());
     bytes
 }
 fn cases() -> serde_json::Value {
     let b = std::fs::read(root().join("temp/root-mixed-mask-research-20261016/literal-index-v1.json")).unwrap();
-    assert_eq!(format!("{:x}", Sha256::digest(&b)), "4d64c41a6460a57e96673e04fdfd79d62183f0808d9ffe1e7db0a34ec442d43e");
+    assert_eq!(
+        Sha256::digest(&b).iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        "4d64c41a6460a57e96673e04fdfd79d62183f0808d9ffe1e7db0a34ec442d43e"
+    );
     serde_json::from_slice(&b).unwrap()
 }
 fn budget() -> photocraft_xcf::Budget<'static> {
@@ -30,7 +36,7 @@ fn span<'a>(packet: &'a [u8], v: &serde_json::Value) -> &'a [u8] {
     let off = v["offset"].as_u64().unwrap() as usize;
     let len = v["bytes"].as_u64().unwrap() as usize;
     let b = &packet[off..off + len];
-    assert_eq!(format!("{:x}", Sha256::digest(b)), v["sha256"].as_str().unwrap());
+    assert_eq!(Sha256::digest(b).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), v["sha256"].as_str().unwrap());
     b
 }
 #[test]
@@ -57,7 +63,10 @@ fn genuine_sources_preserve_node_mask_and_native_custody() {
             &mut std::io::Cursor::new(&bytes),
             bytes.len() as u64,
             &Default::default(),
-            &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+            &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+                .unwrap()
+                .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+                .unwrap(),
             q.clone(),
             &c,
         )
@@ -113,10 +122,10 @@ fn genuine_sources_preserve_node_mask_and_native_custody() {
                 }
             }
         }
-        assert!(q.used(QuotaKind::Resident) > 0);
+        assert!(q.usage().unwrap().resident > 0);
         drop(source);
-        assert_eq!(q.used(QuotaKind::Resident), 0);
-        assert_eq!(q.used(QuotaKind::Index), 0);
+        assert_eq!(q.usage().unwrap().resident, 0);
+        assert_eq!(q.usage().unwrap().index, 0);
     }
 }
 #[test]
@@ -211,20 +220,26 @@ fn original_index_lease_and_control_are_effective() {
             &mut std::io::Cursor::new(&bytes),
             bytes.len() as u64,
             &Default::default(),
-            &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+            &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+                .unwrap()
+                .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+                .unwrap(),
             q.clone(),
             &ctl()
         )
         .is_err()
     );
-    assert_eq!(q.used(QuotaKind::Resident), 0);
-    assert_eq!(q.used(QuotaKind::Index), 0);
+    assert_eq!(q.usage().unwrap().resident, 0);
+    assert_eq!(q.usage().unwrap().index, 0);
 }
 #[test]
 #[ignore = "UNRUN: actual ordinary masked5 F64white original intake now uses descriptor parsepermission without mixedupgrade; default eagerdecoder staysStrict and oldPoint Source/backend remain final"]
 fn ordinary_f64_preimage_permission_keeps_old_point_purpose() {
     let raw = std::fs::read(root().join("temp/sol1-four-masked-point-literal-bindings-20261016/literal-index-v1.json")).unwrap();
-    assert_eq!(format!("{:x}", Sha256::digest(&raw)), "f21b945a5957539a5d645fa87a87a8012bf00de2a32cdb12a3d0b3520716c017");
+    assert_eq!(
+        Sha256::digest(&raw).iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        "f21b945a5957539a5d645fa87a87a8012bf00de2a32cdb12a3d0b3520716c017"
+    );
     let table: serde_json::Value = serde_json::from_slice(&raw).unwrap();
     for case in table["nonempty_cases"].as_array().unwrap().iter().filter(|c| c["source_precision"] == 750) {
         let bytes = binding(&case["source"]);
@@ -239,7 +254,10 @@ fn ordinary_f64_preimage_permission_keeps_old_point_purpose() {
             &mut std::io::Cursor::new(&bytes),
             bytes.len() as u64,
             &Default::default(),
-            &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+            &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+                .unwrap()
+                .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+                .unwrap(),
             q.clone(),
             &ctl(),
         )
@@ -248,7 +266,7 @@ fn ordinary_f64_preimage_permission_keeps_old_point_purpose() {
         assert!(source.document().is_readonly_point_storage());
         assert!(!source.document().is_readonly_masked_filtered_flat_point_storage());
         drop(source);
-        assert_eq!(q.used(QuotaKind::Resident), 0);
-        assert_eq!(q.used(QuotaKind::Index), 0);
+        assert_eq!(q.usage().unwrap().resident, 0);
+        assert_eq!(q.usage().unwrap().index, 0);
     }
 }

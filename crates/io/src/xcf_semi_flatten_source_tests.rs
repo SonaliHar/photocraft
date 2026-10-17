@@ -76,7 +76,7 @@ fn import(b: &[u8], q: &BackingQuota) -> Result<crate::OwnedXcfImport, IoError> 
 #[test]
 #[ignore = "UNRUN: twelve authored F32/F64 Linear/NL colour sources retain tags/words/native/profile/mask/raw3 andpaid title class"]
 fn actual_sources_keep_literal_and_native_custody() {
-    for case in 0..12 {
+    for (case, case_row) in CASES.iter().enumerate() {
         let f = file(case);
         assert!(qualify(&f, &Interrupt::NONE, Some(&budget())).unwrap());
         let q = quota();
@@ -87,7 +87,7 @@ fn actual_sources_keep_literal_and_native_custody() {
         assert!(!owner.is_readonly_assigned_point_storage());
         assert_eq!(d.sample_encoding, Some(SampleEncoding::NonlinearProfile));
         assert!(d.source_color_context.as_ref().unwrap().original_icc.is_none());
-        assert_eq!(d.source_color_context.as_ref().unwrap().source_precision, if CASES[case].3 { 750 } else { 650 });
+        assert_eq!(d.source_color_context.as_ref().unwrap().source_precision, if case_row.3 { 750 } else { 650 });
         let x = d.xcf_state.as_ref().unwrap();
         let n = &x.filter_stacks[0].nodes[0];
         assert_eq!(n.operation.schema_epoch, photocraft_compose::SEMI_FLATTEN_EPOCH);
@@ -99,7 +99,7 @@ fn actual_sources_keep_literal_and_native_custody() {
             (i32::from_be_bytes([0xc8, 0x75, 0x82, 0x51]), i32::from_be_bytes([0xc8, 0x75, 0x82, 0x51]), i32::from_be_bytes([0xc8, 0x75, 0x82, 0x51]))
         );
         let (words, encoding) = parameters(&f.layers[0].effects[0]).unwrap();
-        assert_eq!(encoding, if CASES[case].4 { SampleEncoding::Linear } else { SampleEncoding::NonlinearProfile });
+        assert_eq!(encoding, if case_row.4 { SampleEncoding::Linear } else { SampleEncoding::NonlinearProfile });
         let photocraft_doc::xcf_filters::FilterValue::Color { components, encoding: stored, profile: None } = &n.arguments[0].value else { panic!("literal") };
         assert_eq!(*stored, encoding);
         assert_eq!(
@@ -113,7 +113,7 @@ fn actual_sources_keep_literal_and_native_custody() {
             words
         );
         let photocraft_doc::LayerContent::BackedRaster(layer) = &d.layers[0].content else { panic!("native") };
-        let width = if CASES[case].3 { 32 } else { 16 };
+        let width = if case_row.3 { 32 } else { 16 };
         let r = photocraft_geom::Rect::new(0, 0, 8, 6);
         let pin = layer.checked_view().pin_tile(photocraft_geom::TileCoord::new(0, 0), &ctl()).unwrap();
         let mut raw = vec![0; 48 * width];

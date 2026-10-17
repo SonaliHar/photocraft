@@ -69,6 +69,9 @@ fn actual_mask_move_prepays_physical_padding_and_retains_registry_fee() {
     let retained = token.clone();
     let mut plane = StagedPlane::<ThresholdAlphaPolicy> {
         descriptor: descriptor(PlaneRole::Mask, Model::Gray, false, 1),
+        masked_mixed_plan: false,
+        hierarchy_plan: false,
+        hierarchy_coverage: false,
         storage: Storage::Ready(surface),
         _token: token,
         _policy: PhantomData,
@@ -79,9 +82,9 @@ fn actual_mask_move_prepays_physical_padding_and_retains_registry_fee() {
     assert_eq!(budget.used(BudgetKind::Work) - before, (surface_bytes / 4 + 1) * 32);
     assert!(plane.current_filter_mask_surface(Rect::new(0, 0, 8, 6), &mut local, &Interrupt::NONE).is_err());
     drop(plane);
-    assert_eq!(budget.used(BudgetKind::Resident), surface_bytes);
+    assert_eq!(budget.used(BudgetKind::Resident), surface_bytes + 256); // Index reservations also debit the inclusive Resident ledger.
     drop(surface);
-    assert_eq!(budget.used(BudgetKind::Resident), surface_bytes);
+    assert_eq!(budget.used(BudgetKind::Resident), surface_bytes + 256); // Index reservations also debit the inclusive Resident ledger.
     drop(retained);
     assert_eq!(budget.used(BudgetKind::Resident), 0);
     assert_eq!(budget.used(BudgetKind::Index), 0);

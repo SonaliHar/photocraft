@@ -31,9 +31,9 @@ fn actual_assigned_source_domain() {
         let e = &d.effects[0];
         assert!(matches!(e.arguments[0].value,ArgumentValue::Integer(v)if v==if edit{5}else{4}));
         let mut outside = 0;
-        for p in d.plane.as_ref().unwrap().bytes.chunks_exact(16) {
-            for w in p[..12].chunks_exact(4) {
-                let v = f32::from_ne_bytes(w.try_into().unwrap());
+        for p in d.plane.as_ref().unwrap().bytes.as_chunks::<16>().0 {
+            for w in p[..12].as_chunks::<4>().0 {
+                let v = f32::from_ne_bytes(*w);
                 outside += usize::from(!(0.0..=1.0).contains(&v));
             }
         }

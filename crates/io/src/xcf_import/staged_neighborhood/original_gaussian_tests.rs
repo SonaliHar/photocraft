@@ -70,7 +70,7 @@ fn original_and_edited_parameters_preserve_the_old_opaque_classifier_and_raw_byt
         assert!(<Plane as MappingPlane>::legacy_point_candidate(&file.layers[0], true, false, Size::new(96, 80)).unwrap());
         assert!(qualify(&file, &Interrupt::NONE, None).unwrap());
         assert_eq!(NeighborhoodSourceFamily::hint(&file), Some(NeighborhoodSourceFamily::OriginalGaussian));
-        assert_eq!(NeighborhoodSourceFamily::OriginalGaussian.domain(), crate::xcf_filters::NeighborhoodDomain::RasterOriginal);
+        assert!(NeighborhoodSourceFamily::OriginalGaussian.domain() == crate::xcf_filters::NeighborhoodDomain::RasterOriginal);
         file.layers[0].effects[0].arguments.reverse();
         assert!(qualify(&file, &Interrupt::NONE, None).unwrap()); // No argument normalization/order rewrite.
         assert_eq!(file.layers[0].plane.as_ref().unwrap().bytes, before);
@@ -201,7 +201,7 @@ fn authentic_original_and_edit_keep_domain_native_words_and_actual_quota_custody
         let options = DecodeOptions { progress: Some(&progress), ..Default::default() };
         let ctl = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) };
         let owned = crate::import_owned_xcf_bytes_in_quota(path, Arc::new(bytes), &options, &limits, q.clone(), &ctl).unwrap();
-        assert_eq!(starts.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert_eq!(starts.load(std::sync::atomic::Ordering::Relaxed), 2, "one immutable metadata preplan plus one selected decode; no family retry");
         let crate::OwnedXcfImport::Point(owned) = owned else { panic!("original Gaussian typed holder") };
         let owner = owned.document();
         assert!(owner.is_readonly_point_storage());

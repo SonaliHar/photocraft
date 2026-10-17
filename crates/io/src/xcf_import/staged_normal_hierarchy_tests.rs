@@ -11,12 +11,15 @@ fn binding(v: &serde_json::Value) -> Vec<u8> {
     let p = p.split_once("/temp/").unwrap().1;
     let bytes = std::fs::read(root().join("temp").join(p)).unwrap();
     assert_eq!(bytes.len() as u64, v["bytes"].as_u64().unwrap());
-    assert_eq!(format!("{:x}", Sha256::digest(&bytes)), v["sha256"].as_str().unwrap());
+    assert_eq!(Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), v["sha256"].as_str().unwrap());
     bytes
 }
 fn genuine_sources() {
     let index = std::fs::read(root().join("temp/sol1-normal-hierarchy-gimp-readiness-20261016/literal-index-v1.json")).unwrap();
-    assert_eq!(format!("{:x}", Sha256::digest(&index)), "852e72bec7dcef9714c4a1fc84f3f2708b7edec598fb170e8ebcc0aa226bb2e9");
+    assert_eq!(
+        Sha256::digest(&index).iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        "852e72bec7dcef9714c4a1fc84f3f2708b7edec598fb170e8ebcc0aa226bb2e9"
+    );
     let index: serde_json::Value = serde_json::from_slice(&index).unwrap();
     assert_eq!(index["cases"].as_array().unwrap().len(), 12);
     for case in index["cases"].as_array().unwrap() {

@@ -124,17 +124,17 @@ fn import(b: &[u8], q: &BackingQuota) -> Result<crate::OwnedXcfImport, IoError> 
 #[test]
 #[ignore = "UNRUN: twelve authored sources retain threeF32 args/order/native words, exactprofile/mask/raw andtitle custody; no math claim"]
 fn actual_sources_keep_three_stored_words() {
-    for case in 0..12 {
+    for (case, case_row) in CASES.iter().enumerate() {
         let f = file(case);
         assert!(qualify(&f, &Interrupt::NONE, Some(&budget())).unwrap());
-        assert_eq!(parameters(&f.layers[0].effects[0]).unwrap(), CASES[case].4);
+        assert_eq!(parameters(&f.layers[0].effects[0]).unwrap(), case_row.4);
         let q = quota();
         let crate::OwnedXcfImport::Point(source) = import(&bytes(case), &q).unwrap() else { panic!("Point") };
         let owner = source.document();
         owner.validate_readonly_point_storage(&ctl()).unwrap();
         let d = owner.document();
         assert!(d.source_color_context.as_ref().unwrap().original_icc.is_none());
-        assert_eq!(d.source_color_context.as_ref().unwrap().source_precision, if CASES[case].3 { 750 } else { 650 });
+        assert_eq!(d.source_color_context.as_ref().unwrap().source_precision, if case_row.3 { 750 } else { 650 });
         let x = d.xcf_state.as_ref().unwrap();
         let n = &x.filter_stacks[0].nodes[0];
         assert_eq!(n.operation.schema_epoch, photocraft_compose::HUE_CHROMA_EPOCH);
@@ -147,13 +147,13 @@ fn actual_sources_keep_three_stored_words() {
                 _ => panic!("F32"),
             })
             .collect::<Vec<_>>();
-        assert_eq!(bits.as_slice(), CASES[case].4.as_slice());
+        assert_eq!(bits.as_slice(), case_row.4.as_slice());
         let p = n.composition.as_ref().unwrap();
         assert_eq!(p.compatibility_epoch, n.operation.schema_epoch);
         assert!(p.resolved.is_none());
         assert_eq!((p.stored_blend_space, p.stored_composite_space, p.stored_operator), (720732753, 720732753, 720732753));
         let photocraft_doc::LayerContent::BackedRaster(layer) = &d.layers[0].content else { panic!("native") };
-        let bpp = if CASES[case].3 { 32 } else { 16 };
+        let bpp = if case_row.3 { 32 } else { 16 };
         let r = photocraft_geom::Rect::new(0, 0, 8, 6);
         let pin = layer.checked_view().pin_tile(photocraft_geom::TileCoord::new(0, 0), &ctl()).unwrap();
         let mut raw = vec![0; 48 * bpp];

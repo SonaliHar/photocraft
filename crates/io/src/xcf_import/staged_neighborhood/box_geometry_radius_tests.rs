@@ -36,13 +36,27 @@ fn control() -> ReadControl<'static> {
 #[test]
 #[ignore = "UNRUN: four authored radius endpoints/interiors use observed-only source/prep/promotion, exact radius/raw/native/mask/title custody"]
 fn genuine_radius_originals_map_without_identity_shortcut() {
-    for i in 0..4 {
+    for (i, case_row) in CASES.iter().enumerate() {
         let f = file(i);
         assert!(qualify(&f, &Interrupt::NONE, Some(&budget())).unwrap());
         assert_eq!(NeighborhoodSourceFamily::hint(&f), Some(NeighborhoodSourceFamily::BoxGeometryF32));
         let q = BackingQuota::new(QuotaLimits { resident: 512 << 20, index: 128 << 20, scratch: 0 });
         let b = bytes(i);
-        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap().lowered(&[("scratchBytes", 0)]).unwrap();
+        // Retain the old overlarge preparation profile as a genuine refusal.
+        let before = q.usage().unwrap();
+        let denied = crate::import_owned_xcf_from_reader_in_quota(
+            "Own Box radius.xcf",
+            &mut Cursor::new(&b),
+            b.len() as u64,
+            &Default::default(),
+            &limits,
+            q.clone(),
+            &control(),
+        );
+        assert!(denied.is_err());
+        assert_eq!(q.usage().unwrap(), before);
+        let limits = limits.lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20)]).unwrap();
         let crate::OwnedXcfImport::Point(source) = crate::import_owned_xcf_from_reader_in_quota(
             "Own Box radius.xcf",
             &mut Cursor::new(&b),
@@ -62,7 +76,7 @@ fn genuine_radius_originals_map_without_identity_shortcut() {
         let n = &x.filter_stacks[0].nodes[0];
         assert_eq!(n.operation.schema_epoch, photocraft_compose::backed_box_source::BOX_GEOMETRY_EPOCH);
         assert!(
-            matches!(n.arguments[0].value,photocraft_doc::xcf_filters::FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Signed{width:32,value})if value==i64::from(CASES[i].0))
+            matches!(n.arguments[0].value,photocraft_doc::xcf_filters::FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Signed{width:32,value})if value==i64::from(case_row.0))
         );
         let c = n.composition.as_ref().unwrap();
         assert!(c.resolved.is_none());
@@ -116,6 +130,19 @@ fn range_and_old_identity_fail_closed() {
         assert!(!hint(&f));
         let family = NeighborhoodSourceFamily::hint(&f).unwrap();
         assert_eq!(family, NeighborhoodSourceFamily::BoxFinite);
-        assert!(!family.qualify(&f, &Interrupt::NONE, Some(&budget())).unwrap());
+        // The old native/source envelope is selected; its exact old radius
+        // dictionary still refuses these values during semantic mapping.
+        assert!(family.qualify(&f, &Interrupt::NONE, Some(&budget())).unwrap());
+        assert!(
+            crate::xcf_filters::qualified_owned_neighborhood_stack(
+                &f.layers[0].effects,
+                &[None],
+                photocraft_doc::item_identity::ItemRef::Layer(photocraft_doc::LayerId(1)),
+                1,
+                22,
+                family.domain()
+            )
+            .is_err()
+        );
     }
 }

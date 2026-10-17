@@ -80,7 +80,7 @@ fn plain_decodes_once_preserves_native_words_and_transfers_actual_receipts() {
         };
         let options = DecodeOptions { progress: Some(&progress), ..Default::default() };
         let result = selected("same.xcf", bytes, &Interrupt::NONE, &options, &budget).unwrap();
-        assert_eq!(starts.load(Ordering::Relaxed), 1, "one parser traversal, no second-family decode");
+        assert_eq!(starts.load(Ordering::Relaxed), 2, "one metadata preplan and one decode, no second-family decode");
         assert_eq!(result.family(), SelectedStagedFamily::Plain);
         assert_eq!(result.document().layers[0].surface().unwrap().try_read_interleaved(result.document().bounds()).unwrap(), native_pixel);
         assert!(result.document().xcf_state.as_ref().unwrap().filter_stacks.is_empty());
@@ -98,11 +98,11 @@ fn plain_decodes_once_preserves_native_words_and_transfers_actual_receipts() {
     }
 }
 #[test]
-fn unqualified_effect_selects_threshold_then_refuses_without_second_decode_or_plain_retry() {
+fn unqualified_effect_selects_neighborhood_then_refuses_without_second_decode_or_plain_retry() {
     let options = fixture::FixtureOptions { effect_records: vec![effect("gegl:gaussian-blur")], ..Default::default() };
     let bytes = Arc::new(fixture::image_custom(22, 650, 0, 8, 6, &0.5f32.to_be_bytes().repeat(48 * 4), &options));
     let parsed = photocraft_xcf::decode(&bytes, &DecodeOptions::default()).unwrap();
-    assert_eq!(SourceSelectedPolicy::family(&parsed), SelectedStagedFamily::ThresholdAlpha);
+    assert_eq!(SourceSelectedPolicy::family(&parsed), SelectedStagedFamily::Neighborhood(NeighborhoodSourceFamily::RasterFinite));
     let budget = photocraft_xcf::Budget::new(limits(), None);
     let starts = AtomicU64::new(0);
     let progress = |p: f32| {
@@ -112,8 +112,8 @@ fn unqualified_effect_selects_threshold_then_refuses_without_second_decode_or_pl
     };
     let options = DecodeOptions { progress: Some(&progress), ..Default::default() };
     let result = selected("effect.xcf", bytes, &Interrupt::NONE, &options, &budget);
-    assert!(matches!(result,Err(IoError::Unsupported(ref s)) if s.contains("precision-point predicate")));
-    assert_eq!(starts.load(Ordering::Relaxed), 1);
+    assert!(matches!(result,Err(IoError::Unsupported(ref s)) if s.contains("staged neighborhood source is outside its exact whole-file predicate")));
+    assert_eq!(starts.load(Ordering::Relaxed), 2);
     for kind in [BudgetKind::Encoded, BudgetKind::Resident, BudgetKind::Index] {
         assert_eq!(budget.used(kind), 0);
     }
@@ -159,7 +159,7 @@ fn selected_threshold_native_source_and_mask_match_existing_typed_entry_with_one
         let options = DecodeOptions { progress: Some(&progress), ..Default::default() };
         let budget = photocraft_xcf::Budget::new(limits(), None);
         let result = selected(&name, bytes.clone(), &Interrupt::NONE, &options, &budget).unwrap();
-        assert_eq!(starts.load(Ordering::Relaxed), 1);
+        assert_eq!(starts.load(Ordering::Relaxed), 2);
         assert_eq!(result.family(), SelectedStagedFamily::ThresholdAlpha);
         let other_budget = photocraft_xcf::Budget::new(limits(), None);
         let typed = super::super::staged_threshold_alpha::import_staged_threshold_alpha_bytes_with_budget(

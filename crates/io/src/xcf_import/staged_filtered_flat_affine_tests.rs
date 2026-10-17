@@ -5,7 +5,10 @@ use crate::xcf_filters::{
     self as map,
     mixed_affine_source::{self as affine, Parameters},
 };
-use photocraft_raster::backing::{BackingQuota, QuotaKind, QuotaLimits, ReadControl};
+use photocraft_raster::backing::{
+    ReadControl,
+    quota::{BackingQuota, QuotaLimits},
+};
 use photocraft_xcf::ArgumentValue;
 use sha2::{Digest, Sha256};
 #[derive(Clone, Copy)]
@@ -76,7 +79,7 @@ const CASES: [Case; 4] = [
 fn read(b: Binding) -> Vec<u8> {
     let bytes = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(b.path)).unwrap();
     assert_eq!(bytes.len(), b.bytes);
-    assert_eq!(format!("{:x}", Sha256::digest(&bytes)), b.sha256);
+    assert_eq!(Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), b.sha256);
     bytes
 }
 fn decoded(i: usize) -> XcfFile {
@@ -105,7 +108,10 @@ fn genuine_affine_originals_retain_each_own_node_and_native() {
         qualify(&raw, &Interrupt::NONE, &budget()).unwrap();
         let q = BackingQuota::new(QuotaLimits { resident: 256 << 20, index: 64 << 20, scratch: 0 });
         let c = control();
-        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap();
         let imported = crate::import_owned_xcf_from_reader_in_quota(
             "affine original",
             &mut std::io::Cursor::new(&bytes),
@@ -180,10 +186,10 @@ fn genuine_affine_originals_retain_each_own_node_and_native() {
             }
             assert_eq!(pixels, d.plane.as_ref().unwrap().bytes);
         }
-        assert!(q.used(QuotaKind::Resident) > 0);
+        assert!(q.usage().unwrap().resident > 0);
         drop(imported);
-        assert_eq!(q.used(QuotaKind::Resident), 0);
-        assert_eq!(q.used(QuotaKind::Index), 0);
+        assert_eq!(q.usage().unwrap().resident, 0);
+        assert_eq!(q.usage().unwrap().index, 0);
     }
 }
 #[test]
@@ -286,7 +292,10 @@ fn inactive_native_mask_work_and_cancellation_remain_final() {
     assert!(qualify(&mask, &Interrupt::NONE, &budget()).is_err());
     let bytes = read(CASES[1].source);
     let q = BackingQuota::new(QuotaLimits { resident: 0, index: 64 << 20, scratch: 0 });
-    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+        .unwrap()
+        .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+        .unwrap();
     assert!(
         crate::import_owned_xcf_from_reader_in_quota(
             "no quota",
@@ -299,6 +308,6 @@ fn inactive_native_mask_work_and_cancellation_remain_final() {
         )
         .is_err()
     );
-    assert_eq!(q.used(QuotaKind::Resident), 0);
-    assert_eq!(q.used(QuotaKind::Index), 0);
+    assert_eq!(q.usage().unwrap().resident, 0);
+    assert_eq!(q.usage().unwrap().index, 0);
 }

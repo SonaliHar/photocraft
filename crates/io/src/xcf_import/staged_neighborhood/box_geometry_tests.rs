@@ -7,7 +7,8 @@ use photocraft_raster::backing::{
 };
 use sha2::{Digest, Sha256};
 use std::{io::Cursor, path::PathBuf};
-const CASES: [(&str, &str, usize, [i32; 2], [i32; 2], i32); 6] = [
+type SourceCase = (&'static str, &'static str, usize, [i32; 2], [i32; 2], i32);
+const CASES: [SourceCase; 6] = [
     ("aligned-r4", "8862b7d94c64c25755a01b741a0f55cbaaadf313698f289748af4fe179c9a16d", 89214, [257, 259], [0, 0], 4),
     ("aligned-r5", "15b7292d92c4ffc2743f0caaeef6657aeca70a3cef71929e957659ef19ea7221", 89214, [257, 259], [0, 0], 5),
     ("negative-x-r4", "425aba7dd99bb00860566c00783981643b5f24da3a52b12a28ddea7f2e0c6d9e", 89274, [283, 281], [-7, 11], 4),
@@ -59,7 +60,7 @@ fn imported(b: &[u8], q: &BackingQuota) -> crate::OwnedPointXcfImport {
 #[test]
 #[ignore = "UNRUN: six independently saved v22 geometry originals map actual S/C/emptyphysicalmask/newreadonlyepoch without source/native fixups"]
 fn genuine_sources_keep_independent_source_and_canvas_mask() {
-    for case in 0..6 {
+    for (case, case_row) in CASES.iter().enumerate() {
         let f = file(case);
         assert!(hint(&f));
         assert!(qualify(&f, &Interrupt::NONE, Some(&budget())).unwrap());
@@ -79,12 +80,12 @@ fn genuine_sources_keep_independent_source_and_canvas_mask() {
         assert!(policy.resolved.is_none());
         assert_eq!((policy.stored_blend_space, policy.stored_composite_space, policy.stored_operator), (1654948433, 1654948433, 1654948433));
         assert!(
-            matches!(node.arguments[0].value,photocraft_doc::xcf_filters::FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Signed{width:32,value})if value==i64::from(CASES[case].5))
+            matches!(node.arguments[0].value,photocraft_doc::xcf_filters::FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Signed{width:32,value})if value==i64::from(case_row.5))
         );
         let photocraft_doc::LayerContent::BackedRaster(layer) = &d.layers[0].content else { panic!("actual native") };
-        let [ox, oy] = CASES[case].4;
+        let [ox, oy] = case_row.4;
         assert_eq!(layer.operative_bounds(), Rect::new(ox, oy, ox + 257, oy + 259));
-        assert_eq!(x.filter_masks[0].bounds, Rect::new(0, 0, CASES[case].3[0], CASES[case].3[1]));
+        assert_eq!(x.filter_masks[0].bounds, Rect::new(0, 0, case_row.3[0], case_row.3[1]));
         assert!(x.filter_masks[0].is_empty_selection_with(&Interrupt::NONE).unwrap());
         assert!(d.source_color_context.as_ref().unwrap().original_icc.is_none());
         let maskrow = x.items.iter().find(|i| i.mask.is_some()).unwrap().mask.as_ref().unwrap();
@@ -179,7 +180,7 @@ fn opaque_raw_fields_are_retained_without_resolving() {
         assert_eq!((p.stored_blend_space, p.stored_composite_space, p.stored_operator), raw);
         assert!(p.resolved.is_none());
         assert!(!p.legacy && !p.pass_through);
-        for property in e.properties.iter().filter(|p| matches!(p.tag, 35 | 36 | 37)) {
+        for property in e.properties.iter().filter(|p| matches!(p.tag, 35..=37)) {
             let identity = format!("{}@{}:{}", property.tag, property.offset, property.declared_bytes);
             assert!(x.opaque.iter().any(|v| v.identity == identity && v.bytes.as_slice() == property.payload.as_slice()));
         }

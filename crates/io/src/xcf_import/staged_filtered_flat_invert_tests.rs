@@ -87,14 +87,17 @@ mod inputs {
 #[ignore = "UNRUN: genuine8x6/130x65 both-depth invert originals preserve canonical raw/public list, native planes and every own mask; not numerical order acceptance"]
 fn genuine_invert_originals_preserve_each_node_and_all_native_custody() {
     use photocraft_doc::{LayerContent, item_identity::ItemRef};
-    use photocraft_raster::backing::{BackingQuota, QuotaKind, QuotaLimits, ReadControl};
+    use photocraft_raster::backing::{
+        ReadControl,
+        quota::{BackingQuota, QuotaLimits},
+    };
     use sha2::{Digest, Sha256};
     for case in inputs::CASES {
         let read = |binding: inputs::Binding| {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(binding.path);
             let bytes = std::fs::read(path).unwrap();
             assert_eq!(bytes.len(), binding.bytes);
-            assert_eq!(format!("{:x}", Sha256::digest(&bytes)), binding.sha256);
+            assert_eq!(Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), binding.sha256);
             bytes
         };
         let bytes = read(case.source);
@@ -184,10 +187,10 @@ fn genuine_invert_originals_preserve_each_node_and_all_native_custody() {
             }
             assert_eq!(captured, raw.plane.as_ref().unwrap().bytes);
         }
-        assert!(q.used(QuotaKind::Resident) > 0);
+        assert!(q.usage().unwrap().resident > 0);
         drop(source);
-        assert_eq!(q.used(QuotaKind::Resident), 0);
-        assert_eq!(q.used(QuotaKind::Index), 0);
+        assert_eq!(q.usage().unwrap().resident, 0);
+        assert_eq!(q.usage().unwrap().index, 0);
     }
 }
 
@@ -295,12 +298,18 @@ fn inactive_work_is_cumulative_and_cancellation_effective() {
 #[test]
 #[ignore = "UNRUN: genuine original PointStack selects old positive carrier; fixed rawidentity exclusion remains final on malformed native; no U8/acceptance fallback"]
 fn original_point_stack_priority_is_preserved() {
-    use photocraft_raster::backing::{BackingQuota, QuotaLimits, ReadControl};
+    use photocraft_raster::backing::{
+        ReadControl,
+        quota::{BackingQuota, QuotaLimits},
+    };
     use sha2::{Digest, Sha256};
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/xcf/full/filter-stack-edits-evidence/stack.source.xcf");
     let bytes = std::fs::read(path).unwrap();
     assert_eq!(bytes.len(), 2348);
-    assert_eq!(format!("{:x}", Sha256::digest(&bytes)), "414a7c66f0cbb78d772b2766592472353acb2e520bec71c9f46daee3070c12f8");
+    assert_eq!(
+        Sha256::digest(&bytes).iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+        "414a7c66f0cbb78d772b2766592472353acb2e520bec71c9f46daee3070c12f8"
+    );
     let f = photocraft_xcf::decode(&bytes, &Default::default()).unwrap();
     assert!(crate::xcf_import::qualified_point_stack_edits(&f));
     let b = budget();
@@ -308,7 +317,26 @@ fn original_point_stack_priority_is_preserved() {
     assert_eq!(b.used(photocraft_xcf::BudgetKind::Work), 8);
     let q = BackingQuota::new(QuotaLimits { resident: 128 << 20, index: 32 << 20, scratch: 0 });
     let c = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) };
-    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+        .unwrap()
+        .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+        .unwrap();
+    // Preserve the original real refusal: captured input remains charged while
+    // a complete preparation envelope equal to q.resident cannot fit.
+    let before = q.usage().unwrap();
+    let denied = crate::import_owned_xcf_from_reader_in_quota(
+        "old original",
+        &mut std::io::Cursor::new(&bytes),
+        bytes.len() as u64,
+        &Default::default(),
+        &limits,
+        q.clone(),
+        &c,
+    );
+    assert!(denied.is_err());
+    assert_eq!(q.usage().unwrap(), before);
+    // Lower the preparation envelope; never increase the parent quota.
+    let limits = limits.lowered(&[("residentBytes", 64 << 20), ("indexBytes", 16 << 20)]).unwrap();
     let imported = crate::import_owned_xcf_from_reader_in_quota(
         "old original",
         &mut std::io::Cursor::new(&bytes),

@@ -5,7 +5,8 @@ use super::*;
 use photocraft_doc::import_compositing::{GimpOperator, GimpSpace};
 use sha2::{Digest, Sha256};
 use std::{io::Cursor, path::PathBuf};
-const CASES: &[(i32, &str, &str, usize, (i32, i32, i32), bool, GimpSpace, GimpSpace, bool)] = &[
+type SourceCase = (i32, &'static str, &'static str, usize, (i32, i32, i32), bool, GimpSpace, GimpSpace, bool);
+const CASES: &[SourceCase] = &[
     (
         24,
         "composition-matrix/mode-lch-hue.xcf",
@@ -117,20 +118,19 @@ fn budget() -> photocraft_xcf::Budget<'static> {
 #[test]
 #[ignore = "UNRUN: all8 genuine source/edit packets retain exact old metadata and independent RGB LCh raw policy"]
 fn exact_old_packets() {
-    use photocraft_doc::import_compositing::{GimpOperator, GimpSpace};
-    for i in 0..CASES.len() {
+    for (i, case_row) in CASES.iter().enumerate() {
         let f = source(i);
         assert_eq!(SourceSelectedPolicy::family_controlled(&f, &Interrupt::NONE, Some(&budget())).unwrap(), SelectedStagedFamily::SeparableBlend);
         assert_eq!(qualify_selected(&f, &Interrupt::NONE, &budget()).unwrap(), Some(expected(i)));
         assert!(admission::classify_late(&f).basic_blend_domain);
         assert_eq!(
             (f.version, f.layers[0].mode, f.layers[0].blend_space, f.layers[0].composite_space, f.layers[0].composite_mode),
-            (12, CASES[i].0, CASES[i].4.0, CASES[i].4.1, CASES[i].4.2)
+            (12, case_row.0, case_row.4.0, case_row.4.1, case_row.4.2)
         );
         assert_eq!((f.layers[1].mode, f.layers[1].blend_space, f.layers[1].composite_space, f.layers[1].composite_mode), (28, 0, -1, -1));
-        let (b, c, o) = CASES[i].4;
-        let r = photocraft_doc::import_compositing::flat_lab_source_rule(12, CASES[i].0, b, c, o).unwrap().resolved();
-        assert_eq!((r.blend_space, r.composite_space, r.operator), (CASES[i].6, CASES[i].7, operator(i)));
+        let (b, c, o) = case_row.4;
+        let r = photocraft_doc::import_compositing::flat_lab_source_rule(12, case_row.0, b, c, o).unwrap().resolved();
+        assert_eq!((r.blend_space, r.composite_space, r.operator), (case_row.6, case_row.7, operator(i)));
     }
 }
 #[test]
@@ -149,7 +149,7 @@ fn genuine_paid_source_mapping() {
         },
     };
     let c = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) };
-    for i in 0..CASES.len() {
+    for (i, case_row) in CASES.iter().enumerate() {
         let b = bytes(i);
         let eager = photocraft_xcf::decode(&b, &Default::default()).unwrap();
         let q = BackingQuota::new(QuotaLimits { resident: 256 << 20, index: 64 << 20, scratch: 0 });
@@ -158,7 +158,7 @@ fn genuine_paid_source_mapping() {
             .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
             .unwrap();
         let result =
-            crate::import_owned_xcf_from_reader_in_quota(CASES[i].1, &mut Cursor::new(&b), b.len() as u64, &Default::default(), &limits, q.clone(), &c)
+            crate::import_owned_xcf_from_reader_in_quota(case_row.1, &mut Cursor::new(&b), b.len() as u64, &Default::default(), &limits, q.clone(), &c)
                 .unwrap();
         let crate::OwnedXcfImport::SeparableBlend(imported) = result else { panic!("RGB LCh strict route") };
         let owner = imported.document();
@@ -182,9 +182,9 @@ fn genuine_paid_source_mapping() {
                 assert_eq!(p.compatibility_epoch, "xcf-12-normal");
                 assert_eq!((r.blend_space, r.composite_space, r.operator), (GimpSpace::LinearRgb, GimpSpace::LinearRgb, GimpOperator::Union));
             } else {
-                assert_eq!(p.legacy, CASES[i].5);
+                assert_eq!(p.legacy, case_row.5);
                 assert_eq!(p.compatibility_epoch, "xcf-12-authored-blend-auto");
-                assert_eq!((r.blend_space, r.composite_space, r.operator), (CASES[i].6, CASES[i].7, operator(i)));
+                assert_eq!((r.blend_space, r.composite_space, r.operator), (case_row.6, case_row.7, operator(i)));
             }
             let LayerContent::BackedRaster(native) = &mapped.content else { panic!("paid native") };
             let rect = native.operative_bounds();

@@ -33,7 +33,7 @@ fn sparse_mask_grid_is_priced_per_actual_entry_without_copying_or_normalizing_wo
     for (coord, tile) in mask.tiles() {
         assert!(Arc::ptr_eq(tile, before.tile(*coord).unwrap()));
     }
-    assert!(census::measure(&doc, &budget, &Interrupt::NONE).is_err(), "plain path stays closed");
+    assert!(census::measure_plain_for_test(&doc, &budget, &Interrupt::NONE).is_err(), "plain path stays closed");
 }
 
 #[test]

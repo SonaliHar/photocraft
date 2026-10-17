@@ -3,7 +3,10 @@
 use super::*;
 use crate::xcf_filters::{NeighborhoodDomain as D, PointReplaceFamily as F};
 use crate::xcf_point_replace_source::masked_stock_source as masked;
-use photocraft_raster::backing::{BackingQuota, QuotaKind, QuotaLimits, ReadControl};
+use photocraft_raster::backing::{
+    ReadControl,
+    quota::{BackingQuota, QuotaLimits},
+};
 use photocraft_xcf::ArgumentValue;
 use sha2::{Digest, Sha256};
 #[derive(Clone, Copy)]
@@ -473,11 +476,11 @@ const NONE: [Binding; 8] = [
 fn read(b: Binding) -> Vec<u8> {
     let bts = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(b.path)).unwrap();
     assert_eq!(bts.len(), b.bytes);
-    assert_eq!(format!("{:x}", Sha256::digest(&bts)), b.sha256);
+    assert_eq!(Sha256::digest(&bts).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), b.sha256);
     bts
 }
 fn decoded(i: usize) -> XcfFile {
-    photocraft_xcf::decode(&read(CASES[i].source), &Default::default()).unwrap()
+    super::masked_exposure_tests::decode_planned_coverage(&read(CASES[i].source))
 }
 fn budget() -> photocraft_xcf::Budget<'static> {
     photocraft_xcf::Budget::new(photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(), None)
@@ -506,18 +509,34 @@ fn genuine_sixteen_sources_keep_raw_and_native() {
         let bytes = read(case.source);
         let _capture = read(case.capture);
         let packet = read(case.packet);
-        let raw = photocraft_xcf::decode(&bytes, &Default::default()).unwrap();
+        // Comparison-only collector verifies this immutable source's complete
+        // descriptor plan; genuine selected import below retains Source authority.
+        let raw = super::masked_exposure_tests::decode_planned_coverage(&bytes);
+        if raw.sample == Sample::F64
+            && raw
+                .layers
+                .iter()
+                .flat_map(|d| &d.effects)
+                .filter_map(|e| e.mask.as_ref())
+                .filter_map(|m| m.plane.as_ref())
+                .any(|p| p.bytes.as_chunks::<8>().0.iter().any(|w| f64::from_ne_bytes(*w) > 1.0))
+        {
+            assert!(photocraft_xcf::decode(&bytes, &Default::default()).is_err(), "public default coverage remains strict unit");
+        }
         assert_eq!(selected(&raw), SelectedStagedFamily::Point(case.kind.family()));
         assert!(masked::qualify(&raw, &Interrupt::NONE, Some(&budget())).unwrap());
         let native_raw = &raw.layers[0].plane.as_ref().unwrap().bytes;
         let mask_raw = &raw.layers[0].effects[0].mask.as_ref().unwrap().plane.as_ref().unwrap().bytes;
         assert_eq!(native_raw, packet.get(case.native_offset..case.native_offset + case.native_bytes).unwrap());
-        assert_eq!(format!("{:x}", Sha256::digest(native_raw)), case.native_sha);
+        assert_eq!(Sha256::digest(native_raw).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), case.native_sha);
         assert_eq!(mask_raw, packet.get(case.mask_offset..case.mask_offset + case.mask_bytes).unwrap());
-        assert_eq!(format!("{:x}", Sha256::digest(mask_raw)), case.mask_sha);
+        assert_eq!(Sha256::digest(mask_raw).iter().map(|byte| format!("{byte:02x}")).collect::<String>(), case.mask_sha);
         let q = BackingQuota::new(QuotaLimits { resident: 256 << 20, index: 64 << 20, scratch: 0 });
         let c = ctl();
-        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+        let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default())
+            .unwrap()
+            .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+            .unwrap();
         let source = crate::import_owned_xcf_from_reader_in_quota(
             "genuine masked scalar",
             &mut std::io::Cursor::new(&bytes),
@@ -577,12 +596,12 @@ fn genuine_sixteen_sources_keep_raw_and_native() {
         }
         assert_eq!(&actual, native_raw);
         if case.precision == 750 {
-            assert!(mask_raw.chunks_exact(8).any(|w| u64::from_ne_bytes(w.try_into().unwrap()) == 0x3ff0000009b25010));
+            assert!(mask_raw.as_chunks::<8>().0.iter().any(|w| u64::from_ne_bytes(*w) == 0x3ff0000009b25010));
         }
-        assert!(q.used(QuotaKind::Resident) > 0);
+        assert!(q.usage().unwrap().resident > 0);
         drop(source);
-        assert_eq!(q.used(QuotaKind::Resident), 0);
-        assert_eq!(q.used(QuotaKind::Index), 0);
+        assert_eq!(q.usage().unwrap().resident, 0);
+        assert_eq!(q.usage().unwrap().index, 0);
     }
 }
 #[test]
@@ -610,10 +629,10 @@ fn empty_and_old_priorities_do_not_upgrade() {
 #[test]
 #[ignore = "UNRUN: selected malformed params/outer/source failures stay final, rawpositive beforeFloat and full preimage domain preserve bits, noSourceHDR/Gray/opacity/topology grant"]
 fn exact_domains_and_selected_failure_are_closed() {
-    for i in 0..CASES.len() {
+    for (i, case_row) in CASES.iter().enumerate() {
         let original = decoded(i);
         let e = &original.layers[0].effects[0];
-        assert!(masked::parameters(e) == Some(CASES[i].kind));
+        assert!(masked::parameters(e) == Some(case_row.kind));
         for bad in 0..9 {
             let mut f = original.clone();
             match bad {
@@ -629,7 +648,7 @@ fn exact_domains_and_selected_failure_are_closed() {
             }
             let old = SourceSelectedPolicy::family(&f);
             if matches!(old, SelectedStagedFamily::Point(F::InvertLinear | F::InvertGamma | F::Brightness | F::Levels)) {
-                assert_eq!(selected(&f), SelectedStagedFamily::Point(CASES[i].kind.family()));
+                assert_eq!(selected(&f), SelectedStagedFamily::Point(case_row.kind.family()));
             } else {
                 assert_eq!(selected(&f), old);
             }
@@ -698,12 +717,15 @@ fn original_ledger_and_new_mapper_fee_are_effective() {
             &mut std::io::Cursor::new(&bytes),
             bytes.len() as u64,
             &Default::default(),
-            &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+            &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+                .unwrap()
+                .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+                .unwrap(),
             q.clone(),
             &c
         )
         .is_err()
     );
-    assert_eq!(q.used(QuotaKind::Resident), 0);
-    assert_eq!(q.used(QuotaKind::Index), 0);
+    assert_eq!(q.usage().unwrap().resident, 0);
+    assert_eq!(q.usage().unwrap().index, 0);
 }

@@ -95,8 +95,8 @@ fn assigned_geometry_sources_retain_real_profile_and_native() {
                     let mut pixel = [0; 32];
                     pin.read_pixel_native_into(x, y, &mut pixel, &control()).unwrap();
                     let at = ((y - rect.y0) as usize * 257 + (x - rect.x0) as usize) * 32;
-                    for (c, w) in pixel.chunks_exact(8).enumerate() {
-                        raw[at + c * 8..at + c * 8 + 8].copy_from_slice(&u64::from_ne_bytes(w.try_into().unwrap()).to_le_bytes());
+                    for (c, w) in pixel.as_chunks::<8>().0.iter().enumerate() {
+                        raw[at + c * 8..at + c * 8 + 8].copy_from_slice(&u64::from_ne_bytes(*w).to_le_bytes());
                     }
                 }
             }

@@ -23,10 +23,10 @@ fn layer<'a>(layers: &'a [Layer], name: &str) -> &'a Layer {
         if current.name == name {
             return current;
         }
-        if let LayerContent::Group(group) = &current.content {
-            if let Some(child) = group.children.iter().find(|child| child.name == name) {
-                return child;
-            }
+        if let LayerContent::Group(group) = &current.content
+            && let Some(child) = group.children.iter().find(|child| child.name == name)
+        {
+            return child;
         }
     }
     panic!("original layer identity remains present")
@@ -92,7 +92,7 @@ fn all_originals_promote_real_three_leaf_owners_and_keep_original_root() {
         let options = DecodeOptions { progress: Some(&progress), ..Default::default() };
         assert!(crate::import_owned_staged_plain_bytes_in_quota("strict.xcf", bytes.clone(), &Default::default(), &limits(), quota(), &ctl()).is_err());
         let selected = crate::import_owned_xcf_bytes_in_quota("original-group.xcf", bytes.clone(), &options, &limits(), q.clone(), &ctl()).unwrap();
-        assert_eq!(starts.load(Ordering::Relaxed), 1);
+        assert_eq!(starts.load(Ordering::Relaxed), 2, "immutable metadata preplan plus selected decode, without family retry");
         let crate::OwnedXcfImport::IsolatedNormalGroup(imported) = selected else { panic!("sealed isolated group family") };
         assert!(imported.source_read_only());
         assert!(!imported.preview_only());

@@ -1,13 +1,13 @@
 //! UNRUN U32-only additions. Generated encoded/native/negative buffers are
 //! external harness data; actual source/model/native custody uses real reader.
+use super::tests::data;
 use super::*;
+use crate::xcf_import::plane::ParsedPlaneDescriptor;
 use photocraft_raster::backing::{
     ReadControl,
     quota::{BackingQuota, QuotaLimits},
 };
 use photocraft_xcf::{BudgetKind, ByteSource, PlainSourceAccounting};
-#[path = "plain_quantized_hierarchy_fixture.rs"]
-mod data;
 fn budget() -> photocraft_xcf::Budget<'static> {
     photocraft_xcf::Budget::new(photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(), None)
 }
@@ -41,7 +41,10 @@ fn u32_sources_preserve_lowbits_and_exact_plain_source_role() {
                 "u32-plain.xcf",
                 std::sync::Arc::new(encoded.clone()),
                 &Default::default(),
-                &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+                &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+                    .unwrap()
+                    .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+                    .unwrap(),
                 q.clone(),
                 &ctl(),
             )
@@ -125,7 +128,10 @@ fn u32_sources_preserve_lowbits_and_exact_plain_source_role() {
             "old-u32.xcf",
             std::sync::Arc::new(encoded),
             &Default::default(),
-            &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+            &photocraft_xcf::ResourceLimits::for_policy(Default::default())
+                .unwrap()
+                .lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20), ("scratchBytes", 0)])
+                .unwrap(),
             q.clone(),
             &ctl(),
         )

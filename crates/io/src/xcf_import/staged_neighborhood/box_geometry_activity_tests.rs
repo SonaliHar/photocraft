@@ -154,7 +154,22 @@ fn quota() -> BackingQuota {
     BackingQuota::new(QuotaLimits { resident: 512 << 20, index: 128 << 20, scratch: 0 })
 }
 fn imported(b: &[u8], q: &BackingQuota) -> Result<crate::OwnedPointXcfImport, IoError> {
-    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap();
+    let limits = photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap().lowered(&[("scratchBytes", 0)]).unwrap();
+    // The old default-R2GiB profile honestly refuses qR512MiB, even before
+    // decoding; retain that negative and its exact same-ledger cleanup.
+    let before = q.usage().unwrap();
+    let denied = crate::import_owned_xcf_from_reader_in_quota(
+        "Own Box activity.xcf",
+        &mut Cursor::new(b),
+        b.len() as u64,
+        &Default::default(),
+        &limits,
+        q.clone(),
+        &ctl(),
+    );
+    assert!(denied.is_err());
+    assert_eq!(q.usage().unwrap(), before);
+    let limits = limits.lowered(&[("residentBytes", 128 << 20), ("indexBytes", 32 << 20)]).unwrap();
     match crate::import_owned_xcf_from_reader_in_quota(
         "Own Box activity.xcf",
         &mut Cursor::new(b),
@@ -171,7 +186,7 @@ fn imported(b: &[u8], q: &BackingQuota) -> Result<crate::OwnedPointXcfImport, Io
 #[test]
 #[ignore = "UNRUN: all15 genuinely authored activity sources retain effectiveF32layeropacity/rawbothproperties/native/mask/profile/activation andpaidtitle"]
 fn genuine_activity_sources_preserve_literal_roles() {
-    for i in 0..CASES.len() {
+    for (i, case_row) in CASES.iter().enumerate() {
         let f = file(i);
         assert!(qualify(&f, &Interrupt::NONE, Some(&budget())).unwrap());
         let q = quota();
@@ -181,9 +196,9 @@ fn genuine_activity_sources_preserve_literal_roles() {
         let x = d.xcf_state.as_ref().unwrap();
         let l = &d.layers[0];
         let layer = ItemRef::Layer(l.id);
-        assert_eq!(l.visible, CASES[i].3);
-        assert_eq!(l.opacity.to_bits(), CASES[i].4);
-        assert_eq!(x.filter_stacks[0].nodes[0].enabled, CASES[i].5);
+        assert_eq!(l.visible, case_row.3);
+        assert_eq!(l.opacity.to_bits(), case_row.4);
+        assert_eq!(x.filter_stacks[0].nodes[0].enabled, case_row.5);
         assert_eq!(x.filter_stacks[0].nodes[0].opacity_f64_bits, 1f64.to_bits());
         assert_eq!(x.filter_stacks[0].nodes[0].operation.schema_epoch, photocraft_compose::backed_box_source::BOX_GEOMETRY_EPOCH);
         let item = x.items.iter().find(|r| r.item == layer).unwrap();
@@ -197,7 +212,7 @@ fn genuine_activity_sources_preserve_literal_roles() {
                 x.opaque.iter().find(|r| r.owner == Some(layer) && r.namespace == "gimp/xcf/source-property" && r.identity.starts_with(&prefix)).unwrap();
             assert_eq!(preserved.bytes.as_slice(), p.payload.as_slice());
         }
-        if CASES[i].4 == 0.375f32.to_bits() {
+        if case_row.4 == 0.375f32.to_bits() {
             assert_ne!(l.opacity.to_bits(), (95f32 / 255.0).to_bits());
             let p = f.layers[0].raw_properties.iter().find(|p| p.tag == 6).unwrap();
             assert_eq!(p.payload, 95u32.to_be_bytes());

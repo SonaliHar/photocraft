@@ -127,7 +127,7 @@ fn checked_shapes_and_existing_roles() {
 #[test]
 #[ignore = "UNRUN: malformed origin/side/area/native/physicalmask bytezero/profile/outer-policy controls fail same family finally"]
 fn unchanged_source_refusals() {
-    for i in 0..INPUTS.len() {
+    for (i, case_row) in INPUTS.iter().enumerate() {
         for bad in 0..14 {
             let mut f = file(i, 257, 2);
             match bad {
@@ -154,7 +154,7 @@ fn unchanged_source_refusals() {
                 _ => f.layers[0].effects[0].state.region = Some(1),
             }
             if bad <= 8 {
-                assert!(classify_family_hint(&f) == Some(INPUTS[i].2));
+                assert!(classify_family_hint(&f) == Some(case_row.2));
             }
             assert!(classify(&f, &Interrupt::NONE, Some(&budget())).unwrap().is_none(), "{i}/{bad}");
         }

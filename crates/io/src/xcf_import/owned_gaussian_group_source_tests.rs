@@ -63,7 +63,7 @@ fn original_and_edit_keep_three_stores_two_masks_and_source_fees_through_title()
             &ctl(),
         )
         .unwrap();
-        assert_eq!(starts.load(Ordering::Relaxed), 1);
+        assert_eq!(starts.load(Ordering::Relaxed), 2, "immutable metadata preplan plus selected decode, without family retry");
         let crate::OwnedXcfImport::IsolatedGaussianGroup(imported) = selected else { panic!("sealed distinct source family") };
         assert!(imported.source_read_only() && !imported.preview_only());
         let owner = imported.document();

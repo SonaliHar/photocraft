@@ -18,7 +18,7 @@ const PINS: [&str; 8] = [
     "4734c04a0d5d937294a5b142b645e411563cc029373ed938f32dbe6cfb5b1fc3",
 ];
 fn is_f32(case: usize) -> bool {
-    (case / 2) % 2 == 0
+    (case / 2).is_multiple_of(2)
 }
 fn cms_encoding(case: usize) -> photocraft_cms::xcf_color::Encoding {
     if case < 4 { photocraft_cms::xcf_color::Encoding::Linear } else { photocraft_cms::xcf_color::Encoding::Perceptual }

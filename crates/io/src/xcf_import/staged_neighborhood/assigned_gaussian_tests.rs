@@ -44,7 +44,7 @@ fn budget() -> photocraft_xcf::Budget<'static> {
 #[test]
 #[ignore = "UNRUN: actual4 named-unit/HDR source/edit preserve finite HDRRGB words; exact original profile/native/mask/arg source policy"]
 fn actual_assigned_source_domain() {
-    for case in 0..4 {
+    for (case, case_row) in CASES.iter().enumerate() {
         let edit = case % 2 == 1;
         let f = source(case);
         assert!(qualify(&f, &Interrupt::NONE, Some(&budget())).unwrap());
@@ -59,12 +59,12 @@ fn actual_assigned_source_domain() {
             matches!(e.arguments.iter().find(|a|a.name=="std-dev-y").unwrap().value,ArgumentValue::Float32Bits(v)if v==if edit{0.8f32.to_bits()}else{1.3f32.to_bits()})
         );
         assert!(matches!(e.arguments.iter().find(|a|a.name=="filter").unwrap().value,ArgumentValue::Enum(v)if v==if edit{1}else{0}));
-        let raw: Vec<u8> = d.plane.as_ref().unwrap().bytes.chunks_exact(4).flat_map(|w| u32::from_ne_bytes(w.try_into().unwrap()).to_le_bytes()).collect();
-        assert_eq!(Sha256::digest(&raw).iter().map(|v| format!("{v:02x}")).collect::<String>(), CASES[case].3);
+        let raw: Vec<u8> = d.plane.as_ref().unwrap().bytes.as_chunks::<4>().0.iter().flat_map(|w| u32::from_ne_bytes(*w).to_le_bytes()).collect();
+        assert_eq!(Sha256::digest(&raw).iter().map(|v| format!("{v:02x}")).collect::<String>(), case_row.3);
         let mut outside = 0;
-        for p in d.plane.as_ref().unwrap().bytes.chunks_exact(16) {
-            for w in p[..12].chunks_exact(4) {
-                let v = f32::from_ne_bytes(w.try_into().unwrap());
+        for p in d.plane.as_ref().unwrap().bytes.as_chunks::<16>().0 {
+            for w in p[..12].as_chunks::<4>().0 {
+                let v = f32::from_ne_bytes(*w);
                 outside += usize::from(!(0.0..=1.0).contains(&v));
             }
         }

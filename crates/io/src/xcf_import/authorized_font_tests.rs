@@ -86,7 +86,18 @@ fn original_text_import_matches_default_and_does_not_embed_runtime_authority() {
         let bytes = std::fs::read(root.join(name)).unwrap();
         let baseline = import(name, &bytes, &Interrupt::NONE).unwrap();
         let supplied = import_with_authorized_font(name, &bytes, &font, &Interrupt::NONE).unwrap();
-        assert_eq!(supplied.document, baseline.document);
+        // Independent imports allocate fresh runtime identities. Compare every
+        // persisted field after the exact single-layer identity correspondence.
+        assert_eq!(baseline.document.layers.len(), 1);
+        assert_eq!(supplied.document.layers.len(), 1);
+        let mut expected = baseline.document.clone();
+        let baseline_layer = expected.layers.first().unwrap().id;
+        let supplied_layer = supplied.document.layers.first().unwrap().id;
+        expected.id = supplied.document.id;
+        expected.layers.first_mut().unwrap().id = supplied_layer;
+        expected.xcf_state.as_mut().unwrap().remap_layers(|id| (id == baseline_layer).then_some(supplied_layer)).unwrap();
+        expected.validate_xcf_state().unwrap();
+        assert_eq!(supplied.document, expected);
         assert_eq!(supplied.origin, baseline.origin);
         assert_eq!(supplied.source_read_only, baseline.source_read_only);
         assert_eq!(supplied.preview_only, baseline.preview_only);

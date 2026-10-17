@@ -48,9 +48,13 @@ fn color_balance_depth_and_precision_keep_distinct_original_qualifiers() {
         let other =
             if expected == ConfiguredPointFamily::ColorBalance { ConfiguredPointFamily::ColorBalanceDepth } else { ConfiguredPointFamily::ColorBalance };
         assert!(!other.qualify(&f, &Interrupt::NONE, None).unwrap());
-        assert_eq!(
-            expected.domain(),
-            if expected == ConfiguredPointFamily::ColorBalance { NeighborhoodDomain::ColorBalancePrecision } else { NeighborhoodDomain::ColorBalanceDepth }
+        assert!(
+            expected.domain()
+                == if expected == ConfiguredPointFamily::ColorBalance {
+                    NeighborhoodDomain::ColorBalancePrecision
+                } else {
+                    NeighborhoodDomain::ColorBalanceDepth
+                }
         );
     }
 }

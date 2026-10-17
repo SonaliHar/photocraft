@@ -82,7 +82,12 @@ fn cumulative_outer_ledger_and_late_cancel() {
             let next = seen.get().checked_add(units).unwrap();
             seen.set(next);
             if next >= first {
-                Err(photocraft_xcf::XcfError::new(photocraft_xcf::ErrorKind::Cancelled, 0, "test cancellation at final source proof"))
+                Err(photocraft_xcf::XcfError {
+                    kind: photocraft_xcf::ErrorKind::Cancelled,
+                    offset: 0,
+                    item: String::new(),
+                    message: "test cancellation at final source proof".into(),
+                })
             } else {
                 Ok(())
             }
