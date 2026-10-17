@@ -8,7 +8,7 @@ fn suggestion(origin: ImportOrigin, path: Option<&str>) -> Result<String, String
     let requests = Arc::new(Mutex::new(Vec::new()));
     let captured = requests.clone();
     let services = Services {
-        import: Some(Box::new(move |_, _| {
+        import: Some(Box::new(move |_, _, _| {
             Ok(photocraft_io::ImportResult {
                 document: photocraft_doc::Document::new(
                     "internal-source.xcf",
@@ -19,6 +19,8 @@ fn suggestion(origin: ImportOrigin, path: Option<&str>) -> Result<String, String
                 warnings: Vec::new(),
                 origin,
                 assessment: None,
+                source_read_only: origin.is_read_only(),
+                preview_only: false,
             })
         })),
         file_dialog: Some(Box::new(move |request, _, reply| {

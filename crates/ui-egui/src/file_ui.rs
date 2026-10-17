@@ -1580,7 +1580,7 @@ mod web_playback_tests {
         h.run_steps(6);
         assert_ne!(h.state().1["__web_frame"], paused, "resuming must advance the preview again");
         let st = h.state().0.session.active().unwrap();
-        assert!(Arc::ptr_eq(&st.doc, &original));
+        assert!(st.doc.shares_state(&original));
         assert_eq!(st.revision, revision);
         assert_eq!(st.history.past_len(), history);
         assert!(params(&h.state().1).as_object().unwrap().keys().all(|k| !k.starts_with("__")));
@@ -1599,13 +1599,13 @@ mod web_playback_tests {
             for (frame, expected) in [[1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]].iter().enumerate() {
                 let preview = web_frame_document(&source, Some(frame)).unwrap();
                 let (proxy, _, _) = web_cmds::web_document(&preview, &json!({"width":16,"height":12}), &WebSettings::default()).unwrap();
-                let pixels = photocraft_compose::flatten(&proxy);
+                let pixels = photocraft_compose::flatten(&proxy).unwrap();
                 for (actual, expected) in pixels.px[0].iter().zip(expected) {
                     assert!((actual - expected).abs() < 0.002, "depth={depth} frame={frame}");
                 }
             }
             assert_eq!(source.timeline.as_ref().unwrap().current, 0);
-            assert_eq!(photocraft_compose::flatten(&source).px[0], [1.0, 0.0, 0.0, 1.0]);
+            assert_eq!(photocraft_compose::flatten(&source).unwrap().px[0], [1.0, 0.0, 0.0, 1.0]);
         }
     }
 
@@ -1691,9 +1691,9 @@ mod web_playback_tests {
         let source = app.session.active().unwrap().doc.clone();
         let edited = web_frame_document(&source, Some(0)).unwrap();
         let other = web_frame_document(&source, Some(1)).unwrap();
-        assert_eq!(photocraft_compose::flatten(&edited).px[0], [1.0, 1.0, 0.0, 1.0]);
-        assert_eq!(photocraft_compose::flatten(&other).px[0], [0.0, 1.0, 0.0, 1.0]);
-        assert!(Arc::ptr_eq(&source, &app.session.active().unwrap().doc));
+        assert_eq!(photocraft_compose::flatten(&edited).unwrap().px[0], [1.0, 1.0, 0.0, 1.0]);
+        assert_eq!(photocraft_compose::flatten(&other).unwrap().px[0], [0.0, 1.0, 0.0, 1.0]);
+        assert!(source.shares_state(&app.session.active().unwrap().doc));
         assert_eq!(source.timeline.as_ref().unwrap().current, 0);
     }
 
@@ -1705,7 +1705,7 @@ mod web_playback_tests {
             for (frame, expected) in [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255]].iter().enumerate() {
                 let doc = web_frame_document(&app.session.active().unwrap().doc, Some(frame)).unwrap();
                 let (proxy, _, _) = web_cmds::web_document(&doc, &json!({"width":16,"height":12}), &settings).unwrap();
-                let pixels = photocraft_compose::flatten(&proxy);
+                let pixels = photocraft_compose::flatten(&proxy).unwrap();
                 let optimized = web_cmds::optimize(&pixels.px, 16, photocraft_geom::Rect::new(0, 0, 16, 12), &settings, None, None, 72.0, true).unwrap();
                 assert_eq!(&optimized.preview[..4], expected, "depth={depth} frame={frame}");
             }

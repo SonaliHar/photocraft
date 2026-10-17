@@ -109,8 +109,8 @@ pub(super) fn prepare(queue: &VecDeque<Held>, candidate: Entry<'_>, clone_candid
     let mut retained = 0u64;
     for held in queue.iter().map(Entry::held).chain(std::iter::once(candidate)) {
         poll(control)?;
-        let raster = photocraft_engine::DocumentSnapshot::resident_raster_footprint_of(&held.doc, control).map_err(|e| e.to_string())?;
-        let input = photocraft_io::retained_native_input_bytes(&held.doc, limits, control)
+        let raster = photocraft_engine::DocumentSnapshot::resident_raster_footprint_of(held.doc, control).map_err(|e| e.to_string())?;
+        let input = photocraft_io::retained_native_input_bytes(held.doc, limits, control)
             .map_err(|e| if control.cancelled() { "opening cancelled".into() } else { e.to_string() })?;
         add(&mut retained, (input as u64).max(raster.retained_bytes), ceiling)?;
         add(&mut retained, raster.clone_metadata_bytes, ceiling)?;

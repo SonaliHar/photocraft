@@ -165,6 +165,8 @@ mod tests {
         let brush = json!({"size": 30, "hardness": 1.0, "spacing": 0.05, "pressureSize": true, "pressureOpacity": true, "smoothing": {"amount": 0}});
         app.session.execute("tools.setBrush", json!({ "brush": brush })).unwrap();
         app.ui.tool = Tool::Brush;
+        app.sync_views();
+        let before_steps = app.session.active().unwrap().history.past_len();
         let m = egui::Modifiers::NONE;
         let n = 20;
         for i in 0..=n {
@@ -177,6 +179,27 @@ mod tests {
         }
         tool_event(&mut app, ToolEvent::Up { x: 220.0, y: 40.0 }, m);
         sink(None);
+        // Live-begin is asynchronous. Real canvas frames poll its captured
+        // worker and publish the released stroke; sampling before a frame sees
+        // the unchanged white document rather than the tablet result.
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, Default::default());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while app.session.active().unwrap().history.past_len() == before_steps && !app.ui.status_error && std::time::Instant::now() < deadline {
+            let view = app.ui.views[0].clone();
+            let mut next_view = None;
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(240.0, 80.0));
+                next_view = Some(photocraft_ui_egui::canvas::canvas_view(&mut app, ui, 0, rect, view.clone(), true));
+            });
+            output.textures_delta.clear();
+            if let Some(view) = next_view {
+                app.ui.views[0] = view;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(!app.ui.status_error, "tablet stroke: {}", app.ui.status);
+        assert_eq!(app.session.active().unwrap().history.past_len(), before_steps + 1, "released tablet stroke must finish before sampling");
         // Darkness (1 - luma) along x = 50 (light end) and x = 200 (heavy end), and the painted
         // half-width there.
         let mut dark = |x: i32, y: i32| -> f64 {

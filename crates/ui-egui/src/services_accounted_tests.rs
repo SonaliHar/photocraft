@@ -1,11 +1,12 @@
 //! UNRUN genuine owned-XCF UI save-route drafts. No filesystem writes.
-use super::*;
 use crate::{PhotocraftApp, Services};
 use photocraft_engine::Session;
 use photocraft_raster::{Interrupt, backing::ReadControl};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
 #[path = "../../xcf/tests/common/mod.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod xcf;
 
 fn control() -> ReadControl<'static> {

@@ -79,7 +79,7 @@ fn failed_encode_or_write_keeps_the_previous_name_path_and_dirty_state() {
         assert!(app.save_automation(Some("after.psd".into())).is_ok());
         app.run("layer.new.layer", json!({})).unwrap();
         let before = identity(&app);
-        app.services.automation_write = Some(Box::new(|_, _| Err("denied".into())));
+        app.services.automation_write = Some(Box::new(|_, _, _| Err("denied".into())));
         assert!(app.save_automation(Some("another.psd".into())).is_err());
         assert_eq!(identity(&app), before);
         app.services.export = Some(Box::new(|_, _, _| Err("cannot encode".into())));

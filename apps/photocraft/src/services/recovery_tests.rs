@@ -1,6 +1,7 @@
 use super::*;
-use photocraft_color::Color;
+use photocraft_color::{Color, ColorMode, SampleType};
 use photocraft_format::{Autosaver, RecoveryEntry, SaveOptions, list_recovery};
+use photocraft_geom::Size;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn snapshot(tag: &str) -> (PathBuf, Document, RecoveryEntry) {

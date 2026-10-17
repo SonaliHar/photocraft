@@ -46,7 +46,7 @@ fn jpeg_app(path: Option<&str>, layered: bool) -> (PhotocraftApp, Open, Rc<RefCe
     let (mut app, open, written) = app();
     let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "My image.JPEG", &Default::default()).unwrap().bytes;
     let doc = photocraft_io::import("My image.JPEG", &bytes).unwrap().document;
-    app.session.add_document(doc, path.map(str::to_string));
+    assert!(app.session.add_document(doc, path.map(str::to_string)).is_ok());
     if layered {
         app.run("layer.new.layer", json!({})).unwrap();
     }
@@ -111,13 +111,13 @@ fn save_dialog_preserves_flat_and_existing_layered_format_defaults() {
 #[test]
 fn transparent_png_keeps_its_format_until_its_lone_layer_becomes_smart() {
     let (mut app, open, written) = app();
-    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).layers[0].surface_mut().unwrap().write_pixel(0, 0, &[1.0, 0.0, 0.0, 0.0]);
+    app.session.active_mut().unwrap().doc.try_resident_mut().unwrap().layers[0].surface_mut().unwrap().write_pixel(0, 0, &[1.0, 0.0, 0.0, 0.0]);
     let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "transparent.PNG", &Default::default()).unwrap().bytes;
     let doc = photocraft_io::import("transparent.PNG", &bytes).unwrap().document;
     assert_eq!(doc.layers.len(), 1);
     assert!(!doc.layers[0].locks.transparency, "transparent PNG imports as an unlocked raster layer");
     assert_eq!(doc.layers[0].surface().unwrap().pixel(0, 0)[3], 0.0);
-    app.session.add_document(doc, Some("/pics/transparent.PNG".into()));
+    assert!(app.session.add_document(doc, Some("/pics/transparent.PNG".into())).is_ok());
     let ctx = egui::Context::default();
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
     app.poll_file_dialog(&ctx, None);
@@ -585,7 +585,10 @@ fn cancel_and_a_dialog_that_could_not_show_end_quietly() {
     let (mut app, open, written) = app();
     let ctx = egui::Context::default();
     app.run("layer.new.layer", json!({})).unwrap();
-    let before = app.session.active().unwrap().clone();
+    let before = {
+        let state = app.session.active().unwrap();
+        (state.doc.name.clone(), state.path.clone(), state.revision, state.saved_revision)
+    };
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
     app.poll_file_dialog(&ctx, None);
     answer(&open, None);
@@ -599,9 +602,9 @@ fn cancel_and_a_dialog_that_could_not_show_end_quietly() {
     assert!(!app.file_dialog_open() && !app.ui.status_error);
     assert!(written.borrow().is_empty());
     let after = app.session.active().unwrap();
-    assert_eq!(after.doc.name, before.doc.name);
-    assert_eq!(after.path, before.path);
-    assert_eq!((after.revision, after.saved_revision), (before.revision, before.saved_revision));
+    assert_eq!(after.doc.name, before.0);
+    assert_eq!(after.path, before.1);
+    assert_eq!((after.revision, after.saved_revision), (before.2, before.3));
     // Without a dialog service, asking is a Cancel straight away.
     app.services.file_dialog = None;
     assert_eq!(app.open_dialog_file().unwrap_err(), CANCELLED);
@@ -809,7 +812,7 @@ fn quick_export_selected_layers_writes_separate_pngs_with_one_prompt() {
     app.run("layer.new.layer", json!({"name": "Same/name"})).unwrap();
     app.run("paint.bucket", json!({"x": 0, "y": 0, "color": "#00ff00"})).unwrap();
     app.run("select.allLayers", json!({})).unwrap();
-    let selected = app.session.active().unwrap().selected_layers();
+    let selected = app.session.active().unwrap().selected_layers().unwrap();
     let before = app.session.active().unwrap().doc.clone();
     let sources = Rc::new(RefCell::new(Vec::new()));
     let capture = sources.clone();
@@ -885,7 +888,7 @@ fn export_as_with_several_artboards_selected_writes_one_file_each() {
     let b = app.run("layer.new.artboard", json!({"rect": [60, 0, 20, 50], "name": "Capsule"})).unwrap()["layer"].as_u64().unwrap();
     app.run("layer.select", json!({"layer": a})).unwrap();
     app.run("layer.select", json!({"layer": b, "mode": "add"})).unwrap();
-    assert_eq!(app.session.active().unwrap().selected_layers().len(), 2);
+    assert_eq!(app.session.active().unwrap().selected_layers().unwrap().len(), 2);
     let sizes = Rc::new(RefCell::new(Vec::new()));
     let capture = sizes.clone();
     app.services.export = Some(Box::new(move |doc: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| {
@@ -1096,4 +1099,82 @@ fn save_of_a_flat_file_asks_after_the_dialog_when_another_app_changed_it() {
     assert_eq!(*written.borrow(), [path]);
     assert!(!app.session.active().unwrap().is_dirty());
     assert_eq!(app.session.journal.last().map(|s| s.0.as_str()), Some("file.save"), "still recorded as a plain Save");
+}
+
+#[path = "../../../xcf/tests/common/mod.rs"]
+// Keep this generated-source fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types and cache identity")]
+mod accounted_stamp_xcf;
+
+/// Generated XCF input passes the owned plain reader before native serialization;
+/// the disk map is service metadata, not a source or filesystem fidelity oracle.
+#[test]
+fn accounted_native_existing_target_without_stamp_always_confirms_overwrite() {
+    use std::io::Cursor;
+    use photocraft_raster::{Interrupt, backing::ReadControl};
+    let control = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) };
+    // Match the supported native-open fixture: real plain XCF source custody,
+    // original quota and canonical profile/encoding metadata survive the archive.
+    let imported = photocraft_io::import_owned_staged_plain_bytes(
+        "original.xcf",
+        std::sync::Arc::new(accounted_stamp_xcf::image(13, 150, 0, 1, 1, &[31, 61, 91, 255])),
+        &Default::default(),
+        &photocraft_xcf::ResourceLimits::for_policy(Default::default()).unwrap(),
+        &Interrupt::NONE,
+    ).unwrap();
+    let quota = imported.document().quota().clone();
+    let bytes = photocraft_format::owned_document::save_current_document_archive(
+        imported.document().document(), Cursor::new(Vec::new()), Default::default(), &quota, &control,
+    ).unwrap().into_inner();
+    let read_quota = quota.clone();
+    let disk = Disk::default();
+    let (read_disk, write_disk) = (disk.clone(), disk.clone());
+    let written = Rc::new(RefCell::new(Vec::new()));
+    let writes = written.clone();
+    let services = Services {
+        file_stamp: Some(Box::new(move |path| read_disk.borrow().get(path).map(|&len| crate::FileStamp { len, modified: None }))),
+        owned_native_open: Some(Box::new(move |_, _, c| {
+            photocraft_io::accounted_native::open_accounted_native_from_reader(
+                &mut Cursor::new(bytes.as_slice()), bytes.len() as u64, Default::default(), read_quota.clone(), c,
+            ).map_err(|error| error.to_string())
+        })),
+        accounted_native_save: Some(Box::new(move |snapshot, path, _, c| {
+            let owner = snapshot.accounted().ok_or("typed writer lost its owner")?;
+            let output = photocraft_format::owned_document::save_current_document_archive(
+                owner.document(), Cursor::new(Vec::new()), Default::default(), owner.quota(), c,
+            ).map_err(|error| error.to_string())?.into_inner();
+            if !output.starts_with(b"PK") { return Err("native writer did not produce a ZIP archive".into()); }
+            writes.borrow_mut().push(path.to_owned());
+            *write_disk.borrow_mut().entry(path.to_owned()).or_default() += 1;
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = egui::Context::default();
+    let path = "/pics/generated.pcraft";
+    changed_by_another_app(&disk, path);
+    menus::invoke(&mut app, &ctx, "file.open", json!({"path": path, "nativeProfilePolicy": "keepCurrent"})).unwrap();
+    let state = app.session.active().unwrap();
+    assert!(state.doc.accounted().is_some());
+    let id = state.doc.id;
+    let before = state.doc.clone();
+    let usage = quota.usage().unwrap();
+    assert!(app.changed_on_disk(id, path));
+    assert!(!app.changed_on_disk(id, "/pics/unrelated.pcraft"));
+    assert!(app.disk_stamps.is_empty(), "no uncharged paid-owner stamp cache");
+    assert_eq!(quota.usage().unwrap(), usage);
+    assert!(app.session.active().unwrap().doc.shares_state(&before));
+    let first = menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    assert_eq!(first["confirmationPending"], true);
+    assert!(written.borrow().is_empty());
+    crate::dialogs::confirm(&mut app, first["dialog"].as_u64().unwrap()).unwrap();
+    assert_eq!(&*written.borrow(), &[path]);
+    assert!(!app.session.active().unwrap().is_dirty());
+    assert!(app.disk_stamps.is_empty());
+    let next = menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    assert_eq!(next["confirmationPending"], true, "even our own save has no retained baseline");
+    assert_eq!(written.borrow().len(), 1);
+    disk.borrow_mut().remove(path);
+    assert!(!app.changed_on_disk(id, path), "a missing file is not an overwrite");
 }

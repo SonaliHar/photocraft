@@ -29,7 +29,7 @@ fn duplicate_save(mut doc: photocraft_doc::Document, command: &str) -> TestResul
     let mut session = photocraft_engine::Session::new();
     session.add_document(doc, Some("typed-source.pcraft".into()))?;
     session.edit("Own source redo seed", |doc, _| {
-        doc.name.push('!');
+        doc.resolution_dpi += 1.0;
         Ok(())
     })?;
     assert!(session.undo());
@@ -62,8 +62,10 @@ fn duplicate_save(mut doc: photocraft_doc::Document, command: &str) -> TestResul
     let (name, bytes) = writes.first().ok_or("missing native delivery")?;
     assert_eq!(name, "typed-source.xcf copy.pcraft");
     let reopened = photocraft_format::load_from_bytes(bytes)?;
-    assert_eq!(&reopened, &*before);
-    assert_eq!(&*app.session.active().ok_or("missing duplicate")?.doc, &*before);
+    let mut named = (*before).clone();
+    named.name = name.clone();
+    assert_eq!(reopened, named);
+    assert_eq!(&*app.session.active().ok_or("missing duplicate")?.doc, &named);
     let current = app.session.active().ok_or("missing duplicate")?;
     assert_eq!(current.path.as_deref(), Some("typed-source.xcf copy.pcraft"));
     assert_eq!(current.saved_revision, current.revision);
@@ -220,11 +222,12 @@ fn supplied_multidot_duplicate_display_name_is_preserved_completely() -> TestRes
 
 #[test]
 fn native_memory_reopen_preserves_copy_multidot_and_native_suffix() -> TestResult {
-    for (title, expected) in [
-        ("typed-source.xcf copy", "typed-source.xcf copy.pcraft"),
-        ("Project.v2 title", "Project.v2 title.pcraft"),
-        ("Already.pcraft", "Already.pcraft"),
-        ("Upper.PCRAFT", "Upper.PCRAFT"),
+    for (title, suggested, expected, lowercase_extension) in [
+        ("typed-source.xcf copy", "typed-source.xcf copy.pcraft", "typed-source.xcf copy.pcraft", true),
+        ("Project.v2 title", "Project.v2 title.pcraft", "Project.v2 title.pcraft", true),
+        ("Already.pcraft", "Already.pcraft", "Already.pcraft", true),
+        ("Upper.PCRAFT", "Upper.PCRAFT", "Upper.PCRAFT", false),
+        ("Upper.PCRAFT", "Upper.PCRAFT", "Upper.pcraft", true),
     ] {
         for command in ["file.save", "file.saveAs"] {
             let requests = Arc::new(Mutex::new(Vec::new()));
@@ -232,7 +235,7 @@ fn native_memory_reopen_preserves_copy_multidot_and_native_suffix() -> TestResul
             let captured = requests.clone();
             let delivered = writes.clone();
             let services = Services {
-                import: Some(Box::new(|name, bytes| photocraft_io::import(name, bytes).map_err(|e| e.to_string()))),
+                import: Some(Box::new(|name, bytes, depth| photocraft_io::import_with_svg_group_depth(name, bytes, depth).map_err(|e| e.to_string()))),
                 export: Some(Box::new(|doc, path, _| {
                     photocraft_io::export(doc, path, &Default::default()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
                 })),
@@ -256,6 +259,12 @@ fn native_memory_reopen_preserves_copy_multidot_and_native_suffix() -> TestResul
             doc.icc_profile = Some(photocraft_cms::Builtin::Srgb.profile().to_bytes());
             let input = photocraft_format::save_to_bytes(&doc, &Default::default())?;
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+            // Exercise the real default-on policy and explicit case-preserving opt-out.
+            assert!(app.session.prefs().file_handling.lowercase_extension);
+            if !lowercase_extension {
+                app.run("prefs.set", json!({"path":"fileHandling.lowercaseExtension", "value":false}))?;
+            }
+            assert_eq!(app.session.prefs().file_handling.lowercase_extension, lowercase_extension);
             app.open_bytes("saved-source.pcraft", &input)?;
             let before = app.session.active().ok_or("missing reopened native")?.doc.clone();
             let source = app.session.active().ok_or("missing reopened native")?.source.clone();
@@ -266,15 +275,17 @@ fn native_memory_reopen_preserves_copy_multidot_and_native_suffix() -> TestResul
             photocraft_ui_egui::menus::invoke(&mut app, &ctx, command, json!({}))?;
             app.poll_file_dialog(&ctx, None);
             let requests = requests.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-            assert_eq!(requests.first(), Some(&FileDialogRequest::Save { suggested: expected.into() }));
+            assert_eq!(requests.first(), Some(&FileDialogRequest::Save { suggested: suggested.into() }));
             assert!(!app.ui.status_error, "{}", app.ui.status);
             let writes = writes.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             assert_eq!(writes.len(), 1);
             let (name, bytes) = writes.first().ok_or("missing native delivery")?;
             assert_eq!(name, expected);
-            assert_eq!(photocraft_format::load_from_bytes(bytes)?, *before);
+            let mut named = (*before).clone();
+            named.name = expected.into();
+            assert_eq!(photocraft_format::load_from_bytes(bytes)?, named);
             let after = app.session.active().ok_or("missing reopened native")?;
-            assert_eq!(after.doc, before);
+            assert_eq!(&*after.doc, &named);
             assert_eq!(after.source, source);
             assert_eq!(after.path.as_deref(), Some(expected));
             assert_eq!(after.saved_revision, after.revision);

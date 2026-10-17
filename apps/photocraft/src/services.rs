@@ -11,10 +11,10 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
-#[cfg(test)]
-mod recovery_tests;
 mod owned_native_open;
 mod owned_xcf_open;
+#[cfg(test)]
+mod recovery_tests;
 
 /// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd), swatches (.aco, .ase) and keyboard shortcut sets
@@ -320,7 +320,10 @@ fn save_native(
         let control = photocraft_raster::Interrupt::NONE;
         let held_protection = protection.resident_bytes_with_interrupt(&control).map_err(|error| error.to_string())?;
         let mut limits = photocraft_io::NativeSaveLimits::default();
-        limits.preparation.resident_bytes = limits.preparation.resident_bytes.checked_sub(held_protection)
+        limits.preparation.resident_bytes = limits
+            .preparation
+            .resident_bytes
+            .checked_sub(held_protection)
             .ok_or_else(|| "source-protection.resident-limit: exclusion metadata exceeds save envelope".to_owned())?;
         let guard = |candidate: &Path, resident_limit: u64| -> Result<(), photocraft_io::IoError> {
             photocraft_automation::files::validate_destination_protected_with_resident_limit(candidate, protection, Some("pcraft"), &control, resident_limit)
@@ -329,7 +332,8 @@ fn save_native(
         // Preserve the existing native atomic writer's parent-directory policy.
         // Admission and target guards precede preparation; the writer repeats
         // guards on its resolved target and each atomic rename attempt.
-        let result = photocraft_io::save_native_path_guarded_with_resident_guard(snapshot, target, limits, &control, &guard).map_err(|error| error.to_string())?;
+        let result =
+            photocraft_io::save_native_path_guarded_with_resident_guard(snapshot, target, limits, &control, &guard).map_err(|error| error.to_string())?;
         Ok(photocraft_ui_egui::services::NativeSaveResult { warnings: result.warnings })
     })
 }
@@ -388,7 +392,9 @@ fn save_file(
     ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
     protection: &photocraft_engine::WriteProtection,
 ) -> Result<Vec<String>, String> {
-    save_through(doc, path, settings, ctl, |p, b, progress| photocraft_automation::files::write_protected_native_progress(Path::new(p), b, protection, progress).map_err(|error| error.to_string()))
+    save_through(doc, path, settings, ctl, |p, b, progress| {
+        photocraft_automation::files::write_protected_native_progress(Path::new(p), b, protection, progress).map_err(|error| error.to_string())
+    })
 }
 
 type SharedRecovery = Rc<RefCell<Option<RecoveryStore>>>;
@@ -570,7 +576,8 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                     None => photocraft_io::accounted_native::new_accounted_native_open_quota(control).map_err(|e| e.to_string())?,
                 };
                 let maximum = (photocraft_io::native_plane_store::NATIVE_STORE_MAX_BLOCKS as u64)
-                    .checked_mul(photocraft_io::native_plane_store::NATIVE_STORE_BLOCK_BYTES as u64).ok_or("owned native input limit")?;
+                    .checked_mul(photocraft_io::native_plane_store::NATIVE_STORE_BLOCK_BYTES as u64)
+                    .ok_or("owned native input limit")?;
                 workspace.open_accounted_native_with_read_control(path, maximum, Default::default(), quota, control).map_err(|e| e.to_string())
             })
         }) as photocraft_ui_egui::services::OwnedNativeOpenFn
@@ -589,7 +596,8 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     let automation_stored_selection = automation.clone().filter(|workspace| workspace.has_read_root()).map(|workspace| {
         Box::new(move |session: &mut photocraft_engine::Session, params: &serde_json::Value, wait: bool, context: &photocraft_engine::jobs::JobCtx| {
             crate::crash_guard::guard("Load Stored Selection", || {
-                photocraft_automation::load_stored_selection_from_root_with_context(session, &workspace, params, wait, context).map_err(|error| error.to_string())
+                photocraft_automation::load_stored_selection_from_root_with_context(session, &workspace, params, wait, context)
+                    .map_err(|error| error.to_string())
             })
         }) as photocraft_ui_egui::AutomationStoredSelectionFn
     });
@@ -636,9 +644,17 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         }) as photocraft_ui_egui::AutomationOpenPcraftFn
     });
     let automation_save = automation.clone().map(|workspace| {
-        std::sync::Arc::new(move |doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings, ctl: &photocraft_ui_egui::jobs_ui::SaveCtl, protection: &photocraft_engine::WriteProtection| {
-            save_through(doc, path, settings, ctl, |p, b, _| workspace.write_protected(p, b, &protection.sources, &protection.fingerprints).map_err(|e| e.to_string()))
-        }) as photocraft_ui_egui::SaveFileFn
+        std::sync::Arc::new(
+            move |doc: &Document,
+                  path: &str,
+                  settings: &photocraft_ui_egui::ExportSettings,
+                  ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
+                  protection: &photocraft_engine::WriteProtection| {
+                save_through(doc, path, settings, ctl, |p, b, _| {
+                    workspace.write_protected(p, b, &protection.sources, &protection.fingerprints).map_err(|e| e.to_string())
+                })
+            },
+        ) as photocraft_ui_egui::SaveFileFn
     });
     let step: fn(&str, &serde_json::Value) -> photocraft_engine::Result<()> = photocraft_automation::workspace::authorize_desktop_engine_step;
     let automation_authorize = automation.is_some().then_some(step);
@@ -661,9 +677,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             photocraft_automation::files::validate_destination(Path::new(path), source, None).map_err(|e| e.to_string())
         })),
         import: Some(Box::new(|name: &str, bytes: &[u8], max_svg_group_depth: usize| {
-            crate::crash_guard::guard("Open", || {
-                photocraft_io::import_with_svg_group_depth(name, bytes, max_svg_group_depth).map_err(|e| e.to_string())
-            })
+            crate::crash_guard::guard("Open", || photocraft_io::import_with_svg_group_depth(name, bytes, max_svg_group_depth).map_err(|e| e.to_string()))
         })),
         automation_validate_write,
         automation_native_save,
@@ -1301,7 +1315,9 @@ mod tests {
         let result = save_native(&snapshot, output_text, &protection).unwrap();
         assert!(result.warnings.is_empty());
         let restored = photocraft_format::load_from_bytes(&std::fs::read(&output).unwrap()).unwrap();
-        assert_eq!(restored, *snapshot);
+        let mut expected = (*snapshot).clone();
+        expected.name = "own.pcraft".into();
+        assert_eq!(restored, expected);
         let protected = directory.join("another-open-source.pcraft");
         let original = b"Own existing source bytes";
         std::fs::write(&protected, original).unwrap();

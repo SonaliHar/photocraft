@@ -94,9 +94,9 @@ fn zero_headroom_and_cancel_refuse_before_missing_source_open_and_directory_refu
     let missing = dir.0.join("missing.pcraft");
     let zero = BackingQuota::new(QuotaLimits::default());
     let error = open(missing.to_str().unwrap(), Some(&zero), &ctl()).unwrap_err();
-    assert!(error.contains("quota"));
+    assert!(error.contains(&BackingError::Quota.to_string()), "{error}");
     let cancelled = ReadControl { interrupt: &Interrupt::NONE, work: &|_| Err(BackingError::Cancelled) };
-    assert!(open(missing.to_str().unwrap(), None, &cancelled).unwrap_err().contains("cancelled"));
+    assert_eq!(open(missing.to_str().unwrap(), None, &cancelled).unwrap_err(), BackingError::Cancelled.to_string());
     assert!(open(dir.0.to_str().unwrap(), None, &ctl()).is_err());
     assert!(!missing.exists());
 }

@@ -7,6 +7,8 @@ use photocraft_raster::backing::quota::{BackingQuota, QuotaLease};
 use std::{cell::RefCell, io::Cursor, rc::Rc, sync::Arc};
 
 #[path = "../../xcf/tests/common/mod.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod xcf;
 fn control() -> ReadControl<'static> {
     ReadControl { interrupt: &Interrupt::NONE, work: &|_| Ok(()) }
@@ -111,7 +113,7 @@ fn default_open_retains_existing_dialog_and_explicit_automation_has_no_ambient_f
     let mut app = PhotocraftApp::new(
         photocraft_engine::Session::new(),
         Services {
-            file_dialog: Some(Box::new(|_, _| {})),
+            file_dialog: Some(Box::new(|_, _, _| {})),
             owned_native_open: Some(Box::new(|_, _, _| panic!("ambient reader reached"))),
             ..Default::default()
         },
@@ -187,7 +189,7 @@ fn scoped_open_requires_path_and_capability_without_picker_or_ambient_fallback()
         photocraft_engine::Session::new(),
         Services {
             owned_native_open: Some(Box::new(|_, _, _| panic!("ambient reader reached"))),
-            file_dialog: Some(Box::new(|_, _| panic!("picker reached"))),
+            file_dialog: Some(Box::new(|_, _, _| panic!("picker reached"))),
             ..Default::default()
         },
     );

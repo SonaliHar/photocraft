@@ -16,7 +16,7 @@ fn explicit_owned_byte_policy_and_real_overlap_remain_separate() {
         assert!(!before.deadline_expired);
         let baseline = q.usage().unwrap();
         let name = if family == Family::Native { "actual.pcraft" } else { "actual.xcf" };
-        assert!(CAP > 16 << 20);
+        const { assert!(CAP > 16 << 20) };
         match request.clone().begin_capture(name, (16 << 20) + 1) {
             Err(e) => assert!(e.contains("backing quota")),
             Ok(_) => panic!("small real quota cannot admit payload/provider overlap"),
