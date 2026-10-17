@@ -892,12 +892,12 @@ impl Session {
                 continue;
             }
             let Some(st) = self.docs.iter_mut().find(|st| st.doc.id == doc_id) else { continue };
-            let snapshot = st.doc.clone();
-            let mut doc = (*snapshot).clone();
+            let (dpi, pixel_format) = (st.doc.resolution_dpi, st.doc.pixel_format());
+            let mut doc = (*st.doc).clone();
             let mut changed = false;
             for (_, id) in mine {
                 if let Some(photocraft_doc::Layer { content: photocraft_doc::LayerContent::Text(t), .. }) = doc.layer_mut(*id) {
-                    type_cmds::refresh(&snapshot, t);
+                    type_cmds::refresh_layer(t, dpi, pixel_format);
                     changed = true;
                 }
             }

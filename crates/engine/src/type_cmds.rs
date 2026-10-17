@@ -534,9 +534,14 @@ pub fn replace_text(t: &mut TextLayer, a: usize, b: usize, new: &str) {
 
 /// Re-renders the layer's pixels and regenerates its PSD `TySh` data.
 pub fn refresh(doc: &Document, t: &mut TextLayer) {
-    let dpi = doc.resolution_dpi;
+    refresh_layer(t, doc.resolution_dpi, doc.pixel_format());
+}
+
+/// Re-renders the layer's pixels and regenerates its PSD `TySh` data from resolution DPI and pixel format,
+/// avoiding the need to clone the entire document to satisfy the borrow checker (#7092).
+pub fn refresh_layer(t: &mut TextLayer, dpi: f32, pixel_format: photocraft_raster::PixelFormat) {
     let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
-    let (layout, r) = eng.render(t, dpi, doc.pixel_format());
+    let (layout, r) = eng.render(t, dpi, pixel_format);
     t.cache = Some(r.surface);
     t.psd_raw = Some(Arc::new(photocraft_text::psd::build_tysh(t, dpi, layout.bounds())));
 }
@@ -553,11 +558,11 @@ pub(crate) fn check_text_unlocked(doc: &Document, id: LayerId) -> Result<()> {
 
 /// Runs `f` on a type layer as one undo step. `f` may set an explicit layer name (`type.edit`'s
 /// `name`), which is applied in the same step; otherwise an auto-named layer follows its text.
-fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, &Document, &mut Option<String>) -> Result<R>) -> Result<R> {
+fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&mut TextLayer, f32, &mut Option<String>) -> Result<R>) -> Result<R> {
     let id = layer_id(s, p)?;
     check_text_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     let (r, damage) = s.edit(label, |doc, _| {
-        let snapshot = doc.clone();
+        let (dpi, pixel_format) = (doc.resolution_dpi, doc.pixel_format());
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let auto_named = is_auto_named(l);
         let LayerContent::Text(t) = &mut l.content else {
@@ -565,8 +570,8 @@ fn with_text_layer<R>(s: &mut Session, p: &Value, label: &str, f: impl FnOnce(&m
         };
         let before = t.cache.as_ref().map(|c| c.tile_bounds());
         let mut rename = None;
-        let r = f(t, &snapshot, &mut rename)?;
-        refresh(&snapshot, t);
+        let r = f(t, dpi, &mut rename)?;
+        refresh_layer(t, dpi, pixel_format);
         // Only this layer's pixels changed: the canvas recomposites their old and new area
         // instead of the whole document (#124). Unknown old pixels mean a full refresh.
         let damage = before.zip(t.cache.as_ref().map(|c| c.tile_bounds())).map(|(a, b)| a.union(&b));
@@ -629,14 +634,14 @@ pub(crate) fn with_text_targets(
 ) -> Result<Vec<LayerId>> {
     let ids = format_targets(s, p)?;
     let damage = s.edit(label, |doc, _| {
-        let snapshot = doc.clone();
+        let (dpi, pixel_format) = (doc.resolution_dpi, doc.pixel_format());
         let mut damage = Some(photocraft_geom::Rect::EMPTY);
         for id in &ids {
             let Some(LayerContent::Text(t)) = doc.layer_mut(*id).map(|l| &mut l.content) else { return Err(EngineError::NoLayer(*id)) };
             let before = t.cache.as_ref().map(|c| c.tile_bounds());
             let range = if p.get("layers").is_none() || p.get("layer").is_some() { range_param(&t.text, p) } else { (0, t.text.len()) };
             f(t, range)?;
-            refresh(&snapshot, t);
+            refresh_layer(t, dpi, pixel_format);
             // An unknown old/new cache retains Session.edit's full-refresh fallback.
             damage = damage.zip(before).zip(t.cache.as_ref().map(|c| c.tile_bounds())).map(|((all, a), b)| all.union(&a).union(&b));
         }
@@ -856,7 +861,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                 };
                 let label = if kern_pair.is_some() { "Kerning" } else { "Edit Type" };
-                with_text_layer(s, p, label, |t, doc, rename| {
+                with_text_layer(s, p, label, |t, dpi, rename| {
                     if let Some((at, by)) = kern_pair {
                         // Photoshop's Alt+←/→: the pair before the caret becomes manually kerned,
                         // starting from what it shows now (its metrics/optical or manual value).
@@ -868,7 +873,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         let b = byte_at(&t.text, at);
                         let now = {
                             let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
-                            eng.pair_kerning(t, doc.resolution_dpi, a)
+                            eng.pair_kerning(t, dpi, a)
                         }
                         .ok_or_else(|| bad("type.edit", "no kerning pair at the caret (line break or line end)"))?;
                         let value = (f64::from(now.round()) + by).clamp(KERN_MIN, KERN_MAX) as f32;
@@ -984,16 +989,16 @@ pub fn specs() -> Vec<CommandSpec> {
             run: |s, p| {
                 let id = layer_id(s, p)?;
                 s.edit("Rasterize Type", |doc, _| {
-                    let snapshot = doc.clone();
+                    let (dpi, pixel_format) = (doc.resolution_dpi, doc.pixel_format());
                     let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
                     let LayerContent::Text(t) = &mut l.content else {
                         return Err(EngineError::Other(format!("layer {} is not a type layer", id.0)));
                     };
                     if t.cache.is_none() {
-                        refresh(&snapshot, t);
+                        refresh_layer(t, dpi, pixel_format);
                     }
-                    let surface = t.cache.take().unwrap_or_else(|| photocraft_raster::Surface::new(snapshot.pixel_format()));
-                    let surface = if surface.format() == snapshot.pixel_format() { surface } else { surface.convert(snapshot.pixel_format()) };
+                    let surface = t.cache.take().unwrap_or_else(|| photocraft_raster::Surface::new(pixel_format));
+                    let surface = if surface.format() == pixel_format { surface } else { surface.convert(pixel_format) };
                     l.content = LayerContent::Raster(surface);
                     l.psd_blocks.retain(|(k, _)| k != b"TySh");
                     Ok(())
@@ -1747,5 +1752,20 @@ mod tests {
         let empty = s.execute("type.create", json!({"x": 0, "y": 80, "text": "", "size": 10})).unwrap()["layer"].as_u64().unwrap();
         s.execute("type.setStyle", json!({"layer": empty, "range": [0, 0], "leadingBy": -2})).unwrap();
         assert_eq!(text_layer(&s, empty).char_runs()[0].style.leading_pt, Some(10.0));
+    }
+
+    #[test]
+    fn refresh_layer_matches_refresh() {
+        let mut s = session();
+        let id = s.execute("type.create", json!({"x": 10, "y": 20, "text": "Test", "size": 14})).unwrap()["layer"].as_u64().unwrap();
+        let doc = s.active().unwrap().doc.clone();
+        let mut t1 = text_layer(&s, id);
+        let mut t2 = t1.clone();
+        t1.cache = None;
+        t2.cache = None;
+        refresh(&doc, &mut t1);
+        refresh_layer(&mut t2, doc.resolution_dpi, doc.pixel_format());
+        assert!(t1.cache.is_some() && t2.cache.is_some());
+        assert_eq!(t1.cache.as_ref().unwrap().tile_bounds(), t2.cache.as_ref().unwrap().tile_bounds());
     }
 }
