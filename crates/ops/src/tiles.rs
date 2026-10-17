@@ -52,6 +52,69 @@ impl Tiles {
         self.refs.capacity()
     }
 
+    fn snapshot_map(
+        slots: usize,
+        m: &mut crate::resident_history_controlled::Meter<'_, '_>,
+    ) -> Result<HashMap<usize, (u128, usize)>, photocraft_raster::RasterInputError> {
+        use photocraft_raster::RasterInputError as E;
+        let envelope = (slots as u64).checked_mul(256).and_then(|n| n.checked_add(4096)).ok_or(E::LimitExceeded)?;
+        m.allocate(envelope)?;
+        m.step(envelope)?;
+        let mut refs = HashMap::new();
+        refs.try_reserve(slots).map_err(|_| E::AllocationFailed)?;
+        let actual = (refs.capacity() as u64).checked_mul(128).and_then(|n| n.checked_add(std::mem::size_of::<Self>() as u64)).ok_or(E::LimitExceeded)?;
+        if actual > envelope {
+            return Err(E::LimitExceeded);
+        }
+        Ok(refs)
+    }
+
+    /// Snapshot-only private clone: its whole prospective table is charged
+    /// before reserve, and no insertion can grow it implicitly.
+    pub(crate) fn snapshot_clone_with(&self, m: &mut crate::resident_history_controlled::Meter<'_, '_>) -> Result<Self, photocraft_raster::RasterInputError> {
+        use photocraft_raster::RasterInputError as E;
+        let mut refs = Self::snapshot_map(self.refs.capacity(), m)?;
+        for (key, value) in &self.refs {
+            m.step(128)?;
+            if refs.len() >= refs.capacity() {
+                return Err(E::LimitExceeded);
+            }
+            refs.insert(*key, *value);
+        }
+        Ok(Self { refs, bytes: self.bytes })
+    }
+
+    /// Complete census slots are reserved once before walking the documents;
+    /// aliases are counted without any later allocation or rehash growth.
+    pub(crate) fn snapshot_build_with<'a>(
+        documents: impl Iterator<Item = &'a Document>,
+        slots: usize,
+        m: &mut crate::resident_history_controlled::Meter<'_, '_>,
+    ) -> Result<Self, photocraft_raster::RasterInputError> {
+        use photocraft_raster::RasterInputError as E;
+        let mut result = Self { refs: Self::snapshot_map(slots, m)?, bytes: 0 };
+        for document in documents {
+            m.step(1)?;
+            surfaces_with(document, m, |surface, m| {
+                for (_, tile) in surface.tiles() {
+                    m.step(128)?;
+                    let key = Arc::as_ptr(tile) as usize;
+                    if let Some(value) = result.refs.get_mut(&key) {
+                        value.0 = value.0.checked_add(1).ok_or(E::LimitExceeded)?;
+                    } else {
+                        if result.refs.len() >= result.refs.capacity() {
+                            return Err(E::LimitExceeded);
+                        }
+                        result.bytes = result.bytes.checked_add(tile.bytes().len() as u128).ok_or(E::LimitExceeded)?;
+                        result.refs.insert(key, (1, tile.bytes().len()));
+                    }
+                }
+                Ok(())
+            })?;
+        }
+        Ok(result)
+    }
+
     pub(crate) fn try_clone_with(&self, m: &mut crate::resident_history_controlled::Meter<'_, '_>) -> Result<Self, photocraft_raster::RasterInputError> {
         use photocraft_raster::RasterInputError as E;
         let slots = self.refs.capacity();
@@ -207,6 +270,14 @@ pub(crate) fn surfaces_with(
             visit(surface, m)?;
         }
         if let Some(mask) = &layer.mask {
+            visit(&mask.surface, m)?;
+        }
+        if let Some(cache) = &layer.fill_cache {
+            visit(&cache.surface, m)?;
+        }
+        if let LayerContent::Smart(smart) = &layer.content
+            && let Some(mask) = &smart.filter_mask
+        {
             visit(&mask.surface, m)?;
         }
         if let Some(video) = &layer.video {

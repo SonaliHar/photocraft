@@ -15,8 +15,8 @@ use std::sync::Arc;
 
 use photocraft_doc::{Document, LayerId};
 
-mod tiles;
 mod clone_metadata;
+mod tiles;
 pub use clone_metadata::CloneMetadataRequirements;
 mod resident_history_controlled;
 pub use resident_history_controlled::{ResidentHistoryLimits, ResidentHistoryRequirements};
@@ -508,7 +508,7 @@ mod tests {
         doc.insert_above(None, fill);
         let mut smart_obj = SmartObject::new(SmartSource::Linked { path: "a.png".into() }, Affine::IDENTITY, None);
         let mut mask = LayerMask::reveal_all();
-        mask.surface.write_pixel(1, 1, &[0.5]);
+        Arc::make_mut(&mut mask.surface).write_pixel(1, 1, &[0.5]);
         smart_obj.filter_mask = Some(mask);
         doc.insert_above(None, Layer::new("Smart", LayerContent::Smart(smart_obj)));
         let tile = 256 * 256;
@@ -546,7 +546,8 @@ mod tests {
             let tile = match depth {
                 SampleType::U8 => 65_536,
                 SampleType::U16 => 131_072,
-                SampleType::F32 => 262_144,
+                SampleType::U32 | SampleType::F32 => 262_144,
+                SampleType::F64 => 524_288,
             };
             let mut h = History { max_bytes: usize::MAX, ..History::default() };
             assert_eq!(h.pixel_bytes(&cur), 2 * tile, "current selection counts without any history");
@@ -789,7 +790,7 @@ mod tests {
         let mut doc = base();
         let mut gray = Surface::new(PixelFormat::GRAY8);
         gray.write_pixel(1, 1, &[1.0]);
-        doc.layers[0].mask = Some(LayerMask { surface: gray.clone(), ..LayerMask::reveal_all() });
+        doc.layers[0].mask = Some(LayerMask { surface: Arc::new(gray.clone()), ..LayerMask::reveal_all() });
         doc.channels.push(AlphaChannel::new("alpha", gray.clone()));
         doc.selection = Some(gray.clone());
         doc.quick_mask = Some(AlphaChannel::new("quick", gray));

@@ -253,10 +253,10 @@ impl History {
         undo.push_back(HistoryState { label: current_label, doc: before, layers: current_layers });
         while undo.len() > max_states {
             m.step(1)?;
-            if let Some(state) = undo.pop_front() {
-                if let Some(v) = &mut cache {
-                    v.remove_with(&state.doc, &mut m)?;
-                }
+            if let Some(state) = undo.pop_front()
+                && let Some(v) = &mut cache
+            {
+                v.remove_with(&state.doc, &mut m)?;
             }
         }
         if max_bytes != 0 && undo.len() > 1 {
@@ -297,6 +297,280 @@ impl History {
         }
         m.step(1)?;
         Ok(History { undo, redo: Vec::new(), tiles: cache, max_states, max_bytes, current_label: fresh_label, current_layers: fresh_layers })
+    }
+}
+
+// Snapshot-aware counterparts of the resident compatibility counters and trim.
+// Documents/native tiles stay borrowed; only private metadata and lookup storage
+// are staged, and every allocation is admitted before construction.
+fn snapshot_census<'a>(history: &History, current: &Document, extra: impl Clone + Iterator<Item = &'a Document>, m: &mut Meter<'_, '_>) -> Result<usize> {
+    let mut retained =
+        add(size_of::<History>() as u64, add(bytes::<HistoryState>(history.undo.capacity())?, bytes::<HistoryState>(history.redo.capacity())?)?)?;
+    retained = add(retained, add(history.current_label.capacity() as u64, target_bytes(&history.current_layers)?)?)?;
+    for state in history.undo.iter().chain(&history.redo) {
+        m.step(1)?;
+        retained = add(retained, add(state.label.capacity() as u64, target_bytes(&state.layers)?)?)?;
+    }
+    retained = add(retained, mul(history.tiles.as_ref().map_or(0, tiles::Tiles::capacity) as u64, 128)?)?;
+    m.allocate(retained)?;
+    let mut occurrences = 0u64;
+    let mut scan = |doc: &Document, m: &mut Meter<'_, '_>| {
+        m.step(1)?;
+        tiles::surfaces_with(doc, m, |surface, m| {
+            let count = amount(surface.tile_count())?;
+            // Pay the full origin walk before entering its interrupt-only helper.
+            m.step(add(mul(count, 2)?, 1)?)?;
+            surface.try_validate_tile_origins_with(m.ctl)?;
+            occurrences = add(occurrences, count)?;
+            Ok(())
+        })
+    };
+    scan(current, m)?;
+    for state in history.undo.iter().chain(&history.redo) {
+        scan(&state.doc, m)?;
+    }
+    for doc in extra {
+        scan(doc, m)?;
+    }
+    usize::try_from(occurrences).map_err(|_| RasterInputError::LimitExceeded)
+}
+
+fn snapshot_seen(slots: usize, m: &mut Meter<'_, '_>) -> Result<HashSet<usize>> {
+    let envelope = add(mul(amount(slots)?, 256)?, 4096)?;
+    m.allocate(envelope)?;
+    m.step(envelope)?;
+    let mut seen = HashSet::new();
+    seen.try_reserve(slots).map_err(|_| RasterInputError::AllocationFailed)?;
+    let actual = add(mul(amount(seen.capacity())?, 128)?, size_of::<HashSet<usize>>() as u64)?;
+    if actual > envelope {
+        return Err(RasterInputError::LimitExceeded);
+    }
+    Ok(seen)
+}
+
+fn snapshot_clear(seen: &mut HashSet<usize>, m: &mut Meter<'_, '_>) -> Result<()> {
+    m.step(add(mul(amount(seen.capacity())?, 128)?, 1)?)?;
+    seen.clear();
+    Ok(())
+}
+
+fn snapshot_unique_bytes(doc: &Document, seen: &mut HashSet<usize>, m: &mut Meter<'_, '_>) -> Result<usize> {
+    let mut total = 0usize;
+    tiles::surfaces_with(doc, m, |surface, m| {
+        for (_, tile) in surface.tiles() {
+            m.step(128)?;
+            let key = Arc::as_ptr(tile) as usize;
+            if !seen.contains(&key) {
+                // Even a caller-supplied iterator with surprising Clone behavior
+                // cannot grow the table beyond its completed census admission.
+                if seen.len() >= seen.capacity() {
+                    return Err(RasterInputError::LimitExceeded);
+                }
+                seen.insert(key);
+                total = total.saturating_add(tile.bytes().len());
+            }
+        }
+        Ok(())
+    })?;
+    Ok(total)
+}
+
+fn snapshot_capacity<T>(requested: usize, m: &mut Meter<'_, '_>) -> Result<u64> {
+    let envelope = add(mul(bytes::<T>(requested)?, 2)?, 128)?;
+    m.allocate(envelope)?;
+    m.step(envelope)?;
+    Ok(envelope)
+}
+
+fn snapshot_actual<T>(capacity: usize, envelope: u64) -> Result<()> {
+    if bytes::<T>(capacity)? > envelope {
+        return Err(RasterInputError::LimitExceeded);
+    }
+    Ok(())
+}
+
+fn snapshot_string(value: &str, capacity: usize, m: &mut Meter<'_, '_>) -> Result<String> {
+    let requested = capacity.max(value.len());
+    let envelope = snapshot_capacity::<u8>(requested, m)?;
+    let mut result = String::new();
+    result.try_reserve_exact(requested).map_err(|_| RasterInputError::AllocationFailed)?;
+    snapshot_actual::<u8>(result.capacity(), envelope)?;
+    let mut start = 0usize;
+    while start < value.len() {
+        let mut end = start.checked_add(32768).ok_or(RasterInputError::LimitExceeded)?.min(value.len());
+        while !value.is_char_boundary(end) {
+            end = end.checked_sub(1).ok_or(RasterInputError::InvalidBounds)?;
+        }
+        let chunk = value.get(start..end).ok_or(RasterInputError::InvalidBounds)?;
+        m.step(add(chunk.len() as u64, 1)?)?;
+        result.push_str(chunk);
+        start = end;
+    }
+    Ok(result)
+}
+
+fn snapshot_target(value: &LayerTarget, m: &mut Meter<'_, '_>) -> Result<LayerTarget> {
+    let envelope = snapshot_capacity::<photocraft_doc::LayerId>(value.selected.capacity(), m)?;
+    let mut selected = Vec::new();
+    selected.try_reserve_exact(value.selected.capacity()).map_err(|_| RasterInputError::AllocationFailed)?;
+    snapshot_actual::<photocraft_doc::LayerId>(selected.capacity(), envelope)?;
+    for chunk in value.selected.chunks(4096) {
+        m.step(add(bytes::<photocraft_doc::LayerId>(chunk.len())?, 1)?)?;
+        selected.extend_from_slice(chunk);
+    }
+    Ok(LayerTarget { active: value.active, selected })
+}
+
+fn snapshot_counts<'a>(
+    history: &History,
+    current: &Document,
+    extra: impl Clone + Iterator<Item = &'a Document>,
+    limits: ResidentHistoryLimits,
+    ctl: &Interrupt<'_>,
+) -> Result<((usize, usize, usize), u64, u64)> {
+    validate(limits)?;
+    let mut m = Meter { ctl, limits, used: 0, resident: 0 };
+    let slots = snapshot_census(history, current, extra.clone(), &mut m)?;
+    let mut seen = snapshot_seen(slots, &mut m)?;
+    let mut pixels = snapshot_unique_bytes(current, &mut seen, &mut m)?;
+    for state in history.undo.iter().chain(&history.redo) {
+        m.step(1)?;
+        pixels = pixels.saturating_add(snapshot_unique_bytes(&state.doc, &mut seen, &mut m)?);
+    }
+    let mut extra_only = 0usize;
+    for doc in extra.clone() {
+        m.step(1)?;
+        extra_only = extra_only.saturating_add(snapshot_unique_bytes(doc, &mut seen, &mut m)?);
+    }
+    snapshot_clear(&mut seen, &mut m)?;
+    snapshot_unique_bytes(current, &mut seen, &mut m)?;
+    for doc in extra {
+        m.step(1)?;
+        snapshot_unique_bytes(doc, &mut seen, &mut m)?;
+    }
+    let mut history_only = 0usize;
+    for state in history.undo.iter().chain(&history.redo) {
+        m.step(1)?;
+        history_only = history_only.saturating_add(snapshot_unique_bytes(&state.doc, &mut seen, &mut m)?);
+    }
+    m.step(1)?;
+    Ok(((pixels, extra_only, history_only), m.used, m.resident))
+}
+
+fn snapshot_history_clone(history: &History, m: &mut Meter<'_, '_>) -> Result<History> {
+    m.allocate(size_of::<History>() as u64)?;
+    let undo_envelope = snapshot_capacity::<HistoryState>(history.undo.capacity(), m)?;
+    let mut undo = VecDeque::new();
+    undo.try_reserve_exact(history.undo.capacity()).map_err(|_| RasterInputError::AllocationFailed)?;
+    snapshot_actual::<HistoryState>(undo.capacity(), undo_envelope)?;
+    for state in &history.undo {
+        m.step(128)?;
+        undo.push_back(HistoryState {
+            label: snapshot_string(&state.label, state.label.capacity(), m)?,
+            doc: Arc::clone(&state.doc),
+            layers: snapshot_target(&state.layers, m)?,
+        });
+    }
+    let redo_envelope = snapshot_capacity::<HistoryState>(history.redo.capacity(), m)?;
+    let mut redo = Vec::new();
+    redo.try_reserve_exact(history.redo.capacity()).map_err(|_| RasterInputError::AllocationFailed)?;
+    snapshot_actual::<HistoryState>(redo.capacity(), redo_envelope)?;
+    for state in &history.redo {
+        m.step(128)?;
+        redo.push(HistoryState {
+            label: snapshot_string(&state.label, state.label.capacity(), m)?,
+            doc: Arc::clone(&state.doc),
+            layers: snapshot_target(&state.layers, m)?,
+        });
+    }
+    Ok(History {
+        undo,
+        redo,
+        tiles: history.tiles.as_ref().map(|cache| cache.snapshot_clone_with(m)).transpose()?,
+        max_states: history.max_states,
+        max_bytes: history.max_bytes,
+        current_label: snapshot_string(&history.current_label, history.current_label.capacity(), m)?,
+        current_layers: snapshot_target(&history.current_layers, m)?,
+    })
+}
+
+impl History {
+    /// Unique current/history bytes, extra-only bytes, and history bytes freed
+    /// while current/extra documents remain. The borrowed iterator allocates no
+    /// snapshot-reference vector and is counted on every actual traversal.
+    pub fn resident_memory_bytes_with_interrupt<'a>(
+        &self,
+        current: &Document,
+        extra: impl Clone + Iterator<Item = &'a Document>,
+        limits: ResidentHistoryLimits,
+        ctl: &Interrupt<'_>,
+    ) -> Result<(usize, usize, usize)> {
+        snapshot_counts(self, current, extra, limits, ctl).map(|(counts, _, _)| counts)
+    }
+
+    /// Private snapshot-aware equivalent of `trim_with`. No error or cancelled
+    /// walk changes this history, its cache, or any borrowed document.
+    #[allow(clippy::too_many_arguments)] // Stable snapshot/limit/control contract, matching the existing record adapter.
+    pub fn try_clone_trim_with_interrupt<'a>(
+        &self,
+        current: &Document,
+        pinned: impl Clone + Iterator<Item = &'a Document>,
+        max_states: usize,
+        max_bytes: usize,
+        limits: ResidentHistoryLimits,
+        ctl: &Interrupt<'_>,
+    ) -> Result<History> {
+        validate(limits)?;
+        let mut m = Meter { ctl, limits, used: 0, resident: 0 };
+        let slots = snapshot_census(self, current, pinned.clone(), &mut m)?;
+        let mut history = snapshot_history_clone(self, &mut m)?;
+        history.max_states = max_states;
+        history.max_bytes = max_bytes;
+        if max_bytes != 0 && history.undo.len() > 1 {
+            let mut seen = snapshot_seen(slots, &mut m)?;
+            snapshot_unique_bytes(current, &mut seen, &mut m)?;
+            let mut pinned_bytes = 0usize;
+            for doc in pinned.clone() {
+                m.step(1)?;
+                pinned_bytes = pinned_bytes.saturating_add(snapshot_unique_bytes(doc, &mut seen, &mut m)?);
+            }
+            if history.tiles.is_none() {
+                history.tiles =
+                    Some(tiles::Tiles::snapshot_build_with(history.undo.iter().chain(&history.redo).map(|state| state.doc.as_ref()), slots, &mut m)?);
+            }
+            let cache = history.tiles.as_mut().ok_or(RasterInputError::InvalidBounds)?;
+            snapshot_clear(&mut seen, &mut m)?;
+            if !cache.fits_with(current, max_bytes.saturating_sub(pinned_bytes), &mut seen, &mut m)? {
+                snapshot_clear(&mut seen, &mut m)?;
+                let mut total = snapshot_unique_bytes(current, &mut seen, &mut m)?;
+                for doc in pinned {
+                    m.step(1)?;
+                    total = total.saturating_add(snapshot_unique_bytes(doc, &mut seen, &mut m)?);
+                }
+                for state in history.redo.iter().rev() {
+                    m.step(1)?;
+                    total = total.saturating_add(snapshot_unique_bytes(&state.doc, &mut seen, &mut m)?);
+                }
+                let mut keep = 0usize;
+                for state in history.undo.iter().rev() {
+                    m.step(1)?;
+                    total = total.saturating_add(snapshot_unique_bytes(&state.doc, &mut seen, &mut m)?);
+                    if total > max_bytes && keep >= 1 {
+                        break;
+                    }
+                    keep += 1;
+                }
+                let count = history.undo.len().checked_sub(keep).ok_or(RasterInputError::InvalidBounds)?;
+                for _ in 0..count {
+                    m.step(1)?;
+                    if let Some(state) = history.undo.pop_front() {
+                        cache.remove_with(&state.doc, &mut m)?;
+                    }
+                }
+            }
+        }
+        m.step(1)?;
+        Ok(history)
     }
 }
 
@@ -442,5 +716,113 @@ mod tests {
         );
         assert_eq!(h.entry_labels().map(str::to_owned).collect::<Vec<_>>(), labels);
         assert_eq!(a.name, "Own history");
+    }
+    #[test]
+    fn snapshot_alias_tuple_and_pinned_trim_preserve_redo_and_newest_undo() {
+        let docs: Vec<_> = (1..=6).map(document).collect();
+        let [a, b, c, d, e, f] = docs.as_slice() else { panic!("six fixtures") };
+        let tile = 256 * 256 * 4;
+        let mut h = History::new(10);
+        for (label, doc) in [("B", b), ("C", c), ("D", d)] {
+            h.undo.push_back(HistoryState { label: label.into(), doc: doc.clone(), layers: target() });
+        }
+        h.redo.push(HistoryState { label: "E".into(), doc: e.clone(), layers: target() });
+        let pins = [b.as_ref(), f.as_ref(), f.as_ref()];
+        for warm in [false, true] {
+            let mut source = h.clone();
+            if warm {
+                source.max_bytes = usize::MAX;
+                source.trim_with(a, &pins);
+            }
+            assert_eq!(
+                source.resident_memory_bytes_with_interrupt(a, pins.into_iter(), ResidentHistoryLimits::default(), &Interrupt::NONE).unwrap(),
+                (5 * tile, tile, 3 * tile)
+            );
+            for (budget, remaining) in [(6 * tile, 3), (5 * tile, 1), (4 * tile, 1)] {
+                let result = source.try_clone_trim_with_interrupt(a, pins.into_iter(), 10, budget, ResidentHistoryLimits::default(), &Interrupt::NONE).unwrap();
+                assert_eq!(result.undo.len(), remaining);
+                assert_eq!(result.redo.len(), 1);
+                assert!(Arc::ptr_eq(&result.redo[0].doc, e));
+                assert!(Arc::ptr_eq(&result.undo.back().unwrap().doc, d));
+                if remaining == 1 {
+                    assert_eq!(
+                        result.resident_memory_bytes_with_interrupt(a, pins.into_iter(), ResidentHistoryLimits::default(), &Interrupt::NONE).unwrap(),
+                        (3 * tile, 2 * tile, 2 * tile)
+                    );
+                }
+            }
+            assert_eq!(source.undo.len(), 3);
+        }
+        let equal_bytes_distinct_arc = document(1);
+        assert_eq!(
+            History::new(1)
+                .resident_memory_bytes_with_interrupt(
+                    a,
+                    [a.as_ref(), equal_bytes_distinct_arc.as_ref()].into_iter(),
+                    ResidentHistoryLimits::default(),
+                    &Interrupt::NONE
+                )
+                .unwrap(),
+            (tile, tile, 0)
+        );
+    }
+
+    #[test]
+    fn snapshot_controlled_counts_include_fill_cache_and_smart_filter_mask() {
+        use photocraft_doc::{Affine, Color, Fill, FillCache, LayerMask, SmartObject, SmartSource};
+        let mut doc = Document::new("Owners", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        let mut fill = Layer::new("Fill", LayerContent::Fill(Fill::Solid(Color::WHITE)));
+        let mut surface = Surface::new(PixelFormat::GRAY8);
+        surface.write_pixel(0, 0, &[0.5]);
+        fill.fill_cache = Some(FillCache { fill: Fill::Solid(Color::WHITE), surface });
+        doc.layers.push(fill);
+        let mut smart = SmartObject::new(SmartSource::Linked { path: "unopened.png".into() }, Affine::IDENTITY, None);
+        let mut mask = LayerMask::reveal_all();
+        Arc::make_mut(&mut mask.surface).write_pixel(0, 0, &[0.25]);
+        smart.filter_mask = Some(mask);
+        doc.layers.push(Layer::new("Smart", LayerContent::Smart(smart)));
+        let h = History::new(1);
+        assert_eq!(
+            h.resident_memory_bytes_with_interrupt(&doc, std::iter::once(&doc), ResidentHistoryLimits::default(), &Interrupt::NONE).unwrap(),
+            (2 * 256 * 256, 0, 0)
+        );
+        let empty = Document::new("Default only", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+        assert_eq!(h.resident_memory_bytes_with_interrupt(&empty, std::iter::empty(), ResidentHistoryLimits::default(), &Interrupt::NONE).unwrap(), (0, 0, 0));
+    }
+
+    #[test]
+    fn snapshot_observed_work_and_resident_boundaries_and_cancel_are_atomic() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let current = document(1);
+        let pin = document(2);
+        let mut h = History::new(10);
+        h.record("Prior", document(3), target());
+        let limits = ResidentHistoryLimits::default();
+        let (expected, work, resident) = snapshot_counts(&h, &current, std::iter::once(pin.as_ref()), limits, &Interrupt::NONE).unwrap();
+        assert_eq!(
+            h.resident_memory_bytes_with_interrupt(
+                &current,
+                std::iter::once(pin.as_ref()),
+                ResidentHistoryLimits { work_units: work, resident_bytes: resident },
+                &Interrupt::NONE
+            )
+            .unwrap(),
+            expected
+        );
+        for lower in [ResidentHistoryLimits { work_units: work - 1, ..limits }, ResidentHistoryLimits { resident_bytes: resident - 1, ..limits }] {
+            assert_eq!(
+                h.resident_memory_bytes_with_interrupt(&current, std::iter::once(pin.as_ref()), lower, &Interrupt::NONE).unwrap_err(),
+                RasterInputError::LimitExceeded
+            );
+        }
+        let calls = AtomicU64::new(0);
+        let stop = || calls.fetch_add(1, Ordering::Relaxed) >= 20;
+        assert_eq!(
+            h.try_clone_trim_with_interrupt(&current, std::iter::once(pin.as_ref()), 10, 1, limits, &Interrupt::cancel_only(&stop)).unwrap_err(),
+            RasterInputError::Cancelled
+        );
+        assert_eq!(h.past_len(), 1);
+        assert!(Arc::ptr_eq(&h.undo.front().unwrap().doc, &h.undo.back().unwrap().doc));
+        assert_eq!(current.name, "Own history");
     }
 }
