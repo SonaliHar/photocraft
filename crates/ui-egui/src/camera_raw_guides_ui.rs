@@ -187,8 +187,8 @@ pub(crate) fn preview(
     // Paint: stored guides through the current map (the frozen one mid-drag), then the drag.
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     let draw_map = tool.drag.as_ref().map_or(&map, |d| &d.2);
-    let colour = Color32::from_rgb(255, 214, 10);
-    let line = |a: Pos2, b: Pos2, selected: bool| {
+    let line = |a: Pos2, b: Pos2, selected: bool, axis: upright::Axis| {
+        let colour = guide_colour(axis);
         painter.line_segment([a, b], Stroke::new(3.0, Color32::from_black_alpha(140)));
         painter.line_segment([a, b], Stroke::new(if selected { 2.0 } else { 1.2 }, colour));
         for p in [a, b] {
@@ -207,18 +207,35 @@ pub(crate) fn preview(
             }
         }
         if let (Some(a), Some(b)) = (a, b) {
-            line(a, b, tool.selected == Some(i));
+            line(a, b, tool.selected == Some(i), guide_axis(g, w, h));
         }
     }
     if let Some((drag, cur, _)) = &tool.drag {
         if let Drag::New { start } = drag {
-            line(*start, *cur, true);
+            // On screen, near enough to how the uncorrected frame will see it.
+            let d = *cur - *start;
+            line(*start, *cur, true, if d.y.abs() >= d.x.abs() { upright::Axis::Vertical } else { upright::Axis::Horizontal });
         }
         if let Some(tex) = texture {
             loupe(ui, tex, rect, *cur);
         }
     }
     changed
+}
+
+/// Which way Upright straightens guide `g` (fractions of the uncorrected `w`×`h` frame), as
+/// [`upright::homography`] decides it.
+fn guide_axis(g: &[[f32; 2]; 2], w: usize, h: usize) -> upright::Axis {
+    let s = g.map(|p| upright::to_normalised([f64::from(p[0]) * w as f64, f64::from(p[1]) * h as f64], w, h));
+    upright::axis_of(&s)
+}
+
+/// Guides made vertical are yellow, guides made level cyan.
+fn guide_colour(axis: upright::Axis) -> Color32 {
+    match axis {
+        upright::Axis::Vertical => Color32::from_rgb(255, 214, 10),
+        upright::Axis::Horizontal => Color32::from_rgb(40, 200, 255),
+    }
 }
 
 /// A 4× magnifier of the preview around `at`, beside the pointer.
@@ -249,6 +266,17 @@ fn loupe(ui: &Ui, tex: &egui::TextureHandle, image: Rect, at: Pos2) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A guide is coloured by the axis Upright gives it in the uncorrected frame: a wide frame's
+    /// 45° in fractions is closer to vertical in pixels.
+    #[test]
+    fn guides_are_coloured_by_the_axis_they_are_straightened_to() {
+        let (post, ledge) = ([[0.3f32, 0.1], [0.32, 0.9]], [[0.1f32, 0.5], [0.9, 0.55]]);
+        assert_eq!(guide_axis(&post, 600, 400), upright::Axis::Vertical);
+        assert_eq!(guide_axis(&ledge, 600, 400), upright::Axis::Horizontal);
+        assert_eq!(guide_axis(&[[0.2, 0.2], [0.4, 0.6]], 1200, 400), upright::Axis::Horizontal);
+        assert_ne!(guide_colour(upright::Axis::Vertical), guide_colour(upright::Axis::Horizontal));
+    }
 
     #[test]
     fn shift_t_selects_guided_and_a_second_press_puts_the_tool_down() {
