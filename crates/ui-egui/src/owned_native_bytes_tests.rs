@@ -3,6 +3,8 @@ use super::*;
 use crate::Services;
 use std::{cell::RefCell, io::Cursor, rc::Rc};
 #[path = "../../xcf/tests/common/mod.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod xcf;
 
 fn native_bytes() -> Vec<u8> {

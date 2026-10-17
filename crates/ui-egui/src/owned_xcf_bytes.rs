@@ -306,14 +306,20 @@ pub(crate) fn poll(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 #[path = "owned_xcf_bytes_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
 
 #[cfg(test)]
 #[path = "owned_native_bytes_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod native_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_streamed_box_work_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod streamed_box_work_tests;
 
 #[cfg(test)]

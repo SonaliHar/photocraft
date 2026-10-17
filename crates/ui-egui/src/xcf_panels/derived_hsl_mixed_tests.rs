@@ -1,6 +1,8 @@
 //! Deferred fixed-HSL request shape and passive rawword contract; actual widget/native workflows separate.
 use super::*;
 #[path = "../../../engine/src/accounted_filtered_flat_hsl_test_support.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 #[test]
 #[ignore = "UNRUN HSLfixedmodel1 passiveF32Bool/Enum/order, changed9only andatomicopacity+enablemerge; wrongstoredRGBmodel rejected no normalization or visualclaim"]

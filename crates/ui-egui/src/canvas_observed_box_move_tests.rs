@@ -2,6 +2,8 @@
 use super::*;
 #[path = "observed_box_move_fixture.rs"]
 #[allow(dead_code)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 use serde_json::{Value, json};
 fn preview(snapshot: &photocraft_engine::DocumentSnapshot) {

@@ -18,10 +18,12 @@ pub(super) fn radius(document: &DocumentSnapshot, layer: LayerId, node: &FilterN
             let nonlinear = document.sample_encoding == Some(photocraft_doc::SampleEncoding::NonlinearProfile)
                 && (document.mode == photocraft_doc::ColorMode::Rgb || (!assigned && source.original_icc.is_none()))
                 && matches!((document.depth, source.source_precision), (photocraft_doc::SampleType::F32, 650) | (photocraft_doc::SampleType::F64, 750));
-            let implicit_linear = !assigned && source.original_icc.is_none()
+            let implicit_linear = !assigned
+                && source.original_icc.is_none()
                 && document.sample_encoding == Some(photocraft_doc::SampleEncoding::Linear)
                 && matches!((document.depth, source.source_precision), (photocraft_doc::SampleType::F32, 600) | (photocraft_doc::SampleType::F64, 700));
-            let implicit_perceptual = !assigned && source.original_icc.is_none()
+            let implicit_perceptual = !assigned
+                && source.original_icc.is_none()
                 && document.sample_encoding == Some(photocraft_doc::SampleEncoding::Perceptual)
                 && matches!((document.depth, source.source_precision), (photocraft_doc::SampleType::F32, 675) | (photocraft_doc::SampleType::F64, 775));
             (!nonlinear && !implicit_linear && !implicit_perceptual) || assigned != source.original_icc.is_some()
@@ -67,6 +69,8 @@ pub(super) fn request(node: &FilterNode, old_radius: i32, next_radius: i32, enab
         Some(result)
     }
 }
+// Keep the captured document/revision, target, lock state and UI inputs explicit.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn controls(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
@@ -95,24 +99,36 @@ pub(super) fn controls(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "observed_box_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="assigned_f64_box_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "assigned_f64_box_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod assigned_f64_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="linear_box_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "linear_box_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod linear_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="perceptual_box_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "perceptual_box_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod perceptual_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="gray_box_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "gray_box_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod gray_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="gray_transfer_box_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "gray_transfer_box_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod gray_transfer_tests;

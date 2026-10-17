@@ -1,9 +1,13 @@
 //! Paid synthetic CURRENT control; original source/projection evidence is separate.
 #[path = "canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod native;
 #[path = "canvas_observed_box_fixture.rs"]
 #[allow(dead_code)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod observed;
 use photocraft_doc::{Document, SampleType, item_identity::ItemRef};
 pub(super) fn ctl() -> photocraft_raster::backing::ReadControl<'static> {

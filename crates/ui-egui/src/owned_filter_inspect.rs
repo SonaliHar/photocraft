@@ -5,10 +5,7 @@ use crate::{
     control::{ControlRequest, Outcome},
 };
 use photocraft_engine::accounted_filter_inspect::{OwnedFilterInspectWire, encode_rpc, prepare, validate_rpc_id};
-use photocraft_raster::{
-    Interrupt,
-    backing::ReadControl,
-};
+use photocraft_raster::{Interrupt, backing::ReadControl};
 use serde_json::Value;
 use std::sync::mpsc::Sender;
 
@@ -23,7 +20,9 @@ pub(crate) fn handle(app: &mut PhotocraftApp, request: &ControlRequest, command:
         return None;
     }
     let owner = app.session.active()?.doc.accounted()?;
-    let filtered = owner.is_readonly_normal_hierarchy_storage() || owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_threshold_alpha_storage()
+    let filtered = owner.is_readonly_normal_hierarchy_storage()
+        || owner.is_readonly_filtered_flat_point_storage()
+        || owner.is_readonly_threshold_alpha_storage()
         || owner.is_readonly_threshold_storage()
         || owner.is_readonly_point_storage()
         || owner.is_readonly_assigned_point_storage()
@@ -95,4 +94,6 @@ mod tests;
 
 #[cfg(test)]
 #[path = "owned_plain_xcf_inspect_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod plain_tests;

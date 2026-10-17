@@ -5,6 +5,8 @@ use photocraft_raster::backing::quota::{BackingQuota, QuotaLimits};
 use std::{cell::RefCell, io::Cursor, rc::Rc, sync::Arc};
 
 #[path = "../../xcf/tests/common/mod.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod xcf;
 
 fn reader(bytes: Arc<Vec<u8>>, seen: Rc<RefCell<Vec<(String, bool)>>>) -> OwnedCurrentXcfOpenFn {

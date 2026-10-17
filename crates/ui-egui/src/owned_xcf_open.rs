@@ -118,7 +118,9 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
     control.check(1).map_err(|e| e.to_string())?;
     match &imported {
         photocraft_io::OwnedXcfImport::NormalHierarchy(imported) => app.session.add_owned_normal_hierarchy_xcf_import(imported, name, Some(path), &control),
-        photocraft_io::OwnedXcfImport::MaskedFilteredFlat(imported) => app.session.add_owned_masked_filtered_flat_xcf_import(imported, name, Some(path), &control),
+        photocraft_io::OwnedXcfImport::MaskedFilteredFlat(imported) => {
+            app.session.add_owned_masked_filtered_flat_xcf_import(imported, name, Some(path), &control)
+        }
         photocraft_io::OwnedXcfImport::FilteredFlat(imported) => app.session.add_owned_filtered_flat_xcf_import(imported, name, Some(path), &control),
         photocraft_io::OwnedXcfImport::SeparableBlend(imported) => app.session.add_owned_separable_blend_xcf_import(imported, name, Some(path), &control),
         photocraft_io::OwnedXcfImport::IsolatedGaussianGroup(imported) => {
@@ -334,6 +336,8 @@ impl PreparedReply {
 
 #[cfg(test)]
 #[path = "owned_xcf_open_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
 
 #[cfg(test)]
@@ -342,6 +346,8 @@ mod intake_policy_tests;
 
 #[cfg(test)]
 #[path = "owned_current_xcf_open_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod current_tests;
 
 /// Browser labels never become native paths or source-file capabilities.

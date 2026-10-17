@@ -94,4 +94,6 @@ pub(super) fn controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, document: &Do
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "gaussian_group/parameter_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod parameter_tests;

@@ -2,6 +2,8 @@
 //! existing adapter reference, not independent GIMP numerical acceptance.
 use super::*;
 #[path = "canvas_assigned_box_fixture.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 use fixture::ctl;
 use serde_json::{Value, json};

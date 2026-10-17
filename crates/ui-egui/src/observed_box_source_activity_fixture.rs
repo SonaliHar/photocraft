@@ -1,9 +1,13 @@
 //! Actual independently authored GIMP activity inputs. No derived acceptance claim.
 #[path = "observed_box_move_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod current;
 #[path = "canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod native;
 use photocraft_doc::{Document, SampleType, item_identity::ItemRef};
 use sha2::{Digest, Sha256};

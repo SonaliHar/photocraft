@@ -29,4 +29,6 @@ pub(super) fn candidate(document: &DocumentSnapshot, layer: LayerId, node: &Filt
 }
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "assigned_box_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;

@@ -6,6 +6,8 @@ use photocraft_raster::backing::quota::QuotaKind;
 use std::sync::Arc;
 #[path = "canvas_original_flat_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod original;
 pub(super) fn ctl() -> photocraft_raster::backing::ReadControl<'static> {
     original::ctl()

@@ -5,6 +5,8 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 #[path = "canvas_gaussian_group_fixture.rs"]
 #[allow(dead_code)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, clippy::panic, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod original;
 pub(super) fn ctl() -> photocraft_raster::backing::ReadControl<'static> {
     original::ctl()

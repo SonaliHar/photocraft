@@ -5,6 +5,8 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 #[path = "canvas_gaussian_group_fixture.rs"]
 #[allow(dead_code)] // Shared fixture consumers intentionally use different subsets.
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, clippy::panic, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod original;
 pub(super) fn ctl() -> photocraft_raster::backing::ReadControl<'static> {
     original::ctl()
@@ -48,5 +50,5 @@ pub(super) fn disabled_projection(root: &Path, phase: &str) -> Vec<[f64; 4]> {
     assert_eq!(original::hash(&bytes), r["sha256"].as_str().unwrap());
     assert_eq!(bytes.len() as u64, r["bytes"].as_u64().unwrap());
     assert_eq!(bytes.len(), 16 * 12 * 32);
-    bytes.chunks_exact(32).map(|p| std::array::from_fn(|c| f64::from_le_bytes(p[c * 8..c * 8 + 8].try_into().unwrap()))).collect()
+    bytes.as_chunks::<32>().0.iter().map(|p| std::array::from_fn(|c| f64::from_le_bytes(p[c * 8..c * 8 + 8].try_into().unwrap()))).collect()
 }

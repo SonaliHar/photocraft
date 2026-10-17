@@ -3,8 +3,12 @@
 use super::*;
 #[path = "canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod fixture;
 #[path = "../../xcf/tests/common/mod.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod xcf;
 use fixture::ctl;
 use std::{cell::RefCell, rc::Rc};

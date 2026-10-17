@@ -2,6 +2,8 @@
 //! units test meter plumbing, not measured work, performance or producer proof.
 #[path = "pure_point_geometry_fixture.rs"]
 #[allow(dead_code)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod current;
 use photocraft_doc::{Document, LayerContent, accounted_document::AccountedDocument};
 use photocraft_format::canonical_archive::ImmutableCanonicalArchive;

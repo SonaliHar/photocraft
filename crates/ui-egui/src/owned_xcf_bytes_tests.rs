@@ -4,6 +4,8 @@ use crate::Services;
 use photocraft_raster::backing::quota::{QuotaLimits, QuotaUsage};
 use std::{cell::RefCell, rc::Rc};
 #[path = "../../xcf/tests/common/mod.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod xcf;
 fn quota() -> BackingQuota {
     BackingQuota::new(QuotaLimits { resident: 512 << 20, index: 64 << 20, scratch: 0 })
@@ -75,7 +77,7 @@ fn capture_caps_cumulative_work_consumed_builder_and_failure_cleanup_are_real() 
     drop(builder);
     drop(capture);
     assert_eq!(q.usage().unwrap(), baseline);
-    let work=request.work.meter.diagnostics();
+    let work = request.work.meter.diagnostics();
     request.work.meter.check(work.limit - work.used).unwrap();
     assert!(request.clone().begin_capture("x.xcf", 1).is_err());
     drop(request);

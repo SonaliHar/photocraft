@@ -3,6 +3,8 @@ use super::display_image;
 #[path = "canvas_backed_analytic_profile.rs"]
 mod analytic_profile;
 use photocraft_doc::{Document, LayerContent, WorkingProfileInterpretation};
+#[cfg(test)]
+use photocraft_raster::backing::BackingError;
 use photocraft_raster::{
     Interrupt,
     backing::{
@@ -10,8 +12,6 @@ use photocraft_raster::{
         quota::{QuotaKind, QuotaLease},
     },
 };
-#[cfg(test)]
-use photocraft_raster::backing::BackingError;
 
 // Field order releases the allocation before its accounting on every error path.
 struct ReducedInput {
@@ -28,8 +28,16 @@ fn backed_display_image_with_owner(
     interrupt: &Interrupt<'_>,
 ) -> Result<(egui::ColorImage, QuotaLease), String> {
     let render = || -> Result<_, String> {
-        let builtin_basis = owner
-            .is_some_and(|owner| owner.is_readonly_normal_hierarchy_storage() || owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_threshold_alpha_storage() || owner.is_readonly_threshold_storage() || owner.is_readonly_point_storage() || owner.is_readonly_assigned_point_storage() || owner.is_readonly_gaussian_group_storage() || owner.is_readonly_flat_composite_storage());
+        let builtin_basis = owner.is_some_and(|owner| {
+            owner.is_readonly_normal_hierarchy_storage()
+                || owner.is_readonly_filtered_flat_point_storage()
+                || owner.is_readonly_threshold_alpha_storage()
+                || owner.is_readonly_threshold_storage()
+                || owner.is_readonly_point_storage()
+                || owner.is_readonly_assigned_point_storage()
+                || owner.is_readonly_gaussian_group_storage()
+                || owner.is_readonly_flat_composite_storage()
+        });
         // Ordinary profiles require explicit current ICC interpretation. Typed
         // runtime classes validate their own current/source relation below.
         if !builtin_basis && !matches!(doc.working_profile_interpretation, WorkingProfileInterpretation::Icc) {
@@ -40,14 +48,15 @@ fn backed_display_image_with_owner(
             // Nested leaves need not have a root-level raster. The actual owner
             // retains the same quota for its complete tree and native providers.
             owner.quota()
-        } else { doc
-            .layers
-            .iter()
-            .find_map(|layer| match &layer.content {
-                LayerContent::BackedRaster(backed) => Some(backed.quota()),
-                _ => None,
-            })
-            .ok_or("backed canvas has no owned source")? };
+        } else {
+            doc.layers
+                .iter()
+                .find_map(|layer| match &layer.content {
+                    LayerContent::BackedRaster(backed) => Some(backed.quota()),
+                    _ => None,
+                })
+                .ok_or("backed canvas has no owned source")?
+        };
         let work = photocraft_io::accounted_operation_work::OperationWork::legacy(36_000_000u64 * 512);
         let charge = |units| work.check(units);
         let cancelled = || interrupt.cancelled() || work.deadline_expired();
@@ -214,22 +223,32 @@ mod stock_point_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_residual_point_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod residual_point_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_neighborhood_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod neighborhood_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_analytic_geometry_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 pub(crate) mod analytic_geometry_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_analytic_geometry_layer_props_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod analytic_geometry_layer_props_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_isolated_normal_group_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 pub(crate) mod isolated_normal_group_tests;
 
 #[cfg(test)]
@@ -245,83 +264,125 @@ fn backed_display_image(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_translate_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod translate_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_assigned_translate_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod assigned_translate_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_bulk_translate_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod bulk_translate_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_gaussian_original_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod gaussian_original_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_gaussian_group_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod gaussian_group_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_separable_blend_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod separable_blend_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_separable_metadata_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod separable_metadata_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_flat_current_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod flat_current_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_original_flat_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod original_flat_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_flat_translate_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod flat_translate_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_legacy_flat_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod legacy_flat_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_component_flat_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod component_flat_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_alpha_flat_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod alpha_flat_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_lch_flat_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod lch_flat_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "canvas_backed_assigned_box_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod assigned_box_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="canvas_backed_assigned_box_enabled_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_backed_assigned_box_enabled_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod assigned_box_enabled_tests;
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="canvas_backed_assigned_median_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_backed_assigned_median_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod assigned_median_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="canvas_backed_assigned_gaussian_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_backed_assigned_gaussian_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod assigned_gaussian_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="canvas_streamed_box_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_streamed_box_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod streamed_box_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="canvas_observed_box_move_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_observed_box_move_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod observed_box_move_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="canvas_observed_box_source_activity_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "canvas_observed_box_source_activity_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod observed_box_source_activity_tests;

@@ -121,13 +121,13 @@ fn open_path(app: &mut PhotocraftApp, path: &str, authority: Authority) -> Resul
         Authority::HeldRoot => json!({"path":path,"name":name,"warnings":[]}),
     };
     control.check(1).map_err(|e| e.to_string())?;
-    if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::NormalHierarchy) {
-        app.session.add_owned_native_normal_hierarchy_archive(archive,name,Some(path),&control).map_err(|e|e.to_string())?;
-    } else if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint) {
-        app.session.add_owned_native_masked_filtered_flat_archive(archive,name,Some(path),&control).map_err(|e|e.to_string())?;
-    } else if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) {
+    if archive.current_storage_hint() == Some(photocraft_format::NativeCurrentStorageHint::NormalHierarchy) {
+        app.session.add_owned_native_normal_hierarchy_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
+    } else if archive.current_storage_hint() == Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint) {
+        app.session.add_owned_native_masked_filtered_flat_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
+    } else if archive.current_storage_hint() == Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) {
         app.session.add_owned_native_point_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
-    } else if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) {
+    } else if archive.current_storage_hint() == Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) {
         app.session.add_owned_native_filtered_flat_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
     } else if threshold_candidate(archive.document(), &control)? {
         app.session.add_owned_native_threshold_alpha_archive(archive, name, Some(path), &control).map_err(|e| e.to_string())?;
@@ -179,13 +179,13 @@ pub(crate) fn adopt_bytes(
     let _reply_lease = archive.quota().reserve(QuotaKind::Index, 4096).map_err(|e| e.to_string())?;
     control.check(4096).map_err(|e| e.to_string())?;
     let reply = json!({"warnings":[]});
-    if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::NormalHierarchy) {
-        app.session.add_owned_native_normal_hierarchy_archive(archive,name,None,control).map_err(|e|e.to_string())?;
-    } else if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint) {
-        app.session.add_owned_native_masked_filtered_flat_archive(archive,name,None,control).map_err(|e|e.to_string())?;
-    } else if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) {
+    if archive.current_storage_hint() == Some(photocraft_format::NativeCurrentStorageHint::NormalHierarchy) {
+        app.session.add_owned_native_normal_hierarchy_archive(archive, name, None, control).map_err(|e| e.to_string())?;
+    } else if archive.current_storage_hint() == Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint) {
+        app.session.add_owned_native_masked_filtered_flat_archive(archive, name, None, control).map_err(|e| e.to_string())?;
+    } else if archive.current_storage_hint() == Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) {
         app.session.add_owned_native_point_archive(archive, name, None, control).map_err(|e| e.to_string())?;
-    } else if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) {
+    } else if archive.current_storage_hint() == Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) {
         app.session.add_owned_native_filtered_flat_archive(archive, name, None, control).map_err(|e| e.to_string())?;
     } else if threshold_candidate(archive.document(), control)? {
         app.session.add_owned_native_threshold_alpha_archive(archive, name, None, control).map_err(|e| e.to_string())?;
@@ -212,20 +212,30 @@ pub(crate) fn adopt_bytes(
 
 #[cfg(test)]
 #[path = "owned_native_open_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_masked_native_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod masked_native_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_stock_rgb_native_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod stock_rgb_native_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_hsl_native_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod hsl_native_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_masked_scalar_native_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod masked_scalar_native_tests;

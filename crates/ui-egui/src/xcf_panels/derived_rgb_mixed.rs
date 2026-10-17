@@ -15,7 +15,9 @@ fn kind(node: &FilterNode) -> Option<Kind> {
     let (kind, epoch) = match node.operation.name.as_str() {
         "gegl:color-temperature" => (Kind::Temperature, photocraft_compose::COLOR_TEMPERATURE_MIXED_EPOCH),
         "gegl:sepia" => (Kind::Sepia, photocraft_compose::SEPIA_MIXED_EPOCH),
-        "gegl:alien-map" if node.operation.schema_epoch==photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH => (Kind::AlienHsl,photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH),
+        "gegl:alien-map" if node.operation.schema_epoch == photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH => {
+            (Kind::AlienHsl, photocraft_compose::ALIEN_MAP_HSL_MIXED_EPOCH)
+        }
         "gegl:alien-map" => (Kind::AlienRgb, photocraft_compose::ALIEN_MAP_RGB_MIXED_EPOCH),
         _ => return None,
     };
@@ -50,7 +52,11 @@ fn request(node: &FilterNode, numbers: &[(&str, u32)], bools: &[(&str, bool)], e
             }
         }
         Kind::AlienRgb | Kind::AlienHsl => {
-            if k==Kind::AlienRgb {photocraft_compose::alien_map_rgb_mixed_parameters(&node.arguments).ok()?;}else{photocraft_compose::alien_map_hsl_mixed_parameters(&node.arguments).ok()?;}
+            if k == Kind::AlienRgb {
+                photocraft_compose::alien_map_rgb_mixed_parameters(&node.arguments).ok()?;
+            } else {
+                photocraft_compose::alien_map_hsl_mixed_parameters(&node.arguments).ok()?;
+            }
             if numbers.len() != 6 || bools.len() != 3 {
                 return None;
             }
@@ -95,7 +101,14 @@ fn request(node: &FilterNode, numbers: &[(&str, u32)], bools: &[(&str, bool)], e
                 }
                 json!({"Bool":value})
             }
-            FilterValue::Enum { domain, value } if matches!(k,Kind::AlienRgb|Kind::AlienHsl) && *value==if k==Kind::AlienRgb{0}else{1} && a.name == "color-model" && domain == "gegl:alien-map/color-model" => continue,
+            FilterValue::Enum { domain, value }
+                if matches!(k, Kind::AlienRgb | Kind::AlienHsl)
+                    && *value == if k == Kind::AlienRgb { 0 } else { 1 }
+                    && a.name == "color-model"
+                    && domain == "gegl:alien-map/color-model" =>
+            {
+                continue;
+            }
             _ => return None,
         };
         arguments.push(json!({"name":a.name,"value":value}));
@@ -136,18 +149,20 @@ pub(super) fn edit(ui: &mut egui::Ui, node: &FilterNode, enabled_ui: bool, capti
             request(node, &[("scale", scale[0].to_bits())], &[("srgb", srgb)], enabled)
         }
         Kind::AlienRgb | Kind::AlienHsl => {
-            let k=kind(node)?;
-            let ((f,p),initial_keep)=if k==Kind::AlienRgb {
-                let old=photocraft_compose::alien_map_rgb_mixed_parameters(&node.arguments).ok()?;(old.raw_words(),old.keep())
-            }else{
-                let old=photocraft_compose::alien_map_hsl_mixed_parameters(&node.arguments).ok()?;(old.raw_words(),old.keep())
+            let k = kind(node)?;
+            let ((f, p), initial_keep) = if k == Kind::AlienRgb {
+                let old = photocraft_compose::alien_map_rgb_mixed_parameters(&node.arguments).ok()?;
+                (old.raw_words(), old.keep())
+            } else {
+                let old = photocraft_compose::alien_map_hsl_mixed_parameters(&node.arguments).ok()?;
+                (old.raw_words(), old.keep())
             };
             let mut f = f.map(f32::from_bits);
             let mut p = p.map(f32::from_bits);
             let mut keep = initial_keep;
             ui.add_enabled_ui(enabled_ui, |ui| {
                 ui.checkbox(&mut enabled, caption);
-                ui.label(if k==Kind::AlienRgb{tl!("RGB")}else{tl!("HSL")});
+                ui.label(if k == Kind::AlienRgb { tl!("RGB") } else { tl!("HSL") });
                 scalar_widgets(ui, &mut f, [tl!("Channel 1 frequency"), tl!("Channel 2 frequency"), tl!("Channel 3 frequency")], [(0., 20.); 3]);
                 scalar_widgets(ui, &mut p, [tl!("Channel 1 phase"), tl!("Channel 2 phase"), tl!("Channel 3 phase")], [(0., 360.); 3]);
                 for (value, label) in keep.iter_mut().zip([tl!("Keep channel 1"), tl!("Keep channel 2"), tl!("Keep channel 3")]) {
@@ -171,10 +186,14 @@ pub(super) fn edit(ui: &mut egui::Ui, node: &FilterNode, enabled_ui: bool, capti
     }
 }
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="derived_rgb_mixed_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "derived_rgb_mixed_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="derived_hsl_mixed_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "derived_hsl_mixed_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod hsl_tests;

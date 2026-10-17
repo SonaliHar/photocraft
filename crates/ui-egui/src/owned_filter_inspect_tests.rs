@@ -23,6 +23,7 @@ fn hash(bytes: &[u8]) -> String {
 }
 struct Evidence {
     imported: photocraft_io::OwnedXcfImport,
+    #[allow(dead_code, reason = "Shared cfg(test) fixture retains this item for other independent consumers.")]
     bytes: Arc<Vec<u8>>,
     quota: BackingQuota,
     name: String,

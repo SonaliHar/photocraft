@@ -1,6 +1,8 @@
 //! Deferred actual masked Point UI: passive exact words, intentional edit and stale frame; no visual acceptance.
 use super::*;
 #[path = "../../../engine/src/accounted_exposure_masked_test_support.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 use egui_kittest::{Harness, kittest::Queryable};
 #[test]

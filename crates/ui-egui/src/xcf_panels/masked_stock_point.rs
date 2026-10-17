@@ -140,6 +140,8 @@ pub(super) fn controls(
     }
 }
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="masked_scalar_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "masked_scalar_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;

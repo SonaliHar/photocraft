@@ -6,6 +6,8 @@ use photocraft_doc::LayerContent;
 use photocraft_raster::backing::quota::{BackingQuota, QuotaLimits};
 use std::{cell::RefCell, io::Cursor, rc::Rc, sync::Arc};
 #[path = "../../xcf/tests/common/mod.rs"]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod xcf;
 fn raw() -> Arc<Vec<u8>> {
     Arc::new(xcf::image(13, 150, 0, 1, 1, &[31, 61, 91, 255]))

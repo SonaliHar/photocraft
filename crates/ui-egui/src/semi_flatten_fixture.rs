@@ -2,9 +2,13 @@
 //! CSS failures, ICC date HOLD and Babl/FMA/F64 rounding limits stay explicit.
 #[path = "linear_box_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod ingress;
 #[path = "canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod native;
 use photocraft_doc::{
     Document, LayerContent, SampleEncoding, SampleType,

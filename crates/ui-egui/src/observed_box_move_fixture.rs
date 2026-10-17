@@ -1,9 +1,13 @@
 //! Paid synthetic CURRENT/native geometry, not a producer translation oracle.
 #[path = "observed_box_metadata_fixture.rs"]
 #[allow(dead_code)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod metadata;
 #[path = "canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod native;
 use photocraft_doc::{Document, LayerContent, SampleType, accounted_document::AccountedDocument, item_identity::ItemRef};
 pub(super) fn ctl() -> photocraft_raster::backing::ReadControl<'static> {
