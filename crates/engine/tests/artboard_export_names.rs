@@ -51,7 +51,7 @@ fn check_export(depth: u32, names: &[&str], prefix: Option<&str>, format: &str, 
         let bytes = std::fs::read(file).unwrap();
         let doc = photocraft_io::import(file, &bytes).unwrap().document;
         assert_eq!((doc.size.width, doc.size.height), (board.width, 2), "wrong artboard in {file}");
-        let px = photocraft_compose::flatten(&doc).px[0];
+        let px = photocraft_compose::flatten(&doc).expect("exported artboard renders").px[0];
         for (actual, expected) in px.iter().zip(board.color) {
             assert!((actual - expected).abs() < 1e-3, "wrong pixels in {file}: {px:?}");
         }

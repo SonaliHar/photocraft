@@ -1237,7 +1237,7 @@ fn duplicate_to_a_new_document_keeps_size_pixels_and_place_at_every_depth() {
             src.layer(paint).unwrap().surface().unwrap().read_region(Rect::new(4, 6, 14, 16)),
             "depth {depth}: identical pixels"
         );
-        assert_eq!(s.active().unwrap().selected_layers(), vec![id]);
+        assert_eq!(s.active().unwrap().selected_layers().unwrap(), vec![id]);
     }
 }
 

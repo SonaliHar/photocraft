@@ -1,6 +1,6 @@
 //! Edit › Free Transform / Transform: projective transforms of layers (and the selection).
 
-use photocraft_algo::transform::{Homography, Interp};
+use photocraft_algo::transform::{Homography, Interp, warp_output_bounds};
 use photocraft_color::PixelFormat;
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, Locks};
 use photocraft_geom::{Affine, Rect};
@@ -54,7 +54,7 @@ pub fn transform_bounds(doc: &Document, layer: &Layer) -> Rect {
     let content =
         if content.is_empty() { layer.mask.as_ref().map_or(Rect::EMPTY, |m| photocraft_compose::bounds::content_bounds(&m.surface)) } else { content };
     match &doc.selection {
-        Some(sel) if !layer.is_group() => content.intersect(&sel.content_bounds()),
+        Some(sel) if !moves_whole(layer) => content.intersect(&sel.content_bounds()),
         _ => content,
     }
 }
@@ -74,15 +74,6 @@ fn framed_by_selection(doc: &Document, bounds: Rect) -> Rect {
         Some(sel) if !bounds.is_empty() => sel.content_bounds(),
         _ => bounds,
     }
-}
-
-/// A group moves all its descendants, so its frame must not clip raster children to the selection.
-fn whole_layer_bounds(layer: &Layer) -> Rect {
-    let content = match &layer.content {
-        LayerContent::Group(g) => g.children.iter().map(whole_layer_bounds).fold(Rect::EMPTY, |a, b| a.union(&b)),
-        _ => layer.surface().map_or(Rect::EMPTY, photocraft_compose::bounds::content_bounds),
-    };
-    if content.is_empty() { layer.mask.as_ref().map_or(Rect::EMPTY, |m| photocraft_compose::bounds::content_bounds(&m.surface)) } else { content }
 }
 
 /// Warp a surface whose pixels outside the content read as `default` (masks, selections):
@@ -266,7 +257,7 @@ fn transform_locks(l: &Layer, group: Locks, background: bool) -> Locks {
 pub fn locked_for_transform(doc: &Document, id: LayerId) -> bool {
     let Some(l) = doc.layer(id) else { return false };
     // An explicit stack rather than recursion: documents can nest deeply.
-    let mut stack = vec![(l, group_locks(doc, id), doc.is_background(id))];
+    let mut stack = vec![(l, group_locks(doc, id).unwrap_or(Locks { all: true, ..Default::default() }), doc.is_background(id))];
     while let Some((l, group, background)) = stack.pop() {
         let locks = transform_locks(l, group, background);
         if locks.position || locks.all {
@@ -367,15 +358,22 @@ fn transform_layer_with_extent(
 ) -> Result<()> {
     control.check().map_err(|_| EngineError::Cancelled)?;
     let (affine, interp, declared) = options;
-    // Photoshop turns the Background into a normal layer before transforming it.
-    if l.locks.position && l.name == "Background" {
-        l.locks.position = false;
-        l.locks.transparency = false;
-        l.name = "Layer 0".into();
+    check_layer_budget(doc_sel, l, h)?;
+    if let Some(bounds) = declared {
+        check_budget(bounds, h, "canonical raster")?;
     }
+    crate::allocation::checkpoint("transforming pixels")?;
     let locks = l.locks.union(group);
     if locks.position || locks.all {
         return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
+    }
+    if h.is_identity() {
+        if let LayerContent::Group(group) = &mut l.content {
+            for child in &mut group.children {
+                transform_layer_with_extent(None, locks, child, h, (affine, interp, None), control)?;
+            }
+        }
+        return Ok(());
     }
     // With a selection only the selected pixels move, and so only the same region of a linked
     // mask (#205). Groups, type, shapes and smart objects move whole.
@@ -392,12 +390,10 @@ fn transform_layer_with_extent(
             };
             t.transform = a.mul(&t.transform);
         }
-        LayerContent::Shape(sh) => {
-            let Some(a) = affine else {
-                return Err(EngineError::Other("Distort and Perspective need a rasterized shape (Layer › Rasterize › Shape)".into()));
-            };
-            crate::vector_cmds::transform_shape(sh, &a);
-        }
+        LayerContent::Shape(shape) => match affine {
+            Some(affine) => crate::vector_cmds::transform_shape(shape, &affine),
+            None => crate::vector_cmds::map_shape(shape, Some(h), None)?,
+        },
         LayerContent::Smart(sm) => {
             // Smart objects keep the transform and re-render from their source afterwards
             // (`refresh_text`), so repeated transforms don't degrade the pixels. Distort and
@@ -421,15 +417,15 @@ fn transform_layer_with_extent(
                     // Only the selected pixels move: lift them, clear them, warp and paste back. The
                     // lifted pixels' own bounds are the edge a stretch repeats (#3773).
                     Some(sel) => {
-                        let (lifted, mut rest) = split_selected(surf, sel)?;
-                        let moved = warp_surface_with(&lifted, lifted.content_bounds(), h, interp, ctl)?.ok_or(EngineError::Cancelled)?;
+                        let (lifted, mut rest) = try_split_selected(surf, sel)?;
+                        let moved = controlled_warp(&lifted, lifted.content_bounds(), h, interp, control)?;
                         composite_over(&mut rest, &moved);
                         rest.prune();
                         rest
                     }
                     None => {
-                        let src = surf.content_bounds();
-                        warp_surface_with(surf, src, h, interp, ctl)?.ok_or(EngineError::Cancelled)?
+                        let src = declared.unwrap_or_else(|| surf.content_bounds());
+                        controlled_warp(surf, src, h, interp, control)?
                     }
                 };
             }
@@ -459,7 +455,13 @@ fn controlled_warp(src: &Surface, bounds: Rect, h: &Homography, interp: Interp, 
     } else if matches!(src.format().sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
         photocraft_algo::transform::try_warp_surface_with_limits(src, bounds, h, interp, photocraft_algo::wide_geometry::GeometryLimits::default(), control)
     } else {
-        photocraft_algo::transform::try_warp_surface(src, bounds, h, interp)
+        // Retain finite input/mapping admission from the checked local wrapper,
+        // then use upstream's tile-progress sampler with this original token.
+        photocraft_raster::checked_region_byte_len(bounds, src.format()).map_err(|error| bad(error.to_string()))?;
+        photocraft_algo::transform::try_warp_bounds(bounds, h).map_err(|error| bad(error.to_string()))?;
+        return photocraft_algo::transform::warp_surface_with(src, bounds, h, interp, control)
+            .map_err(|error| EngineError::Other(error.to_string()))?
+            .ok_or(EngineError::Cancelled);
     };
     control.check().map_err(|_| EngineError::Cancelled)?;
     result.map_err(|e| EngineError::Other(e.to_string()))
@@ -475,24 +477,32 @@ pub fn try_split_selected(surf: &Surface, sel: &Surface) -> Result<(Surface, Sur
     }
     let fmt = surf.format();
     let prepared = surf.try_convert(PixelFormat::new(fmt.mode, fmt.sample, true)).map_err(|e| crate::EngineError::Other(format!("pixel conversion: {e}")))?;
-    Ok(split_selected(&prepared, sel))
+    split_selected(&prepared, sel)
 }
 
 /// Legacy presentation split; authoritative command callers use `try_split_selected`.
-pub fn split_selected(surf: &Surface, sel: &Surface) -> (Surface, Surface) {
+pub fn split_selected(surf: &Surface, sel: &Surface) -> Result<(Surface, Surface)> {
     let fmt = surf.format();
     let with_alpha = PixelFormat::new(fmt.mode, fmt.sample, true);
     let mut lifted = Surface::new(with_alpha);
-    let mut rest = surf.convert(with_alpha);
+    let mut rest = surf.try_convert(with_alpha)?;
     let src = surf.content_bounds();
     if src.is_empty() {
-        return (lifted, rest);
+        return Ok((lifted, rest));
     }
     let n = with_alpha.channels();
-    let px = rest.read_region(src);
-    let mut lp = px.clone();
+    let px = crate::allocation::read_region(&rest, src, "transforming selected pixels")?;
+    let mut lp = crate::allocation::filled(px.len(), 0.0, "transforming selected pixels")?;
+    lp.copy_from_slice(&px);
     let mut rp = px;
     let w = src.width() as usize;
+    // A pixel the selection fully lifts out is reset to the surface's (transparent) default;
+    // keeping its colour would make `content_bounds` still count it, so the layer's bounds would
+    // include the area the pixels were moved from.
+    let mut rest_clear = rest.default_pixel();
+    if rest_clear.last().is_some_and(|a| *a > 0.0) {
+        rest_clear.fill(0.0);
+    }
     for (i, (l, r)) in lp.chunks_exact_mut(n).zip(rp.chunks_exact_mut(n)).enumerate() {
         let (x, y) = (src.x0 + (i % w) as i32, src.y0 + (i / w) as i32);
         let k = sel.sample_channel(x, y, 0);
@@ -507,10 +517,10 @@ pub fn split_selected(surf: &Surface, sel: &Surface) -> (Surface, Surface) {
             r.iter_mut().zip(&rest_clear).for_each(|(d, c)| *d = *c);
         }
     }
-    lifted.write_region(src, &lp);
+    lifted.try_write_region(src, &lp)?;
     lifted.prune();
-    rest.write_region(src, &rp);
-    (lifted, rest)
+    rest.try_write_region(src, &rp)?;
+    Ok((lifted, rest))
 }
 
 pub(crate) fn refresh_text(doc: &Document, l: &mut Layer) -> Result<()> {
@@ -521,7 +531,8 @@ pub(crate) fn refresh_text(doc: &Document, l: &mut Layer) -> Result<()> {
             // Unavailable sources keep the warped cache.
             #[cfg(target_arch = "wasm32")]
             crate::type_cmds::text_engine()?;
-            let _ = crate::smart_cmds::refresh_layer(doc, l);
+            // Ok(false) keeps an unavailable source cache; typed replay failures abort the edit.
+            crate::smart_cmds::refresh_layer(doc, l)?;
         }
         LayerContent::Group(g) => {
             for c in &mut g.children {
@@ -590,20 +601,47 @@ fn canonical_raster_transform_bounds(doc: &Document, id: LayerId) -> Result<Opti
     Ok(Some(bounds))
 }
 
-fn transform(s: &mut Session, p: &Value) -> Result<Value> {
-    let params = with_panel_target(s, p);
-    transform_with_interrupt(s, &params, &Interrupt::NONE)
+struct TransformPlan {
+    params: Value,
+    id: Option<LayerId>,
+    rect: [f64; 4],
+    h: Homography,
+    affine: Option<Affine>,
+    interp: Interp,
+    canonical: Option<Rect>,
+    moved_extent: Option<Rect>,
+    linear_sampling: bool,
+    scoped_cubic: bool,
+    lone: bool,
 }
 
-/// Controlled transform staging. Command registry dispatch currently uses no token.
-/// Wide checked sampling polls this token; legacy narrow stages check at stage boundaries.
+fn transform(s: &mut Session, p: &Value) -> Result<Value> {
+    let params = with_panel_target(s, p);
+    let plan = prepare_transform(s, &params, &Interrupt::NONE)?;
+    let rect = plan.rect;
+    // Upstream background dispatch: the complete controlled edit runs privately
+    // with the job's original interrupt; edit_job publishes one history step.
+    crate::jobs::edit_job(
+        s,
+        "Free Transform",
+        move |doc, _, ctx| ctx.stage(0.0, 1.0, "Transforming", |control| apply_transform_plan(doc, plan, control)),
+        move |()| json!({"rect": rect}),
+    )
+}
+
+/// Explicit controlled entry for callers that already own the original token.
+/// Registry dispatch uses the same plan/apply core under the background JobCtx.
 pub fn transform_with_interrupt(s: &mut Session, p: &Value, control: &Interrupt<'_>) -> Result<Value> {
+    let plan = prepare_transform(s, p, control)?;
+    let rect = plan.rect;
+    s.edit_with_interrupt("Free Transform", control, |doc, _| apply_transform_plan(doc, plan, control))?;
+    Ok(json!({"rect": rect}))
+}
+
+fn prepare_transform(s: &Session, p: &Value, control: &Interrupt<'_>) -> Result<TransformPlan> {
     control.check().map_err(|_| EngineError::Cancelled)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let id = match p.get("layer").and_then(Value::as_u64) {
-        Some(v) => Some(LayerId(v)),
-        None => st.active_layer,
-    };
+    let id = crate::commands::explicit_layer(s, p)?.or(st.active_layer);
     let lone = lone_target(&st.doc, id, p)?;
     if lone.is_some() && st.doc.xcf_state.is_some() {
         return Err(bad("canonical mask/channel transforms require separately qualified geometry"));
@@ -653,71 +691,86 @@ pub fn transform_with_interrupt(s: &mut Session, p: &Value, control: &Interrupt<
     let moved_extent = canonical.map(|bounds| photocraft_algo::transform::try_warp_bounds(bounds, &h).map_err(|e| bad(e.to_string()))).transpose()?;
     let linear_sampling = p.get("interpolation").and_then(Value::as_str) == Some("gimpLinear");
     let scoped_cubic = linear_sampling || p.get("interpolation").and_then(Value::as_str) == Some("gimpCubic");
+    Ok(TransformPlan { params: p.clone(), id, rect, h, affine, interp, canonical, moved_extent, linear_sampling, scoped_cubic, lone: lone.is_some() })
+}
+
+fn apply_transform_plan(doc: &mut Document, plan: TransformPlan, control: &Interrupt<'_>) -> Result<()> {
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    let TransformPlan { params, id, h, affine, interp, canonical, moved_extent, linear_sampling, scoped_cubic, lone, .. } = plan;
+    let p = &params;
     let staged_cubic = if scoped_cubic {
-        if lone.is_some() {
+        if lone {
             return Err(bad("Cubic compatibility does not qualify numeric targets"));
         }
         let id = id.ok_or_else(|| bad("Cubic compatibility needs a raster owner"))?;
         let bounds = canonical.ok_or_else(|| bad("Cubic compatibility needs a canonical declared Raster extent"))?;
-        let layer = st.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-        let locks = layer.locks.union(group_locks(&st.doc, id)?);
+        let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+        let locks = layer.locks.union(group_locks(doc, id)?);
         if locks.position || locks.all {
             return Err(bad("Cubic owner position is locked"));
         }
         let LayerContent::Raster(source) = &layer.content else {
             return Err(bad("Cubic compatibility requires an ordinary Raster"));
         };
-        Some(xcf_cubic::warp(&st.doc, source, bounds, &h, linear_sampling, control)?)
+        Some(xcf_cubic::warp(doc, source, bounds, &h, linear_sampling, control)?)
     } else {
         None
     };
-    let lone = lone.is_some();
-    s.edit_with_interrupt("Free Transform", control, |doc, _| {
-        let sel = doc.selection.clone();
-        if lone {
-            // A targeted unlinked mask, alpha channel or Quick Mask transforms by itself.
-            let (surf, _) = crate::channel_cmds::target_surface(doc, id, p)?;
-            *surf = match &sel {
-                Some(sel) => try_warp_gray_selected(surf, sel, &h, interp)?,
-                None => try_warp_gray(surf, &h, interp)?,
-            };
-            if let Some(sel) = &doc.selection {
-                doc.selection = Some(try_warp_gray(sel, &h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());
-            }
+    let sel = doc.selection.clone();
+    if let Some(selection) = sel.as_ref().filter(|_| !h.is_identity()) {
+        check_budget(selection.content_bounds(), &h, "selection")?;
+    }
+    if lone {
+        if h.is_identity() {
             return Ok(());
         }
-        let id = id.ok_or_else(|| EngineError::Other("no active layer".into()))?;
-        let is_group = doc.layer(id).is_some_and(Layer::is_group);
-        let group = group_locks(doc, id)?;
-        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-        if let Some(surface) = staged_cubic {
-            *l.surface_mut().ok_or_else(|| bad("Cubic raster owner changed"))? = surface;
-        } else {
-            transform_layer_with_extent(if is_group { None } else { sel.as_ref() }, group, l, &h, (affine, interp, canonical), control)?;
-        }
-        if let Some(bounds) = moved_extent {
-            let item = doc
-                .xcf_state
-                .as_mut()
-                .and_then(|state| state.items.iter_mut().find(|item| item.item == photocraft_doc::item_identity::ItemRef::Layer(id)))
-                .ok_or_else(|| bad("missing canonical raster owner"))?;
-            item.raster_bounds = Some(bounds);
-            if scoped_cubic {
-                xcf_cubic::stamp_finite_normal_if_needed(doc, id, bounds, control)?;
-            }
-        }
-        // Type layers re-render from their new transform.
-        let snapshot = doc.clone();
-        if let Some(l) = doc.layer_mut(id) {
-            refresh_text(&snapshot, l)?;
-        }
-        // The selection outline moves with the pixels.
+        // A targeted unlinked mask, alpha channel or Quick Mask transforms by itself.
+        let (surf, _) = crate::channel_cmds::target_surface(doc, id, p)?;
+        let bounds = sel.as_ref().map_or_else(|| surf.content_bounds(), Surface::content_bounds);
+        check_budget(bounds, &h, "mask or channel")?;
+        *surf = match &sel {
+            Some(sel) => try_warp_gray_selected(surf, sel, &h, interp)?,
+            None => try_warp_gray(surf, &h, interp)?,
+        };
         if let Some(sel) = &doc.selection {
             doc.selection = Some(try_warp_gray(sel, &h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());
         }
-        Ok(())
-    })?;
-    Ok(json!({"rect": rect}))
+        return Ok(());
+    }
+    let id = id.ok_or_else(|| EngineError::Other("no active layer".into()))?;
+    let is_group = doc.layer(id).is_some_and(Layer::is_group);
+    let group = group_locks(doc, id)?;
+    crate::extra_cmds::background_to_layer(doc, id);
+    let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+    if let Some(surface) = staged_cubic {
+        *l.surface_mut().ok_or_else(|| bad("Cubic raster owner changed"))? = surface;
+    } else {
+        transform_layer_with_extent(if is_group { None } else { sel.as_ref() }, group, l, &h, (affine, interp, canonical), control)?;
+    }
+    if let Some(bounds) = moved_extent {
+        let item = doc
+            .xcf_state
+            .as_mut()
+            .and_then(|state| state.items.iter_mut().find(|item| item.item == photocraft_doc::item_identity::ItemRef::Layer(id)))
+            .ok_or_else(|| bad("missing canonical raster owner"))?;
+        item.raster_bounds = Some(bounds);
+        if scoped_cubic {
+            xcf_cubic::stamp_finite_normal_if_needed(doc, id, bounds, control)?;
+        }
+    }
+    if h.is_identity() {
+        return Ok(());
+    }
+    // Type layers re-render from their new transform.
+    let snapshot = doc.clone();
+    if let Some(l) = doc.layer_mut(id) {
+        refresh_text(&snapshot, l)?;
+    }
+    // The selection outline moves with the pixels.
+    if let Some(sel) = &doc.selection {
+        doc.selection = Some(try_warp_gray(sel, &h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());
+    }
+    Ok(())
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -733,13 +786,86 @@ pub fn specs() -> Vec<CommandSpec> {
     }]
 }
 
+pub(crate) fn move_gray_selected(
+    s: &Surface,
+    sel: &Surface,
+    warp: &dyn Fn(&Surface, Rect) -> Result<Surface>,
+    whole: &dyn Fn(&Surface) -> Result<Surface>,
+) -> Result<Surface> {
+    let Some((lifted, mut out)) = try_split_gray_selected(s, sel)? else { return whole(s) };
+    let src = lifted.content_bounds();
+    if src.is_empty() {
+        return Ok(out);
+    }
+    let w = warp(&lifted, src)?;
+    let b = w.content_bounds();
+    if !b.is_empty() {
+        let moved = crate::allocation::read_region(&w, b, "compositing transformed mask pixels")?;
+        let under = crate::allocation::read_region(&out, b, "compositing transformed mask pixels")?;
+        let mut flat = crate::allocation::filled(under.len(), 0.0, "compositing transformed mask pixels")?;
+        for (i, (p, u)) in moved.as_chunks::<2>().0.iter().zip(&under).enumerate() {
+            flat[i] = p[0] * p[1] + u * (1.0 - p[1]);
+        }
+        out.try_write_region(b, &flat)?;
+    }
+    out.prune();
+    Ok(out)
+}
+
+fn with_panel_target(s: &Session, p: &Value) -> Value {
+    let mut p = if p.is_object() { p.clone() } else { json!({}) };
+    if p.get("target").is_none()
+        && p.get("layer").is_none()
+        && let (Some(m), Some(Value::Object(t))) = (p.as_object_mut(), crate::channel_cmds::targeted_channel(s))
+    {
+        m.extend(t);
+    }
+    p
+}
+
+pub(crate) fn warp_gray(source: &Surface, h: &Homography, interp: Interp) -> Result<Surface> {
+    try_warp_gray(source, h, interp)
+}
+
+pub fn moves_whole(layer: &Layer) -> bool {
+    matches!(layer.content, LayerContent::Group(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_))
+}
+
+fn relative_matrix(p: &Value, rect: [f64; 4]) -> Result<Option<Homography>> {
+    let num = |k: &str| -> Result<Option<f64>> {
+        match p.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => v.as_f64().filter(|f| f.is_finite()).map(Some).ok_or_else(|| bad(format!("`{k}` must be a finite number"))),
+        }
+    };
+    let (sx, sy, rot, dx, dy) = (num("scaleX")?, num("scaleY")?, num("rotate")?, num("dx")?, num("dy")?);
+    if sx.is_none() && sy.is_none() && rot.is_none() && dx.is_none() && dy.is_none() {
+        return Ok(None);
+    }
+    let (sx, sy) = (sx.unwrap_or(100.0) / 100.0, sy.unwrap_or(100.0) / 100.0);
+    if sx.abs() < 1e-6 || sy.abs() < 1e-6 {
+        return Err(bad("`scaleX` and `scaleY` must not be 0"));
+    }
+    let (cx, cy) = ((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0);
+    let (sin, cos) = rot.unwrap_or(0.0).to_radians().sin_cos();
+    // (x, y) → translate(-c) → scale → rotate → translate(c + d).
+    let (a, b, c, d) = (sx * cos, sx * sin, -sy * sin, sy * cos);
+    let e = cx + dx.unwrap_or(0.0) - a * cx - c * cy;
+    let f = cy + dy.unwrap_or(0.0) - b * cx - d * cy;
+    Ok(Some(Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0])))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn session() -> Session {
+        session_depth(8)
+    }
+
+    fn session_depth(depth: u32) -> Session {
         let mut s = Session::new();
-        s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+        s.execute("file.new", json!({"width": 100, "height": 100, "depth": depth})).unwrap();
         s.execute("layer.new.layer", json!({})).unwrap();
         s.edit("paint", |doc, active| {
             let l = doc.layer_mut(active.unwrap()).unwrap();
@@ -805,6 +931,37 @@ mod tests {
     }
 
     #[test]
+    fn type_bounds_query_with_half_selection_keeps_whole_text_and_is_nonmutating() {
+        let mut s = session();
+        let id = s.execute("type.create", json!({"x":10,"y":50,"text":"Whole text","size":20})).unwrap()["layer"].as_u64().unwrap();
+        let id = LayerId(id);
+        let whole = active_bounds(&s);
+        assert!(whole.width() > 2 && whole.height() > 0);
+        s.execute("select.rect", json!({"x":whole.x0,"y":whole.y0,"width":whole.width()/2,"height":whole.height()})).unwrap();
+        let state = s.active().unwrap();
+        let before = state.doc.clone();
+        let revision = (state.revision, state.saved_revision, state.view_revision);
+        let history = state.history.entry_labels().map(str::to_string).collect::<Vec<_>>();
+        let selection = state.doc.selection.clone();
+        let half = selection.as_ref().unwrap().content_bounds();
+        assert_ne!(whole.intersect(&half), whole);
+        assert!(moves_whole(state.doc.layer(id).unwrap()));
+        assert_eq!(transform_bounds(&state.doc, state.doc.layer(id).unwrap()), whole);
+        let state = s.active().unwrap();
+        assert!(state.doc.shares_state(&before));
+        assert_eq!((state.revision, state.saved_revision, state.view_revision), revision);
+        assert_eq!(state.history.entry_labels().collect::<Vec<_>>(), history.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(state.doc.selection, selection);
+        s.execute("edit.transform", json!({"layer":id.0,"matrix":[1,0,0,1,10,0],"interpolation":"nearest"})).unwrap();
+        let moved = active_bounds(&s);
+        assert!(moved.x0.abs_diff(whole.x0 + 10) <= 1);
+        assert!(moved.width().abs_diff(whole.width()) <= 1);
+        assert!(matches!(s.active().unwrap().doc.layer(id).unwrap().content, LayerContent::Text(_)));
+        assert!(s.undo());
+        assert_eq!(s.active().unwrap().doc, before);
+    }
+
+    #[test]
     fn type_layers_transform_as_vectors() {
         let mut s = session();
         let r = s.execute("type.create", json!({"x": 10, "y": 50, "text": "Hi", "size": 20})).unwrap();
@@ -846,7 +1003,11 @@ mod tests {
 
     /// `session()` plus a reveal-all mask with `hide` painted black (linked unless `linked` is false).
     fn masked(hide: &[Rect], linked: bool) -> Session {
-        let mut s = session();
+        masked_depth(hide, linked, 8)
+    }
+
+    fn masked_depth(hide: &[Rect], linked: bool, depth: u32) -> Session {
+        let mut s = session_depth(depth);
         s.execute("layer.layerMask.revealAll", json!({})).unwrap();
         s.edit("mask", |doc, active| {
             let m = doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap();
@@ -983,7 +1144,8 @@ mod tests {
         let s = Surface::new(PixelFormat::RGBA8);
         let mut sel = Surface::new(PixelFormat::GRAY8);
         sel.fill_rect(Rect::new(0, 0, 4, 4), &[1.0]);
-        assert!(matches!(split_gray_selected(&s, &sel), Ok(None)));
+        assert!(split_gray_selected(&s, &sel).is_none());
+        assert!(try_split_gray_selected(&s, &sel).is_err());
     }
 
     /// #2630: type can't be partly transformed, so a selection doesn't narrow the frame: Free
@@ -1078,7 +1240,7 @@ mod tests {
                     s.execute("layer.groupLayers", json!({})).unwrap();
                 }
                 s.execute("select.rect", json!({"x": selection.x0, "y": selection.y0, "width": selection.width(), "height": selection.height()})).unwrap();
-                let steps = s.active().unwrap().history.entries().len();
+                let steps = s.active().unwrap().history.entry_labels().count();
                 let result = s.execute("edit.transform", json!({"quad": [[10, 10], [50, 10], [50, 30], [10, 30]], "interpolation": "nearest"})).unwrap();
                 assert_eq!(result["rect"], json!([10.0, 10.0, 30.0, 20.0]), "frame must include the whole group (nested={nested})");
                 let st = s.active().unwrap();
@@ -1087,7 +1249,7 @@ mod tests {
                 let mask = &layer.mask.as_ref().unwrap().surface;
                 assert_eq!(mask.sample_channel(19, 20, 0), 0.0, "the linked mask scales with its complete layer");
                 assert_eq!(mask.sample_channel(21, 20, 0), 1.0);
-                assert_eq!(st.history.entries().len(), steps + 1);
+                assert_eq!(st.history.entry_labels().count(), steps + 1);
                 assert!(s.undo());
                 let st = s.active().unwrap();
                 let layer = st.doc.layer(child).unwrap();
@@ -1250,100 +1412,4 @@ mod tests {
             assert!(s.execute("edit.transform", bad.clone()).is_err(), "{bad}");
         }
     }
-}
-
-pub(crate) fn move_gray_selected(
-    s: &Surface,
-    sel: &Surface,
-    warp: &dyn Fn(&Surface, Rect) -> Result<Surface>,
-    whole: &dyn Fn(&Surface) -> Result<Surface>,
-) -> Result<Surface> {
-    let Some((lifted, mut out)) = try_split_gray_selected(s, sel)? else { return whole(s) };
-    let src = lifted.content_bounds();
-    if src.is_empty() {
-        return Ok(out);
-    }
-    let w = warp(&lifted, src)?;
-    let b = w.content_bounds();
-    if !b.is_empty() {
-        let moved = crate::allocation::read_region(&w, b, "compositing transformed mask pixels")?;
-        let under = crate::allocation::read_region(&out, b, "compositing transformed mask pixels")?;
-        let mut flat = crate::allocation::filled(under.len(), 0.0, "compositing transformed mask pixels")?;
-        for (i, (p, u)) in moved.as_chunks::<2>().0.iter().zip(&under).enumerate() {
-            flat[i] = p[0] * p[1] + u * (1.0 - p[1]);
-        }
-        out.try_write_region(b, &flat)?;
-    }
-    out.prune();
-    Ok(out)
-}
-
-fn transform_locks(l: &Layer, group: Locks, background: bool) -> Locks {
-    let mut own = l.locks;
-    if background {
-        own.position = false;
-        own.transparency = false;
-    }
-    own.union(group)
-}
-
-pub fn locked_for_transform(doc: &Document, id: LayerId) -> bool {
-    let Some(l) = doc.layer(id) else { return false };
-    // An explicit stack rather than recursion: documents can nest deeply.
-    let mut stack = vec![(l, group_locks(doc, id).unwrap_or(Locks { all: true, ..Default::default() }), doc.is_background(id))];
-    while let Some((l, group, background)) = stack.pop() {
-        let locks = transform_locks(l, group, background);
-        if locks.position || locks.all {
-            return true;
-        }
-        if let LayerContent::Group(g) = &l.content {
-            stack.extend(g.children.iter().map(|c| (c, locks, false)));
-        }
-    }
-    false
-}
-
-fn with_panel_target(s: &Session, p: &Value) -> Value {
-    let mut p = if p.is_object() { p.clone() } else { json!({}) };
-    if p.get("target").is_none()
-        && p.get("layer").is_none()
-        && let (Some(m), Some(Value::Object(t))) = (p.as_object_mut(), crate::channel_cmds::targeted_channel(s))
-    {
-        m.extend(t);
-    }
-    p
-}
-
-pub const MAX_TRANSFORM_PIXELS: u64 = 1 << 30;
-
-pub(crate) fn warp_gray(source: &Surface, h: &Homography, interp: Interp) -> Result<Surface> {
-    try_warp_gray(source, h, interp)
-}
-
-pub fn moves_whole(layer: &Layer) -> bool {
-    matches!(layer.content, LayerContent::Group(_) | LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_))
-}
-
-fn relative_matrix(p: &Value, rect: [f64; 4]) -> Result<Option<Homography>> {
-    let num = |k: &str| -> Result<Option<f64>> {
-        match p.get(k) {
-            None | Some(Value::Null) => Ok(None),
-            Some(v) => v.as_f64().filter(|f| f.is_finite()).map(Some).ok_or_else(|| bad(format!("`{k}` must be a finite number"))),
-        }
-    };
-    let (sx, sy, rot, dx, dy) = (num("scaleX")?, num("scaleY")?, num("rotate")?, num("dx")?, num("dy")?);
-    if sx.is_none() && sy.is_none() && rot.is_none() && dx.is_none() && dy.is_none() {
-        return Ok(None);
-    }
-    let (sx, sy) = (sx.unwrap_or(100.0) / 100.0, sy.unwrap_or(100.0) / 100.0);
-    if sx.abs() < 1e-6 || sy.abs() < 1e-6 {
-        return Err(bad("`scaleX` and `scaleY` must not be 0"));
-    }
-    let (cx, cy) = ((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0);
-    let (sin, cos) = rot.unwrap_or(0.0).to_radians().sin_cos();
-    // (x, y) → translate(-c) → scale → rotate → translate(c + d).
-    let (a, b, c, d) = (sx * cos, sx * sin, -sy * sin, sy * cos);
-    let e = cx + dx.unwrap_or(0.0) - a * cx - c * cy;
-    let f = cy + dy.unwrap_or(0.0) - b * cx - d * cy;
-    Ok(Some(Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0])))
 }

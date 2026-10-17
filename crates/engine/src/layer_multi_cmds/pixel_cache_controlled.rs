@@ -352,7 +352,9 @@ mod tests {
         let mut b = a.clone();
         b.icc_profile = Some(Arc::new(vec![19; 4096]));
         assert!(compare(&a, &b));
-        b.icc_profile.as_mut().map(|icc| Arc::make_mut(icc).push(1));
+        if let Some(icc) = b.icc_profile.as_mut() {
+            Arc::make_mut(icc).push(1);
+        }
         assert!(!compare(&a, &b));
         let mut a = fixture();
         a.layers[0].content = LayerContent::Raster(Surface::with_default(PixelFormat::RGBA8.with_sample(SampleType::F32), &[f32::NAN, 0., 0., 0.]));
@@ -372,10 +374,17 @@ mod tests {
         assert!(compare(&a, &b));
         b.physical_resolution.as_mut().unwrap().y_dpi = 144.;
         assert!(!compare(&a, &b));
-        a.physical_resolution = Some(photocraft_doc::PhysicalResolution { x_dpi: 72., y_dpi: 144.,
+        a.physical_resolution = Some(photocraft_doc::PhysicalResolution {
+            x_dpi: 72.,
+            y_dpi: 144.,
             unit: photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {
-                name: "Own units".into(), factor: 2., digits: 2, symbol: "u".into(), abbreviation: "unit".into(),
-            }) });
+                name: "Own units".into(),
+                factor: 2.,
+                digits: 2,
+                symbol: "u".into(),
+                abbreviation: "unit".into(),
+            }),
+        });
         b.physical_resolution = a.physical_resolution.clone();
         assert!(compare(&a, &b));
         if let photocraft_doc::PhysicalUnit::Custom(unit) = &mut b.physical_resolution.as_mut().unwrap().unit {
@@ -388,10 +397,10 @@ mod tests {
         let a = fixture();
         let mut b = a.clone();
         b.icc_profile = Some(Arc::new(vec![19; 4096]));
-        let calls = std::cell::Cell::new(0);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
         let cancel = || {
-            calls.set(calls.get() + 1);
-            calls.get() >= 8
+            calls.store(calls.load(std::sync::atomic::Ordering::Relaxed) + 1, std::sync::atomic::Ordering::Relaxed);
+            calls.load(std::sync::atomic::Ordering::Relaxed) >= 8
         };
         assert!(matches!(same_plain_pixels_with_interrupt(&a, &b, &Interrupt::cancel_only(&cancel), &mut |_| Ok(())), Err(EngineError::Cancelled)));
         let mut work = 0;

@@ -438,7 +438,9 @@ pub fn moved_target(doc: &Document, ids: &[LayerId], dx: i32, dy: i32, mask_targ
             return Err(EngineError::Other(format!("layer \"{}\" is position-locked", l.name)));
         }
         if mask_target && moves_mask_alone(l) {
-            if let Some(mask) = &mut l.mask { mask.surface = std::sync::Arc::new(shift_surface(&mask.surface, dx, dy)); }
+            if let Some(mask) = &mut l.mask {
+                mask.surface = std::sync::Arc::new(shift_surface(&mask.surface, dx, dy));
+            }
             continue;
         }
         shift_shown(doc, l, dx, dy)?;
@@ -1276,9 +1278,12 @@ pub(crate) fn rename_dispatch_preflight(s: &Session, p: &Value, background: bool
         return Err(bad(CMD, "rename requires synchronous idle uncoalesced context"));
     }
     let active = s.active().ok_or(EngineError::NoDocument)?;
-    if active.floating.is_some() || active.coalesce.is_some() || active.doc.xcf_state.as_ref().is_some_and(|state| state.floating.is_some()) {
+    if active.floating.is_some() || active.coalesce.is_some() {
         return Err(bad(CMD, "finish floating or coalesced editing before renaming"));
     }
+    // Only resident name metadata is edited here. A persisted attachment is
+    // an immutable typed relationship, not a live pixel preview. The controlled
+    // source_admission below validates its complete graph before any edit/no-op.
     active.doc.validate_resident()?;
     if active.revision == u64::MAX {
         return Err(bad(CMD, "revision headroom exhausted"));
@@ -1319,7 +1324,7 @@ pub fn rename_layer_with_interrupt(s: &mut Session, p: &Value, control: &photocr
     const CMD: &str = "layer.renameLayer";
     rename_dispatch_preflight(s, p, false)?;
     control.check().map_err(|_| EngineError::Cancelled)?;
-    let requested = p.get("name").and_then(Value::as_str).map(str::trim).ok_or_else(|| bad(CMD, "missing `name`"))?;
+    let requested = p.get("name").and_then(Value::as_str).ok_or_else(|| bad(CMD, "missing `name`"))?;
     let id = rename_layer_selector(s, p)?;
     fn source_admission(doc: &Document, id: LayerId, name_bytes: usize, control: &photocraft_raster::Interrupt<'_>) -> Result<()> {
         control.check().map_err(|_| EngineError::Cancelled)?;
@@ -1474,7 +1479,7 @@ fn merge_layers(s: &mut Session) -> Result<Value> {
         // lower chain's pixels to the upper chain's base.
         let base = crate::clip_group::base_of(doc, top_id);
         merged.clipped = base.is_some() && solo.layers.iter().all(|l| l.clipped && crate::clip_group::base_of(doc, l.id) == base);
-        *crate::pixels_mut(&mut merged)? = crate::pixels::composite_layers_uncropped(&solo, fmt);
+        *crate::pixels_mut(&mut merged)? = crate::pixels::composite_layers_uncropped(&solo, fmt)?;
         let mid = merged.id;
         // Hidden selected layers are discarded, as in Photoshop.
         for id in &ids[..ids.len() - 1] {
@@ -1778,7 +1783,7 @@ mod tests {
             s.execute("layer.select", json!({"layer": a.0})).unwrap();
             s.execute("layer.layerMask.hideAll", json!({})).unwrap();
             s.edit("mask", |doc, _| {
-                doc.layer_mut(a).unwrap().mask.as_mut().unwrap().surface.fill_rect(Rect::new(12, 12, 18, 18), &[1.0]);
+                std::sync::Arc::make_mut(&mut doc.layer_mut(a).unwrap().mask.as_mut().unwrap().surface).fill_rect(Rect::new(12, 12, 18, 18), &[1.0]);
                 Ok(())
             })
             .unwrap();
@@ -1803,7 +1808,7 @@ mod tests {
             s.execute("layer.select", json!({"layer": a.0})).unwrap();
             s.execute("layer.layerMask.hideAll", json!({})).unwrap();
             s.edit("mask", |doc, _| {
-                doc.layer_mut(a).unwrap().mask.as_mut().unwrap().surface.fill_rect(Rect::new(12, 12, 18, 18), &[1.0]);
+                std::sync::Arc::make_mut(&mut doc.layer_mut(a).unwrap().mask.as_mut().unwrap().surface).fill_rect(Rect::new(12, 12, 18, 18), &[1.0]);
                 Ok(())
             })
             .unwrap();
@@ -1948,7 +1953,7 @@ mod tests {
     /// base of the layers above still recomposites everything.
     #[test]
     fn duplicate_shares_tiles_and_damages_only_the_copy() {
-        let render = |s: &Session| photocraft_compose::render(doc(s), doc(s).bounds());
+        let render = |s: &Session| photocraft_compose::render(doc(s), doc(s).bounds()).unwrap();
         let tiles =
             |s: &Session, id: LayerId| doc(s).layer(id).unwrap().surface().unwrap().tiles().map(|(c, t)| (*c, std::sync::Arc::as_ptr(t))).collect::<Vec<_>>();
         for depth in [8, 16, 32] {
@@ -1981,7 +1986,7 @@ mod tests {
 
     /// The composite of `after` equals `before`'s outside `damage`.
     fn unchanged_outside(before: &Document, after: &Document, damage: Rect) -> bool {
-        let (x, y) = (photocraft_compose::render(before, before.bounds()), photocraft_compose::render(after, after.bounds()));
+        let (x, y) = (photocraft_compose::render(before, before.bounds()).unwrap(), photocraft_compose::render(after, after.bounds()).unwrap());
         let w = before.bounds().width() as i32;
         x.px.iter().zip(&y.px).enumerate().all(|(i, (p, q))| p == q || damage.contains(i as i32 % w, i as i32 / w))
     }
@@ -2104,10 +2109,10 @@ mod tests {
         assert_eq!(sel(&s), vec![a, b, c, d], "Select All Layers skips the locked Background");
         s.execute("select.deselectLayers", json!({})).unwrap();
         assert!(sel(&s).is_empty());
-        assert_eq!(s.active().unwrap().history.entries().len(), history);
+        assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().len(), history);
         // Nothing selected: a no-op, not an error (#2457).
         s.execute("select.deselectLayers", json!({})).unwrap();
-        assert_eq!(s.active().unwrap().history.entries().len(), history);
+        assert_eq!(s.active().unwrap().history.entries(&crate::read_control_none()).unwrap().values().len(), history);
         // An explicit layer needs no active layer.
         s.execute("layer.hideLayers", json!({"layer": a.0})).unwrap();
         assert!(!s.active().unwrap().doc.layer(a).unwrap().visible);
@@ -2363,10 +2368,10 @@ mod tests {
             let lower = rect_layer(&mut s, Rect::new(10, 10, 30, 30));
             let upper = rect_layer(&mut s, Rect::new(40, 20, 60, 40));
             s.execute("layer.layerStyle.dropShadow", json!({"layer": upper.0, "blend": "normal", "distance": 12, "size": 4})).unwrap();
-            let before = photocraft_compose::render(doc(&s), doc(&s).bounds());
+            let before = photocraft_compose::render(doc(&s), doc(&s).bounds()).unwrap();
             select_all(&mut s, &[lower, upper]);
             s.execute("layer.mergeLayers", json!({})).unwrap();
-            let after = photocraft_compose::render(doc(&s), doc(&s).bounds());
+            let after = photocraft_compose::render(doc(&s), doc(&s).bounds()).unwrap();
             let worst = before.px.iter().zip(&after.px).map(|(a, b)| a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max)).fold(0.0f32, f32::max);
             assert!(worst <= 1.5 / 255.0, "depth {depth}: merge layers dropped the shadow (off by {worst})");
         }

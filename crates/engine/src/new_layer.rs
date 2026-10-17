@@ -28,8 +28,13 @@ pub(crate) fn captured_preflight(s: &Session, p: &Value) -> Result<()> {
             if state.doc.id.0 == 0 || decimal(document) != Some(state.doc.id.0) || decimal(revision) != Some(state.revision) {
                 return Err(bad("captured new-layer document changed"));
             }
-            if state.revision == u64::MAX || state.floating.is_some() || state.coalesce.is_some() || s.has_jobs() || s.command_has_pending_job()
-                || state.doc.xcf_state.as_ref().is_some_and(|xcf| xcf.floating.is_some()) {
+            if state.revision == u64::MAX
+                || state.floating.is_some()
+                || state.coalesce.is_some()
+                || s.has_jobs()
+                || s.command_has_pending_job()
+                || state.doc.xcf_state.as_ref().is_some_and(|xcf| xcf.floating.is_some())
+            {
                 return Err(bad("finish pending edits before creating the captured layer"));
             }
             Ok(())
@@ -170,7 +175,7 @@ mod tests {
         for (mode, depth) in [("rgb", 8), ("rgb", 16), ("rgb", 32), ("gray", 8), ("gray", 16)] {
             let s0 = busy(mode, depth);
             let doc0 = s0.active().unwrap().doc.clone();
-            let shown = photocraft_compose::render(&doc0, doc0.bounds());
+            let shown = photocraft_compose::render(&doc0, doc0.bounds()).unwrap();
             for m in BlendMode::LAYER_MODES.into_iter().filter(|m| neutral_color(*m).is_some()) {
                 let mut s = busy(mode, depth);
                 s.execute("layer.new.layer", json!({"mode": m.label(), "fillNeutral": true})).unwrap();
@@ -178,7 +183,7 @@ mod tests {
                 let top = doc.layers.last().unwrap();
                 assert_eq!(top.blend, m);
                 assert!(top.surface().unwrap().tile_count() > 0, "{m:?} filled");
-                let d = max_diff(&photocraft_compose::render(doc, doc.bounds()), &shown);
+                let d = max_diff(&photocraft_compose::render(doc, doc.bounds()).unwrap(), &shown);
                 // 8-bit stores 50% gray as 128 (0.502), which can move a pixel by one level.
                 let tolerance = if depth == 8 { 1.0 / 255.0 + 1e-6 } else { 1e-3 };
                 assert!(d <= tolerance, "{mode}/{depth}: {m:?} changed the image by {d}");
@@ -187,7 +192,7 @@ mod tests {
             s.execute("layer.new.layer", json!({"mode": "Multiply"})).unwrap();
             s.execute("edit.fill", json!({"contents": "gray"})).unwrap();
             let doc = &s.active().unwrap().doc;
-            assert!(max_diff(&photocraft_compose::render(doc, doc.bounds()), &shown) > 0.1, "{mode}/{depth}: the control changes it");
+            assert!(max_diff(&photocraft_compose::render(doc, doc.bounds()).unwrap(), &shown) > 0.1, "{mode}/{depth}: the control changes it");
         }
         for m in [BlendMode::Normal, BlendMode::Dissolve, BlendMode::HardMix, BlendMode::Hue, BlendMode::Saturation, BlendMode::Color, BlendMode::Luminosity] {
             assert!(neutral_color(m).is_none(), "{m:?}");
@@ -281,5 +286,4 @@ mod tests {
         s.execute("layer.new.layer", json!({"name":"Uncaptured defaults"})).unwrap();
         assert_eq!(s.active().unwrap().doc.layers.len(), before.layers.len() + 1);
     }
-
 }

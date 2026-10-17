@@ -269,10 +269,19 @@ fn retag_dpi_with_interrupt(doc: &Document, control: &Interrupt<'_>) -> crate::R
 pub(crate) fn preflight_geometry_with_interrupt(doc: &Document, control: &Interrupt<'_>) -> crate::Result<()> {
     turn_poll(control)?;
     let limits = photocraft_io::NativeSaveLimits::default().preparation;
-    let model = photocraft_io::retained_native_model_bytes(doc, limits, control).map_err(|error| if control.cancelled() { crate::EngineError::Cancelled } else { crate::EngineError::Other(error.to_string()) })? as u64;
-    let payload = photocraft_io::retained_native_payload_bytes(doc, limits, control).map_err(|error| if control.cancelled() { crate::EngineError::Cancelled } else { crate::EngineError::Other(error.to_string()) })? as u64;
+    let model = photocraft_io::retained_native_model_bytes(doc, limits, control)
+        .map_err(|error| if control.cancelled() { crate::EngineError::Cancelled } else { crate::EngineError::Other(error.to_string()) })?
+        as u64;
+    let payload = photocraft_io::retained_native_payload_bytes(doc, limits, control)
+        .map_err(|error| if control.cancelled() { crate::EngineError::Cancelled } else { crate::EngineError::Other(error.to_string()) })?
+        as u64;
     let raster = crate::document_snapshot::DocumentSnapshot::resident_raster_footprint_of(doc, control)?;
-    if model.checked_mul(3).and_then(|n| n.checked_add(payload)).and_then(|n| n.checked_add(raster.clone_metadata_bytes.checked_mul(3)?)).is_none_or(|n| n > photocraft_raster::MAX_CHECKED_RASTER_BYTES) {
+    if model
+        .checked_mul(3)
+        .and_then(|n| n.checked_add(payload))
+        .and_then(|n| n.checked_add(raster.clone_metadata_bytes.checked_mul(3)?))
+        .is_none_or(|n| n > photocraft_raster::MAX_CHECKED_RASTER_BYTES)
+    {
         return Err(crate::EngineError::Other("Canvas geometry retained/model staging limit".into()));
     }
     turn_poll(control)
@@ -295,73 +304,171 @@ fn path_with_interrupt(path: &mut photocraft_doc::Path, a: &Affine, control: &In
     turn_poll(control)
 }
 fn fill_with_interrupt(fill: &mut Fill, a: &Affine, control: &Interrupt<'_>) -> crate::Result<()> {
-    turn_poll(control)?; map_fill(a, fill);
-    if let Fill::Gradient { angle, offset, .. } = fill { finite_canvas(&[f64::from(*angle), f64::from(offset.0), f64::from(offset.1)])?; }
+    turn_poll(control)?;
+    map_fill(a, fill);
+    if let Fill::Gradient { angle, offset, .. } = fill {
+        finite_canvas(&[f64::from(*angle), f64::from(offset.0), f64::from(offset.1)])?;
+    }
     turn_poll(control)
 }
 fn live_shape_finite(live: Option<&photocraft_doc::LiveShape>) -> crate::Result<()> {
     use photocraft_doc::LiveShape;
     match live {
-        Some(LiveShape::Rect { rect, radii }) => { finite_canvas(rect)?; finite_canvas(radii) }
+        Some(LiveShape::Rect { rect, radii }) => {
+            finite_canvas(rect)?;
+            finite_canvas(radii)
+        }
         Some(LiveShape::Ellipse { rect }) => finite_canvas(rect),
-        Some(LiveShape::Polygon { rect, star_ratio, .. }) => { finite_canvas(rect)?; finite_canvas(&[*star_ratio]) }
-        Some(LiveShape::Line { from, to, weight }) => { finite_canvas(from)?; finite_canvas(to)?; finite_canvas(&[*weight]) }
+        Some(LiveShape::Polygon { rect, star_ratio, .. }) => {
+            finite_canvas(rect)?;
+            finite_canvas(&[*star_ratio])
+        }
+        Some(LiveShape::Line { from, to, weight }) => {
+            finite_canvas(from)?;
+            finite_canvas(to)?;
+            finite_canvas(&[*weight])
+        }
         None => Ok(()),
     }
 }
-fn layer_geometry_with_interrupt(layer: &mut Layer, a: &Affine, dpi: Option<&photocraft_doc::PhysicalResolution>, depth: usize, control: &Interrupt<'_>) -> crate::Result<()> {
+fn layer_geometry_with_interrupt(
+    layer: &mut Layer,
+    a: &Affine,
+    dpi: Option<&photocraft_doc::PhysicalResolution>,
+    depth: usize,
+    control: &Interrupt<'_>,
+) -> crate::Result<()> {
     turn_poll(control)?;
-    if depth > photocraft_doc::MAX_GROUP_DEPTH { return Err(crate::EngineError::Other("Canvas group depth exceeds limit".into())); }
-    if let Some(mask) = &mut layer.vector_mask { path_with_interrupt(&mut mask.path, a, control)?; }
-    if let Some((x, y)) = layer.effects.reference { let value = map_pt(a, [x, y]); finite_canvas(&value)?; layer.effects.reference = Some((value[0], value[1])); }
-    if let Some(cache) = &mut layer.fill_cache { fill_with_interrupt(&mut cache.fill, a, control)?; }
+    if depth > photocraft_doc::MAX_GROUP_DEPTH {
+        return Err(crate::EngineError::Other("Canvas group depth exceeds limit".into()));
+    }
+    if let Some(mask) = &mut layer.vector_mask {
+        path_with_interrupt(&mut mask.path, a, control)?;
+    }
+    if let Some((x, y)) = layer.effects.reference {
+        let value = map_pt(a, [x, y]);
+        finite_canvas(&value)?;
+        layer.effects.reference = Some((value[0], value[1]));
+    }
+    if let Some(cache) = &mut layer.fill_cache {
+        fill_with_interrupt(&mut cache.fill, a, control)?;
+    }
     match &mut layer.content {
         LayerContent::Group(group) => {
             if let Some(artboard) = &mut group.artboard {
-                let mapped = map_box(a, [artboard.rect.x0 as f64, artboard.rect.y0 as f64, artboard.rect.x1 as f64, artboard.rect.y1 as f64]); finite_canvas(&mapped)?;
+                let mapped = map_box(a, [artboard.rect.x0 as f64, artboard.rect.y0 as f64, artboard.rect.x1 as f64, artboard.rect.y1 as f64]);
+                finite_canvas(&mapped)?;
                 artboard.rect = map_rect(a, artboard.rect);
             }
-            for child in &mut group.children { layer_geometry_with_interrupt(child, a, dpi, depth + 1, control)?; }
+            for child in &mut group.children {
+                layer_geometry_with_interrupt(child, a, dpi, depth + 1, control)?;
+            }
         }
         LayerContent::Shape(shape) => {
-            if let Some(fill) = &mut shape.fill { fill_with_interrupt(fill, a, control)?; }
+            if let Some(fill) = &mut shape.fill {
+                fill_with_interrupt(fill, a, control)?;
+            }
             // Preserve the exact shared live-shape math while avoiding its
             // whole Path clone: transform original knots in place, restore them.
-            let mut path = std::mem::take(&mut shape.path); path_with_interrupt(&mut path, a, control)?;
-            crate::vector_cmds::transform_shape(shape, a); shape.path = path; live_shape_finite(shape.live.as_ref())?;
+            let mut path = std::mem::take(&mut shape.path);
+            path_with_interrupt(&mut path, a, control)?;
+            crate::vector_cmds::transform_shape(shape, a);
+            shape.path = path;
+            live_shape_finite(shape.live.as_ref())?;
         }
         LayerContent::Fill(fill) => fill_with_interrupt(fill, a, control)?,
         LayerContent::Text(text) => {
-            text.transform = a.mul(&text.transform); finite_canvas(&text.transform.m)?;
+            text.transform = a.mul(&text.transform);
+            finite_canvas(&text.transform.m)?;
             // Layout/TySh APIs currently have no internal Interrupt argument.
-            turn_poll(control)?; retag_text(dpi, text)?; turn_poll(control)?;
+            turn_poll(control)?;
+            retag_text(dpi, text)?;
+            turn_poll(control)?;
         }
-        LayerContent::Smart(smart) => { crate::smart_cmds::transform_placement(smart, a); finite_canvas(&smart.transform.m)?; if let Some(perspective) = &smart.perspective { finite_canvas(perspective)?; } }
+        LayerContent::Smart(smart) => {
+            crate::smart_cmds::transform_placement(smart, a);
+            finite_canvas(&smart.transform.m)?;
+            if let Some(perspective) = &smart.perspective {
+                finite_canvas(perspective)?;
+            }
+        }
         _ => {}
     }
     turn_poll(control)
 }
 fn marks_with_interrupt(doc: &mut Document, a: &Affine, control: &Interrupt<'_>) -> crate::Result<()> {
-    for path in &mut doc.paths { turn_poll(control)?; path_with_interrupt(&mut path.path, a, control)?; }
-    if let Some(path) = &mut doc.work_path { path_with_interrupt(path, a, control)?; }
-    for note in &mut doc.notes { turn_poll(control)?; let position = map_pt(a, note.position); let popup = map_box(a, note.popup); finite_canvas(&position)?; finite_canvas(&popup)?; note.position = position; note.popup = popup; }
-    for group in &mut doc.measurement.count_groups { turn_poll(control)?; for chunk in group.points.chunks_mut(256) { turn_poll(control)?; for point in chunk { let next = map_pt(a, *point); finite_canvas(&next)?; *point = next; } } }
-    if let Some(ruler) = &mut doc.measurement.ruler {
-        let start = map_pt(a, ruler.start); let end = map_pt(a, ruler.end); finite_canvas(&start)?; finite_canvas(&end)?; ruler.start = start; ruler.end = end;
-        if let Some(point) = &mut ruler.protractor { let next = map_pt(a, *point); finite_canvas(&next)?; *point = next; }
+    for path in &mut doc.paths {
+        turn_poll(control)?;
+        path_with_interrupt(&mut path.path, a, control)?;
     }
-    for slice in &mut doc.slices.list { turn_poll(control)?; let mapped = map_box(a, [slice.rect.x0 as f64, slice.rect.y0 as f64, slice.rect.x1 as f64, slice.rect.y1 as f64]); finite_canvas(&mapped)?; slice.rect = map_rect(a, slice.rect); }
+    if let Some(path) = &mut doc.work_path {
+        path_with_interrupt(path, a, control)?;
+    }
+    for note in &mut doc.notes {
+        turn_poll(control)?;
+        let position = map_pt(a, note.position);
+        let popup = map_box(a, note.popup);
+        finite_canvas(&position)?;
+        finite_canvas(&popup)?;
+        note.position = position;
+        note.popup = popup;
+    }
+    for group in &mut doc.measurement.count_groups {
+        turn_poll(control)?;
+        for chunk in group.points.chunks_mut(256) {
+            turn_poll(control)?;
+            for point in chunk {
+                let next = map_pt(a, *point);
+                finite_canvas(&next)?;
+                *point = next;
+            }
+        }
+    }
+    if let Some(ruler) = &mut doc.measurement.ruler {
+        let start = map_pt(a, ruler.start);
+        let end = map_pt(a, ruler.end);
+        finite_canvas(&start)?;
+        finite_canvas(&end)?;
+        ruler.start = start;
+        ruler.end = end;
+        if let Some(point) = &mut ruler.protractor {
+            let next = map_pt(a, *point);
+            finite_canvas(&next)?;
+            *point = next;
+        }
+    }
+    for slice in &mut doc.slices.list {
+        turn_poll(control)?;
+        let mapped = map_box(a, [slice.rect.x0 as f64, slice.rect.y0 as f64, slice.rect.x1 as f64, slice.rect.y1 as f64]);
+        finite_canvas(&mapped)?;
+        slice.rect = map_rect(a, slice.rect);
+    }
     let [m0, m1, m2, m3, tx, ty] = a.m;
     let guides = &mut doc.guides;
     let map_guides = |values: &mut [f64], scale: f64, offset: f64| -> crate::Result<()> {
-        for chunk in values.chunks_mut(256) { turn_poll(control)?; for value in chunk {
-            let next = scale * *value + offset;
-            if !next.is_finite() { return Err(crate::EngineError::Other("Canvas guide exceeds finite f64 range".into())); } *value = next;
-        } } Ok(())
+        for chunk in values.chunks_mut(256) {
+            turn_poll(control)?;
+            for value in chunk {
+                let next = scale * *value + offset;
+                if !next.is_finite() {
+                    return Err(crate::EngineError::Other("Canvas guide exceeds finite f64 range".into()));
+                }
+                *value = next;
+            }
+        }
+        Ok(())
     };
-    if m1.abs() < EPS && m2.abs() < EPS { map_guides(&mut guides.horizontal, m3, ty)?; map_guides(&mut guides.vertical, m0, tx)?; }
-    else if m0.abs() < EPS && m3.abs() < EPS { map_guides(&mut guides.horizontal, m2, tx)?; map_guides(&mut guides.vertical, m1, ty)?; std::mem::swap(&mut guides.horizontal, &mut guides.vertical); }
-    else { guides.horizontal.clear(); guides.vertical.clear(); }
+    if m1.abs() < EPS && m2.abs() < EPS {
+        map_guides(&mut guides.horizontal, m3, ty)?;
+        map_guides(&mut guides.vertical, m0, tx)?;
+    } else if m0.abs() < EPS && m3.abs() < EPS {
+        map_guides(&mut guides.horizontal, m2, tx)?;
+        map_guides(&mut guides.vertical, m1, ty)?;
+        std::mem::swap(&mut guides.horizontal, &mut guides.vertical);
+    } else {
+        guides.horizontal.clear();
+        guides.vertical.clear();
+    }
     turn_poll(control)
 }
 
@@ -373,7 +480,9 @@ pub(crate) fn transform_geometry(doc: &mut Document, a: &Affine) -> crate::Resul
 /// Controlled private-candidate mutation. Callers discard partial candidates on
 /// refusal; source/cache/provenance bytes and DPI are not reinterpreted here.
 pub(crate) fn transform_geometry_with_interrupt(doc: &mut Document, a: &Affine, control: &Interrupt<'_>) -> crate::Result<()> {
-    turn_poll(control)?; finite_canvas(&a.m)?; preflight_geometry_with_interrupt(doc, control)?;
+    turn_poll(control)?;
+    finite_canvas(&a.m)?;
+    preflight_geometry_with_interrupt(doc, control)?;
     let dpi = retag_dpi_with_interrupt(doc, control)?;
     for l in &mut doc.layers {
         layer_geometry_with_interrupt(l, a, dpi.as_ref(), 0, control)?;
@@ -393,21 +502,38 @@ pub(crate) enum Refresh {
 
 fn refresh_admission(layers: &[Layer], what: Refresh, format: photocraft_color::PixelFormat, depth: usize, control: &Interrupt<'_>) -> crate::Result<bool> {
     turn_poll(control)?;
-    if depth > photocraft_doc::MAX_GROUP_DEPTH { return Err(crate::EngineError::Other("Canvas refresh group depth exceeds limit".into())); }
+    if depth > photocraft_doc::MAX_GROUP_DEPTH {
+        return Err(crate::EngineError::Other("Canvas refresh group depth exceeds limit".into()));
+    }
     let wide = |format: photocraft_color::PixelFormat| matches!(format.sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64);
     let mut needed = false;
     for layer in layers {
         turn_poll(control)?;
         let cache = match &layer.content {
-            LayerContent::Group(group) => { needed |= refresh_admission(&group.children, what, format, depth + 1, control)?; continue; }
-            LayerContent::Shape(shape) => { needed = true; shape.cache.as_ref() }
-            LayerContent::Text(text) if what == Refresh::All => { needed = true; text.cache.as_ref() }
-            LayerContent::Smart(smart) if what == Refresh::All => { needed = true; smart.cache.as_ref() }
+            LayerContent::Group(group) => {
+                needed |= refresh_admission(&group.children, what, format, depth + 1, control)?;
+                continue;
+            }
+            LayerContent::Shape(shape) => {
+                needed = true;
+                shape.cache.as_ref()
+            }
+            LayerContent::Text(text) if what == Refresh::All => {
+                needed = true;
+                text.cache.as_ref()
+            }
+            LayerContent::Smart(smart) if what == Refresh::All => {
+                needed = true;
+                smart.cache.as_ref()
+            }
             _ => continue,
         };
-        if wide(format) || cache.is_some_and(|surface| wide(surface.format())) { return Err(crate::EngineError::Other("Canvas cache regeneration does not support U32/F64 arithmetic".into())); }
+        if wide(format) || cache.is_some_and(|surface| wide(surface.format())) {
+            return Err(crate::EngineError::Other("Canvas cache regeneration does not support U32/F64 arithmetic".into()));
+        }
     }
-    turn_poll(control)?; Ok(needed)
+    turn_poll(control)?;
+    Ok(needed)
 }
 /// Snapshot clone is admitted before allocation; hierarchy/cache boundaries poll.
 /// Current text render/TySh, shape render and smart refresh APIs are internally
@@ -415,10 +541,14 @@ fn refresh_admission(layers: &[Layer], what: Refresh, format: photocraft_color::
 /// before/after each call; this does not claim deep cancellation or render RSS.
 pub(crate) fn refresh_with_interrupt(doc: &mut Document, what: Refresh, control: &Interrupt<'_>) -> crate::Result<()> {
     preflight_geometry_with_interrupt(doc, control)?;
-    if !refresh_admission(&doc.layers, what, doc.pixel_format(), 0, control)? { return turn_poll(control); }
+    if !refresh_admission(&doc.layers, what, doc.pixel_format(), 0, control)? {
+        return turn_poll(control);
+    }
     fn rec(snapshot: &Document, layers: &mut [Layer], what: Refresh, depth: usize, control: &Interrupt<'_>) -> crate::Result<()> {
         turn_poll(control)?;
-        if depth > photocraft_doc::MAX_GROUP_DEPTH { return Err(crate::EngineError::Other("Canvas refresh group depth exceeds limit".into())); }
+        if depth > photocraft_doc::MAX_GROUP_DEPTH {
+            return Err(crate::EngineError::Other("Canvas refresh group depth exceeds limit".into()));
+        }
         for l in layers {
             turn_poll(control)?;
             match &mut l.content {
@@ -868,35 +998,112 @@ mod controlled_geometry_drafts {
         let mut doc = Document::new("Own geometry", photocraft_doc::Size::new(4, 3), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U16);
         doc.layers.push(Layer::raster("Own unchanged raster", doc.pixel_format()));
         doc.set_physical_resolution(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 288.0, unit: photocraft_doc::PhysicalUnit::Inch }).unwrap();
-        let mut path = photocraft_doc::NamedPath::new("Own path", photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(0.25, 0.5), (2.0, 0.5), (1.0, 2.0)])]));
-        path.psd_raw = Some(Arc::new(vec![1, 2, 3])); doc.paths.push(path);
-        doc.guides.horizontal = vec![0.5, 2.5]; doc.guides.vertical = vec![1.5]; doc
+        let mut path = photocraft_doc::NamedPath::new(
+            "Own path",
+            photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(0.25, 0.5), (2.0, 0.5), (1.0, 2.0)])]),
+        );
+        path.psd_raw = Some(Arc::new(vec![1, 2, 3]));
+        doc.paths.push(path);
+        doc.guides.horizontal = vec![0.5, 2.5];
+        doc.guides.vertical = vec![1.5];
+        doc
     }
     #[test]
     fn controlled_geometry_matches_existing_math_and_preserves_raw_dpi_and_pixels() {
-        let original = document(); let before_pixels = original.layers[0].surface().unwrap().clone(); let raw = original.paths[0].psd_raw.clone();
+        let original = document();
+        let before_pixels = original.layers[0].surface().unwrap().clone();
+        let raw = original.paths[0].psd_raw.clone();
         for affine in [Affine::translate(-3.0, 5.0), Affine { m: [0.0, 1.0, -1.0, 0.0, 3.0, 0.0] }] {
-            let mut expected = original.clone(); let dpi = retag_dpi(&expected).unwrap();
-            for layer in &mut expected.layers { transform_layer_geometry(layer, &affine, true, dpi.as_ref()).unwrap(); } transform_doc_marks(&mut expected, &affine);
-            let mut actual = original.clone(); transform_geometry_with_interrupt(&mut actual, &affine, &Interrupt::NONE).unwrap();
-            assert_eq!(actual, expected); assert_eq!(actual.physical_resolution, original.physical_resolution); assert_eq!(actual.paths[0].psd_raw, raw); assert_eq!(actual.layers[0].surface().unwrap(), &before_pixels);
+            let mut expected = original.clone();
+            let dpi = retag_dpi(&expected).unwrap();
+            for layer in &mut expected.layers {
+                transform_layer_geometry(layer, &affine, true, dpi.as_ref()).unwrap();
+            }
+            transform_doc_marks(&mut expected, &affine);
+            let mut actual = original.clone();
+            transform_geometry_with_interrupt(&mut actual, &affine, &Interrupt::NONE).unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(actual.physical_resolution, original.physical_resolution);
+            assert_eq!(actual.paths[0].psd_raw, raw);
+            assert_eq!(actual.layers[0].surface().unwrap(), &before_pixels);
         }
     }
     #[test]
     fn late_metadata_cancel_inside_session_keeps_native_and_real_redo() {
-        let mut doc = document(); doc.work_path = Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&vec![(0.5, 1.0); 1024])]));
-        let mut session = crate::Session::new(); session.open_document(doc, None).unwrap(); session.edit("Own redo seed", |doc, _| { doc.name.push_str(" edited"); Ok(()) }).unwrap();
-        session.execute("edit.undo", serde_json::json!({})).unwrap(); let before = session.active().unwrap().doc.clone(); let native = photocraft_format::save_to_bytes(&before, &Default::default()).unwrap();
-        let polls = AtomicUsize::new(0); let cancel = || polls.fetch_add(1, Ordering::Relaxed) > 8;
-        assert!(matches!(session.edit_with_interrupt("Own cancelled metadata", &Interrupt::cancel_only(&cancel), |doc, _| transform_geometry_with_interrupt(doc, &Affine::translate(1.0, 0.0), &Interrupt::cancel_only(&cancel))), Err(crate::EngineError::Cancelled)));
-        assert!(session.active().unwrap().doc.shares_state(&before)); assert!(session.active().unwrap().history.can_redo()); assert_eq!(photocraft_format::save_to_bytes(&session.active().unwrap().doc, &Default::default()).unwrap(), native);
+        use std::sync::atomic::AtomicBool;
+        let mut doc = document();
+        doc.work_path = Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&vec![(0.5, 1.0); 64])]));
+        let mut session = crate::Session::new();
+        session.open_document(doc, None).unwrap();
+        session
+            .edit("Own redo seed", |doc, _| {
+                doc.layers[0].name.push_str(" edited");
+                Ok(())
+            })
+            .unwrap();
+        let redo_document = session.active().unwrap().doc.clone();
+        session.execute("edit.undo", serde_json::json!({})).unwrap();
+        let before = session.active().unwrap().doc.clone();
+        let native = photocraft_format::save_to_bytes(&before, &Default::default()).unwrap();
+        let revision = session.active().unwrap().revision;
+        let past = session.active().unwrap().history.entry_labels().map(str::to_owned).collect::<Vec<_>>();
+        let redo = session.active().unwrap().history.redo_labels().map(str::to_owned).collect::<Vec<_>>();
+
+        // Probe the helper separately, then cancel its final poll inside the
+        // actual Session callback. Session admission cannot consume this signal.
+        let probe_polls = AtomicUsize::new(0);
+        let probe_signal = || {
+            probe_polls.fetch_add(1, Ordering::Relaxed);
+            false
+        };
+        let mut probe = (*before).clone();
+        transform_geometry_with_interrupt(&mut probe, &Affine::translate(1.0, 0.0), &Interrupt::cancel_only(&probe_signal)).unwrap();
+        let cancel_at = probe_polls.load(Ordering::Relaxed).checked_sub(1).unwrap();
+        assert!(cancel_at > 8);
+        let entered = AtomicBool::new(false);
+        let polls = AtomicUsize::new(0);
+        let cancel = || entered.load(Ordering::Relaxed) && polls.fetch_add(1, Ordering::Relaxed) >= cancel_at;
+        let control = Interrupt::cancel_only(&cancel);
+        assert!(matches!(
+            session.edit_with_interrupt("Own cancelled metadata", &control, |doc, _| {
+                entered.store(true, Ordering::Relaxed);
+                transform_geometry_with_interrupt(doc, &Affine::translate(1.0, 0.0), &control)
+            }),
+            Err(crate::EngineError::Cancelled)
+        ));
+        assert!(entered.load(Ordering::Relaxed));
+        assert_eq!(polls.load(Ordering::Relaxed), cancel_at + 1);
+        let active = session.active().unwrap();
+        assert!(active.doc.shares_state(&before));
+        assert_eq!(active.revision, revision);
+        assert_eq!(active.history.entry_labels().map(str::to_owned).collect::<Vec<_>>(), past);
+        assert_eq!(active.history.redo_labels().map(str::to_owned).collect::<Vec<_>>(), redo);
+        assert!(active.history.can_redo());
+        assert_eq!(photocraft_format::save_to_bytes(&active.doc, &Default::default()).unwrap(), native);
+        session.execute("edit.redo", serde_json::json!({})).unwrap();
+        assert!(session.active().unwrap().doc.shares_state(&redo_document));
+    }
+    #[test]
+    fn oversized_geometry_metadata_keeps_native_preparation_limit() {
+        let mut doc = document();
+        doc.work_path = Some(photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&vec![(0.5, 1.0); 1024])]));
+        let before = doc.clone();
+        let error = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap_err();
+        assert!(matches!(error, photocraft_format::FormatError::LimitExceeded(_)));
+        assert!(error.to_string().contains("native preparation JSON bytes"));
+        assert_eq!(doc, before);
     }
     #[test]
     fn invalid_affine_and_early_refresh_cancel_do_not_mutate_document() {
-        let mut doc = document(); let original = doc.clone();
-        assert!(transform_geometry_with_interrupt(&mut doc, &Affine { m: [f64::INFINITY, 0.0, 0.0, 1.0, 0.0, 0.0] }, &Interrupt::NONE).is_err()); assert_eq!(doc, original);
-        let cancel = || true; assert!(matches!(refresh_with_interrupt(&mut doc, Refresh::All, &Interrupt::cancel_only(&cancel)), Err(crate::EngineError::Cancelled))); assert_eq!(doc, original);
-        refresh_with_interrupt(&mut doc, Refresh::All, &Interrupt::NONE).unwrap(); assert_eq!(doc, original);
+        let mut doc = document();
+        let original = doc.clone();
+        assert!(transform_geometry_with_interrupt(&mut doc, &Affine { m: [f64::INFINITY, 0.0, 0.0, 1.0, 0.0, 0.0] }, &Interrupt::NONE).is_err());
+        assert_eq!(doc, original);
+        let cancel = || true;
+        assert!(matches!(refresh_with_interrupt(&mut doc, Refresh::All, &Interrupt::cancel_only(&cancel)), Err(crate::EngineError::Cancelled)));
+        assert_eq!(doc, original);
+        refresh_with_interrupt(&mut doc, Refresh::All, &Interrupt::NONE).unwrap();
+        assert_eq!(doc, original);
     }
 }
 
@@ -906,10 +1113,15 @@ mod controlled_turn_drafts {
     #[test]
     fn cancelled_turn_entry_preserves_native_document_and_real_redo() {
         let mut session = crate::Session::new();
-        session.execute("file.new", serde_json::json!({"width":2,"height":1,"depth":64,"background":"transparent"})).unwrap();
+        // The public new-document API keeps its upstream 8/16/32 contract.
+        assert!(session.execute("file.new", serde_json::json!({"width":2,"height":1,"depth":64,"background":"transparent"})).is_err());
+        assert!(session.documents().is_empty());
+        let mut document = Document::new("Own F64 turn", photocraft_doc::Size::new(2, 1), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::F64);
+        document.layers.push(Layer::raster("Own F64 raster", document.pixel_format()));
+        session.open_document(document, None).unwrap();
         session
             .edit("Own redo", |document, _| {
-                document.name.push_str(" redo");
+                document.layers[0].name.push_str(" redo");
                 Ok(())
             })
             .unwrap();

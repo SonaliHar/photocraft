@@ -29,39 +29,87 @@ fn check_memory(source: &Surface, output: &Surface, retained: u64, scratch: u64)
     }
     Ok(())
 }
-fn cms_error(error:photocraft_cms::control::Error)->EngineError {
-    match error {photocraft_cms::control::Error::Cancelled=>EngineError::Cancelled,error=>bad(error.to_string())}
+fn cms_error(error: photocraft_cms::control::Error) -> EngineError {
+    match error {
+        photocraft_cms::control::Error::Cancelled => EngineError::Cancelled,
+        error => bad(error.to_string()),
+    }
 }
 struct ProfileReserve {
-    source_limits:photocraft_cms::control::Limits,
-    linear_peak:usize,
-    linear_work:u64,
-    retained_bytes:u64,
-    work_units:u64,
-    transform_limits:photocraft_cms::control::Limits,
+    source_limits: photocraft_cms::control::Limits,
+    linear_peak: usize,
+    linear_work: u64,
+    retained_bytes: u64,
+    work_units: u64,
+    transform_limits: photocraft_cms::control::Limits,
 }
 /// Reserve both implicit analytic profile phases before either private profile
 /// or plane is built. This changes no binding/encoding/geometry qualification.
-fn profile_reserve(doc:&Document,source:&Surface,control:&Interrupt<'_>)->Result<ProfileReserve> {
-    control.check().map_err(|_|EngineError::Cancelled)?;
-    let geometry=GeometryLimits::default();let source_bytes=resident(source)?;
-    let remaining=geometry.resident_bytes.checked_sub(source_bytes).ok_or_else(||bad("cubic source/profile headroom limit"))?;
-    let maximum=photocraft_cms::control::Limits::default();
-    let limits=photocraft_cms::control::Limits{resident_bytes:usize::try_from(remaining).map_err(|e|bad(e.to_string()))?.min(maximum.resident_bytes),work_units:geometry.work_units.min(maximum.work_units)};
-    let source_req=crate::color_cmds::document_profile_requirements_with_limits(doc,limits,control)?;
+fn profile_reserve(doc: &Document, source: &Surface, control: &Interrupt<'_>) -> Result<ProfileReserve> {
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    let geometry = GeometryLimits::default();
+    let source_bytes = resident(source)?;
+    let remaining = geometry.resident_bytes.checked_sub(source_bytes).ok_or_else(|| bad("cubic source/profile headroom limit"))?;
+    let maximum = photocraft_cms::control::Limits::default();
+    let limits = photocraft_cms::control::Limits {
+        resident_bytes: usize::try_from(remaining).map_err(|e| bad(e.to_string()))?.min(maximum.resident_bytes),
+        work_units: geometry.work_units.min(maximum.work_units),
+    };
+    let source_req = crate::color_cmds::document_profile_requirements_with_limits(doc, limits, control)?;
     // Eligibility below admits only byte-bound implicit RGB/Gray analytical
     // definitions: no LUTs/large tables. A sixfold returned-model envelope plus
     // 64 KiB covers the second clone, description and three encoding buffers;
     // the exact second-phase requirements are checked against it before copying.
-    let linear_peak=source_req.result_retained_bytes_upper_bound.checked_mul(6).and_then(|n|n.checked_add(64<<10)).ok_or_else(||bad("cubic Linear profile envelope overflow"))?;
-    let linear_work=(source_req.result_retained_bytes_upper_bound as u64).checked_mul(32).and_then(|n|n.checked_add(16<<20)).ok_or_else(||bad("cubic Linear profile work overflow"))?;
-    let transform_peak=32usize<<20;let transform_work=128u64<<20;
-    let peak=source_req.peak_resident_bytes.checked_add(linear_peak).and_then(|n|n.checked_add(transform_peak)).ok_or_else(||bad("cubic profile peak overflow"))?;
-    let work=source_req.work_units.checked_add(linear_work).and_then(|n|n.checked_mul(3)).and_then(|n|n.checked_add(transform_work)).ok_or_else(||bad("cubic profile work overflow"))?;
-    if peak>limits.resident_bytes||work>limits.work_units{return Err(bad("cubic aggregate profile storage/work limit"));}
-    let source_limits=photocraft_cms::control::Limits{resident_bytes:limits.resident_bytes.checked_sub(linear_peak).and_then(|n|n.checked_sub(transform_peak)).ok_or_else(||bad("cubic Linear profile reservation"))?,work_units:limits.work_units.checked_sub(linear_work).and_then(|n|n.checked_sub(transform_work)).ok_or_else(||bad("cubic Linear work reservation"))?};
-    let retained=source_req.result_retained_bytes_upper_bound.checked_add(linear_peak).and_then(|n|n.checked_add(transform_peak)).ok_or_else(||bad("cubic retained profiles overflow"))?;
-    Ok(ProfileReserve{source_limits,linear_peak,linear_work,retained_bytes:retained as u64,work_units:work,transform_limits:photocraft_cms::control::Limits{resident_bytes:transform_peak,work_units:transform_work}})
+    let linear_peak = source_req
+        .result_retained_bytes_upper_bound
+        .checked_mul(6)
+        .and_then(|n| n.checked_add(64 << 10))
+        .ok_or_else(|| bad("cubic Linear profile envelope overflow"))?;
+    let linear_work = (source_req.result_retained_bytes_upper_bound as u64)
+        .checked_mul(32)
+        .and_then(|n| n.checked_add(16 << 20))
+        .ok_or_else(|| bad("cubic Linear profile work overflow"))?;
+    let transform_peak = 32usize << 20;
+    let transform_work = 128u64 << 20;
+    let peak = source_req
+        .peak_resident_bytes
+        .checked_add(linear_peak)
+        .and_then(|n| n.checked_add(transform_peak))
+        .ok_or_else(|| bad("cubic profile peak overflow"))?;
+    let work = source_req
+        .work_units
+        .checked_add(linear_work)
+        .and_then(|n| n.checked_mul(3))
+        .and_then(|n| n.checked_add(transform_work))
+        .ok_or_else(|| bad("cubic profile work overflow"))?;
+    if peak > limits.resident_bytes || work > limits.work_units {
+        return Err(bad("cubic aggregate profile storage/work limit"));
+    }
+    let source_limits = photocraft_cms::control::Limits {
+        resident_bytes: limits
+            .resident_bytes
+            .checked_sub(linear_peak)
+            .and_then(|n| n.checked_sub(transform_peak))
+            .ok_or_else(|| bad("cubic Linear profile reservation"))?,
+        work_units: limits
+            .work_units
+            .checked_sub(linear_work)
+            .and_then(|n| n.checked_sub(transform_work))
+            .ok_or_else(|| bad("cubic Linear work reservation"))?,
+    };
+    let retained = source_req
+        .result_retained_bytes_upper_bound
+        .checked_add(linear_peak)
+        .and_then(|n| n.checked_add(transform_peak))
+        .ok_or_else(|| bad("cubic retained profiles overflow"))?;
+    Ok(ProfileReserve {
+        source_limits,
+        linear_peak,
+        linear_work,
+        retained_bytes: retained as u64,
+        work_units: work,
+        transform_limits: photocraft_cms::control::Limits { resident_bytes: transform_peak, work_units: transform_work },
+    })
 }
 fn convert(
     source: &Surface,
@@ -277,36 +325,52 @@ pub(super) fn warp(doc: &Document, source: &Surface, bounds: Rect, h: &Homograph
     {
         return Err(bad("GIMP interpolation compatibility requires a current implicit sRGB/sGray nonlinear profile"));
     }
-    let reservation=profile_reserve(doc,source,control)?;
-    let profile = crate::color_cmds::try_document_profile_with_limits(doc,reservation.source_limits,control)?;
-    let cancelled=||control.cancelled();
-    let linear_limits=photocraft_cms::control::Limits{resident_bytes:reservation.linear_peak,work_units:reservation.linear_work};
-    let linear_req=photocraft_cms::xcf_color::effective_profile_requirements_with_control(&profile,Encoding::Linear,linear_limits,&cancelled).map_err(cms_error)?;
-    if linear_req.peak_resident_bytes>reservation.linear_peak||linear_req.work_units>reservation.linear_work{return Err(bad("cubic Linear reconstruction exceeds prospective reservation"));}
-    let linear = effective_profile_from_definition_with_control(&profile, Encoding::Linear,linear_limits,&cancelled).map_err(cms_error)?;
+    let reservation = profile_reserve(doc, source, control)?;
+    let profile = crate::color_cmds::try_document_profile_with_limits(doc, reservation.source_limits, control)?;
+    let cancelled = || control.cancelled();
+    let linear_limits = photocraft_cms::control::Limits { resident_bytes: reservation.linear_peak, work_units: reservation.linear_work };
+    let linear_req =
+        photocraft_cms::xcf_color::effective_profile_requirements_with_control(&profile, Encoding::Linear, linear_limits, &cancelled).map_err(cms_error)?;
+    if linear_req.peak_resident_bytes > reservation.linear_peak || linear_req.work_units > reservation.linear_work {
+        return Err(bad("cubic Linear reconstruction exceeds prospective reservation"));
+    }
+    let linear = effective_profile_from_definition_with_control(&profile, Encoding::Linear, linear_limits, &cancelled).map_err(cms_error)?;
     // This already-qualified implicit analytic pair has fixed matrix/TRC sides.
     // Both exact constructors are prepaid before private working/output planes;
     // no upstream work is refunded and the first owned transform stays resident.
-    let options=photocraft_cms::transform::TransformOptions{intent:Intent::RelativeColorimetric,bpc:false,..Default::default()};
-    let decode_req=Transform::requirements_with_control(&profile,&linear,options,reservation.transform_limits,&cancelled).map_err(cms_error)?;
-    let encode_limits=photocraft_cms::control::Limits{
-        resident_bytes:reservation.transform_limits.resident_bytes.checked_sub(decode_req.peak_resident_bytes).ok_or_else(||bad("cubic decode retained constructor limit"))?,
-        work_units:reservation.transform_limits.work_units.checked_sub(decode_req.work_units).ok_or_else(||bad("cubic decode consumed constructor work"))?,
+    let options = photocraft_cms::transform::TransformOptions { intent: Intent::RelativeColorimetric, bpc: false, ..Default::default() };
+    let decode_req = Transform::requirements_with_control(&profile, &linear, options, reservation.transform_limits, &cancelled).map_err(cms_error)?;
+    let encode_limits = photocraft_cms::control::Limits {
+        resident_bytes: reservation
+            .transform_limits
+            .resident_bytes
+            .checked_sub(decode_req.peak_resident_bytes)
+            .ok_or_else(|| bad("cubic decode retained constructor limit"))?,
+        work_units: reservation.transform_limits.work_units.checked_sub(decode_req.work_units).ok_or_else(|| bad("cubic decode consumed constructor work"))?,
     };
-    let encode_req=Transform::requirements_with_control(&linear,&profile,options,encode_limits,&cancelled).map_err(cms_error)?;
-    decode_req.peak_resident_bytes.checked_add(encode_req.peak_resident_bytes).filter(|n|*n<=reservation.transform_limits.resident_bytes).ok_or_else(||bad("cubic aggregate transform headroom"))?;
-    decode_req.work_units.checked_add(encode_req.work_units).filter(|n|*n<=reservation.transform_limits.work_units).ok_or_else(||bad("cubic aggregate transform work"))?;
-    let decode = Transform::with_options_with_control(&profile,&linear,options,reservation.transform_limits,&cancelled).map_err(cms_error)?;
-    let encode = Transform::with_options_with_control(&linear,&profile,options,encode_limits,&cancelled).map_err(cms_error)?;
-    control.check().map_err(|_|EngineError::Cancelled)?;
+    let encode_req = Transform::requirements_with_control(&linear, &profile, options, encode_limits, &cancelled).map_err(cms_error)?;
+    decode_req
+        .peak_resident_bytes
+        .checked_add(encode_req.peak_resident_bytes)
+        .filter(|n| *n <= reservation.transform_limits.resident_bytes)
+        .ok_or_else(|| bad("cubic aggregate transform headroom"))?;
+    decode_req
+        .work_units
+        .checked_add(encode_req.work_units)
+        .filter(|n| *n <= reservation.transform_limits.work_units)
+        .ok_or_else(|| bad("cubic aggregate transform work"))?;
+    let decode = Transform::with_options_with_control(&profile, &linear, options, reservation.transform_limits, &cancelled).map_err(cms_error)?;
+    let encode = Transform::with_options_with_control(&linear, &profile, options, encode_limits, &cancelled).map_err(cms_error)?;
+    control.check().map_err(|_| EngineError::Cancelled)?;
     source.try_validate_tile_origins_with(control).map_err(|e| if control.cancelled() { EngineError::Cancelled } else { bad(e.to_string()) })?;
     let format = PixelFormat::new(source.format().mode, SampleType::F64, true);
     let original_bytes = resident(source)?;
     let working = convert(source, bounds, format, &decode, (reservation.retained_bytes, false, false, false), control)?;
-    let retained=original_bytes.checked_add(reservation.retained_bytes).ok_or_else(||bad("cubic retained source/profile overflow"))?;
-    let remaining = GeometryLimits::default().resident_bytes.checked_sub(retained).ok_or_else(|| bad("cubic retained source/profile exceeds resident budget"))?;
-    let work=GeometryLimits::default().work_units.checked_sub(reservation.work_units).ok_or_else(||bad("cubic profile work exceeds geometry budget"))?;
-    let limits = GeometryLimits { resident_bytes: remaining, work_units:work };
+    let retained = original_bytes.checked_add(reservation.retained_bytes).ok_or_else(|| bad("cubic retained source/profile overflow"))?;
+    let remaining =
+        GeometryLimits::default().resident_bytes.checked_sub(retained).ok_or_else(|| bad("cubic retained source/profile exceeds resident budget"))?;
+    let work = GeometryLimits::default().work_units.checked_sub(reservation.work_units).ok_or_else(|| bad("cubic profile work exceeds geometry budget"))?;
+    let limits = GeometryLimits { resident_bytes: remaining, work_units: work };
     let output = if linear_sampling {
         photocraft_algo::transform::try_warp_bilinear_hidden_surface_with_limits(&working, bounds, h, limits, control)
     } else {
@@ -401,30 +465,76 @@ pub(super) fn stamp_finite_normal_if_needed(doc: &mut Document, id: photocraft_d
 
 #[cfg(test)]
 mod controlled_profile_tests {
- use super::*;
- use photocraft_cms::Builtin;
- use photocraft_doc::{ColorMode,SampleEncoding};
- use std::cell::Cell;
- fn owned()->(Document,Surface) {
-  let mut doc=Document::new("owned cubic",photocraft_geom::Size::new(8,7),ColorMode::Rgb,SampleType::F64);
-  let bytes=Builtin::Srgb.profile().to_bytes();doc.working_profile_interpretation=WorkingProfileInterpretation::implicit_srgb(&bytes);doc.icc_profile=Some(bytes);doc.sample_encoding=Some(SampleEncoding::NonlinearProfile);
-  (doc,Surface::new(PixelFormat::RGBA64F))
- }
- #[test]
- fn controlled_source_and_linear_definitions_preserve_old_profile_math() {
-  let(doc,surface)=owned();let old=crate::color_cmds::try_document_profile(&doc).unwrap();let old_linear=photocraft_cms::xcf_color::effective_profile_from_definition(&old,Encoding::Linear).unwrap();
-  let req=profile_reserve(&doc,&surface,&Interrupt::NONE).unwrap();let current=crate::color_cmds::try_document_profile_with_limits(&doc,req.source_limits,&Interrupt::NONE).unwrap();let limits=photocraft_cms::control::Limits{resident_bytes:req.linear_peak,work_units:req.linear_work};let linear=effective_profile_from_definition_with_control(&current,Encoding::Linear,limits,&||false).unwrap();assert_eq!(old.to_bytes(),current.to_bytes());assert_eq!(old_linear.to_bytes(),linear.to_bytes());
-  let old_decode=Transform::new(&old,&old_linear,Intent::RelativeColorimetric,false).unwrap();let decode=Transform::new(&current,&linear,Intent::RelativeColorimetric,false).unwrap();let mut a=[0.;3];let mut b=[0.;3];old_decode.try_eval_f64(&[0.125,0.5,0.75],&mut a).unwrap();decode.try_eval_f64(&[0.125,0.5,0.75],&mut b).unwrap();assert_eq!(a.map(f64::to_bits),b.map(f64::to_bits));
- }
- #[test]
- fn profile_phase_cancellation_and_binding_refusal_do_not_change_source() {
-  let(mut doc,surface)=owned();let before=doc.clone();let bytes=doc.icc_profile.clone();let calls=Cell::new(0);let cancel=||{calls.set(calls.get()+1);calls.get()>40};assert!(matches!(profile_reserve(&doc,&surface,&Interrupt::cancel_only(&cancel)),Err(EngineError::Cancelled)));assert_eq!(doc,before);assert_eq!(doc.icc_profile,bytes);
-  doc.icc_profile=Some(Builtin::DisplayP3.profile().to_bytes());assert!(profile_reserve(&doc,&surface,&Interrupt::NONE).is_err());assert_eq!(doc.working_profile_interpretation,before.working_profile_interpretation);
- }
- #[test]
- fn both_constructor_requirements_fit_prepaid_analytic_pair_without_refunds() {
-  let(doc,surface)=owned();let before=doc.clone();let reserve=profile_reserve(&doc,&surface,&Interrupt::NONE).unwrap();let profile=crate::color_cmds::try_document_profile_with_limits(&doc,reserve.source_limits,&Interrupt::NONE).unwrap();let linear=effective_profile_from_definition_with_control(&profile,Encoding::Linear,photocraft_cms::control::Limits{resident_bytes:reserve.linear_peak,work_units:reserve.linear_work},&||false).unwrap();
-  let options=photocraft_cms::transform::TransformOptions{intent:Intent::RelativeColorimetric,bpc:false,..Default::default()};let first=Transform::requirements_with_control(&profile,&linear,options,reserve.transform_limits,&||false).unwrap();let second_limits=photocraft_cms::control::Limits{resident_bytes:reserve.transform_limits.resident_bytes-first.peak_resident_bytes,work_units:reserve.transform_limits.work_units-first.work_units};let second=Transform::requirements_with_control(&linear,&profile,options,second_limits,&||false).unwrap();assert!(first.work_units+second.work_units<=reserve.transform_limits.work_units);assert!(first.peak_resident_bytes+second.peak_resident_bytes<=reserve.transform_limits.resident_bytes);assert_eq!(doc,before);
- }
+    use super::*;
+    use photocraft_cms::Builtin;
+    use photocraft_doc::{ColorMode, SampleEncoding};
 
+    fn owned() -> (Document, Surface) {
+        let mut doc = Document::new("owned cubic", photocraft_geom::Size::new(8, 7), ColorMode::Rgb, SampleType::F64);
+        let bytes = Builtin::Srgb.profile().to_bytes();
+        doc.working_profile_interpretation = WorkingProfileInterpretation::implicit_srgb(&bytes);
+        doc.icc_profile = Some(bytes);
+        doc.sample_encoding = Some(SampleEncoding::NonlinearProfile);
+        (doc, Surface::new(PixelFormat::RGBA64F))
+    }
+    #[test]
+    fn controlled_source_and_linear_definitions_preserve_old_profile_math() {
+        let (doc, surface) = owned();
+        let old = crate::color_cmds::try_document_profile(&doc).unwrap();
+        let old_linear = photocraft_cms::xcf_color::effective_profile_from_definition(&old, Encoding::Linear).unwrap();
+        let req = profile_reserve(&doc, &surface, &Interrupt::NONE).unwrap();
+        let current = crate::color_cmds::try_document_profile_with_limits(&doc, req.source_limits, &Interrupt::NONE).unwrap();
+        let limits = photocraft_cms::control::Limits { resident_bytes: req.linear_peak, work_units: req.linear_work };
+        let linear = effective_profile_from_definition_with_control(&current, Encoding::Linear, limits, &|| false).unwrap();
+        assert_eq!(old.to_bytes(), current.to_bytes());
+        assert_eq!(old_linear.to_bytes(), linear.to_bytes());
+        let old_decode = Transform::new(&old, &old_linear, Intent::RelativeColorimetric, false).unwrap();
+        let decode = Transform::new(&current, &linear, Intent::RelativeColorimetric, false).unwrap();
+        let mut a = [0.; 3];
+        let mut b = [0.; 3];
+        old_decode.try_eval_f64(&[0.125, 0.5, 0.75], &mut a).unwrap();
+        decode.try_eval_f64(&[0.125, 0.5, 0.75], &mut b).unwrap();
+        assert_eq!(a.map(f64::to_bits), b.map(f64::to_bits));
+    }
+    #[test]
+    fn profile_phase_cancellation_and_binding_refusal_do_not_change_source() {
+        let (mut doc, surface) = owned();
+        let before = doc.clone();
+        let bytes = doc.icc_profile.clone();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let cancel = || {
+            calls.store(calls.load(std::sync::atomic::Ordering::Relaxed) + 1, std::sync::atomic::Ordering::Relaxed);
+            calls.load(std::sync::atomic::Ordering::Relaxed) > 40
+        };
+        assert!(matches!(profile_reserve(&doc, &surface, &Interrupt::cancel_only(&cancel)), Err(EngineError::Cancelled)));
+        assert_eq!(doc, before);
+        assert_eq!(doc.icc_profile, bytes);
+        doc.icc_profile = Some(Builtin::DisplayP3.profile().to_bytes());
+        assert!(profile_reserve(&doc, &surface, &Interrupt::NONE).is_err());
+        assert_eq!(doc.working_profile_interpretation, before.working_profile_interpretation);
+    }
+    #[test]
+    fn both_constructor_requirements_fit_prepaid_analytic_pair_without_refunds() {
+        let (doc, surface) = owned();
+        let before = doc.clone();
+        let reserve = profile_reserve(&doc, &surface, &Interrupt::NONE).unwrap();
+        let profile = crate::color_cmds::try_document_profile_with_limits(&doc, reserve.source_limits, &Interrupt::NONE).unwrap();
+        let linear = effective_profile_from_definition_with_control(
+            &profile,
+            Encoding::Linear,
+            photocraft_cms::control::Limits { resident_bytes: reserve.linear_peak, work_units: reserve.linear_work },
+            &|| false,
+        )
+        .unwrap();
+        let options = photocraft_cms::transform::TransformOptions { intent: Intent::RelativeColorimetric, bpc: false, ..Default::default() };
+        let first = Transform::requirements_with_control(&profile, &linear, options, reserve.transform_limits, &|| false).unwrap();
+        let second_limits = photocraft_cms::control::Limits {
+            resident_bytes: reserve.transform_limits.resident_bytes - first.peak_resident_bytes,
+            work_units: reserve.transform_limits.work_units - first.work_units,
+        };
+        let second = Transform::requirements_with_control(&linear, &profile, options, second_limits, &|| false).unwrap();
+        assert!(first.work_units + second.work_units <= reserve.transform_limits.work_units);
+        assert!(first.peak_resident_bytes + second.peak_resident_bytes <= reserve.transform_limits.resident_bytes);
+        assert_eq!(doc, before);
+    }
 }

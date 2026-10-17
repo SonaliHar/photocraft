@@ -190,7 +190,12 @@ fn warp_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut Layer, w: &Warp, 
     {
         let whole = |m: &Surface| try_warp_mesh_gray(m, &map, interp).map_err(|e| EngineError::Other(e.to_string()));
         m.surface = std::sync::Arc::new(match mask_sel {
-            Some(sel) => crate::transform_cmds::move_gray_selected(&m.surface, sel, &|lifted, src| photocraft_algo::warp::try_warp_mesh_surface(lifted, src, &map, interp).map_err(|e| EngineError::Other(e.to_string())), &whole)?,
+            Some(sel) => crate::transform_cmds::move_gray_selected(
+                &m.surface,
+                sel,
+                &|lifted, src| photocraft_algo::warp::try_warp_mesh_surface(lifted, src, &map, interp).map_err(|e| EngineError::Other(e.to_string())),
+                &whole,
+            )?,
             None => whole(&m.surface)?,
         });
     }
@@ -213,21 +218,26 @@ fn preflight_warp_samples(layer: &Layer) -> Result<()> {
     loop {
         let next = frames.get_mut(depth).and_then(Option::as_mut).and_then(Iterator::next);
         let Some(layer) = next else {
-            if depth == 0 { break; }
+            if depth == 0 {
+                break;
+            }
             depth = depth.checked_sub(1).ok_or_else(|| EngineError::Other("warp layer depth limit".into()))?;
             continue;
         };
         visits = visits.checked_add(1).filter(|count| *count <= 10_000).ok_or_else(|| EngineError::Other("warp layer visit limit".into()))?;
-        if layer.surface().is_some_and(wide) || layer.mask.as_ref().is_some_and(|mask| mask.linked && wide(&mask.surface))
+        if layer.surface().is_some_and(wide)
+            || layer.mask.as_ref().is_some_and(|mask| mask.linked && wide(&mask.surface))
             || matches!(&layer.content, LayerContent::Smart(smart) if smart.filter_mask.as_ref().is_some_and(|mask|wide(&mask.surface)))
         {
             return Err(EngineError::Other("warp interpolation/composition for authoritative U32/F64 samples is unsupported".into()));
         }
         if let LayerContent::Group(group) = &layer.content {
-            depth = depth.checked_add(1).filter(|depth| *depth <= photocraft_doc::MAX_GROUP_DEPTH).ok_or_else(|| EngineError::Other("warp layer depth limit".into()))?;
+            depth = depth
+                .checked_add(1)
+                .filter(|depth| *depth <= photocraft_doc::MAX_GROUP_DEPTH)
+                .ok_or_else(|| EngineError::Other("warp layer depth limit".into()))?;
             *frames.get_mut(depth).ok_or_else(|| EngineError::Other("warp layer depth limit".into()))? = Some(group.children.iter());
         }
-
     }
     Ok(())
 }
@@ -381,7 +391,12 @@ fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     }
     let state = s.active().ok_or(EngineError::NoDocument)?;
     preflight_warp_samples(state.doc.layer(id).ok_or(EngineError::NoLayer(id))?)?;
-    if state.doc.selection.as_ref().is_some_and(|selection| matches!(selection.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64)) {
+    if state
+        .doc
+        .selection
+        .as_ref()
+        .is_some_and(|selection| matches!(selection.format().sample, photocraft_doc::SampleType::U32 | photocraft_doc::SampleType::F64))
+    {
         return Err(EngineError::Other("warp interpolation of an authoritative U32/F64 selection is unsupported".into()));
     }
     let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
@@ -897,8 +912,8 @@ mod tests {
             l.surface_mut().unwrap().fill_rect(Rect::new(10, 10, 30, 20), &[1.0, 0.0, 0.0, 1.0]);
             // Hide the left quarter (selected) and the right quarter (not selected).
             let m = l.mask.as_mut().unwrap();
-            m.surface.fill_rect(Rect::new(10, 10, 15, 20), &[0.0]);
-            m.surface.fill_rect(Rect::new(25, 10, 30, 20), &[0.0]);
+            std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(10, 10, 15, 20), &[0.0]);
+            std::sync::Arc::make_mut(&mut m.surface).fill_rect(Rect::new(25, 10, 30, 20), &[0.0]);
             m.linked = true;
             Ok(())
         })

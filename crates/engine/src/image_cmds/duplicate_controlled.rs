@@ -239,6 +239,12 @@ pub(super) fn run(session: &mut Session, params: &Value) -> Result<Value> {
                     layers.try_reserve_exact(1).map_err(|_| bad(CMD, "merged layer allocation"))?;
                     layers.push(Layer::new("Background", LayerContent::Raster(surface)));
                     document.layers = layers;
+                    // These layouts addressed discarded source layers; the source keeps them.
+                    document.layer_comps.clear();
+                    document.last_applied_comp = None;
+                    document.last_document_state = None;
+                    // Variable bindings address layers discarded by the merged-only copy.
+                    document.variables = photocraft_doc::Variables::default();
                 }
                 if let Some(plan) = plan {
                     plan.apply_with_interrupt(&mut document, control)?;

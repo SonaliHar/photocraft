@@ -57,7 +57,7 @@ impl Scene {
         for id in &ids[1..] {
             self.s.execute("layer.select", json!({"layer": id.0, "mode": "add"})).unwrap();
         }
-        assert_eq!(self.s.active().unwrap().selected_layers().len(), ids.len());
+        assert_eq!(self.s.active().unwrap().selected_layers().unwrap().len(), ids.len());
     }
 }
 
@@ -66,12 +66,12 @@ fn rasterize_layer_converts_every_selected_layer_in_one_step() {
     let mut sc = scene();
     let all = [sc.text, sc.shape, sc.smart, sc.fill];
     sc.select(&all);
-    let before = sc.s.active().unwrap().selected_layers();
+    let before = sc.s.active().unwrap().selected_layers().unwrap();
     let r = sc.s.execute("layer.rasterize.layer", json!({})).unwrap();
     assert_eq!(r["layers"].as_array().unwrap().len(), 4, "{r}");
     assert_eq!(kinds(&sc.s, &all), ["raster"; 4]);
     assert_eq!(kind(&sc.s, sc.bystander), "shape", "an unselected layer is left alone");
-    assert_eq!(sc.s.active().unwrap().selected_layers(), before, "the selection survives");
+    assert_eq!(sc.s.active().unwrap().selected_layers().unwrap(), before, "the selection survives");
     // One history step brings all four back.
     assert!(sc.s.undo());
     assert_eq!(kinds(&sc.s, &all), ["type", "shape", "smart", "fill"]);

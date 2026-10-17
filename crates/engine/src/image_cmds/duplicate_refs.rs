@@ -55,11 +55,10 @@ pub(super) fn has_associations_with_interrupt(doc: &Document, control: &photocra
     if doc.layer_comps.len() > MAX_REFERENCES || doc.slices.list.len() > MAX_REFERENCES || doc.variables.defs.len() > MAX_REFERENCES {
         return Err(error("reference container limit"));
     }
+    let mut references = 0usize;
     for comp in doc.layer_comps.iter().chain(doc.last_document_state.iter()) {
         poll(control)?;
-        if !comp.states.is_empty() {
-            return Ok(true);
-        }
+        visit(&mut references, comp.states.len())?;
     }
     if !doc.variables.defs.is_empty() {
         return Ok(true);
@@ -75,6 +74,7 @@ pub(super) fn has_associations_with_interrupt(doc: &Document, control: &photocra
 }
 pub(super) struct Plan {
     ids: HashMap<LayerId, LayerId>,
+    missing_comp_ids: HashSet<LayerId>,
     count: usize,
 }
 impl Plan {
@@ -121,15 +121,26 @@ impl Plan {
         if doc.slices.list.len() > MAX_REFERENCES || doc.layer_comps.len() > MAX_REFERENCES || doc.variables.defs.len() > MAX_REFERENCES {
             return Err(error("reference container limit"));
         }
+        // Missing comp records are retained warnings, not live layer identities.
+        // Reserve them too, so fresh copies cannot accidentally satisfy a stale record.
+        let mut missing_comp_ids = HashSet::new();
+        missing_comp_ids.try_reserve(MAX_REFERENCES).map_err(|_| error("missing comp identity allocation"))?;
+        if missing_comp_ids.capacity() > MAX_REFERENCES * 4 {
+            return Err(error("missing comp identity capacity"));
+        }
         let mut visits = 0usize;
-        let mut check = |id: LayerId| -> Result<()> {
+        let mut check = |id: LayerId, allow_missing_comp: bool| -> Result<()> {
             poll(control)?;
             visits = visits.checked_add(1).ok_or_else(|| error("reference limit"))?;
             if visits > MAX_REFERENCES {
                 return Err(error("reference limit"));
             }
             if !live.contains(&id) {
-                return Err(error("unsupported unresolved current layer association"));
+                if allow_missing_comp {
+                    missing_comp_ids.insert(id);
+                } else {
+                    return Err(error("unsupported unresolved current layer association"));
+                }
             }
             Ok(())
         };
@@ -137,17 +148,17 @@ impl Plan {
             poll(control)?;
             for state in &comp.states {
                 poll(control)?;
-                check(state.layer)?;
+                check(state.layer, true)?;
             }
         }
         for v in &doc.variables.defs {
             poll(control)?;
-            check(v.layer)?;
+            check(v.layer, false)?;
         }
         for slice in &doc.slices.list {
             poll(control)?;
             if let Some(id) = slice.layer {
-                check(id)?;
+                check(id, false)?;
             }
         }
         typed_visits(doc, &mut visits, control)?;
@@ -174,14 +185,14 @@ impl Plan {
                 }
                 attempts += 1;
                 let id = fresh();
-                if id.0 != 0 && !live.contains(&id) && assigned.insert(id) {
+                if id.0 != 0 && !live.contains(&id) && !missing_comp_ids.contains(&id) && assigned.insert(id) {
                     break id;
                 }
             };
             ids.insert(*old, next);
         }
         poll(control)?;
-        Ok(Self { ids, count: live.len() })
+        Ok(Self { ids, missing_comp_ids, count: live.len() })
     }
     #[cfg(test)]
     pub(super) fn apply(self, doc: &mut Document) -> Result<()> {
@@ -219,7 +230,11 @@ impl Plan {
             poll(control)?;
             for state in &mut comp.states {
                 poll(control)?;
-                map(&mut state.layer)?;
+                if let Some(mapped) = self.ids.get(&state.layer) {
+                    state.layer = *mapped;
+                } else if !self.missing_comp_ids.contains(&state.layer) {
+                    return Err(error("missing comp association mapping"));
+                }
             }
         }
         for v in &mut doc.variables.defs {
@@ -260,6 +275,26 @@ mod tests {
         let mut ids = d.layers.iter().map(|l| l.id.0).collect::<Vec<_>>();
         ids.sort();
         assert_eq!(ids, vec![11, 12]);
+    }
+    #[test]
+    fn missing_comp_identity_cannot_be_allocated_to_a_live_copy() {
+        let mut d = doc();
+        d.layer_comps.push(photocraft_doc::LayerComp {
+            id: 1,
+            name: "Missing warning".into(),
+            comment: String::new(),
+            apply_visibility: true,
+            apply_position: false,
+            apply_appearance: false,
+            states: vec![photocraft_doc::CompLayerState { layer: LayerId(99), visible: Some(false), position: None, appearance: None }],
+        });
+        let before = d.clone();
+        let mut candidates = [99, 9, 100].into_iter();
+        let plan = Plan::with_fresh(&d, || LayerId(candidates.next().unwrap())).unwrap();
+        plan.apply(&mut d).unwrap();
+        assert_eq!(d.layers[0].id, LayerId(100));
+        assert_eq!(d.layer_comps, before.layer_comps);
+        assert_eq!(d.layer_comps[0].missing_layers(&d), vec![LayerId(99)]);
     }
     #[test]
     fn exhausted_allocator_and_invalid_identity_leave_source_exact() {

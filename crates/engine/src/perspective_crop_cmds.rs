@@ -266,7 +266,7 @@ mod tests {
         }
         doc.layers[0].surface_mut().unwrap().write_region(Rect::from_xywh(0, 0, 160, 120), &px);
         let mut s = Session::new();
-        s.add_document(doc, None);
+        s.add_document(doc, None).unwrap();
         s
     }
 

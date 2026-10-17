@@ -41,7 +41,7 @@ fn has_block(doc: &Document, name: &str, keys: &[&[u8; 4]]) -> bool {
 /// Rasterizes every layer named in `names` of a session opened on `doc`, then saves and reopens.
 fn rasterize_and_reopen(doc: Document, names: &[&str]) -> Document {
     let mut s = Session::new();
-    s.add_document(doc, None);
+    s.add_document(doc, None).unwrap();
     for name in names {
         let id = s.active().unwrap().doc.walk().into_iter().map(|(_, _, l)| l).find(|l| l.name == *name).unwrap().id;
         s.execute("layer.rasterize.layer", json!({"layer": id.0})).unwrap();

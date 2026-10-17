@@ -88,7 +88,7 @@ fn multi_layer_duplication_unlocks_only_the_background_copy() {
     s.execute("layer.setProps", json!({"layer": ordinary, "locks": {"position": true}})).unwrap();
     select(&mut s, bg, "replace");
     select(&mut s, LayerId(ordinary), "add");
-    assert_eq!(s.active().unwrap().selected_layers().len(), 2);
+    assert_eq!(s.active().unwrap().selected_layers().unwrap().len(), 2);
     s.execute("layer.duplicate", json!({})).unwrap();
 
     assert_eq!(s.active().unwrap().doc.layers.len(), 4);

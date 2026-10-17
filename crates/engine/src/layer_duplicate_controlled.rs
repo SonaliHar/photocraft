@@ -64,10 +64,10 @@ pub(crate) fn dispatch_preflight(session: &Session, params: &Value, _background:
             }));
         }
     }
-    if let Some(value) = params.get("inPlace") {
-        if !value.is_boolean() {
-            return Err(bad("inPlace must be boolean"));
-        }
+    if let Some(value) = params.get("inPlace")
+        && !value.is_boolean()
+    {
+        return Err(bad("inPlace must be boolean"));
     }
     let state = session.active().ok_or(EngineError::NoDocument)?;
     if state.revision == u64::MAX
@@ -282,13 +282,9 @@ pub(crate) fn run(session: &mut Session, params: &Value) -> Result<Value> {
                     poll(control)?;
                     // Existing duplicate/name/artboard implementations are bounded by
                     // admission above and polled at their boundaries, not inside them.
-                    let mut copy = if multiple {
-                        let mut copy = document.layer(id).ok_or(EngineError::NoLayer(id))?.duplicate();
-                        copy.name = document.copy_name(&copy.name);
-                        copy
-                    } else {
-                        crate::commands::layer_copy(&document, id)?
-                    };
+                    // The shared helper makes Background copies ordinary/unlocked;
+                    // every other selected layer retains its existing lock policy.
+                    let mut copy = crate::commands::layer_copy(&document, id)?;
                     if let Some(name) = &copy_name {
                         copy.name.clear();
                         copy.name.try_reserve_exact(name.len()).map_err(|_| bad("copy name allocation"))?;
@@ -410,11 +406,12 @@ mod tests {
         }
     }
     #[test]
-    fn multiple_selection_keeps_background_locks_and_retargets_copies_atomically() {
+    fn multiple_selection_unlocks_only_background_copy_and_retargets_atomically() {
         let mut session = fixture(SampleType::U32);
         session
             .edit("Setup", |doc, active| {
-                let second = Layer::raster("Second", doc.pixel_format());
+                let mut second = Layer::raster("Second", doc.pixel_format());
+                second.locks.position = true;
                 *active = Some(second.id);
                 doc.layers.push(second);
                 Ok(())
@@ -430,7 +427,11 @@ mod tests {
         assert_eq!(state.selected_layers, copies);
         assert_eq!(state.active_layer, copies.last().copied());
         assert_eq!(state.layer_anchor, state.active_layer);
-        assert_eq!(state.doc.layer(copies[0]).unwrap().locks, before.layers[0].locks);
+        assert_eq!(state.doc.layer(copies[0]).unwrap().locks, Default::default());
+        assert_eq!(state.doc.layer(copies[1]).unwrap().locks, before.layers[1].locks);
+        assert!(state.doc.layer(copies[1]).unwrap().locks.position);
+        assert_eq!(state.doc.layer(ids[0]).unwrap(), &before.layers[0]);
+        assert_eq!(state.doc.layer(ids[1]).unwrap(), &before.layers[1]);
         assert_eq!(state.doc.layer(copies[0]).unwrap().surface(), before.layers[0].surface());
         session.execute("edit.undo", Value::Null).unwrap();
         assert_eq!(session.active().unwrap().doc.layers, before.layers);
@@ -492,9 +493,14 @@ mod tests {
         let session = fixture(SampleType::U32);
         dispatch_preflight(&session, &json!({"document":"new", "documentName":"Owned copy"}), false).unwrap();
         dispatch_preflight(&session, &json!({"document":session.active_index().unwrap()}), false).unwrap();
-        for params in [json!({"document":true}), json!({"document":1.5}), json!({"document":"other"}), json!({"documentName":3}), json!({"documentName":"x".repeat(2049)})] {
+        for params in [
+            json!({"document":true}),
+            json!({"document":1.5}),
+            json!({"document":"other"}),
+            json!({"documentName":3}),
+            json!({"documentName":"x".repeat(2049)}),
+        ] {
             assert!(dispatch_preflight(&session, &params, false).is_err());
         }
     }
-
 }

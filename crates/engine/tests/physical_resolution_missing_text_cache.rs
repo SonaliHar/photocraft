@@ -1,4 +1,4 @@
-//! Native public file.open late type-cache preparation refusals preserve existing work.
+//! Native public file.open paired type-cache preparation and invalid geometry preserve existing work.
 #![cfg(not(target_arch = "wasm32"))]
 use photocraft_doc::{ColorMode, Document, Layer, LayerContent, PhysicalResolution, SampleType, Size, TextLayer};
 use photocraft_engine::{
@@ -45,6 +45,27 @@ fn encode_fixture(d: &Document, ext: &str) -> Vec<u8> {
 fn fixture(axes: [f64; 2], cached: bool, ext: &str) -> Vec<u8> {
     encode_fixture(&source(Some(axes), cached, false), ext)
 }
+// Build the valid tiny file first, then change only its typed font geometry.
+// This avoids asking the exporter to render an intentionally unrepresentable model.
+fn unrepresentable_fixture(axes: [f64; 2], ext: &str) -> Vec<u8> {
+    let doc = source(Some(axes), false, false);
+    let LayerContent::Text(original) = &doc.layers[0].content else { panic!("text fixture") };
+    let mut text = original.clone();
+    text.runs[0].style.size_pt = 1_000_000_000.0;
+    text.sync_summary();
+    text.cache = None;
+    assert!(text.runs[0].style.size_pt.is_finite());
+    let tysh = photocraft_text::psd::build_tysh(&text, doc.resolution_dpi, None);
+    assert!(photocraft_text::psd::text_layer_from_tysh_with_resolution(&tysh, &doc.effective_resolution()).is_err());
+    let mut file = photocraft_psd::PsdFile::from_bytes(&encode_fixture(&doc, ext)).unwrap();
+    let block = file.layers_mut()[0].blocks.iter_mut().find(|block| block.key == *b"TySh").unwrap();
+    block.data = tysh;
+    block.padding = None;
+    let bytes = file.to_bytes().unwrap();
+    photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+    bytes
+}
+
 fn existing() -> Session {
     let mut d = Document::new("Existing dirty work", Size::new(2, 1), ColorMode::Rgb, SampleType::F32);
     let mut surface = Surface::new(d.pixel_format());
@@ -54,12 +75,12 @@ fn existing() -> Session {
     let mut s = Session::new();
     s.add_document(d, None).unwrap();
     s.edit("Committed dirty change", |d, _| {
-        d.name.push_str(" dirty");
+        d.layers[0].name.push_str(" dirty");
         Ok(())
     })
     .unwrap();
     s.edit("Real redo seed", |d, _| {
-        d.name.push_str(" redone");
+        d.layers[0].name.push_str(" redone");
         Ok(())
     })
     .unwrap();
@@ -83,7 +104,7 @@ fn open(s: &mut Session, name: &str, bytes: &[u8], background: bool) -> photocra
     }
 }
 fn check(ext: &str, background: bool, axes: [f64; 2], cached: bool, refuse: bool) {
-    let bytes = fixture(axes, cached, ext);
+    let bytes = if refuse { unrepresentable_fixture(axes, ext) } else { fixture(axes, cached, ext) };
     let retained = bytes.clone();
     let mut s = existing();
     assert_eq!(s.documents().len(), 1);
@@ -106,8 +127,8 @@ fn check(ext: &str, background: bool, axes: [f64; 2], cached: bool, refuse: bool
     let profile = s.clipboard.as_ref().unwrap().color.icc_profile.clone();
     let result = open(&mut s, &format!("own-small.{ext}"), &bytes, background);
     if refuse {
-        let error = result.expect_err("valid unequal-axis missing-cache type requires unsupported instead of unqualified scalar regeneration");
-        assert!(error.to_string().contains("unequal") && error.to_string().contains("text"), "{error}");
+        let error = result.expect_err("finite unrepresentable type geometry must refuse before publication");
+        assert!(error.to_string().contains("unrepresentable geometry") && error.to_string().contains("text"), "{error}");
         assert_eq!(s.documents().len(), 1);
         assert_eq!(s.active_index(), active_index);
     } else {
@@ -119,6 +140,13 @@ fn check(ext: &str, background: bool, axes: [f64; 2], cached: bool, refuse: bool
         assert_eq!([r.x_dpi, r.y_dpi], axes);
         let LayerContent::Text(text) = &opened.layers[0].content else { panic!("text retained") };
         assert!(text.cache.as_ref().is_some_and(|s| !s.content_bounds().is_empty()));
+        if !cached {
+            // Independent public paired-resolution rendering of the decoded model,
+            // never an expected surface copied from the actual prepared cache.
+            let mut engine = photocraft_text::TextEngine::new();
+            let (_, expected) = engine.render_with_resolution(text, &opened.effective_resolution(), opened.pixel_format()).unwrap();
+            assert_eq!(text.cache.as_ref(), Some(&expected.surface));
+        }
         if cached {
             assert_eq!(
                 text.cache.as_ref().unwrap().try_read_interleaved(opened.bounds()).unwrap(),
@@ -149,20 +177,20 @@ fn check(ext: &str, background: bool, axes: [f64; 2], cached: bool, refuse: bool
     assert_eq!(s.active().unwrap().doc, expected_redo);
 }
 #[test]
-fn native_psd_open_late_refusal_is_atomic() {
-    check("psd", true, [144., 288.], false, true);
+fn native_psd_open_paired_missing_cache_preserves_existing_work() {
+    check("psd", true, [144., 288.], false, false);
 }
 #[test]
-fn native_psb_open_late_refusal_is_atomic() {
-    check("psb", true, [144., 288.], false, true);
+fn native_psb_open_paired_missing_cache_preserves_existing_work() {
+    check("psb", true, [144., 288.], false, false);
 }
 #[test]
-fn synchronous_psd_open_late_refusal_is_atomic() {
-    check("psd", false, [144., 288.], false, true);
+fn synchronous_psd_open_paired_missing_cache_preserves_existing_work() {
+    check("psd", false, [144., 288.], false, false);
 }
 #[test]
-fn synchronous_psb_open_late_refusal_is_atomic() {
-    check("psb", false, [144., 288.], false, true);
+fn synchronous_psb_open_paired_missing_cache_preserves_existing_work() {
+    check("psb", false, [144., 288.], false, false);
 }
 #[test]
 fn cached_unequal_and_square_missing_open_controls_preserve_existing_work() {
@@ -172,4 +200,21 @@ fn cached_unequal_and_square_missing_open_controls_preserve_existing_work() {
             check(ext, background, [144., 144.], false, false);
         }
     }
+}
+
+#[test]
+fn background_psd_unrepresentable_finite_type_geometry_is_atomic() {
+    check("psd", true, [144., 288.], false, true);
+}
+#[test]
+fn background_psb_unrepresentable_finite_type_geometry_is_atomic() {
+    check("psb", true, [144., 288.], false, true);
+}
+#[test]
+fn synchronous_psd_unrepresentable_finite_type_geometry_is_atomic() {
+    check("psd", false, [144., 288.], false, true);
+}
+#[test]
+fn synchronous_psb_unrepresentable_finite_type_geometry_is_atomic() {
+    check("psb", false, [144., 288.], false, true);
 }

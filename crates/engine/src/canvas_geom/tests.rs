@@ -154,7 +154,7 @@ fn check_turn(depth: u64, mode: &str, t: Turn) {
     // Re-rendering every type, shape and smart object from its *geometry* gives the same image,
     // so the transforms (not only the cached pixels) moved.
     let mut d = doc(&s).clone();
-    refresh(&mut d, Refresh::All).unwrap();
+    refresh_with_interrupt(&mut d, Refresh::All, &photocraft_raster::Interrupt::NONE).unwrap();
     let (mean, big) = diff(&photocraft_compose::flatten(&d).unwrap().px, &want);
     assert!(mean < 2.0 / 255.0 && big < 0.01, "{t:?} {depth} {mode} re-rendered: mean {mean} big {big}");
     // Undo restores the original, bit-exactly.
@@ -266,7 +266,7 @@ fn canvas_size_and_crop_move_vector_geometry() {
     assert_eq!(d.slices.list[0].rect, Rect::new(21, 12, 31, 18));
     // The old canvas shows unchanged at its new offset, also after re-rendering from geometry.
     let mut r = d.clone();
-    refresh(&mut r, Refresh::All).unwrap();
+    refresh_with_interrupt(&mut r, Refresh::All, &photocraft_raster::Interrupt::NONE).unwrap();
     for img in [photocraft_compose::flatten(d).unwrap(), photocraft_compose::flatten(&r).unwrap()] {
         let nw = img.rect.width() as usize;
         let shifted: Vec<[f32; 4]> = (0..H as usize).flat_map(|y| img.px[(y + 10) * nw + 20..(y + 10) * nw + 20 + W as usize].to_vec()).collect();
@@ -528,19 +528,19 @@ fn physical_canvas_raster_unequal_axes_remain_supported() {
     }
 }
 #[test]
-fn physical_canvas_retag_refuses_invalid_or_unequal_axes_atomically() {
+fn physical_canvas_retag_refuses_invalid_axes_atomically() {
     for depth in [8, 16, 32] {
         let mut s = Session::new();
         s.execute("file.new", json!({"width":200,"height":100,"depth":depth,"background":"transparent"})).unwrap();
         s.execute("type.create", json!({"text":"AV","size":24,"x":30,"y":60})).unwrap();
-        for (x, y) in [(144.0, 72.0), (0.0, 144.0), (f64::INFINITY, 144.0)] {
+        for (x, y) in [(0.0, 144.0), (f64::INFINITY, 144.0)] {
             s.edit("physical hostile", |d, _| {
                 d.physical_resolution = Some(photocraft_doc::PhysicalResolution { x_dpi: x, y_dpi: y, unit: physical_unit() });
                 Ok(())
             })
             .unwrap();
             s.edit("redo witness", |d, _| {
-                d.name.push('x');
+                d.layers[0].name.push('x');
                 Ok(())
             })
             .unwrap();
@@ -561,6 +561,51 @@ fn physical_canvas_retag_refuses_invalid_or_unequal_axes_atomically() {
     }
 }
 
+#[test]
+fn physical_canvas_typed_unequal_axes_keep_cache_transform_tysh_and_native_exact() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width":200,"height":100,"depth":depth,"background":"transparent"})).unwrap();
+        let id = photocraft_doc::LayerId(s.execute("type.create", json!({"text":"AV","size":24,"x":30,"y":60})).unwrap()["layer"].as_u64().unwrap());
+        s.edit("Author unequal typed axes", |d, _| {
+            d.physical_resolution = Some(photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 72.0, unit: physical_unit() });
+            let snapshot = d.clone();
+            let LayerContent::Text(t) = &mut d.layer_mut(id).unwrap().content else {
+                return Err(crate::EngineError::Other("Expected authored text layer".into()));
+            };
+            crate::type_cmds::try_refresh(&snapshot, t)?;
+            Ok(())
+        })
+        .unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let resolution = before.physical_resolution.as_ref().unwrap();
+        let t = physical_text(&before, id).unwrap();
+        let cache = t.cache.as_ref().unwrap();
+        let bounds = cache.content_bounds();
+        let pixels = cache.try_read_interleaved(bounds).unwrap();
+        let parsed = photocraft_text::psd::text_layer_from_tysh_with_resolution(t.psd_raw.as_deref().unwrap(), resolution).unwrap().unwrap();
+        assert_eq!(physical_size(&parsed).unwrap(), 24.0);
+        assert_eq!(parsed.transform, t.transform);
+        s.execute("image.canvasSize", json!({"width":220,"height":110,"anchor":"center","extensionColor":"transparent"})).unwrap();
+        let after = s.active().unwrap().doc.clone();
+        let transformed = physical_text(&after, id).unwrap();
+        let shifted = bounds.translate(10, 5);
+        assert_eq!(transformed.cache.as_ref().unwrap().content_bounds(), shifted);
+        assert_eq!(transformed.cache.as_ref().unwrap().try_read_interleaved(shifted).unwrap(), pixels);
+        assert_eq!(transformed.transform, Affine::translate(10.0, 5.0).mul(&t.transform));
+        assert_eq!(after.physical_resolution, before.physical_resolution);
+        assert_eq!(after.resolution_dpi.to_bits(), before.resolution_dpi.to_bits());
+        assert_eq!(physical_size(transformed).unwrap(), 24.0);
+        let parsed = photocraft_text::psd::text_layer_from_tysh_with_resolution(transformed.psd_raw.as_deref().unwrap(), resolution).unwrap().unwrap();
+        assert_eq!(physical_size(&parsed).unwrap(), 24.0);
+        assert_eq!(parsed.transform, transformed.transform);
+        physical_native(&after, None).unwrap();
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(s.active().unwrap().doc.shares_state(&before));
+        s.execute("edit.redo", json!({})).unwrap();
+        assert!(s.active().unwrap().doc.shares_state(&after));
+    }
+}
 #[test]
 fn physical_canvas_cache_only_text_does_not_require_scalar_resolution() {
     for depth in [8, 16, 32] {

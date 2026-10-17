@@ -188,16 +188,16 @@ fn roundtrip(doc: &Document) -> TestResult<()> {
 // Unrun sharing-wave draft: identity metadata may change while retained bytes stay shared.
 #[test]
 fn opaque_payload_clone_shares_bytes_and_private_tamper_keeps_original() {
-    let original=document(SampleType::U16).unwrap();
-    let before=archives(&original).unwrap();
-    let mut private=original.clone();
-    let retained=&original.xcf_state.as_ref().unwrap().opaque.first().unwrap().bytes;
-    let changed=&mut private.xcf_state.as_mut().unwrap().opaque.first_mut().unwrap().bytes;
-    assert!(std::sync::Arc::ptr_eq(retained,changed));
-    std::sync::Arc::make_mut(changed)[0]^=1;
-    assert!(!std::sync::Arc::ptr_eq(retained,changed));
-    assert_ne!(retained.as_slice(),changed.as_slice());
-    assert_eq!(archives(&original).unwrap(),before);
+    let original = document(SampleType::U16).unwrap();
+    let before = archives(&original).unwrap();
+    let mut private = original.clone();
+    let retained = &original.xcf_state.as_ref().unwrap().opaque.first().unwrap().bytes;
+    let changed = &mut private.xcf_state.as_mut().unwrap().opaque.first_mut().unwrap().bytes;
+    assert!(std::sync::Arc::ptr_eq(retained, changed));
+    std::sync::Arc::make_mut(changed)[0] ^= 1;
+    assert!(!std::sync::Arc::ptr_eq(retained, changed));
+    assert_ne!(retained.as_slice(), changed.as_slice());
+    assert_eq!(archives(&original).unwrap(), before);
     assert!(private.validate_xcf_state().is_err());
 }
 
@@ -294,7 +294,7 @@ fn ordinary_duplicate_remaps_nested_typed_and_all_four_document_holders() {
     }
 }
 #[test]
-fn stale_direct_associations_refuse_without_install_or_source_history_mutation() {
+fn historical_comp_refs_survive_but_stale_variable_and_slice_refs_refuse() {
     for field in 0..4 {
         let mut doc = document(SampleType::U8).unwrap();
         doc.xcf_state = None;
@@ -319,7 +319,27 @@ fn stale_direct_associations_refuse_without_install_or_source_history_mutation()
         let events = s.file_menu.event_log.clone();
         let journal = s.journal.clone();
         let h = history(&s);
-        let err = s.execute("image.duplicate", serde_json::json!({})).expect_err("unresolved current association must refuse");
+        if field < 2 {
+            // Upstream preserves unresolved historical comp references, while
+            // reserving those IDs against the duplicate's fresh live identities.
+            s.execute("image.duplicate", serde_json::json!({})).unwrap();
+            assert_eq!(s.documents().len(), 2);
+            let copied = &s.documents()[1].doc;
+            if field == 0 {
+                assert_eq!(copied.layer_comps[0], snapshot.layer_comps[0]);
+            } else {
+                assert_eq!(copied.last_document_state, snapshot.last_document_state);
+            }
+            assert!(copied.walk().into_iter().all(|(_, _, layer)| layer.id != LayerId(99999)));
+            assert!(s.documents()[0].doc.shares_state(&snapshot));
+            assert_eq!(history(&s), h);
+            assert_eq!(archives(&s.documents()[0].doc).unwrap(), native);
+            assert_eq!(&s.journal[..journal.len()], journal.as_slice());
+            assert_eq!(s.journal.last().unwrap().0, "image.duplicate");
+            roundtrip(copied).unwrap();
+            continue;
+        }
+        let err = s.execute("image.duplicate", serde_json::json!({})).expect_err("unresolved variable/slice association must refuse");
         assert!(err.to_string().contains("duplicate"));
         assert_eq!(s.documents().len(), 1);
         assert_eq!(s.file_menu.event_log, events);
@@ -330,7 +350,7 @@ fn stale_direct_associations_refuse_without_install_or_source_history_mutation()
     }
 }
 #[test]
-fn merged_direct_associations_refuse_before_flatten_but_plain_merged_remains_supported() {
+fn merged_comp_state_drops_but_variable_and_slice_refs_refuse() {
     let mut doc = document(SampleType::U8).unwrap();
     doc.xcf_state = None;
     for field in 0..4 {
@@ -352,7 +372,25 @@ fn merged_direct_associations_refuse_before_flatten_but_plain_merged_remains_sup
         let events = s.file_menu.event_log.clone();
         let journal = s.journal.clone();
         let h = history(&s);
-        let err = s.execute("image.duplicate", serde_json::json!({"mergedOnly":true})).expect_err("merged associated state is unqualified");
+        if field < 2 {
+            // A merged duplicate has no layer-comp continuation; only those
+            // obsolete comp holders are dropped, without changing the source.
+            s.execute("image.duplicate", serde_json::json!({"mergedOnly":true})).unwrap();
+            assert_eq!(s.documents().len(), 2);
+            let copied = &s.documents()[1].doc;
+            assert_eq!(copied.layers.len(), 1);
+            assert!(copied.layer_comps.is_empty());
+            assert!(copied.last_document_state.is_none());
+            assert!(copied.last_applied_comp.is_none());
+            assert!(s.documents()[0].doc.shares_state(&snapshot));
+            assert_eq!(history(&s), h);
+            assert_eq!(archives(&s.documents()[0].doc).unwrap(), archives(&snapshot).unwrap());
+            assert_eq!(&s.journal[..journal.len()], journal.as_slice());
+            assert_eq!(s.journal.last().unwrap().0, "image.duplicate");
+            roundtrip(copied).unwrap();
+            continue;
+        }
+        let err = s.execute("image.duplicate", serde_json::json!({"mergedOnly":true})).expect_err("merged variable/slice association is unqualified");
         assert!(err.to_string().contains("duplicate"));
         assert_eq!(s.documents().len(), 1);
         assert_eq!(s.file_menu.event_log, events);
