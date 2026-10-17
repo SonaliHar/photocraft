@@ -307,19 +307,21 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         })
         .collect();
     let modal = egui::Modal::new(egui::Id::new("discard-prompt")).show(ctx, |ui| {
-        ui.set_max_width(420.0);
+        ui.set_min_width(400.0);
+        ui.set_max_width(450.0);
         ui.label(egui::RichText::new(tl!(&title)).font(crate::theme::semibold(15.0)));
-        ui.add_space(4.0);
+        ui.add_space(6.0);
         crate::widgets::hairline(ui);
-        ui.add_space(8.0);
-        ui.label(message);
-        ui.add_space(12.0);
+        ui.add_space(14.0);
+        ui.label(egui::RichText::new(message).line_height(Some(19.0)));
+        ui.add_space(20.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
             if let Some(role) = crate::widgets::dialog_buttons(ui, &row) {
                 answer = buttons.iter().find(|b| b.0 == role).map(|b| b.4);
             }
         });
+        ui.add_space(4.0);
     });
     if modal.should_close() {
         answer = Some(Answer::Cancel);
@@ -421,7 +423,7 @@ fn button_labels(mac: bool, buttons: &[(&str, Option<Key>)]) -> Vec<(String, Opt
                 return (text.to_string(), None);
             }
             let key_char = k.name().chars().next();
-            let contains_key = key_char.is_some_and(|ch| text.chars().any(|c| c.to_ascii_uppercase() == ch.to_ascii_uppercase()));
+            let contains_key = key_char.is_some_and(|ch| text.chars().any(|c| c.eq_ignore_ascii_case(&ch)));
             if contains_key {
                 (text.to_string(), key_char)
             } else {

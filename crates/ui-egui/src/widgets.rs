@@ -1300,11 +1300,12 @@ fn button_layout(ui: &Ui, label: &str, mnemonic: Option<char>, min_width: f32, h
     let galley = if let Some(m) = mnemonic {
         let font_id = theme::medium(13.0);
         let plain = egui::TextFormat { font_id: font_id.clone(), color: fg, ..Default::default() };
-        let at = text.char_indices().find(|(_, c)| c.to_ascii_uppercase() == m.to_ascii_uppercase()).map(|(i, c)| (i, c.len_utf8()));
+        let at = text.char_indices().find(|(_, c)| c.eq_ignore_ascii_case(&m)).map(|(i, c)| (i, c.len_utf8()));
         if let Some((i, len)) = at {
             let mut job = egui::text::LayoutJob::default();
             job.wrap.max_width = f32::INFINITY;
-            let underlined = egui::TextFormat { underline: Stroke::new(1.0, fg), ..plain.clone() };
+            let underline_color = fg.gamma_multiply(0.65);
+            let underlined = egui::TextFormat { underline: Stroke::new(1.0, underline_color), ..plain.clone() };
             if i > 0 {
                 job.append(&text[..i], 0.0, plain.clone());
             }
@@ -1329,6 +1330,7 @@ fn button_impl(ui: &mut Ui, label: &str, mnemonic: Option<char>, min_width: f32,
 }
 
 /// [`button_impl`] with an explicit `height` (`None`: the theme's button height).
+#[allow(clippy::too_many_arguments)]
 fn button_impl_h(ui: &mut Ui, label: &str, mnemonic: Option<char>, min_width: f32, height: Option<f32>, bg: Color32, fg: Color32, primary: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let (galley, size) = button_layout(ui, label, mnemonic, min_width, height, fg);
