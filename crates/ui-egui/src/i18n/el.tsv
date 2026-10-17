@@ -3939,3 +3939,5 @@ curves	Smooth	Εξομάλυνση
 	Sends the same area and prompt to {name} again for three more.	Στέλνει ξανά την ίδια περιοχή και περιγραφή στο {name} για τρεις ακόμη.
 	Generate More	Δημιουργία περισσότερων
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Κάθε Παραγωγικό γέμισμα δημιουργεί τρεις παραλλαγές, άρα στέλνει τρία αιτήματα, το καθένα χρεώνεται στο κλειδί σας.
+	{name} was changed by another app after it was opened or saved here.	Το {name} άλλαξε από άλλη εφαρμογή αφού ανοίχτηκε ή αποθηκεύτηκε εδώ.
+	Replace it with this document, or cancel and use File › Save As to keep both.	Αντικαταστήστε το με αυτό το έγγραφο ή ακυρώστε και χρησιμοποιήστε Αρχείο › Αποθήκευση ως για να κρατήσετε και τα δύο.

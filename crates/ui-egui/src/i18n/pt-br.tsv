@@ -4029,3 +4029,5 @@ layerLabel	No Color	Sem cor
 	Sends the same area and prompt to {name} again for three more.	Envia a mesma área e descrição para {name} de novo para mais três.
 	Generate More	Gerar mais
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Cada Preenchimento generativo cria três variações, então envia três solicitações, cada uma cobrada na sua chave.
+	{name} was changed by another app after it was opened or saved here.	{name} foi alterado por outro app depois de ser aberto ou salvo aqui.
+	Replace it with this document, or cancel and use File › Save As to keep both.	Substitua-o por este documento, ou cancele e use Arquivo › Salvar como para manter os dois.

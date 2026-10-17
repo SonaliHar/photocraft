@@ -3847,3 +3847,5 @@ navigator	Zoom	Zvětšení
 	Sends the same area and prompt to {name} again for three more.	Odešle stejnou oblast a popis znovu do {name} pro tři další.
 	Generate More	Generovat další
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Každá generativní výplň vytvoří tři varianty, takže odešle tři požadavky a každý se účtuje na váš klíč.
+	{name} was changed by another app after it was opened or saved here.	Soubor {name} změnila jiná aplikace poté, co byl zde otevřen nebo uložen.
+	Replace it with this document, or cancel and use File › Save As to keep both.	Nahraďte ho tímto dokumentem, nebo zrušte a použijte Soubor › Uložit jako, abyste zachovali obojí.

@@ -4312,3 +4312,5 @@ shape	Appearance	Izgled
 	Sends the same area and prompt to {name} again for three more.	Ponovo šalje istu oblast i opis ka {name} za još tri.
 	Generate More	Napravi još
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Svaka Generativna popuna pravi tri varijacije, pa šalje tri zahteva, a svaki se naplaćuje na vaš ključ.
+	{name} was changed by another app after it was opened or saved here.	Datoteku {name} je izmenila druga aplikacija nakon što je ovde otvorena ili sačuvana.
+	Replace it with this document, or cancel and use File › Save As to keep both.	Zameni je ovim dokumentom ili otkaži i koristi Datoteka › Sačuvaj kao da zadržiš obe.

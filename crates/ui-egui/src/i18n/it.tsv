@@ -4360,3 +4360,5 @@ shape	Appearance	Aspetto
 	Sends the same area and prompt to {name} again for three more.	Invia di nuovo la stessa area e la stessa descrizione a {name} per altre tre.
 	Generate More	Genera altre
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Ogni Riempimento generativo crea tre varianti, quindi invia tre richieste, ognuna addebitata sulla tua chiave.
+	{name} was changed by another app after it was opened or saved here.	{name} è stato modificato da un'altra app dopo essere stato aperto o salvato qui.
+	Replace it with this document, or cancel and use File › Save As to keep both.	Sostituiscilo con questo documento, oppure annulla e usa File › Salva con nome per tenerli entrambi.

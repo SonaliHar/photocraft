@@ -3999,3 +3999,5 @@ curves	Smooth	Vloeiend maken
 	Sends the same area and prompt to {name} again for three more.	Stuurt hetzelfde gebied en dezelfde beschrijving opnieuw naar {name} voor nog drie.
 	Generate More	Meer genereren
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Elk Generatief vullen maakt drie variaties en stuurt dus drie verzoeken, die elk op uw sleutel worden gefactureerd.
+	{name} was changed by another app after it was opened or saved here.	{name} is door een andere app gewijzigd nadat het hier is geopend of bewaard.
+	Replace it with this document, or cancel and use File › Save As to keep both.	Vervang het door dit document, of annuleer en gebruik Bestand › Opslaan als om beide te houden.

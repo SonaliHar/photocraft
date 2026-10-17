@@ -3969,3 +3969,5 @@ cameraData	Lens	Lens
 	Sends the same area and prompt to {name} again for three more.	Üç tane daha için aynı alanı ve istemi yeniden şuraya gönderir: {name}.
 	Generate More	Daha Fazla Üret
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Her Üretken Dolgu üç varyasyon oluşturur; bu yüzden her biri anahtarınıza faturalandırılan üç istek gönderir.
+	{name} was changed by another app after it was opened or saved here.	{name}, burada açıldıktan veya kaydedildikten sonra başka bir uygulama tarafından değiştirildi.
+	Replace it with this document, or cancel and use File › Save As to keep both.	Bu belgeyle değiştirin ya da iptal edip ikisini de korumak için Dosya › Farklı Kaydet'i kullanın.

@@ -3244,3 +3244,6 @@ curves	Smooth	Lisser
 	Sends the same area and prompt to {name} again for three more.	Renvoie la même zone et la même description à {name} pour trois de plus.
 	Generate More	En générer plus
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Chaque Remplissage génératif crée trois variantes : il envoie donc trois requêtes, chacune facturée sur votre clé.
+	Replace	Remplacer
+	{name} was changed by another app after it was opened or saved here.	{name} a été modifié par une autre application après avoir été ouvert ou enregistré ici.
+	Replace it with this document, or cancel and use File › Save As to keep both.	Remplacez-le par ce document, ou annulez et utilisez Fichier › Enregistrer sous pour garder les deux.

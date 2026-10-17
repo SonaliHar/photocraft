@@ -3209,3 +3209,6 @@ curves	Smooth	Сгладить
 	Sends the same area and prompt to {name} again for three more.	Снова отправляет ту же область и описание в {name}, чтобы получить ещё три.
 	Generate More	Создать ещё
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Каждая Генеративная заливка создаёт три варианта, поэтому отправляет три запроса, каждый оплачивается по вашему ключу.
+	Replace	Заменить
+	{name} was changed by another app after it was opened or saved here.	Файл {name} был изменён другим приложением после того, как его открыли или сохранили здесь.
+	Replace it with this document, or cancel and use File › Save As to keep both.	Замените его этим документом или отмените и используйте Файл › Сохранить как, чтобы сохранить оба.

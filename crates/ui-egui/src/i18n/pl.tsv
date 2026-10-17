@@ -3837,3 +3837,6 @@ curves	Smooth	Wygładź
 	Sends the same area and prompt to {name} again for three more.	Wysyła ten sam obszar i opis ponownie do {name}, aby uzyskać trzy kolejne.
 	Generate More	Generuj więcej
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Każde Wypełnienie generatywne tworzy trzy warianty, więc wysyła trzy żądania, a każde jest rozliczane z Twojego klucza.
+	Replace	Zastąp
+	{name} was changed by another app after it was opened or saved here.	Plik {name} został zmieniony przez inną aplikację po otwarciu lub zapisaniu go tutaj.
+	Replace it with this document, or cancel and use File › Save As to keep both.	Zastąp go tym dokumentem albo anuluj i użyj Plik › Zapisz jako, aby zachować oba.

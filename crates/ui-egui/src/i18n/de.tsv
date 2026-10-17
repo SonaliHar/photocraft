@@ -3241,3 +3241,5 @@ curves	Smooth	Glätten
 	Sends the same area and prompt to {name} again for three more.	Sendet denselben Bereich und dieselbe Beschreibung erneut an {name}, für drei weitere.
 	Generate More	Weitere generieren
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Jedes Generative Füllen erzeugt drei Varianten und sendet daher drei Anfragen, die jeweils über Ihren Schlüssel abgerechnet werden.
+	{name} was changed by another app after it was opened or saved here.	{name} wurde von einer anderen App geändert, nachdem es hier geöffnet oder gespeichert wurde.
+	Replace it with this document, or cancel and use File › Save As to keep both.	Ersetze die Datei durch dieses Dokument oder brich ab und nutze Datei › Speichern unter, um beide zu behalten.

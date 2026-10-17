@@ -3725,3 +3725,6 @@ curves	Smooth	Làm mượt
 	Sends the same area and prompt to {name} again for three more.	Gửi lại cùng vùng và lời nhắc tới {name} để có thêm ba biến thể.
 	Generate More	Tạo thêm
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Mỗi lần Tô tạo sinh tạo ba biến thể, nên gửi ba yêu cầu, mỗi yêu cầu được tính phí vào khóa của bạn.
+	Replace	Thay thế
+	{name} was changed by another app after it was opened or saved here.	{name} đã bị một ứng dụng khác thay đổi sau khi được mở hoặc lưu ở đây.
+	Replace it with this document, or cancel and use File › Save As to keep both.	Thay thế bằng tài liệu này, hoặc hủy và dùng Tệp › Lưu thành để giữ cả hai.

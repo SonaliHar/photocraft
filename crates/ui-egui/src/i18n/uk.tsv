@@ -3938,3 +3938,6 @@ curves	Smooth	Згладити
 	Sends the same area and prompt to {name} again for three more.	Знову надсилає ту саму область і опис до {name}, щоб отримати ще три.
 	Generate More	Створити ще
 	Each Generative Fill makes three variations, so it sends three requests, each billed to your key.	Кожна Генеративна заливка створює три варіанти, тож надсилає три запити, кожен оплачується за вашим ключем.
+	Replace	Замінити
+	{name} was changed by another app after it was opened or saved here.	Файл {name} змінила інша програма після того, як його тут відкрили або зберегли.
+	Replace it with this document, or cancel and use File › Save As to keep both.	Замініть його цим документом або скасуйте й скористайтеся Файл › Зберегти як, щоб зберегти обидва.
