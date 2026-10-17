@@ -128,11 +128,11 @@ pub fn apply_depth(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, depth
             let m = 2f32.powf(*exposure);
             let g = gamma.max(0.01);
             let transfer = transfer.for_exposure();
-            let hdr = depth == Some(SampleType::F32);
+            let hdr = depth == Some(SampleType::F32) && matches!(transfer, Transfer::Gamma(1.0));
             map_rgb(buf, |c| {
                 c.map(|v| {
                     if hdr {
-                        // Float documents store linear samples. Photoshop's 32-bit merged
+                        // Linear Float documents store linear samples. Photoshop's 32-bit merged
                         // Exposure oracle also retains negative results with signed gamma.
                         let lin = v * m + offset;
                         return if g == 1.0 { lin } else { lin.signum() * lin.abs().powf(1.0 / g) };
@@ -321,6 +321,18 @@ pub fn threshold_white(c: [f32; 3], level: f32, depth: Option<SampleType>) -> bo
         None | Some(SampleType::U8) => sum(255.0) > 100.0 * t - 50.0,
         Some(SampleType::U16) => sum(32768.0) >= 100.0 * (t * 32768.0 / 255.0).round(),
         Some(SampleType::F32) => (0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2]) * 255.0 >= t,
+        // This helper evaluates the supplied f32 composite view, not native
+        // wide samples. Promote before native-code quantization/weighted sums;
+        // typed native-wide evaluators retain their separate precision contract.
+        Some(SampleType::U32) => {
+            let q = f64::from(u32::MAX);
+            let [r, g, b] = c.map(|value| (f64::from(value).clamp(0.0, 1.0) * q).round());
+            30.0 * r + 59.0 * g + 11.0 * b >= 100.0 * (f64::from(t) * q / 255.0).round()
+        }
+        Some(SampleType::F64) => {
+            let [r, g, b] = c.map(f64::from);
+            (0.3 * r + 0.59 * g + 0.11 * b) * 255.0 >= f64::from(t)
+        }
     }
 }
 
@@ -1587,6 +1599,19 @@ mod tone_tests {
         let mut b = Buffer::filled(Rect::new(0, 0, 1, 1), [87.0 / 255.0, 51.0 / 255.0, 31.0 / 255.0, 1.0]);
         apply_depth(&Adjustment::Threshold { level: 60.0 / 255.0 }, &mut b, Transfer::Srgb, Some(SampleType::U8));
         assert_eq!(b.px[0], [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    /// Wide depth tags on this f32 Buffer API do not turn its input into raw
+    /// native samples. Test its level boundary and nonfinite decision explicitly.
+    #[test]
+    fn wide_threshold_view_keeps_normalized_boundary_without_narrowing_sums() {
+        for depth in [SampleType::U32, SampleType::F64] {
+            assert!(threshold_white([0.5; 3], 127.0 / 255.0, Some(depth)));
+            assert!(!threshold_white([0.5; 3], 128.0 / 255.0, Some(depth)));
+            assert!(!threshold_white([0.0; 3], 128.0 / 255.0, Some(depth)));
+            assert!(threshold_white([1.0; 3], 128.0 / 255.0, Some(depth)));
+            assert!(!threshold_white([f32::NAN; 3], 128.0 / 255.0, Some(depth)));
+        }
     }
 
     /// 16-bit sample → Photoshop's 8-bit level, from psd-tools posterize_16bits_rgb.psd: bins

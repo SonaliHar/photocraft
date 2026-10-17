@@ -328,6 +328,11 @@ impl<'a> DocCtx<'a> {
 
 /// Build the pass list for `doc`.
 pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {
+    // Shader storage/arithmetic is f32. Native wide samples must stay on the
+    // typed CPU path rather than silently lose U32 low bits or F64 precision.
+    if matches!(doc.depth, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+        return Err(Unsupported("Native-wide samples require the checked CPU compositor".into()));
+    }
     if doc.has_backed_rasters().map_err(|error| Unsupported(error.to_string()))? {
         return Err(Unsupported("Native-backed raster requires the checked CPU compositor".into()));
     }
@@ -999,7 +1004,7 @@ impl<'a> Planner<'a> {
         }
         let mut p = Pass::new(Kernel::Adjust, 0);
         p.a = Some(src);
-        let (kind, params, lut) = adjustment_program(adj, self.cx.transfer, self.cx.depth);
+        let (kind, params, lut) = adjustment_program(adj, self.cx.transfer, self.cx.depth)?;
         p.adjust_kind = kind;
         p.params = params;
         p.lut = lut;
@@ -1608,9 +1613,12 @@ fn transfer_exponent(t: Transfer) -> f32 {
 }
 
 /// Adjustment → (kernel kind, parameters, LUT rows). Kinds are the `switch` in `adjust()`.
-pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraft_color::SampleType) -> Program {
+pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraft_color::SampleType) -> Result<Program, Unsupported> {
+    if matches!(depth, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64) {
+        return Err(Unsupported("Native-wide adjustments require the checked CPU compositor".into()));
+    }
     let mut p = [[0.0f32; 4]; 4];
-    match adj {
+    Ok(match adj {
         Adjustment::Invert => (1, p, None),
         Adjustment::Threshold { level } => {
             // The level, the depth's split (compose::adjust::threshold_white) and the level in 16 bits.
@@ -1619,6 +1627,9 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
                 photocraft_color::SampleType::U8 => [t, 1.0, 0.0, 0.0],
                 photocraft_color::SampleType::U16 => [t, 2.0, (t * 32768.0 / 255.0).round(), 0.0],
                 photocraft_color::SampleType::F32 => [t, 0.0, 0.0, 0.0],
+                photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64 => {
+                    return Err(Unsupported("Native-wide threshold requires the checked CPU compositor".into()));
+                }
             };
             (2, p, None)
         }
@@ -1753,7 +1764,7 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
         }
         // Identity on the CPU too (not evaluated there).
         Adjustment::ColorLookup { .. } | Adjustment::Unsupported { .. } => (0, p, None),
-    }
+    })
 }
 
 /// A gradient's colour and alpha as four 4096-entry LUT rows (`lut_tex`).
@@ -1827,6 +1838,25 @@ mod tests {
     use super::*;
     use photocraft_color::{Color, ColorMode, SampleType};
     use photocraft_geom::Size;
+
+    #[test]
+    fn native_wide_depths_refuse_before_gpu_program_or_pass_allocation() {
+        use photocraft_color::{ColorMode, SampleType};
+        for depth in [SampleType::U32, SampleType::F64] {
+            let doc = Document::new("wide", photocraft_doc::Size::new(4, 3), ColorMode::Rgb, depth);
+            assert!(plan(&doc).unwrap_err().to_string().contains("Native-wide"));
+            assert!(adjustment_program(&Adjustment::Threshold { level: 0.5 }, Transfer::Srgb, depth).is_err());
+        }
+        let adjustment = Adjustment::Threshold { level: 128.0 / 255.0 };
+        for (depth, expected) in
+            [(SampleType::U8, [128.0, 1.0, 0.0, 0.0]), (SampleType::U16, [128.0, 2.0, 16448.0, 0.0]), (SampleType::F32, [128.0, 0.0, 0.0, 0.0])]
+        {
+            let (kind, params, table) = adjustment_program(&adjustment, Transfer::Srgb, depth).unwrap();
+            assert_eq!(kind, 2);
+            assert_eq!(params[0], expected);
+            assert!(table.is_none());
+        }
+    }
 
     #[test]
     fn stops_closer_than_one_lut_step_stay_on_the_cpu() {
@@ -1920,7 +1950,7 @@ mod tests {
     fn color_lookup_with_an_overflowing_stored_size_uploads_no_table() {
         for size in [1 << 22, u32::MAX] {
             let a = Adjustment::ColorLookup { name: "x".into(), lut: Some(std::sync::Arc::new(vec![0.5; 24])), size, tetrahedral: false, dither: false };
-            let (kind, _, rows) = adjustment_program(&a, Transfer::Srgb, SampleType::U8);
+            let (kind, _, rows) = adjustment_program(&a, Transfer::Srgb, SampleType::U8).unwrap();
             assert_eq!((kind, rows.is_none()), (0, true), "size {size}");
         }
     }

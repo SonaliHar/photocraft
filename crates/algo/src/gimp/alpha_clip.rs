@@ -55,11 +55,11 @@ impl AlphaClip {
                 *value = f64::from(*value as f32);
             }
             let alpha = staged.get_mut(3).ok_or(RasterInputError::LengthMismatch)?;
-            if self.clip_low {
-                *alpha = alpha.max(f64::from(self.low_limit));
+            if self.clip_low && *alpha < f64::from(self.low_limit) {
+                *alpha = f64::from(self.low_limit);
             }
-            if self.clip_high {
-                *alpha = alpha.min(f64::from(self.high_limit));
+            if self.clip_high && *alpha > f64::from(self.high_limit) {
+                *alpha = f64::from(self.high_limit);
             }
         }
         interrupt.check().map_err(|_| RasterInputError::Cancelled)?;
@@ -88,6 +88,15 @@ mod tests {
             for (a, b) in output.iter().take(3).zip(input) {
                 assert_eq!(a.to_bits(), f64::from(b as f32).to_bits());
             }
+        }
+    }
+    #[test]
+    fn equal_signed_zero_endpoint_preserves_native_alpha_sign() {
+        for high_limit in [0., 1.] {
+            let op = AlphaClip { clip_low: true, low_limit: 0., clip_high: true, high_limit };
+            let mut output = [17.; 4];
+            op.try_eval_pixel(&[0.125, 0.375, 0.625, -0.], 3, &mut output).unwrap();
+            assert_eq!(output.map(f64::to_bits), [0.125_f64, 0.375, 0.625, -0.].map(f64::to_bits));
         }
     }
     #[test]

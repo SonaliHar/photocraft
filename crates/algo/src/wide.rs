@@ -31,7 +31,17 @@ pub fn try_invert(source: &Surface, area: Rect, selection: Option<&Surface>, con
                 if !value.is_finite() {
                     return Err(RasterInputError::InvalidSample);
                 }
-                let inverted = 1.0 - value;
+                // Stored Lab chroma mirrors about encoded neutral at every
+                // authoritative wide depth, matching the existing stored-channel adjustment.
+                let mirror = if format.mode == photocraft_color::ColorMode::Lab
+                    && matches!(format.sample, photocraft_color::SampleType::U32 | photocraft_color::SampleType::F64)
+                    && channel > 0
+                {
+                    256.0 / 255.0
+                } else {
+                    1.0
+                };
+                let inverted = mirror - value;
                 let result = if weight == 1.0 { inverted } else { value * (1.0 - weight) + inverted * weight };
                 if !result.is_finite() {
                     return Err(RasterInputError::InvalidSample);

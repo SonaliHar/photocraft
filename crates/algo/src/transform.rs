@@ -13,8 +13,8 @@ use photocraft_raster::{Interrupt, Surface};
 use serde::{Deserialize, Serialize};
 
 use crate::resample::{Resample, resize_surface};
-mod wide;
 mod legacy_controlled;
+mod wide;
 pub use legacy_controlled::try_warp_surface_legacy_with_limits;
 
 /// 3×3 projective matrix, row-major: `[x', y', w'] = H · [x, y, 1]`.
@@ -168,8 +168,10 @@ pub(crate) fn bicubic(t: f64) -> [f64; 4] {
 }
 
 /// Warp `src` (its content inside `src_rect`) by `h` (source → destination document space).
-/// The result has the same format as `src`, with alpha added if `src` had none; pixels outside
-/// the warped quad are transparent.
+/// The result has the same format as `src`, with alpha added if `src` had none.
+/// Outside the warped quad is transparent except for U32/F64 raw identity and
+/// whole-pixel translations, which preserve the source default words (adding
+/// implicit opaque alpha when the source has none).
 /// Checked authoritative entry point. Wide data uses bounded normalized f64
 /// bilinear sampling, or exact raw identity/whole-pixel translation.
 pub fn try_warp_surface(src: &Surface, src_rect: Rect, h: &Homography, interp: Interp) -> Result<Surface, photocraft_raster::RasterInputError> {
@@ -300,7 +302,6 @@ pub fn try_warp_cubic_surface_with_limits(
 pub fn try_warp_bounds(bounds: Rect, h: &Homography) -> Result<Rect, photocraft_raster::RasterInputError> {
     wide::extent(bounds, h)
 }
-
 
 pub fn warp_surface(src: &Surface, src_rect: Rect, h: &Homography, interp: Interp) -> Result<Surface, photocraft_raster::AllocationError> {
     warp(src, src_rect, h, interp, None, &Interrupt::NONE)
@@ -828,13 +829,39 @@ mod tests {
                     }
                     s.fill_rect(Rect::new(4, 4, 8, 8), &pixel);
                     let mut expected = s.pixel(5, 5);
+                    let mut expected_native = s.try_read_interleaved(Rect::new(5, 5, 6, 6)).unwrap();
                     if !alpha {
                         expected.push(1.0);
+                        expected_native.extend(match sample {
+                            SampleType::U8 => vec![u8::MAX],
+                            SampleType::U16 => u16::MAX.to_ne_bytes().to_vec(),
+                            SampleType::U32 => u32::MAX.to_ne_bytes().to_vec(),
+                            SampleType::F32 => 1.0f32.to_ne_bytes().to_vec(),
+                            SampleType::F64 => 1.0f64.to_ne_bytes().to_vec(),
+                        });
                     }
                     for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
-                        let out = warp_surface(&s, s.content_bounds(), &h, interp).unwrap();
+                        let out = try_warp_surface(&s, s.content_bounds(), &h, interp).unwrap();
                         assert_eq!(out.pixel(12, 2), expected, "{sample:?}/{mode:?}/alpha={alpha}/{interp:?}");
-                        assert_eq!(out.pixel(0, 0).last(), Some(&0.0));
+                        assert_eq!(
+                            out.try_read_interleaved(Rect::new(12, 2, 13, 3)).unwrap(),
+                            expected_native,
+                            "native {sample:?}/{mode:?}/alpha={alpha}/{interp:?}"
+                        );
+                        if matches!(sample, SampleType::U32 | SampleType::F64) {
+                            let mut outside = s.default_bytes().to_vec();
+                            if !alpha {
+                                outside.extend_from_slice(&expected_native[s.format().bytes_per_pixel()..]);
+                            }
+                            assert_eq!(out.default_bytes(), outside, "wide raw default {sample:?}/{mode:?}/alpha={alpha}/{interp:?}");
+                            assert_eq!(
+                                out.try_read_interleaved(Rect::new(0, 0, 1, 1)).unwrap(),
+                                outside,
+                                "wide raw outside words {sample:?}/{mode:?}/alpha={alpha}/{interp:?}"
+                            );
+                        } else {
+                            assert_eq!(out.pixel(0, 0).last(), Some(&0.0), "legacy transparent outside {sample:?}/{mode:?}/alpha={alpha}/{interp:?}");
+                        }
                     }
                 }
             }
