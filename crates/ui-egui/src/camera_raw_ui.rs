@@ -1369,7 +1369,8 @@ fn filmstrip(ui: &mut egui::Ui, rect: ERect, shelf: &mut [HeldRaw], current: usi
                 p.circle_filled(frame.right_top() + vec2(-7.0, 7.0), 3.0, c.text);
             }
             let name = ERect::from_min_max(pos2(tile.left(), frame.bottom()), tile.max);
-            p.with_clip_rect(name).text(name.center(), Align2::CENTER_CENTER, &held.raw.name, FontId::proportional(10.5), c.label);
+            let label = tail_fitting(p, &held.raw.name, FontId::proportional(10.5), name.width());
+            p.with_clip_rect(name).text(name.center(), Align2::CENTER_CENTER, label, FontId::proportional(10.5), c.label);
             let response = response.on_hover_text(&held.raw.name);
             if response.clicked() {
                 clicked = Some(i);
@@ -1377,6 +1378,17 @@ fn filmstrip(ui: &mut egui::Ui, rect: ERect, shelf: &mut [HeldRaw], current: usi
         }
     });
     clicked
+}
+
+/// `name`, or "…" and as much of its end as fits in `width`: raws from one shoot differ at the
+/// end of their names (the frame number).
+fn tail_fitting(p: &egui::Painter, name: &str, font: FontId, width: f32) -> String {
+    let fits = |s: &str| p.layout_no_wrap(s.to_owned(), font.clone(), Color32::WHITE).size().x <= width;
+    if fits(name) {
+        return name.to_owned();
+    }
+    let chars: Vec<char> = name.chars().collect();
+    (1..chars.len()).map(|start| format!("…{}", chars[start..].iter().collect::<String>())).find(|s| fits(s)).unwrap_or_default()
 }
 
 fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
