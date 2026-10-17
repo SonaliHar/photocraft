@@ -41,6 +41,8 @@ eframe = { workspace = true, features = ["wgpu", "accesskit"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+# Display order of right-to-left labels (`bidi_text.rs`); already linked through usvg.
+unicode-bidi = "0.3"
 base64 = "0.22"
 sha2 = { version = "0.10", optional = true }
 # Inflating the translation catalogs, stored deflated (build.rs); already linked through photocraft-io.

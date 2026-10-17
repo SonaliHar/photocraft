@@ -86,38 +86,68 @@ impl PhotocraftApp {
     /// Publish an already prepared import using the shared interactive-open
     /// policy. A native stream has no original byte buffer; byte imports retain
     /// it only for the existing Camera Raw dialog flow.
-    pub(crate) fn finish_import(&mut self, name: &str, imported: photocraft_io::ImportResult, original_bytes: Option<&[u8]>, path: Option<&str>) -> Result<Vec<String>, String> {
+    pub(crate) fn finish_import(
+        &mut self,
+        name: &str,
+        imported: photocraft_io::ImportResult,
+        original_bytes: Option<&[u8]>,
+        path: Option<&str>,
+    ) -> Result<Vec<String>, String> {
         let photocraft_io::ImportResult { document, mut warnings, origin, assessment, source_read_only, preview_only } = imported;
         crate::import_assessment_ui::append(&mut warnings, assessment.as_ref());
-        let warnings=with_missing_fonts_of(&document,warnings);
-        let developed=warnings.iter().any(|warning|warning.contains(photocraft_io::raw::DEVELOPED_NOTE));
-        let question=self.session.color.open_question(&document).filter(|_|!developed);
-        let wants_raw=crate::camera_raw_ui::wants_open_dialog(self,&warnings);
-        let bytes=if wants_raw&&path.is_none(){
-            if let Some(source)=original_bytes{
-                let mut bytes=Vec::new();bytes.try_reserve_exact(source.len()).map_err(|_|"could not reserve Camera Raw source bytes")?;
-                bytes.extend_from_slice(source);Some(std::sync::Arc::new(bytes))
-            }else{None}
-        }else{None};
+        let warnings = with_missing_fonts_of(&document, warnings);
+        let developed = warnings.iter().any(|warning| warning.contains(photocraft_io::raw::DEVELOPED_NOTE));
+        let question = self.session.color.open_question(&document).filter(|_| !developed);
+        let wants_raw = crate::camera_raw_ui::wants_open_dialog(self, &warnings);
+        let bytes = if wants_raw && path.is_none() {
+            if let Some(source) = original_bytes {
+                let mut bytes = Vec::new();
+                bytes.try_reserve_exact(source.len()).map_err(|_| "could not reserve Camera Raw source bytes")?;
+                bytes.extend_from_slice(source);
+                Some(std::sync::Arc::new(bytes))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         // A queued prompt owns this import and its path. It must never stamp the
         // unrelated currently active tab or publish before Color Settings asks.
-        crate::open_prompt::arrive_checked(self,crate::open_prompt::Held{
-            doc:document,origin:Some(origin),read_only:source_read_only||preview_only||origin.is_read_only(),
-            name:name.to_string(),path:path.map(str::to_string),warnings:warnings.clone(),bytes,
-            slot:None,question,policy_applied:false,
-        })?;
+        crate::open_prompt::arrive_checked(
+            self,
+            crate::open_prompt::Held {
+                doc: document,
+                origin: Some(origin),
+                read_only: source_read_only || preview_only || origin.is_read_only(),
+                name: name.to_string(),
+                path: path.map(str::to_string),
+                warnings: warnings.clone(),
+                bytes,
+                slot: None,
+                question,
+                policy_applied: false,
+            },
+        )?;
         Ok(warnings)
     }
 
     /// Record that the active document was just opened from `path`: File › Save writes back to it
     /// (unless it's a template or derivative preview) and it goes to the top of Open Recent.
     pub(crate) fn opened_from(&mut self, path: &str) {
-        if let Some(st) = self.session.active_mut() {
+        let writable_document = if let Some(st) = self.session.active_mut() {
             let origin = st.source.as_ref().map_or_else(photocraft_io::ImportOrigin::default, |source| source.origin);
             st.set_import_origin(origin, display_name(path), Some(path.to_string()));
             if is_template(path) || st.source_read_only {
                 st.path = None;
+                None
+            } else {
+                Some(st.doc.id)
             }
+        } else {
+            None
+        };
+        if let Some(doc) = writable_document {
+            self.remember_stamp(doc, path);
         }
         self.push_recent(path);
     }
@@ -144,12 +174,12 @@ impl PhotocraftApp {
         let mut input = std::fs::File::open(path).map_err(|error| format!("{path}: {error}"))?;
         if !self.background_jobs && !crate::preset_files_ui::PRESET_EXTS.contains(&ext.as_str()) {
             let name = self.open_name(&display_name(path));
-            let imported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(||
-                photocraft_io::import_native_stream_candidate(&name, &mut input, &photocraft_raster::Interrupt::NONE)))
-                .map_err(|_| format!("{path}: Open failed unexpectedly; the existing document was retained"))?
-                .map_err(|error| format!("{path}: {error}"))?;
-            if let Some(imported) = imported
-            {
+            let imported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                photocraft_io::import_native_stream_candidate(&name, &mut input, &photocraft_raster::Interrupt::NONE)
+            }))
+            .map_err(|_| format!("{path}: Open failed unexpectedly; the existing document was retained"))?
+            .map_err(|error| format!("{path}: {error}"))?;
+            if let Some(imported) = imported {
                 let warnings = self.finish_import(&name, imported, None, Some(path))?;
                 return Ok(warnings);
             }
