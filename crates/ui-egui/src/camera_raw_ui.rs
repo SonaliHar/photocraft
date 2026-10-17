@@ -127,6 +127,11 @@ pub struct CameraRawDialog {
     /// for the settings it was made with ([`photocraft_algo::camera_raw::tonal_part`]): a change
     /// of colour, Detail or Effects settings starts from it.
     tonal: super::camera_raw_detail_ui::TonalCache,
+    /// Settings before each finished edit, so Ctrl+Z works inside the dialog (#4100).
+    undo: Vec<CameraRaw>,
+    redo: Vec<CameraRaw>,
+    /// Params at pointer-down. One drag is one undo step.
+    edit_origin: Option<CameraRaw>,
 }
 
 impl CameraRawDialog {
@@ -796,6 +801,9 @@ fn open_pixels(
         raw_open: None,
         raw_curve: None,
         tonal: Default::default(),
+        undo: Vec::new(),
+        redo: Vec::new(),
+        edit_origin: None,
     };
     d.render(ctx);
     app.camera_raw = Some(d);
@@ -834,8 +842,8 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     for (key, value) in fields {
         match key.as_str() {
             "set" | "scope" | "view" | "layout" | "hidden" | "beforeAfter" | "demosaic" => {}
-            "before" | "commit" | "cancel" | "profileBrowser" | "saveSettings" | "loadSettings" if value.is_boolean() => {}
-            "before" | "commit" | "cancel" | "profileBrowser" | "saveSettings" | "loadSettings" => {
+            "before" | "commit" | "cancel" | "profileBrowser" | "saveSettings" | "loadSettings" | "undo" | "redo" if value.is_boolean() => {}
+            "before" | "commit" | "cancel" | "profileBrowser" | "saveSettings" | "loadSettings" | "undo" | "redo" => {
                 return Some(Err(format!("Camera Raw {key} must be a boolean")));
             }
             _ => return Some(Err(format!("unknown Camera Raw ui property {key}"))),
@@ -975,8 +983,11 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     if d.params.point_curve != next_params.point_curve {
         d.curve_state = Default::default();
     }
-    d.dirty |= d.params != next_params;
-    d.params = next_params;
+    if d.params != next_params {
+        remember_edit(d);
+        d.dirty = true;
+        d.params = next_params;
+    }
     if let Some(layout) = layout {
         app.ui.camera_raw_layout = layout;
     }
@@ -997,6 +1008,12 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     }
     if let Some(update) = scope_update {
         update.apply(d, &mut app.ui.camera_raw_scope);
+    }
+    if ui.get("undo").and_then(Value::as_bool) == Some(true) {
+        undo_edit(d);
+    }
+    if ui.get("redo").and_then(Value::as_bool) == Some(true) {
+        redo_edit(d);
     }
     if d.dirty {
         d.render(ctx);
@@ -1041,8 +1058,11 @@ fn load_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
         if d.params.point_curve != next.point_curve {
             d.curve_state = Default::default();
         }
-        d.dirty |= d.params != next;
-        d.params = next;
+        if d.params != next {
+            remember_edit(d);
+            d.dirty = true;
+            d.params = next;
+        }
         app.ui.status_error = false;
         app.ui.status = if report.ignored.is_empty() {
             crate::i18n::fmt(tl!("Loaded Camera Raw settings from {file}"), &[("file", &file)])
@@ -1060,6 +1080,49 @@ fn report_file_error(app: &mut PhotocraftApp, r: Result<Value, String>) {
     {
         app.ui.status_error = true;
         app.ui.status = e;
+    }
+}
+
+const RAW_UNDO_LIMIT: usize = 40;
+
+fn remember_edit(d: &mut CameraRawDialog) {
+    if d.undo.len() == RAW_UNDO_LIMIT {
+        d.undo.remove(0);
+    }
+    d.undo.push(d.params.clone());
+    d.redo.clear();
+}
+
+fn undo_edit(d: &mut CameraRawDialog) -> bool {
+    let Some(prev) = d.undo.pop() else { return false };
+    d.redo.push(d.params.clone());
+    if d.params.point_curve != prev.point_curve {
+        d.curve_state = Default::default();
+    }
+    d.params = prev;
+    d.dirty = true;
+    d.edit_origin = None;
+    true
+}
+
+fn redo_edit(d: &mut CameraRawDialog) -> bool {
+    let Some(next) = d.redo.pop() else { return false };
+    d.undo.push(d.params.clone());
+    if d.params.point_curve != next.point_curve {
+        d.curve_state = Default::default();
+    }
+    d.params = next;
+    d.dirty = true;
+    d.edit_origin = None;
+    true
+}
+
+fn history_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
+    let cmd_shift = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    if ctx.input_mut(|i| i.consume_key(cmd_shift, egui::Key::Z)) {
+        redo_edit(d);
+    } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
+        undo_edit(d);
     }
 }
 
@@ -1185,6 +1248,11 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     let previous: Option<CameraRaw> = app.session.prefs().dialogs.get(PREVIOUS_KEY).and_then(|v| serde_json::from_value(v.clone()).ok());
     egui::Area::new(egui::Id::new("camera-raw-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.camera_raw.as_mut() else { return };
+        history_keys(d, ctx);
+        let pointer = ctx.input(|i| i.pointer.primary_down());
+        if pointer && d.edit_origin.is_none() {
+            d.edit_origin = Some(d.params.clone());
+        }
         if let Some(display) = &current_display
             && display.key != d.display.key
         {
@@ -1428,6 +1496,14 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         if cancel.clicked() {
             action = Some("cancel");
         }
+        if !ctx.input(|i| i.pointer.primary_down())
+            && let Some(origin) = d.edit_origin.take()
+            && origin != d.params
+        {
+            let edited = std::mem::replace(&mut d.params, origin);
+            remember_edit(d);
+            d.params = edited;
+        }
     });
     super::camera_raw_scope_ui::persist(app, ctx);
     persist_layout(app, ctx);
@@ -1616,12 +1692,20 @@ fn shortcuts(app: &mut PhotocraftApp, ctx: &egui::Context, action: &mut Option<&
         if i.consume_key(Modifiers::NONE, Key::P) || i.consume_key(Modifiers::NONE, Key::Backslash) {
             d.show_before = !d.show_before;
         }
+        // Keys change the settings without a pointer drag: each is an undo step of its own.
         if i.consume_key(Modifiers::NONE, Key::V) {
+            remember_edit(d);
             d.params.monochrome = !d.params.monochrome;
             d.dirty = true;
         }
         if i.consume_key(Modifiers::COMMAND, Key::U) {
+            let was = d.params.clone();
             d.auto_tone();
+            if d.params != was {
+                let toned = std::mem::replace(&mut d.params, was);
+                remember_edit(d);
+                d.params = toned;
+            }
             d.dirty = true;
         }
         if i.consume_key(Modifiers::COMMAND, Key::K) {
@@ -1801,6 +1885,35 @@ mod tests {
         assert_eq!(app.session.active().unwrap().history.past_len(), steps);
         let pixel = app.session.active().unwrap().doc.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().rgba(0, 0);
         assert!((pixel[0] - 128.0 / 255.0).abs() < 0.0001);
+    }
+
+    /// #4100 in the Camera Raw 16.1.1 layout: each edit is an undo step, `undo`/`redo` walk them.
+    #[test]
+    fn undo_and_redo_walk_the_edits() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({})).unwrap().unwrap();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 20}}})).unwrap().unwrap();
+        let p = |app: &PhotocraftApp| {
+            let d = app.camera_raw.as_ref().unwrap();
+            (d.params.exposure, d.params.contrast)
+        };
+        assert_eq!(p(&app), (1.0, 20.0));
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"undo": true}})).unwrap().unwrap();
+        assert_eq!(p(&app), (1.0, 0.0));
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"undo": true}})).unwrap().unwrap();
+        assert_eq!(p(&app), (0.0, 0.0));
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"redo": true}})).unwrap().unwrap();
+        assert_eq!(p(&app), (1.0, 0.0));
+        // Layout and panel changes are not edits.
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"beforeAfter": "leftRight"}})).unwrap().unwrap();
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"undo": true}})).unwrap().unwrap();
+        assert_eq!(p(&app), (0.0, 0.0));
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
     }
 
     /// Closing Camera Raw's window is Cancel. Without a multi-window backend egui embeds the
