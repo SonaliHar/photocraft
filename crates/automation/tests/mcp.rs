@@ -526,9 +526,13 @@ async fn affinity_preview_warns_and_requires_a_new_save_path() {
         assert!(text(&refused).contains("pass `path`"), "{}", text(&refused));
         let native = call(&client, "doc_save", json!({"path": "source.af"})).await;
         assert_eq!(native.is_error, Some(true));
-        assert!(text(&native).contains("Affinity export"));
+        assert!(text(&native).contains("the original XCF source is protected; choose a different destination"), "{}", text(&native));
         assert_eq!(std::fs::read(dir.join(name)).unwrap(), bytes);
     }
+    let unsupported = call(&client, "doc_save", json!({"path": "unsupported-copy.af"})).await;
+    assert_eq!(unsupported.is_error, Some(true));
+    assert!(text(&unsupported).contains("Affinity export"), "{}", text(&unsupported));
+    assert!(!dir.join("unsupported-copy.af").exists());
     json_of(&call(&client, "doc_save", json!({"path": "copy.pcraft"})).await);
     assert_eq!(json_of(&call(&client, "doc_save", json!({})).await)["path"], "copy.pcraft");
     assert_eq!(std::fs::read(dir.join("source.af")).unwrap(), bytes);
@@ -769,7 +773,7 @@ async fn smart_object_commands_refuse_real_linked_files_without_changing_the_ses
     session.execute("file.new", json!({"width": 16, "height": 8, "background": "white"})).unwrap();
     let layer = session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].clone();
     let state = session.active_mut().unwrap();
-    let LayerContent::Smart(smart) = &mut std::sync::Arc::make_mut(&mut state.doc).layers[0].content else { panic!("smart object") };
+    let LayerContent::Smart(smart) = &mut state.doc.try_resident_mut().unwrap().layers[0].content else { panic!("smart object") };
     smart.source = SmartSource::Linked { path: dir.join("external.png").to_string_lossy().into_owned() };
     std::fs::write(dir.join("parent.pcraft"), photocraft_engine::smart_cmds::encode_source(&state.doc).unwrap()).unwrap();
     let client = connect(headless_in(&dir)).await;

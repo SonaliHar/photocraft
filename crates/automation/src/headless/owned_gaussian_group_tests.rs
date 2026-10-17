@@ -2,6 +2,9 @@
 //! External temporary files are harness captures, not quota evidence.
 use super::*;
 #[path = "../../../ui-egui/src/canvas_gaussian_group_fixture.rs"]
+#[allow(clippy::duplicate_mod, reason = "This workflow deliberately instantiates its shared test helper under its own consumer parent")]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::panic, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 use fixture::{assets, ctl, observed, retained, state};
 use std::sync::atomic::{AtomicU64, Ordering};

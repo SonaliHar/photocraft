@@ -1,5 +1,6 @@
 //! Deferred bounded host service/control tests; injected units are not measured work.
 use super::*;
+#[allow(clippy::duplicate_mod, reason = "Independent test workflows reuse this data-only fixture module.")]
 #[path = "../../../../ui-egui/src/canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
 mod boxed;
@@ -67,7 +68,8 @@ fn pure_point_bounded_query_and_native_save_use_one_finite_service() {
             h.session.authorize = Some(|_, _| Err(photocraft_engine::EngineError::Other("service query denied".into())));
             assert!(
                 h.inspect_owned_command_cli_bounded("xcf.inspect", &serde_json::json!({}), true, crate::budgets::MAX_RESPONSE_BYTES)
-                    .unwrap_err()
+                    .err()
+                    .unwrap()
                     .to_string()
                     .contains("service query denied")
             );

@@ -61,11 +61,8 @@ impl NativePlaneStore for Store {
         Ok(())
     }
 }
-fn fixture(
-    mode: ColorMode,
-    sample: SampleType,
-    stored: SampleEncoding,
-) -> (Document, BackingQuota, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>, &'static Profile, Vec<u8>) {
+type Fixture = (Document, BackingQuota, Arc<dyn Any + Send + Sync>, Arc<AtomicU64>, &'static Profile, Vec<u8>);
+fn fixture(mode: ColorMode, sample: SampleType, stored: SampleEncoding) -> Fixture {
     let quota = BackingQuota::new(QuotaLimits { resident: 64 << 20, scratch: 0, index: 16 << 20 });
     // Actual source/map/default/model fixture allocation is prospectively paid.
     let guard: Arc<dyn Any + Send + Sync> = Arc::new(quota.reserve(QuotaKind::Resident, 2 << 20).unwrap());

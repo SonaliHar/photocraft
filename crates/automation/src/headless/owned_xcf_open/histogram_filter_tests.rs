@@ -5,12 +5,13 @@ use photocraft_doc::LayerContent;
 use photocraft_engine::DocumentSnapshot;
 use photocraft_raster::backing::quota::{QuotaKind, QuotaLease};
 
+type MaskStorage = (photocraft_raster::backing::NativePlaneDescriptor, Option<(photocraft_geom::TileCoord, Vec<u8>)>);
 #[derive(Debug, PartialEq, Eq)]
 struct RawStorage {
     layer: photocraft_raster::backing::NativePlaneDescriptor,
     layer_full_tile: bool,
     layer_bytes: Vec<u8>,
-    masks: Vec<(photocraft_raster::backing::NativePlaneDescriptor, Option<(photocraft_geom::TileCoord, Vec<u8>)>)>,
+    masks: Vec<MaskStorage>,
 }
 #[derive(Debug)]
 struct NativeSnapshot {

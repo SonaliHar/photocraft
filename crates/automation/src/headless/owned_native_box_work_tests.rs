@@ -2,6 +2,8 @@
 use super::*;
 #[path = "../../../ui-egui/src/canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod fixture;
 use photocraft_doc::SampleType;
 use photocraft_raster::backing::BackingError;

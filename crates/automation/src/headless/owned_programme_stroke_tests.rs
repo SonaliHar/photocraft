@@ -35,10 +35,10 @@ fn programme_headless_command_and_native_continue_without_flattening() {
         assert_ne!(f::raw(&changed, id), raw);
         witness.preserved(&changed, id, &f::ctl());
         assert_eq!(h.session.active().unwrap().source, source);
-        if let Some(identity) = &source {
-            if let Some(path) = &identity.path {
-                assert!(identity.check_destination(path).is_err());
-            }
+        if let Some(identity) = &source
+            && let Some(path) = &identity.path
+        {
+            assert!(identity.check_destination(path).is_err());
         }
         let dir = Directory::new();
         let path = dir.0.join("programme.pcraft");

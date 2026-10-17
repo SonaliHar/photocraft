@@ -1,6 +1,7 @@
 //! UNRUN paid metadata queries over a genuinely qualified Point source.
 //! Inspection adds no source, edit or rendering authority.
 use super::*;
+use photocraft_engine::Session;
 use photocraft_raster::{
     Interrupt,
     backing::{

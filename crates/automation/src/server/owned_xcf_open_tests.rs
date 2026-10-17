@@ -32,18 +32,19 @@ async fn actual_mcp_held_root_returns_bounded_summary_and_denied_backend_has_no_
     std::fs::create_dir(&root).unwrap();
     std::fs::write(root.join("plain.xcf"), fixture::image(13, 150, 0, 1, 1, &[31, 61, 91, 255])).unwrap();
     let h = Arc::new(Mutex::new(Headless::with_workspace(AuthorizedWorkspace::new(Some(&root), None).unwrap())));
-    let mcp = PhotocraftMcp::with_backend(Backend::Headless(h.clone()));
-    let result = mcp
+    let owned_mcp = PhotocraftMcp::with_backend(Backend::Headless(h.clone()));
+    let result = owned_mcp
         .doc_open(Parameters(OpenParams { path: "plain.xcf".into(), xcf_profile_policy: Some(XcfProfilePolicy::KeepCurrent), native_profile_policy: None }))
         .await
         .unwrap();
     assert_ne!(result.is_error, Some(true));
     let wire = serde_json::to_value(result).unwrap();
     assert!(wire.to_string().contains("owned-import-summary"));
-    let headless = h.lock().unwrap();
-    assert!(headless.session.active().unwrap().doc.accounted().is_some());
-    assert_eq!(headless.session.documents().len(), 1);
-    drop(headless);
+    {
+        let headless = h.lock().unwrap();
+        assert!(headless.session.active().unwrap().doc.accounted().is_some());
+        assert_eq!(headless.session.documents().len(), 1);
+    }
     let denied = Arc::new(Mutex::new(Headless::new()));
     let mcp = PhotocraftMcp::with_backend(Backend::Headless(denied.clone()));
     let result = mcp
@@ -56,6 +57,10 @@ async fn actual_mcp_held_root_returns_bounded_summary_and_denied_backend_has_no_
         .unwrap();
     assert_eq!(result.is_error, Some(true));
     assert!(denied.lock().unwrap().session.documents().is_empty());
+    drop(owned_mcp);
+    drop(h);
+    drop(mcp);
+    drop(denied);
     std::fs::remove_file(root.join("plain.xcf")).unwrap();
     std::fs::remove_dir(root).unwrap();
 }

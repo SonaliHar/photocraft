@@ -1,6 +1,7 @@
 //! Real authored source endpoints and paid synthetic CURRENT native continuation.
 //! Producer projection/profile/Float variability remains separate HOLD evidence.
 use super::*;
+#[allow(clippy::duplicate_mod, reason = "Independent test workflows reuse this data-only fixture module.")]
 #[path = "../../../ui-egui/src/filtered_flat_fixture.rs"]
 #[allow(dead_code)]
 mod fixture;

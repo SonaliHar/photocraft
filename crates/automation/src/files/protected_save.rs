@@ -144,6 +144,8 @@ pub fn save_protected_with_interrupt(
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     fn root() -> std::path::PathBuf {

@@ -1,6 +1,7 @@
 //! Genuine masked mixed Source/native12 workflow; no producer numerical oracle.
 use super::*;
 #[path = "../../../engine/src/accounted_masked_filtered_flat_test_support.rs"]
+#[allow(clippy::duplicate_mod, reason = "This workflow deliberately instantiates its shared test helper under its own consumer parent")]
 mod fixture;
 use std::{
     path::PathBuf,

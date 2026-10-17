@@ -4,6 +4,8 @@ use super::*;
 mod data;
 #[path = "../../../ui-egui/src/filtered_flat_fixture.rs"]
 #[allow(dead_code)]
+// Keep this test fixture local to its consumer namespace.
+#[allow(clippy::duplicate_mod, reason = "Test fixture instances preserve local types, visibility and cache identity")]
 mod native;
 use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicU64, Ordering};

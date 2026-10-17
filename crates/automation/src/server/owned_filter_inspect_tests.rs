@@ -174,6 +174,8 @@ mod actual_source {
 }
 
 #[path = "../../../xcf/tests/common/mod.rs"]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod plain_fixture;
 
 mod plain_current {

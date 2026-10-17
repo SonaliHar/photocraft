@@ -20,8 +20,8 @@ impl RoutedReply {
     }
     pub(super) fn write_line_to(&self, output: &mut impl std::io::Write) -> std::io::Result<()> {
         match self {
-            Self::Legacy(value) => crate::budgets::write_reply(output,value),
-            Self::Owned(reply) => crate::budgets::write_reply(output,reply.value()),
+            Self::Legacy(value) => crate::budgets::write_reply(output, value),
+            Self::Owned(reply) => crate::budgets::write_reply(output, reply.value()),
             Self::FilterInspect(reply) => reply.write_line_to(output),
         }
     }
@@ -107,7 +107,11 @@ pub(super) fn validate_id_shape(value: &Value) -> Result<(), AutomationError> {
 }
 
 #[cfg(test)]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
 
 #[cfg(test)]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod native_tests;

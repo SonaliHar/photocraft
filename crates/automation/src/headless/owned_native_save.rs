@@ -4,12 +4,9 @@
 use super::{Filesystem, Headless};
 use crate::AutomationError;
 use photocraft_engine::{accounted_commands::PreparedAccountedSaveReply, accounted_native_save::PreparedAccountedNativeSave};
-use photocraft_raster::{
-    Interrupt,
-    backing::ReadControl,
-};
 #[cfg(test)]
 use photocraft_raster::backing::BackingError;
+use photocraft_raster::{Interrupt, backing::ReadControl};
 use serde_json::Value;
 use std::path::Path;
 impl Headless {
@@ -85,7 +82,7 @@ impl Headless {
             Filesystem::TrustedLocal => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    crate::files::save_accounted_native_selected_path(snapshot, target, &protection.protection, control).map_err(&boundary)
+                    crate::files::save_accounted_native_selected_path(snapshot, target, &protection.protection, control).map_err(boundary)
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
@@ -127,8 +124,12 @@ impl Headless {
     }
 }
 #[cfg(test)]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_native_save/box_work_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod box_work_tests;

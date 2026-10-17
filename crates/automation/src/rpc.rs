@@ -35,7 +35,7 @@ use crate::security::{
 use crate::{AutomationError, Headless};
 mod owned_xcf_open;
 use owned_xcf_open::RoutedReply;
-pub(crate) use owned_xcf_open::{validate_owned_path,validate_owned_native_path};
+pub(crate) use owned_xcf_open::{validate_owned_native_path, validate_owned_path};
 
 /// Method names served by [`Headless::handle`].
 pub const METHODS: &[&str] = &[
@@ -82,11 +82,13 @@ fn str_of<'a>(p: &'a Value, k: &str) -> Option<&'a str> {
 impl Headless {
     /// Dispatch one request. Unknown methods and bad params are errors, never panics.
     pub fn handle(&mut self, method: &str, params: Value) -> Result<Value, AutomationError> {
-        if method == "engine.execute" && params.get("command").and_then(Value::as_str).is_some_and(|command|matches!(command,"xcf.filter.inspect"|"xcf.inspect"))
-            && self.session.active().is_some_and(|state| state.doc.accounted().is_some()) {
+        if method == "engine.execute"
+            && params.get("command").and_then(Value::as_str).is_some_and(|command| matches!(command, "xcf.filter.inspect" | "xcf.inspect"))
+            && self.session.active().is_some_and(|state| state.doc.accounted().is_some())
+        {
             return Err(bad("accounted filter inspection requires the retained RPC transport or typed Headless API"));
         }
-        if method=="doc.open" && (params.get("xcfProfilePolicy").is_some() || params.get("nativeProfilePolicy").is_some()) {
+        if method == "doc.open" && (params.get("xcfProfilePolicy").is_some() || params.get("nativeProfilePolicy").is_some()) {
             return Err(bad("explicit owned doc.open requires the retained RPC transport or owned Headless API"));
         }
         if method == "xcf.link.substituteFromRoot" {
@@ -95,7 +97,9 @@ impl Headless {
         if method == "xcf.link.recoverFromRoot" {
             return self.recover_xcf_link_from_root(&params);
         }
-        if method == "engine.execute" && params.get("command").and_then(Value::as_str).is_some_and(|id| matches!(id, "xcf.link.substitute" | "xcf.link.recover")) {
+        if method == "engine.execute"
+            && params.get("command").and_then(Value::as_str).is_some_and(|id| matches!(id, "xcf.link.substitute" | "xcf.link.recover"))
+        {
             let wait = params.get("wait").and_then(Value::as_bool).unwrap_or(true);
             let id = params.get("command").and_then(Value::as_str).ok_or_else(|| bad("missing linked-image command"))?;
             return self.command_start(id, params.get("params").cloned().unwrap_or(Value::Null), wait);
@@ -270,63 +274,81 @@ impl Headless {
 /// Answer one request line. Malformed JSON gets an error reply with `id: null`.
 pub fn respond(h: &Mutex<Headless>, line: &str) -> Value {
     // Legacy raw Value entry never publishes a new owner with an escaping fee.
-    match respond_retained(h,line,false) {
-        RoutedReply::Legacy(value)=>value,
-        RoutedReply::Owned(_) | RoutedReply::FilterInspect(_)=>json!({"id":null,"ok":false,"error":"owned reply requires a retained transport"}),
+    match respond_retained(h, line, false) {
+        RoutedReply::Legacy(value) => value,
+        RoutedReply::Owned(_) | RoutedReply::FilterInspect(_) => json!({"id":null,"ok":false,"error":"owned reply requires a retained transport"}),
     }
 }
-fn respond_retained(h: &Mutex<Headless>, line: &str, allow_owned:bool) -> RoutedReply {
-    let req:Value=match serde_json::from_str(line) {
-        Ok(value)=>value,
-        Err(error)=>return RoutedReply::Legacy(json!({"id":null,"ok":false,"error":format!("bad JSON: {error}")})),
+fn respond_retained(h: &Mutex<Headless>, line: &str, allow_owned: bool) -> RoutedReply {
+    let req: Value = match serde_json::from_str(line) {
+        Ok(value) => value,
+        Err(error) => return RoutedReply::Legacy(json!({"id":null,"ok":false,"error":format!("bad JSON: {error}")})),
     };
-    let id=req.get("id").unwrap_or(&Value::Null);
-    let Some(method)=req.get("method").and_then(Value::as_str) else {
+    let id = req.get("id").unwrap_or(&Value::Null);
+    let Some(method) = req.get("method").and_then(Value::as_str) else {
         return RoutedReply::Legacy(json!({"id":id,"ok":false,"error":"missing `method`"}));
     };
-    let owned=method=="doc.open" && req.get("params").is_some_and(|p|p.get("xcfProfilePolicy").is_some() || p.get("nativeProfilePolicy").is_some());
-    if owned {
-        if let Err(error)=owned_xcf_open::validate_id_shape(id) {
-            return RoutedReply::Legacy(json!({"id":null,"ok":false,"error":error.to_string()}));
-        }
+    let owned = method == "doc.open" && req.get("params").is_some_and(|p| p.get("xcfProfilePolicy").is_some() || p.get("nativeProfilePolicy").is_some());
+    if owned && let Err(error) = owned_xcf_open::validate_id_shape(id) {
+        return RoutedReply::Legacy(json!({"id":null,"ok":false,"error":error.to_string()}));
     }
-    let result=std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if owned && allow_owned {
-            let request=owned_xcf_open::parameters(req.get("params").ok_or_else(||bad("missing owned doc.open parameters"))?)?;
-            let mut headless=h.lock().unwrap_or_else(PoisonError::into_inner);
+            let request = owned_xcf_open::parameters(req.get("params").ok_or_else(|| bad("missing owned doc.open parameters"))?)?;
+            let mut headless = h.lock().unwrap_or_else(PoisonError::into_inner);
             return match request {
-                owned_xcf_open::OpenRequest::Xcf(path)=>headless.open_owned_xcf_rpc_bounded(std::path::Path::new(path),id),
-                owned_xcf_open::OpenRequest::Native(path)=>headless.open_owned_native_rpc_bounded(std::path::Path::new(path),id),
-            }.map(RoutedReply::Owned);
+                owned_xcf_open::OpenRequest::Xcf(path) => headless.open_owned_xcf_rpc_bounded(std::path::Path::new(path), id),
+                owned_xcf_open::OpenRequest::Native(path) => headless.open_owned_native_rpc_bounded(std::path::Path::new(path), id),
+            }
+            .map(RoutedReply::Owned);
         }
         // Intercept the paid installed-snapshot query before parameter cloning
         // or the legacy handle's job synchronization. Resident behavior is unchanged.
-        if method == "engine.execute" && req.get("params").and_then(|p|p.get("command")).and_then(Value::as_str).is_some_and(|command|matches!(command,"xcf.filter.inspect"|"xcf.inspect")) {
-            let mut headless=h.lock().unwrap_or_else(PoisonError::into_inner);
-            if req.get("params").and_then(|p|p.get("command")).and_then(Value::as_str).is_some_and(|command|headless.has_owned_inspection_command(command)) {
-                if let Err(error)=owned_xcf_open::validate_id_shape(id) {
+        if method == "engine.execute"
+            && req
+                .get("params")
+                .and_then(|p| p.get("command"))
+                .and_then(Value::as_str)
+                .is_some_and(|command| matches!(command, "xcf.filter.inspect" | "xcf.inspect"))
+        {
+            let mut headless = h.lock().unwrap_or_else(PoisonError::into_inner);
+            if req.get("params").and_then(|p| p.get("command")).and_then(Value::as_str).is_some_and(|command| headless.has_owned_inspection_command(command)) {
+                if let Err(error) = owned_xcf_open::validate_id_shape(id) {
                     return Ok(RoutedReply::Legacy(json!({"id":null,"ok":false,"error":error.to_string()})));
                 }
-                if !allow_owned { return Err(bad("accounted filter inspection requires the retained RPC transport")); }
-                let params=req.get("params").and_then(Value::as_object).ok_or_else(||bad("engine.execute requires an object"))?;
-                if params.len()>3 || params.keys().any(|key|!matches!(key.as_str(),"command"|"params"|"wait")) { return Err(bad("unknown owned inspection engine.execute field")); }
-                let wait=match params.get("wait") {None=>true,Some(Value::Bool(wait))=>*wait,_=>return Err(bad("owned inspection wait must be boolean"))};
-                let command=params.get("command").and_then(Value::as_str).ok_or_else(||bad("owned inspection command required"))?;
-                let query=params.get("params").unwrap_or(&Value::Null);
-                return if command=="xcf.filter.inspect" {
-                    headless.inspect_owned_filter_rpc_bounded(query,wait,id)
+                if !allow_owned {
+                    return Err(bad("accounted filter inspection requires the retained RPC transport"));
+                }
+                let params = req.get("params").and_then(Value::as_object).ok_or_else(|| bad("engine.execute requires an object"))?;
+                if params.len() > 3 || params.keys().any(|key| !matches!(key.as_str(), "command" | "params" | "wait")) {
+                    return Err(bad("unknown owned inspection engine.execute field"));
+                }
+                let wait = match params.get("wait") {
+                    None => true,
+                    Some(Value::Bool(wait)) => *wait,
+                    _ => return Err(bad("owned inspection wait must be boolean")),
+                };
+                let command = params.get("command").and_then(Value::as_str).ok_or_else(|| bad("owned inspection command required"))?;
+                let query = params.get("params").unwrap_or(&Value::Null);
+                return if command == "xcf.filter.inspect" {
+                    headless.inspect_owned_filter_rpc_bounded(query, wait, id)
                 } else {
-                    headless.inspect_owned_command_rpc_bounded(command,query,wait,id)
-                }.map(RoutedReply::FilterInspect);
+                    headless.inspect_owned_command_rpc_bounded(command, query, wait, id)
+                }
+                .map(RoutedReply::FilterInspect);
             }
         }
-        let params=req.get("params").cloned().unwrap_or(Value::Null);
-        h.lock().unwrap_or_else(PoisonError::into_inner).handle(method,params)
-            .map(|value|RoutedReply::Legacy(json!({"id":id,"ok":true,"result":value})))
-    })).unwrap_or_else(|_|Err(AutomationError::Other(format!("internal error: `{method}` panicked"))));
+        let params = req.get("params").cloned().unwrap_or(Value::Null);
+        h.lock().unwrap_or_else(PoisonError::into_inner).handle(method, params).map(|value| RoutedReply::Legacy(json!({"id":id,"ok":true,"result":value})))
+    }))
+    .unwrap_or_else(|_| Err(AutomationError::Other(format!("internal error: `{method}` panicked"))));
     match result {
-        Ok(reply)=>reply,
-        Err(error)=> { let mut reply=error.error_reply();reply["id"]=id.clone();RoutedReply::Legacy(reply) }
+        Ok(reply) => reply,
+        Err(error) => {
+            let mut reply = error.error_reply();
+            reply["id"] = id.clone();
+            RoutedReply::Legacy(reply)
+        }
     }
 }
 
@@ -337,8 +359,12 @@ pub fn serve_lines(h: &Mutex<Headless>, mut r: impl BufRead, mut w: impl Write) 
     loop {
         let (reply, unread_rest) = match read_bounded_line(&mut r, &mut line) {
             Ok(LineRead::Eof) => return Ok(()),
-            Ok(LineRead::TooLong) => (RoutedReply::Legacy(json!({"id": null, "ok": false, "error": format!("request exceeds {MAX_REQUEST_BYTES} bytes")})), !line.ends_with('\n')),
-            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => (RoutedReply::Legacy(json!({"id": null, "ok": false, "error": "request is not valid UTF-8"})), false),
+            Ok(LineRead::TooLong) => {
+                (RoutedReply::Legacy(json!({"id": null, "ok": false, "error": format!("request exceeds {MAX_REQUEST_BYTES} bytes")})), !line.ends_with('\n'))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                (RoutedReply::Legacy(json!({"id": null, "ok": false, "error": "request is not valid UTF-8"})), false)
+            }
             Err(e) => return Err(e),
             Ok(LineRead::Line) if line.trim().is_empty() => continue,
             Ok(LineRead::Line) => (respond_retained(h, &line, true), false),
@@ -384,7 +410,7 @@ fn serve_tcp_connection(h: &Mutex<Headless>, stream: std::net::TcpStream, token:
             if ok {
                 reader.get_mut().authenticated()?;
             }
-            reply
+            RoutedReply::Legacy(reply)
         };
         reply.write_line_to(&mut out)?;
         out.flush()?;
@@ -1018,7 +1044,7 @@ mod tests {
         for _ in 0..2 {
             assert_eq!(respond(&h, r#"{"method":"doc.new","params":{"width":8,"height":8}}"#)["ok"], true);
         }
-        let count = |h: &Mutex<Headless>| h.lock().unwrap().session_list()["documents"].as_array().unwrap().len();
+        let count = |h: &Mutex<Headless>| h.lock().unwrap().session_list().unwrap()["documents"].as_array().unwrap().len();
         for index in [json!("0"), json!(-1), json!(0.5), json!(true)] {
             for method in ["doc.close", "doc.inspect", "doc.select"] {
                 let reply = respond(&h, &json!({"method": method, "params": {"index": index}}).to_string());

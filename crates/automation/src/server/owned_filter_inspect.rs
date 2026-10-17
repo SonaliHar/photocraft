@@ -39,4 +39,6 @@ pub(super) async fn run(server: &PhotocraftMcp, id: String, params: Value, wait:
 
 #[cfg(test)]
 #[path = "owned_filter_inspect_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;

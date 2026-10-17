@@ -68,7 +68,7 @@ impl<'a> Sink<'a> {
         }
         .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
         .ok_or_else(|| failed("native directory content name is invalid"))?;
-        for (pair, expected) in hash.as_bytes().chunks_exact(2).zip(entry.decoded_hash) {
+        for (pair, expected) in hash.as_bytes().as_chunks::<2>().0.iter().zip(entry.decoded_hash) {
             let nibble = |byte: u8| if byte.is_ascii_digit() { byte - b'0' } else { byte - b'a' + 10 };
             let first = *pair.first().ok_or_else(|| failed("native directory content hash width"))?;
             let second = *pair.get(1).ok_or_else(|| failed("native directory content hash width"))?;

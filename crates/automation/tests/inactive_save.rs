@@ -40,18 +40,19 @@ fn indexed_native_save_preserves_active_document_and_future_command_target() {
         assert_eq!(headless.session.documents()[1].doc.name, "second");
         assert!(!headless.session.documents()[0].is_dirty());
     }
-    let before = headless.session.documents()[0].clone();
+    let before_doc = headless.session.documents()[0].doc.clone();
+    let before_path = headless.session.documents()[0].path.clone();
     let blocked = dir.join("not-a-directory");
     std::fs::write(&blocked, b"blocks the parent directory").unwrap();
     let failed = blocked.join("fail.psd");
     assert!(headless.handle("doc.save", json!({"index": 0, "path": failed.to_str().unwrap()})).is_err());
     assert_eq!(headless.session.active_index(), Some(1));
-    assert_eq!(headless.session.documents()[0].doc.name, before.doc.name);
-    assert_eq!(headless.session.documents()[0].path, before.path);
+    assert_eq!(headless.session.documents()[0].doc.name, before_doc.name);
+    assert_eq!(headless.session.documents()[0].path, before_path);
     let copy = dir.join("copy.png");
     headless.handle("doc.save", json!({"index": 0, "path": copy.to_str().unwrap()})).unwrap();
-    assert_eq!(headless.session.documents()[0].doc.name, before.doc.name);
-    assert_eq!(headless.session.documents()[0].path, before.path);
+    assert_eq!(headless.session.documents()[0].doc.name, before_doc.name);
+    assert_eq!(headless.session.documents()[0].path, before_path);
     drop(headless);
     std::fs::remove_dir_all(dir).unwrap();
 }

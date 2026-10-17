@@ -240,8 +240,9 @@ fn assigned_geometry_host_source_protection_title_save_and_native_continuation()
         assert_eq!(current.doc.source_color_context, before.source_color_context);
         assert_eq!(current.doc.working_profile_interpretation, before.working_profile_interpretation);
         assert_eq!(native(&current.doc), raw);
+        let current_doc = current.doc.clone();
         let reply = reopened.inspect_owned_command_with_read_control("xcf.inspect", &Value::Null, true, &ctl()).unwrap();
-        query(reply.value(), &current.doc);
+        query(reply.value(), &current_doc);
         drop(reply);
         assert!(reopened.command_run("select.all", json!({})).is_err());
         assert_eq!(std::fs::read(&source).unwrap(), original);

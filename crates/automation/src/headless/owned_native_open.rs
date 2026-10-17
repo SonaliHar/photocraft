@@ -80,18 +80,20 @@ impl Headless {
                 reply.wrap_rpc(id, bound, control).map_err(ReplyError::into_automation)?;
                 reply.validate_rpc_wire_size(control).map_err(ReplyError::into_automation)?;
             }
-            let threshold = if archive.current_storage_hint().is_some() { false } else {
+            let threshold = if archive.current_storage_hint().is_some() {
+                false
+            } else {
                 photocraft_engine::accounted_native_open::is_current_threshold_alpha_candidate(archive.document(), control)
                     .map_err(photocraft_engine::EngineError::from)?
             };
             control.check(1).map_err(photocraft_engine::EngineError::from)?;
-            if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::NormalHierarchy) {
-                self.session.add_owned_native_normal_hierarchy_archive(archive,label,Some(path),control)?;
-            } else if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint) {
-                self.session.add_owned_native_masked_filtered_flat_archive(archive,label,Some(path),control)?;
-            } else if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) {
+            if archive.current_storage_hint() == Some(photocraft_format::NativeCurrentStorageHint::NormalHierarchy) {
+                self.session.add_owned_native_normal_hierarchy_archive(archive, label, Some(path), control)?;
+            } else if archive.current_storage_hint() == Some(photocraft_format::NativeCurrentStorageHint::MaskedFilteredFlatPoint) {
+                self.session.add_owned_native_masked_filtered_flat_archive(archive, label, Some(path), control)?;
+            } else if archive.current_storage_hint() == Some(photocraft_format::NativeCurrentStorageHint::PointF32Coverage) {
                 self.session.add_owned_native_point_archive(archive, label, Some(path), control)?;
-            } else if archive.current_storage_hint()==Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) {
+            } else if archive.current_storage_hint() == Some(photocraft_format::NativeCurrentStorageHint::FilteredFlatPoint) {
                 self.session.add_owned_native_filtered_flat_archive(archive, label, Some(path), control)?;
             } else if threshold {
                 self.session.add_owned_native_threshold_alpha_archive(archive, label, Some(path), control)?;
@@ -140,24 +142,44 @@ impl Headless {
 }
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_native_open_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_native_box_work_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod box_work_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_masked_native_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod masked_native_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_stock_rgb_native_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod stock_rgb_native_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_hsl_native_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod hsl_native_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_masked_scalar_native_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod masked_scalar_native_tests;

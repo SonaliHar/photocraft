@@ -30,7 +30,7 @@ fn layered_documents_save_reopen_and_save_in_place_as_openraster() {
     exec(&mut h, "paint.stroke", json!({"points": [[4, 4], [30, 20]], "size": 6, "hardness": 1.0, "color": "#ff0000"}));
     let top = h.session.active().unwrap().doc.layers.last().unwrap().id.0;
     exec(&mut h, "layer.setProps", json!({"layer": top, "name": "Ink", "opacity": 0.5, "blend": "Multiply"}));
-    let before = photocraft_compose::flatten(&h.session.active().unwrap().doc);
+    let before = photocraft_compose::flatten(&h.session.active().unwrap().doc).unwrap();
 
     let saved = h.handle("doc.save", json!({"path": path_str})).unwrap();
     assert!(saved["warnings"].as_array().is_none_or(Vec::is_empty), "{saved}");
@@ -44,7 +44,7 @@ fn layered_documents_save_reopen_and_save_in_place_as_openraster() {
     assert_eq!(doc.layers.len(), 2, "{opened}");
     let ink = doc.layers.last().unwrap();
     assert_eq!((ink.name.as_str(), ink.opacity, ink.blend), ("Ink", 0.5, photocraft_doc::BlendMode::Multiply));
-    assert_eq!(photocraft_compose::flatten(doc).px, before.px);
+    assert_eq!(photocraft_compose::flatten(doc).unwrap().px, before.px);
 
     // Edit, then a pathless save writes the .ora back in place and clears dirty.
     exec(&mut h, "image.adjustments.invert", json!({}));
@@ -52,7 +52,7 @@ fn layered_documents_save_reopen_and_save_in_place_as_openraster() {
     h.handle("doc.save", json!({})).unwrap();
     assert!(!h.session.active().unwrap().is_dirty());
     let reread = photocraft_io::import("art.ora", &std::fs::read(&path).unwrap()).unwrap().document;
-    assert_eq!(photocraft_compose::flatten(&reread).px, photocraft_compose::flatten(&h.session.active().unwrap().doc).px);
+    assert_eq!(photocraft_compose::flatten(&reread).unwrap().px, photocraft_compose::flatten(&h.session.active().unwrap().doc).unwrap().px);
     std::fs::remove_dir_all(dir).unwrap();
 }
 

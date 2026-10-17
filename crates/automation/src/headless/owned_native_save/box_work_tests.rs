@@ -3,6 +3,7 @@
 use super::*;
 #[path = "../../../../ui-egui/src/canvas_streamed_box_fixture.rs"]
 #[allow(dead_code)]
+#[allow(clippy::duplicate_mod, reason = "This workflow deliberately instantiates its shared test helper under its own consumer parent")]
 mod fixture;
 use photocraft_format::canonical_archive::ImmutableCanonicalArchive;
 use photocraft_raster::backing::quota::{BackingQuota, QuotaKind, QuotaLease};

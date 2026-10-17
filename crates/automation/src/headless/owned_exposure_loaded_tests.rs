@@ -94,7 +94,7 @@ fn loaded_endpoints_continue_both_native_classes() {
         assert!(reopened.session.active().unwrap().doc.accounted().unwrap().is_readonly_filtered_flat_point_storage());
         assert_eq!(
             fixture::words(
-                &reopened.session.active().unwrap().doc.xcf_state.as_ref().unwrap().filter_stacks.iter().flat_map(|s| &s.nodes).find(|n| n.id == id).unwrap()
+                reopened.session.active().unwrap().doc.xcf_state.as_ref().unwrap().filter_stacks.iter().flat_map(|s| &s.nodes).find(|n| n.id == id).unwrap()
             )[1],
             case.black
         );

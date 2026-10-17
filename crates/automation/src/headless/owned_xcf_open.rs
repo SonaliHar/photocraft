@@ -91,7 +91,9 @@ impl Headless {
         control.check(1).map_err(photocraft_engine::EngineError::from)?;
         match &imported {
             photocraft_io::OwnedXcfImport::NormalHierarchy(value) => self.session.add_owned_normal_hierarchy_xcf_import(value, name, Some(path), control)?,
-            photocraft_io::OwnedXcfImport::MaskedFilteredFlat(value) => self.session.add_owned_masked_filtered_flat_xcf_import(value, name, Some(path), control)?,
+            photocraft_io::OwnedXcfImport::MaskedFilteredFlat(value) => {
+                self.session.add_owned_masked_filtered_flat_xcf_import(value, name, Some(path), control)?
+            }
             photocraft_io::OwnedXcfImport::FilteredFlat(value) => self.session.add_owned_filtered_flat_xcf_import(value, name, Some(path), control)?,
             photocraft_io::OwnedXcfImport::SeparableBlend(value) => self.session.add_owned_separable_blend_xcf_import(value, name, Some(path), control)?,
             photocraft_io::OwnedXcfImport::IsolatedGaussianGroup(value) => {
@@ -407,6 +409,8 @@ impl OwnedXcfOpenReply {
 }
 
 #[cfg(test)]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;
 
 impl OwnedXcfOpenReply {

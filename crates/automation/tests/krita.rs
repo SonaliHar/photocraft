@@ -53,7 +53,7 @@ fn krita_documents_open_with_layers_and_save_as_openraster() {
     assert_eq!(names, ["Paper", "Inks"]);
     let line = doc.layers[1].children().unwrap()[0].clone();
     assert_eq!((line.name.as_str(), line.blend), ("Line", photocraft_doc::BlendMode::Multiply));
-    let flat = photocraft_compose::flatten(doc);
+    let flat = photocraft_compose::flatten(doc).unwrap();
     assert!((flat.px[0][1] - 0.2).abs() < 0.01, "80% red multiplied over white: {:?}", flat.px[0]);
 
     // Read-only source: the file itself is never overwritten as Krita.

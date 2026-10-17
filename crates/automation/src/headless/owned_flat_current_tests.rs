@@ -2,6 +2,7 @@
 use super::*;
 #[path = "../../../ui-egui/src/canvas_flat_current_fixture.rs"]
 #[allow(dead_code)]
+#[allow(clippy::duplicate_mod, reason = "This workflow deliberately instantiates its shared test helper under its own consumer parent")]
 mod fixture;
 use fixture::{ctl, fixture, page, payload};
 use std::sync::atomic::{AtomicU64, Ordering};

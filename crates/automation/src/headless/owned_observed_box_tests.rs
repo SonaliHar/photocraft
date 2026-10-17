@@ -2,6 +2,7 @@
 //! No corpus enrollment or producer geometry/numerical acceptance claim.
 use super::*;
 #[path = "../../../ui-egui/src/canvas_observed_box_fixture.rs"]
+#[allow(clippy::duplicate_mod, reason = "This workflow deliberately instantiates its shared test helper under its own consumer parent")]
 mod observed;
 fn refuse_mutations(h: &mut Headless) {
     let before = h.session.active().unwrap().doc.clone();
@@ -42,7 +43,7 @@ fn observed_box_originals_and_current_native_are_read_only() {
         // Independent author seed samples are local f32LE. Hash that precise
         // canonical byte role, not generated display/effective profile bytes.
         let native = fixture::native(&before);
-        let little: Vec<u8> = native.chunks_exact(4).flat_map(|v| u32::from_ne_bytes(v.try_into().unwrap()).to_le_bytes()).collect();
+        let little: Vec<u8> = native.as_chunks::<4>().0.iter().flat_map(|v| u32::from_ne_bytes(*v).to_le_bytes()).collect();
         assert_eq!(format!("{:x}", Sha256::digest(&little)), "72fc0fa6db04a4c04240d9db9e270517b5f907a6dae4e681c05173fe8567ec2e");
         let identity = h.session.active().unwrap().source.clone();
         for wait in [false, true] {

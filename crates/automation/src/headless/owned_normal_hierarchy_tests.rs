@@ -1,6 +1,7 @@
 //! Deferred native13 CURRENT hierarchy workflow, no authored hierarchy Source claim.
 use super::*;
 #[path = "../../../engine/src/accounted_normal_hierarchy_test_support.rs"]
+#[allow(clippy::duplicate_mod, reason = "This workflow deliberately instantiates its shared test helper under its own consumer parent")]
 mod f;
 use std::sync::atomic::{AtomicU64, Ordering};
 struct Directory(std::path::PathBuf);

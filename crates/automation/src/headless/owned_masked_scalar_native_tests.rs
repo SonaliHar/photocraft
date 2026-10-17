@@ -1,6 +1,7 @@
 //! Deferred genuine source protection and native11 trusted file continuation.
 use super::*;
 #[path = "../../../engine/src/accounted_masked_scalar_test_support.rs"]
+#[allow(clippy::duplicate_mod, reason = "This workflow deliberately instantiates its shared test helper under its own consumer parent")]
 mod fixture;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -13,7 +13,7 @@ mod owned_native_open;
 pub use owned_native_open::open_accounted_native_selected_path;
 #[path = "files/owned_xcf_open.rs"]
 pub(crate) mod owned_xcf_open;
-pub use owned_xcf_open::{open_owned_plain_xcf_selected_path, open_owned_current_xcf_selected_path};
+pub use owned_xcf_open::{open_owned_current_xcf_selected_path, open_owned_plain_xcf_selected_path};
 
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "files/accounted_native_save.rs"]
@@ -21,11 +21,11 @@ mod accounted_native_save;
 #[cfg(not(target_arch = "wasm32"))]
 pub use accounted_native_save::save_accounted_native_selected_path;
 
-#[path = "files/protected_save.rs"]
-mod protected_save;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "files/protected_directory.rs"]
 mod protected_directory;
+#[path = "files/protected_save.rs"]
+mod protected_save;
 pub use protected_save::{save_protected, save_protected_with_interrupt};
 
 /// Result of opening a file.
@@ -367,7 +367,8 @@ fn check_native_file_with_limit(
         }
     }
     if let Some(limit) = resident_limit {
-        photocraft_io::source_protection::check_reader_with_resident_limit(file, metadata.len(), &protection.fingerprints, limit, control).map_err(protection_error)?;
+        photocraft_io::source_protection::check_reader_with_resident_limit(file, metadata.len(), &protection.fingerprints, limit, control)
+            .map_err(protection_error)?;
     } else {
         photocraft_io::source_protection::check_reader_with_interrupt(file, metadata.len(), &protection.fingerprints, control).map_err(protection_error)?;
     }
@@ -545,8 +546,8 @@ pub(crate) fn write_protected_stream_with_guard<R>(
         let leaf = target.file_name().ok_or_else(|| AutomationError::BadRequest("native destination has no filename".into()))?;
         let parent_path = target.parent().filter(|parent| !parent.as_os_str().is_empty()).unwrap_or_else(|| Path::new("."));
         poll(control)?;
-        let parent=if let Some(parent)=held_parent {
-            parent.try_clone().map_err(|error|AutomationError::Io(format!("cannot retain native entry parent: {error}")))?
+        let parent = if let Some(parent) = held_parent {
+            parent.try_clone().map_err(|error| AutomationError::Io(format!("cannot retain native entry parent: {error}")))?
         } else {
             std::fs::create_dir_all(parent_path).map_err(|error| AutomationError::Io(format!("cannot create destination parent: {error}")))?;
             cap_std::fs::Dir::open_ambient_dir(parent_path, cap_std::ambient_authority())
@@ -644,6 +645,8 @@ pub fn render_png(doc: &Document, max_side: u32) -> Result<Vec<u8>, AutomationEr
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod controlled_native_write_tests {
     use super::*;
     #[test]
@@ -652,14 +655,18 @@ mod controlled_native_write_tests {
         let path = root.join("absent.pcraft");
         let protection = photocraft_engine::WriteProtection::default();
         let result = validate_destination_protected_with_resident_limit(
-            &path, &protection, Some("pcraft"), &photocraft_raster::Interrupt::NONE,
+            &path,
+            &protection,
+            Some("pcraft"),
+            &photocraft_raster::Interrupt::NONE,
             photocraft_io::source_protection::resident_ceiling().checked_add(1).unwrap(),
         );
         assert!(matches!(result, Err(AutomationError::BadRequest(_))));
         let cancelled = || true;
-        assert!(validate_destination_protected_with_resident_limit(
-            &path, &protection, Some("pcraft"), &photocraft_raster::Interrupt::cancel_only(&cancelled), 0,
-        ).is_err());
+        assert!(
+            validate_destination_protected_with_resident_limit(&path, &protection, Some("pcraft"), &photocraft_raster::Interrupt::cancel_only(&cancelled), 0,)
+                .is_err()
+        );
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
         std::fs::remove_dir(root).unwrap();
     }

@@ -5,6 +5,7 @@ use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
+#[allow(clippy::duplicate_mod, reason = "Independent test workflows reuse this data-only fixture module.")]
 #[path = "../../../../xcf/tests/common/mod.rs"]
 mod fixture;
 struct Directory(PathBuf);

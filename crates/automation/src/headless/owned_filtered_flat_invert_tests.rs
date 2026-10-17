@@ -1,6 +1,7 @@
 //! Deferred genuine mixed invert sources/native writer/control lifecycle.
 use super::*;
 #[path = "../../../engine/src/accounted_filtered_flat_invert_test_support.rs"]
+#[allow(clippy::duplicate_mod, reason = "This workflow deliberately instantiates its shared test helper under its own consumer parent")]
 mod fixture;
 use std::sync::atomic::{AtomicU64, Ordering};
 struct Directory(PathBuf);

@@ -97,10 +97,11 @@ impl<'a> Target<'a> {
         }
         for source in sources.paths() {
             poll(control)?;
-            if let Some(read) = &self.workspace.read {
-                if read.identity == root.identity && request_path(source, self.workspace.read.as_ref())? == self.relative {
-                    return Err(AutomationError::BadRequest("the original XCF source is protected; choose a different destination".into()));
-                }
+            if let Some(read) = &self.workspace.read
+                && read.identity == root.identity
+                && request_path(source, self.workspace.read.as_ref())? == self.relative
+            {
+                return Err(AutomationError::BadRequest("the original XCF source is protected; choose a different destination".into()));
             }
         }
         poll(control)?;

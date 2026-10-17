@@ -1,9 +1,6 @@
 //! Stored smart-filter parameters must not grant automation ambient filesystem access.
 use std::path::{Path, PathBuf};
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use photocraft_automation::{AuthorizedWorkspace, Headless, workspace::authorize_desktop_engine_step};
 use photocraft_doc::{Document, LayerContent, LayerId};
@@ -103,7 +100,7 @@ fn parameter_edits_reject_outside_images_and_luts_without_changing_the_document(
             let id = if lookup { "image.adjustments.colorLookup" } else { "filter.distort.displace" };
             assert_denied(h.session.execute(id, params.clone()));
             assert_denied(h.handle("engine.execute", json!({"command": "layer.smartFilter.setParams", "params": {"layer": layer.0, "params": params}})));
-            assert!(Arc::ptr_eq(&doc, &h.session.active().unwrap().doc));
+            assert!(doc.shares_state(&h.session.active().unwrap().doc));
             assert_eq!(h.session.journal.len(), journal);
             assert_eq!(h.render_png(None, 64).unwrap(), before);
         }
@@ -124,7 +121,7 @@ fn action_playback_cannot_hide_a_smart_filter_path_edit() {
     ));
     let result = h.session.execute("actions.play", json!({"action": "edit filter"})).unwrap();
     assert!(result["failed"]["error"].as_str().unwrap().contains("ambient filesystem"), "{result}");
-    assert!(Arc::ptr_eq(&doc, &h.session.active().unwrap().doc));
+    assert!(doc.shares_state(&h.session.active().unwrap().doc));
 }
 
 #[test]
@@ -136,7 +133,7 @@ fn loaded_filters_are_checked_after_merging_even_when_the_edit_contains_no_path(
         h.open(Path::new("stored.pcraft")).unwrap();
         let doc = h.session.active().unwrap().doc.clone();
         assert_denied(h.session.execute("layer.smartFilter.setParams", json!({"layer": layer.0, "params": {"horizontal": 10, "dither": false}})));
-        assert!(Arc::ptr_eq(&doc, &h.session.active().unwrap().doc));
+        assert!(doc.shares_state(&h.session.active().unwrap().doc));
         // Removing an ambient input makes the filter usable again.
         let safe = if lookup { json!({"file": "", "lut": "none"}) } else { json!({"mapPath": ""}) };
         h.session.execute("layer.smartFilter.setParams", json!({"layer": layer.0, "params": safe})).unwrap();
@@ -157,7 +154,7 @@ fn loaded_filters_cannot_read_on_rerender_or_reuse_a_trusted_cached_stage() {
             h.open(Path::new("stored.pcraft")).unwrap();
             let before = h.session.active().unwrap().doc.clone();
             assert_denied(h.session.execute("layer.smartFilter.setVisible", json!({"layer": layer.0, "visible": true})));
-            assert!(Arc::ptr_eq(&before, &h.session.active().unwrap().doc));
+            assert!(before.shares_state(&h.session.active().unwrap().doc));
         }
     }
 }
@@ -168,7 +165,7 @@ fn background_rerender_keeps_the_desktop_request_authority() {
         let f = Fixture::new();
         let (doc, layer) = f.saved_filter(lookup);
         let mut s = Session::new();
-        s.add_document(doc, None);
+        s.add_document(doc, None).unwrap();
         s.authorize = Some(authorize_desktop_engine_step);
         let before = s.active().unwrap().doc.clone();
         let started = s.start("layer.smartFilter.setVisible", json!({"layer": layer.0, "visible": true})).unwrap();
@@ -176,7 +173,7 @@ fn background_rerender_keeps_the_desktop_request_authority() {
         s.authorize = None;
         let Started::Job(job) = started else { panic!("expected a background render") };
         assert_denied(s.wait_job(job));
-        assert!(Arc::ptr_eq(&before, &s.active().unwrap().doc));
+        assert!(before.shares_state(&s.active().unwrap().doc));
         // The worker's restriction must not leak into subsequent trusted UI work.
         s.execute("layer.smartFilter.setVisible", json!({"layer": layer.0, "visible": true})).unwrap();
     }
@@ -193,7 +190,7 @@ fn transferring_stored_filters_cannot_read_outside_files() {
         let before = h.session.active().unwrap().doc.clone();
         for copy in [false, true] {
             assert_denied(h.session.execute("layer.smartFilter.transfer", json!({"from": from.0, "to": to, "copy": copy})));
-            assert!(Arc::ptr_eq(&before, &h.session.active().unwrap().doc));
+            assert!(before.shares_state(&h.session.active().unwrap().doc));
         }
     }
 }
@@ -206,7 +203,7 @@ fn trusted_parameter_edits_still_read_maps_and_luts_after_a_denied_request() {
         let edit = |path: &Path| json!({"layer": layer.0, "params": path_params(lookup, path)});
         assert_denied(h.session.execute("layer.smartFilter.setParams", edit(&f.outside("white.png"))));
         let mut trusted = Headless::trusted_local();
-        trusted.session.add_document((*h.session.active().unwrap().doc).clone(), None);
+        trusted.session.add_document((*h.session.active().unwrap().doc).clone(), None).unwrap();
         let mut renders = Vec::new();
         for name in if lookup { ["black.cube", "white.cube", "black.cube"] } else { ["black.png", "white.png", "black.png"] } {
             trusted.session.execute("layer.smartFilter.setParams", edit(&f.outside(name))).unwrap();
@@ -234,10 +231,10 @@ fn a_refresh_outside_command_execution_surfaces_the_denial_instead_of_rendering_
             Ok(_) => Ok(()),
             Err(e) => Err(e),
         }));
-        assert!(Arc::ptr_eq(&before, &h.session.active().unwrap().doc));
+        assert!(before.shares_state(&h.session.active().unwrap().doc));
         // A trusted session (no gate) still renders the same document.
         let mut trusted = Session::new();
-        trusted.add_document(doc, None);
+        trusted.add_document(doc, None).unwrap();
         let mut d = (*trusted.active().unwrap().doc).clone();
         assert!(smart_cmds::refresh(&mut d, layer).is_ok());
     }
@@ -250,7 +247,7 @@ fn an_ambient_map_or_lut_never_renders_unfiltered_pixels_into_the_stack_cache() 
         let f = Fixture::new();
         let (doc, layer) = f.saved_filter(lookup);
         let mut s = Session::new();
-        s.add_document(doc, None);
+        s.add_document(doc, None).unwrap();
         s.authorize = Some(authorize_desktop_engine_step);
         let bytes = smart_cmds::stack_cache_bytes();
         assert_denied(s.execute("layer.smartFilter.setVisible", json!({"layer": layer.0, "visible": true})));

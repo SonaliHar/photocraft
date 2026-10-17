@@ -13,50 +13,74 @@ use crate::workspace::{ExportSequence, authorize_engine_command, authorize_engin
 use crate::{AuthorizedWorkspace, AutomationError, files};
 
 mod linked_root;
-mod stored_channel_root;
-mod owned_xcf_open;
-mod owned_native_save;
-mod owned_native_open;
-mod owned_filter_inspect;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-#[path = "headless/owned_point_command_tests.rs"]
-mod owned_point_command_tests;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-#[path = "headless/owned_residual_point_command_tests.rs"]
-mod owned_residual_point_command_tests;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-#[path = "headless/owned_configured_point_command_tests.rs"]
-mod owned_configured_point_command_tests;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-#[path = "headless/owned_point_stack_command_tests.rs"]
-mod owned_point_stack_command_tests;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-#[path = "headless/owned_scalar_point_command_tests.rs"]
-mod owned_scalar_point_command_tests;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-#[path = "headless/owned_point_remove_command_tests.rs"]
-mod owned_point_remove_command_tests;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-#[path = "headless/owned_empty_point_command_tests.rs"]
-mod owned_empty_point_command_tests;
-#[cfg(all(test, not(target_arch = "wasm32")))]
-#[path = "headless/owned_neighborhood_command_tests.rs"]
-mod owned_neighborhood_command_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_analytic_geometry_command_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_analytic_geometry_command_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_analytic_geometry_layer_props_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod owned_analytic_geometry_layer_props_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_analytic_geometry_mask_enabled_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod owned_analytic_geometry_mask_enabled_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_configured_point_command_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+mod owned_configured_point_command_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_empty_point_command_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+mod owned_empty_point_command_tests;
+mod owned_filter_inspect;
+#[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_isolated_normal_group_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_isolated_normal_group_tests;
-pub use photocraft_engine::accounted_filter_inspect::{OwnedFilterInspectReply, OwnedFilterInspectWire};
+mod owned_native_open;
+mod owned_native_save;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_neighborhood_command_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+mod owned_neighborhood_command_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_point_command_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+mod owned_point_command_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_point_remove_command_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+mod owned_point_remove_command_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_point_stack_command_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+mod owned_point_stack_command_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_residual_point_command_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+mod owned_residual_point_command_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_scalar_point_command_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+mod owned_scalar_point_command_tests;
+mod owned_xcf_open;
+mod stored_channel_root;
 pub use owned_native_open::OwnedNativeOpenReply;
 pub use owned_xcf_open::OwnedXcfOpenReply;
+pub use photocraft_engine::accounted_filter_inspect::{OwnedFilterInspectReply, OwnedFilterInspectWire};
 pub use stored_channel_root::{load_stored_selection_from_root_with_context, validate_stored_selection_request};
 
 fn native_save_requested(name: &str, format: Option<&str>) -> bool {
@@ -68,6 +92,8 @@ fn native_save_requested(name: &str, format: Option<&str>) -> bool {
 
 /// Unrun during the implementation-first pass.
 #[cfg(test)]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
 mod calculation_dispatch_drafts {
     use super::*;
     use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
@@ -90,6 +116,7 @@ mod calculation_dispatch_drafts {
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::unwrap_used, reason = "Test setup and assertions are permitted by repository policy.")]
 mod prepared_native_save_tests {
     use super::*;
     fn root() -> PathBuf {
@@ -131,14 +158,22 @@ mod prepared_native_save_tests {
             let path = if trusted { root.join("own.pcraft") } else { PathBuf::from("own.pcraft") };
             headless.save_with_interrupt(None, Some(&path), None, &Default::default(), &photocraft_raster::Interrupt::NONE).unwrap();
             let bytes = std::fs::read(root.join("own.pcraft")).unwrap();
-            assert_eq!(photocraft_format::load_from_bytes(&bytes).unwrap(), *before);
+            let mut reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
+            assert_eq!(reopened.name, "own.pcraft");
+            reopened.name = before.name.clone();
+            assert_eq!(reopened, *before);
             let active = headless.session.active().unwrap();
-            assert!(active.doc.shares_state(&before));
+            assert_eq!(active.doc.name, "own.pcraft");
+            let mut current = (*active.doc).clone();
+            current.name = before.name.clone();
+            assert_eq!(current, *before);
+            assert_eq!(active.path.as_deref(), path.to_str());
             assert_eq!(active.revision, revision);
             assert_eq!(active.saved_revision, revision);
             assert!(active.source.is_none());
             assert_eq!(active.history.entry_labels().map(str::to_owned).collect::<Vec<_>>(), labels);
             assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+            drop(headless); // Release held workspace/native archive owners after every assertion.
             std::fs::remove_file(root.join("own.pcraft")).unwrap();
             std::fs::remove_dir(root).unwrap();
         }
@@ -172,6 +207,7 @@ mod prepared_native_save_tests {
         assert!(headless.session.active().unwrap().path.is_none());
         assert_eq!(std::fs::read(&original).unwrap(), b"own original source bytes");
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 2);
+        drop(headless);
         std::fs::remove_file(root.join("alias.pcraft")).unwrap();
         std::fs::remove_file(original).unwrap();
         std::fs::remove_dir(root).unwrap();
@@ -194,6 +230,7 @@ mod prepared_native_save_tests {
         }
         assert_eq!(std::fs::read(root.join("out.pcraft")).unwrap(), b"original destination");
         assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1);
+        drop(workspace);
         std::fs::remove_file(root.join("out.pcraft")).unwrap();
         std::fs::remove_dir(root).unwrap();
     }
@@ -213,6 +250,7 @@ mod prepared_native_save_tests {
             assert_eq!(active.path.as_deref(), path.to_str());
             assert_eq!(active.source.as_ref().unwrap().origin, photocraft_io::ImportOrigin::writable(photocraft_io::ImportFormat::Pcraft));
             assert!(!active.history.can_undo());
+            drop(headless); // Release held workspace/native archive owners after every assertion.
             std::fs::remove_file(root.join("own.pcraft")).unwrap();
             std::fs::remove_dir(root).unwrap();
         }
@@ -266,6 +304,7 @@ mod prepared_native_save_tests {
                 assert_eq!(headless.session.documents().len(), 2);
             }
         }
+        drop(measured); // The successful control run owns the archive until here.
         std::fs::remove_file(root.join("own.pcraft")).unwrap();
         std::fs::remove_dir(root).unwrap();
     }
@@ -282,6 +321,8 @@ mod prepared_native_save_tests {
         assert!(headless.open_with_interrupt(Path::new("bad.pcraft"), &photocraft_raster::Interrupt::NONE).is_err());
         assert_eq!(headless.session.documents().len(), 1);
         assert!(headless.session.active().unwrap().doc.shares_state(&before));
+        drop(headless);
+        drop(denied);
         std::fs::remove_file(root.join("bad.pcraft")).unwrap();
         std::fs::remove_dir(root).unwrap();
     }
@@ -414,6 +455,13 @@ impl Headless {
             Filesystem::TrustedLocal => files::open_with_interrupt(path, control)?,
             Filesystem::Workspace(workspace) => workspace.open_document_with_interrupt(requested, control)?,
         };
+        // Preserve the existing missing-font warning contract before any
+        // response serialization or Session publication can fail.
+        control.check().map_err(|_| photocraft_engine::EngineError::Cancelled)?;
+        let font_warnings = photocraft_engine::type_extra_cmds::missing_font_warnings(&o.document);
+        control.check().map_err(|_| photocraft_engine::EngineError::Cancelled)?;
+        o.warnings.try_reserve(font_warnings.len()).map_err(|_| AutomationError::Other("open font warnings allocation failed".into()))?;
+        o.warnings.extend(font_warnings);
         // Complete response serialization and owned runtime provenance before
         // admission: a failure must not leave a newly focused partial tab.
         let assessment =
@@ -581,11 +629,11 @@ impl Headless {
     ) -> Result<Value, AutomationError> {
         control.check().map_err(|_| photocraft_engine::EngineError::Cancelled)?;
         let i = self.doc_index(index)?;
-        if self.session.documents().get(i).is_some_and(|state|state.doc.accounted().is_some()) {
-            if self.session.active_index()!=Some(i) {
+        if self.session.documents().get(i).is_some_and(|state| state.doc.accounted().is_some()) {
+            if self.session.active_index() != Some(i) {
                 return Err(AutomationError::BadRequest("owned native save currently requires the active document; select it explicitly first".into()));
             }
-            return self.save_owned_native_active_bounded(path,format,control);
+            return self.save_owned_native_active_bounded(path, format, control);
         }
         let (stored_path, doc) = {
             let state = &self.session.documents()[i];
@@ -629,9 +677,15 @@ impl Headless {
                 } else if native_save_requested(target_text, format) {
                     // Source identities and target checks precede preparation; all
                     // preview/model admission completes before opening the temp.
+                    let destination_name = target
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .filter(|name| !name.is_empty() && name.len() <= 4096 && !name.contains(['/', '\\', '\0']))
+                        .ok_or_else(|| AutomationError::BadRequest("native destination must have a bounded UTF-8 filename".into()))?;
+                    control.check().map_err(|_| photocraft_engine::EngineError::Cancelled)?;
                     let prepared = photocraft_io::prepare_native_stream(&doc, Default::default(), control).map_err(native_save_error)?;
                     let result = files::write_protected_stream_with_interrupt(&target, &protection, control, move |file| {
-                        let (_, result) = prepared.write(file).map_err(native_save_error)?;
+                        let (_, result) = prepared.write_named(destination_name, file).map_err(native_save_error)?;
                         Ok(result)
                     })?;
                     result.warnings
@@ -774,7 +828,7 @@ impl Headless {
     /// Photomerge, â€¦) runs in the background and this returns `{"job": id}` at once (poll with
     /// `jobs.list`, stop with `jobs.cancel`). Other commands finish before returning either way.
     pub fn command_start(&mut self, id: &str, params: Value, wait: bool) -> Result<Value, AutomationError> {
-        if matches!(id,"xcf.filter.inspect"|"xcf.inspect") && self.session.active().is_some_and(|state| state.doc.accounted().is_some()) {
+        if matches!(id, "xcf.filter.inspect" | "xcf.inspect") && self.session.active().is_some_and(|state| state.doc.accounted().is_some()) {
             return Err(AutomationError::BadRequest("accounted filter inspection requires a retained reply transport or typed Headless API".into()));
         }
         if id == "select.loadSelection" && params.get("originalPath").is_some() {
@@ -791,9 +845,11 @@ impl Headless {
         // as its filter edits. Refuse start before syncing unrelated jobs; a
         // browser/native storage marker does not grant background execution.
         if id == "layer.setProps"
-            && self.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
-                owner.is_readonly_point_storage() || photocraft_engine::owned_layer_metadata_candidate(owner)
-            })
+            && self
+                .session
+                .active()
+                .and_then(|state| state.doc.accounted())
+                .is_some_and(|owner| owner.is_readonly_point_storage() || photocraft_engine::owned_layer_metadata_candidate(owner))
         {
             if !wait {
                 return Err(AutomationError::BadRequest(format!("{id}.context: synchronous dispatch is required")));
@@ -933,235 +989,439 @@ fn exported(dir: &str, written: photocraft_engine::Result<Vec<String>>, outputs:
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_isolated_group_props_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_isolated_group_props_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_plain_translate_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_plain_translate_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_assigned_translate_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_assigned_translate_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_plain_bulk_translate_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_plain_bulk_translate_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_gaussian_original_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_gaussian_original_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_gaussian_group_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_gaussian_group_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_gaussian_group_activation_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_gaussian_group_activation_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_gaussian_group_metadata_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_gaussian_group_metadata_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_gaussian_group_parameter_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_gaussian_group_parameter_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_separable_blend_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_separable_blend_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_separable_metadata_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_separable_metadata_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_flat_current_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_flat_current_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_flat_composition_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_flat_composition_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_original_flat_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_original_flat_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_flat_translate_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_flat_translate_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_legacy_flat_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_legacy_flat_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_component_flat_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_component_flat_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_alpha_flat_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_alpha_flat_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_lch_flat_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_lch_flat_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_assigned_box_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_assigned_box_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="headless/owned_assigned_box_enabled_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_assigned_box_enabled_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_assigned_box_enabled_tests;
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="headless/owned_assigned_median_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_assigned_median_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_assigned_median_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="headless/owned_assigned_gaussian_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_assigned_gaussian_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_assigned_gaussian_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="headless/owned_streamed_box_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_streamed_box_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_streamed_box_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="headless/owned_observed_box_metadata_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_observed_box_metadata_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_observed_box_metadata_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="headless/owned_observed_box_move_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_observed_box_move_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_observed_box_move_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="headless/owned_observed_box_source_activity_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_observed_box_source_activity_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_observed_box_source_activity_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="headless/owned_assigned_f64_box_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_assigned_f64_box_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_assigned_f64_box_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="headless/owned_linear_box_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_linear_box_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_linear_box_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="headless/owned_perceptual_box_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_perceptual_box_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_perceptual_box_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="headless/owned_gray_box_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_gray_box_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_gray_box_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="headless/owned_gray_transfer_box_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_gray_transfer_box_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_gray_transfer_box_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="headless/owned_semi_flatten_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_semi_flatten_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_semi_flatten_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="headless/owned_hue_chroma_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_hue_chroma_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_hue_chroma_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="headless/owned_vibrance_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_vibrance_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_vibrance_tests;
 
-#[cfg(all(test, not(target_arch="wasm32")))]
-#[path="headless/owned_pure_point_geometry_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_pure_point_geometry_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_pure_point_geometry_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_nine_point_geometry_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_nine_point_geometry_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_residual_point_geometry_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_residual_point_geometry_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_filtered_flat_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_filtered_flat_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_filtered_flat_edit_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_filtered_flat_edit_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_filtered_flat_edit_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_filtered_flat_source_activity_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_filtered_flat_source_activity_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_filtered_flat_source_activity_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_filtered_flat_ordered_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_filtered_flat_ordered_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_filtered_flat_ordered_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_filtered_flat_move_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_filtered_flat_move_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_filtered_flat_move_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_filtered_flat_remove_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_filtered_flat_remove_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_filtered_flat_remove_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_filtered_flat_current_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_filtered_flat_current_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_filtered_flat_current_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_filtered_flat_exposure_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_filtered_flat_exposure_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_filtered_flat_exposure_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_filtered_flat_invert_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_filtered_flat_invert_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_filtered_flat_invert_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_exposure_loaded_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_exposure_loaded_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_exposure_loaded_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_filtered_flat_opacity_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_filtered_flat_opacity_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_filtered_flat_opacity_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_filtered_flat_source_opacity_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_filtered_flat_source_opacity_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_filtered_flat_source_opacity_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "headless/owned_filtered_flat_affine_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_filtered_flat_affine_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_masked_filtered_flat_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_masked_filtered_flat_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_masked_filtered_flat_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_normal_hierarchy_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_normal_hierarchy_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_normal_hierarchy_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_native_stroke_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_native_stroke_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_native_stroke_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_plain_integer_hierarchy_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_plain_integer_hierarchy_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_plain_integer_hierarchy_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_native_wide_stroke_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_native_wide_stroke_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod owned_native_wide_stroke_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_u32_plain_hierarchy_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_u32_plain_hierarchy_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_u32_plain_hierarchy_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_normal_hierarchy_stroke_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_normal_hierarchy_stroke_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_normal_hierarchy_stroke_tests;
 
-#[cfg(all(test,not(target_arch="wasm32")))]
-#[path="headless/owned_programme_stroke_tests.rs"]
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "headless/owned_programme_stroke_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
+// This test fixture keeps its consumer-local namespace and assertions.
+#[allow(clippy::duplicate_mod, reason = "Shared test fixtures retain consumer-local module identities and assertion helpers")]
 mod owned_programme_stroke_tests;

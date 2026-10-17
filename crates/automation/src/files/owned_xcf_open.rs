@@ -133,4 +133,6 @@ fn open_selected<T>(
 
 #[cfg(test)]
 #[path = "owned_xcf_open_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod tests;

@@ -12,8 +12,8 @@ use crate::AutomationError;
 
 mod accounted_native_open;
 mod accounted_native_save;
-mod owned_xcf_open;
 mod linked_read;
+mod owned_xcf_open;
 mod source_write;
 mod stored_channel_read;
 
@@ -349,9 +349,15 @@ impl AuthorizedWorkspace {
             }
         };
         self.guard_write_protected_with_interrupt(path, &protection.sources, &protection.fingerprints, control)?;
+        let destination_name = Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty() && name.len() <= 4096 && !name.contains(['/', '\\', '\0']))
+            .ok_or_else(|| AutomationError::BadRequest("native destination must have a bounded UTF-8 filename".into()))?;
+        control.check().map_err(|_| photocraft_engine::EngineError::Cancelled)?;
         let prepared = photocraft_io::prepare_native_stream(document, limits, control).map_err(error)?;
         self.write_protected_stream_with_interrupt(path, &protection.sources, &protection.fingerprints, control, move |file| {
-            let (_, result) = prepared.write(file).map_err(error)?;
+            let (_, result) = prepared.write_named(destination_name, file).map_err(error)?;
             Ok(result)
         })
     }
@@ -1180,11 +1186,11 @@ mod tests {
 
     #[test]
     fn pending_import_cancel_is_available_without_granting_file_access() {
-        let mut headless=crate::Headless::new();
-        assert_eq!(headless.command_run("file.open.discardPending",serde_json::json!({})).unwrap()["discarded"],0);
-        assert!(headless.command_run("file.open.discardPending",serde_json::json!({"path":"/outside/source.xcf"})).is_err());
-        assert!(headless.command_run("file.open.discardPending",serde_json::json!({"heldId":"0"})).is_err());
-        assert!(headless.command_run("file.open",serde_json::json!({"path":"/outside/source.xcf"})).is_err());
+        let mut headless = crate::Headless::new();
+        assert_eq!(headless.command_run("file.open.discardPending", serde_json::json!({})).unwrap()["discarded"], 0);
+        assert!(headless.command_run("file.open.discardPending", serde_json::json!({"path":"/outside/source.xcf"})).is_err());
+        assert!(headless.command_run("file.open.discardPending", serde_json::json!({"heldId":"0"})).is_err());
+        assert!(headless.command_run("file.open", serde_json::json!({"path":"/outside/source.xcf"})).is_err());
         assert!(headless.session.documents().is_empty());
     }
 
@@ -1221,6 +1227,12 @@ mod tests {
                 | "type.attachToPath"
                 | "type.detachFromPath"
                 | "xcf.itemSet.setMembers"
+                | "xcf.itemSet.create"
+                | "xcf.items.select"
+                | "xcf.vector.fill.color.set"
+                | "xcf.vector.stroke.color.set"
+                | "xcf.path.name.set"
+                | "xcf.source.inspect"
                 | "xcf.vector.stroke.width.set"
                 | "select.toWorkPath"
                 | "layer.vectorMask.add"

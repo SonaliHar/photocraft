@@ -3,14 +3,14 @@
 use super::{Filesystem, Headless};
 use crate::{AutomationError, workspace::authorize_engine_command};
 use photocraft_engine::accounted_filter_inspect::{OwnedFilterInspectReply, OwnedFilterInspectWire};
-use photocraft_raster::{
-    Interrupt,
-    backing::ReadControl,
-};
+use photocraft_raster::{Interrupt, backing::ReadControl};
 use serde_json::Value;
 
 const COMMAND: &str = "xcf.filter.inspect";
-fn bounded<R>(owner: Option<&photocraft_doc::accounted_document::AccountedDocument>, run: impl FnOnce(&ReadControl<'_>) -> Result<R, AutomationError>) -> Result<R, AutomationError> {
+fn bounded<R>(
+    owner: Option<&photocraft_doc::accounted_document::AccountedDocument>,
+    run: impl FnOnce(&ReadControl<'_>) -> Result<R, AutomationError>,
+) -> Result<R, AutomationError> {
     let work = photocraft_io::accounted_operation_work::OperationWork::legacy(8_000_000_000);
     let charge = |units| work.check(units);
     let cancelled = || work.deadline_expired();
@@ -28,7 +28,9 @@ impl Headless {
     /// Cheap runtime routing only; the paid query validates the real class.
     pub fn has_owned_filter_inspection(&self) -> bool {
         self.session.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| {
-            owner.is_readonly_normal_hierarchy_storage() || owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_threshold_alpha_storage()
+            owner.is_readonly_normal_hierarchy_storage()
+                || owner.is_readonly_filtered_flat_point_storage()
+                || owner.is_readonly_threshold_alpha_storage()
                 || owner.is_readonly_threshold_storage()
                 || owner.is_readonly_point_storage()
                 || owner.is_readonly_assigned_point_storage()
@@ -138,4 +140,6 @@ mod point_tests;
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "owned_filter_inspect/pure_point_work_tests.rs"]
+// Test assertions are permitted by repository policy.
+#[allow(clippy::panic, clippy::unwrap_used)]
 mod pure_point_work_tests;
