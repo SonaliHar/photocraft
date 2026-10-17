@@ -165,3 +165,8 @@ sync_github_name = true
 
 [people.1Git2Clone]
 sync_github_name = true
+
+[people.hidoba]
+real_name = "Vlad Grankovsky"
+display_name = "Vlad Grankovsky"
+sync_github_name = false
