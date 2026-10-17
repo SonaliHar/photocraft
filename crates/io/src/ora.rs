@@ -566,6 +566,13 @@ impl Writer<'_> {
         if layer.locks.all || layer.locks.pixels {
             attrs.push_str(" edit-locked=\"true\"");
         }
+        // OpenRaster's one edit lock reopens as Lock All; it has no position lock (#7018).
+        if layer.locks.pixels && !layer.locks.all {
+            self.warnings.layer(&layer.name, "Lock Image Pixels was saved as OpenRaster's edit lock; it reopens as Lock All");
+        }
+        if layer.locks.position && !layer.locks.all {
+            self.warnings.layer(&layer.name, "Lock Position is not saved to OpenRaster");
+        }
         if layer.locks.transparency {
             attrs.push_str(" alpha-preserve=\"true\"");
         }
