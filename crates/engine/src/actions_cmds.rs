@@ -543,6 +543,15 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
         if id == "actions.play" && params.get("action").and_then(Value::as_str) == Some(old.as_str()) {
             params["action"] = json!(name);
         }
+        // `actions.conditional` names its branch actions in `then`/`else` (#6772): a renamed
+        // action would otherwise be called by its dead name and fail with "no action named …".
+        if id == "actions.conditional" {
+            for key in ["then", "else"] {
+                if params.get(key).and_then(Value::as_str) == Some(old.as_str()) {
+                    params[key] = json!(name);
+                }
+            }
+        }
     }
     if let Some(action) = s.actions.list.get_mut(idx) {
         action.name = name.clone();
@@ -767,6 +776,27 @@ mod tests {
             assert!(s.execute("actions.rename", bad.clone()).is_err(), "{bad}");
         }
         assert_eq!(s.actions.list[0].name, "Sepia");
+    }
+
+    /// Renaming an action must also follow into `actions.conditional` steps, which name their
+    /// branch actions in `then`/`else` (#6772): the Play test above only covered `actions.play`.
+    #[test]
+    fn rename_updates_conditional_branches_that_call_the_action() {
+        let mut s = Session::new();
+        s.actions.list.push(Action { name: "B".into(), steps: vec![("layer.new.layer".into(), json!({}))], ..Default::default() });
+        s.actions.list.push(Action {
+            name: "Main".into(),
+            steps: vec![("actions.conditional".into(), json!({ "if": "always", "then": "B", "else": "B" }))],
+            ..Default::default()
+        });
+        assert_eq!(s.execute("actions.rename", json!({ "action": "B", "name": "C" })).unwrap()["action"], "C");
+        assert_eq!(s.actions.list[1].steps[0].1["then"], "C");
+        assert_eq!(s.actions.list[1].steps[0].1["else"], "C");
+        // The conditional plays the renamed branch instead of failing with "no action named B".
+        s.execute("file.new", json!({ "width": 8, "height": 8 })).unwrap();
+        let played = s.execute("actions.play", json!({ "action": "Main" })).unwrap();
+        assert!(played.get("failed").is_none(), "{played}");
+        assert_eq!(played["ran"], 1, "{played}");
     }
 
     fn record_red(s: &mut Session, depth: u32) {
