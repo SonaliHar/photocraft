@@ -500,6 +500,54 @@ fn unescape_tsv(source: &str) -> String {
 mod tests {
     use super::*;
 
+    const LANGUAGE_DOC: &str = "# Localisation
+
+## Supported languages
+
+| Language | Preference code | Integer plural forms |
+|---|---|---|
+| English | `en` | one / other |
+| Türkçe | `tr` | one form |
+
+## Catalogs
+| Example | `not-a-language` | ignored outside the section |
+";
+
+    fn documentation_languages() -> [Language; 2] {
+        [Language { code: "en".into(), catalog: None }, Language { code: "tr".into(), catalog: Some("tr.tsv".into()) }]
+    }
+
+    #[test]
+    fn documented_languages_match_the_registry() {
+        assert_eq!(check_documented_languages(&documentation_languages(), LANGUAGE_DOC), Ok(()));
+    }
+
+    #[test]
+    fn documented_languages_reject_a_missing_registered_code() {
+        let doc = LANGUAGE_DOC.replace("| Türkçe | `tr` | one form |\n", "");
+        assert_eq!(
+            check_documented_languages(&documentation_languages(), &doc),
+            Err("docs/localization.md's Supported languages table is out of date:\n  registered but not listed: tr".into())
+        );
+    }
+
+    #[test]
+    fn documented_languages_reject_an_unregistered_code() {
+        let doc = LANGUAGE_DOC.replace("## Catalogs", "| Klingon | `tlh` | one / other |\n\n## Catalogs");
+        assert_eq!(
+            check_documented_languages(&documentation_languages(), &doc),
+            Err("docs/localization.md's Supported languages table is out of date:\n  listed but not registered: tlh".into())
+        );
+    }
+
+    #[test]
+    fn documented_languages_require_the_supported_languages_section() {
+        assert_eq!(
+            check_documented_languages(&documentation_languages(), "# Localisation\n\n## Catalogs\n"),
+            Err("docs/localization.md has no `## Supported languages` section".into())
+        );
+    }
+
     fn known_keys(values: &[&str]) -> BTreeSet<Key> {
         values.iter().map(|value| Key { context: String::new(), source: (*value).to_string() }).collect()
     }
