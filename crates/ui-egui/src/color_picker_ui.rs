@@ -811,6 +811,12 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         crate::crop_shield::set_custom_color(app, color)?;
         return Ok(json!({ "color": color }));
     }
+    // A colour of the open Filter Gallery (its selected effect's Glow Color, or its own
+    // foreground and background colours).
+    if let Some(which) = target.strip_prefix("gallery:") {
+        crate::gallery_ui::set_color(app, which, parse_hex(color).ok_or("not a colour")?)?;
+        return Ok(json!({ "color": color }));
+    }
     // The Note tool's colour for new notes (#2144).
     if target == "noteColor" {
         app.ui.analysis.note_color = parse_hex(color).ok_or("not a colour")?;
