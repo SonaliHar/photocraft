@@ -546,13 +546,23 @@ pub fn parse_placed_warp(key: &[u8; 4], data: &[u8]) -> Option<photocraft_geom::
 /// can't be read (an unknown style, missing bounds, a malformed mesh).
 fn warp_of(w: &Descriptor) -> Option<Option<photocraft_geom::warp::Warp>> {
     use photocraft_geom::warp::{BezierMesh, Warp, WarpStyle};
-    let style = enum_of(w, "warpStyle").and_then(|v| WarpStyle::parse(&String::from_utf8_lossy(v)))?;
+    let style_id = enum_of(w, "warpStyle")?;
+    let bounds = || {
+        let b = get_desc(w, "bounds")?;
+        let g = |k: &str| num(b.get(k));
+        Some([g("Left")?, g("Top ")?, g("Rght")?, g("Btom")?])
+    };
+    // Photoshop's Cylinder warp keeps its handles in `warpValues` instead of a mesh.
+    if style_id == b"warpCylinder" {
+        let Some(Value::List(vals)) = w.get("warpValues") else { return None };
+        let v: Vec<f64> = vals.iter().filter_map(|x| num(Some(x))).collect();
+        return Warp::cylinder(<[f64; 7]>::try_from(v).ok()?, bounds()?).map(Some);
+    }
+    let style = WarpStyle::parse(&String::from_utf8_lossy(style_id))?;
     if style == WarpStyle::None {
         return Some(None);
     }
-    let b = get_desc(w, "bounds")?;
-    let g = |k: &str| num(b.get(k));
-    let bounds = [g("Left")?, g("Top ")?, g("Rght")?, g("Btom")?];
+    let bounds = bounds()?;
     let mut warp = Warp::preset(style, num(w.get("warpValue")).unwrap_or(0.0), bounds);
     warp.h_distort = num(w.get("warpPerspective")).unwrap_or(0.0);
     warp.v_distort = num(w.get("warpPerspectiveOther")).unwrap_or(0.0);
@@ -631,12 +641,16 @@ pub(crate) fn parse_prefix_versioned(data: &[u8]) -> Option<Descriptor> {
     VersionedDescriptor::parse_prefix(data).ok().map(|(v, _)| v.descriptor)
 }
 
-/// The source-space box Photoshop maps onto a placed layer's `Trnf` quad: the bounding box of a
-/// custom warp's control points, which may spill past the source, else the source
+/// The source-space box Photoshop maps onto a placed layer's `Trnf` quad: a Cylinder warp's
+/// surface box, else the bounding box of a custom warp's control points, which may spill past the source, else the source
 /// rect `0..w × 0..h`. Mapping the source rect instead counts the overhang twice and stretches the
 /// placement. A degenerate or non-finite box falls back to the source rect.
 pub(crate) fn placed_frame(warp: Option<&photocraft_geom::warp::Warp>, w: f64, h: f64) -> [f64; 4] {
     let rect = [0.0, 0.0, w, h];
+    // A Cylinder frames its surface, not its control points.
+    if let Some(f) = warp.and_then(|wp| wp.placed_frame()).filter(|f| f.iter().all(|v| v.is_finite()) && f[2] > f[0] && f[3] > f[1]) {
+        return f;
+    }
     let Some(m) = warp.filter(|wp| wp.style == photocraft_geom::warp::WarpStyle::Custom).and_then(|wp| wp.mesh.as_ref()) else {
         return rect;
     };
@@ -1072,6 +1086,37 @@ mod tests {
         // The `PlLd` record reads the same corners the same way.
         let p = [100.0, 100.0, 300.0, 120.0, 280.0, 220.0, 110.0, 200.0];
         assert_eq!(plld_transform(&p, Some((40.0, 20.0)), Some(&warp)).1, Some(h.0));
+    }
+
+    /// A Cylinder warp (`warpCylinder` with `warpValues`) reads into its mesh and is placed by its
+    /// rectangle; malformed handles are unreadable.
+    #[test]
+    fn cylinder_warp_is_read() {
+        use photocraft_geom::warp::Warp;
+        let e = |t: &str, v: &str| Value::Enumerated { type_id: Id::new(t), value: Id::new(v) };
+        let bounds = Descriptor::new("classFloatRect")
+            .with("Top ", Value::Double(0.0))
+            .with("Left", Value::Double(0.0))
+            .with("Btom", Value::Double(761.0))
+            .with("Rght", Value::Double(505.0));
+        let sold = |values: Vec<f64>| {
+            let w = Descriptor::new("warp")
+                .with("warpStyle", e("warpStyle", "warpCylinder"))
+                .with("warpValues", Value::List(values.into_iter().map(Value::Double).collect()))
+                .with("bounds", Value::Descriptor(bounds.clone()));
+            let mut v = b"soLD".to_vec();
+            v.extend_from_slice(&4u32.to_be_bytes());
+            v.extend(VersionedDescriptor::new(Descriptor::new("null").with("warp", Value::Descriptor(w))).to_bytes());
+            v
+        };
+        let values = [122.27, 1207.43, 606.51, 261.0, 0.1508, -0.4065, 0.9];
+        let w = parse_placed_warp(b"SoLd", &sold(values.to_vec())).expect("cylinder reads");
+        assert_eq!(Some(w.clone()), Warp::cylinder(values, [0.0, 0.0, 505.0, 761.0]));
+        // Both edges bow into the rectangle here, so the surface's box is the rectangle.
+        let f = placed_frame(Some(&w), 505.0, 761.0);
+        assert!((f[0] - 122.27).abs() < 0.5 && (f[1] - 261.0).abs() < 1e-9 && (f[2] - 606.51).abs() < 0.5 && (f[3] - 1207.43).abs() < 1e-9, "{f:?}");
+        assert!(parse_placed_warp(b"SoLd", &sold(values[..6].to_vec())).is_none(), "six handles");
+        assert!(parse_placed_warp(b"SoLd", &sold(vec![0.0, 761.0, 505.0, 0.0, 0.2, 0.2, 0.4])).is_none(), "unmodelled k");
     }
 
     #[test]

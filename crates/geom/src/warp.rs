@@ -920,12 +920,76 @@ pub struct Warp {
     /// Control mesh for [`WarpStyle::Custom`] (output coordinates).
     #[serde(default)]
     pub mesh: Option<BezierMesh>,
+    /// Photoshop's Cylinder warp this custom mesh was built from ([`Warp::cylinder`]): its
+    /// `warpValues`, kept so the layer goes back to PSD as a cylinder and is placed by its frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cylinder: Option<[f64; 7]>,
 }
+
+/// Photoshop's Cylinder warp (`warpCylinder`) as observed in its renders: a 2 × 1-patch Bezier
+/// mesh over the cylinder's rectangle. The columns sit at fixed fractions of the width (the halves
+/// are quarter turns of the cylinder, seen from the front); the top and bottom edges are elliptic
+/// arcs bowing by `depth × width / 2` towards +y; the rows between are blended linearly; placed
+/// corners frame the surface's box ([`Warp::placed_frame`]). Measured
+/// from Photoshop renders of a dot grid (scripted and designer-made layers agree within 0.002 of
+/// the width).
+const CYLINDER_COLUMNS: [f64; 7] = [0.0, -0.0101, 0.2254, 0.5, 0.7746, 1.0101, 1.0];
+/// The edge arcs' profile across the columns, in units of the bow.
+const CYLINDER_PROFILE: [f64; 7] = [0.0, 0.505, 1.0, 1.0, 1.0, 0.505, 0.0];
+/// The seventh `warpValues` entry. Every designer-made cylinder seen stores 0.9; others are not
+/// modelled.
+const CYLINDER_K: f64 = 0.9;
 
 impl Warp {
     /// No warp over `bounds`.
     pub fn none(bounds: [f64; 4]) -> Warp {
-        Warp { style: WarpStyle::None, bend: 0.0, h_distort: 0.0, v_distort: 0.0, vertical: false, bounds, mesh: None }
+        Warp { style: WarpStyle::None, bend: 0.0, h_distort: 0.0, v_distort: 0.0, vertical: false, bounds, mesh: None, cylinder: None }
+    }
+
+    /// Photoshop's Cylinder warp from its `warpValues` (`[left, bottom, right, top, top bow,
+    /// bottom bow, k]`, the rectangle in source pixels) as a custom mesh over `bounds`. `None` for
+    /// an empty or non-finite rectangle, or a `k` other than 0.9.
+    pub fn cylinder(values: [f64; 7], bounds: [f64; 4]) -> Option<Warp> {
+        let [x0, yb, x1, yt, top, bottom, k] = values;
+        if !values.iter().all(|v| v.is_finite()) || (k - CYLINDER_K).abs() > 1e-6 || (x1 - x0).abs() < 1e-6 || (yb - yt).abs() < 1e-6 {
+            return None;
+        }
+        let half = (x1 - x0) / 2.0;
+        let mut points = Vec::with_capacity(28);
+        for j in 0..4 {
+            let t = f64::from(j) / 3.0;
+            for (c, p) in CYLINDER_COLUMNS.iter().zip(CYLINDER_PROFILE) {
+                let (y_top, y_bottom) = (yt + top * half * p, yb + bottom * half * p);
+                points.push([x0 + c * (x1 - x0), y_top + (y_bottom - y_top) * t]);
+            }
+        }
+        let mesh = BezierMesh { us: vec![0.0, 0.5, 1.0], vs: vec![0.0, 1.0], points };
+        mesh.is_valid().then(|| Warp { cylinder: Some(values), ..Warp::custom(mesh, bounds) })
+    }
+
+    /// The Cylinder `warpValues` this warp still is: `Some` only while the mesh is the one
+    /// [`Warp::cylinder`] built (an edited mesh is an ordinary custom warp).
+    pub fn cylinder_values(&self) -> Option<[f64; 7]> {
+        let v = self.cylinder?;
+        (Warp::cylinder(v, self.bounds)?.mesh == self.mesh).then_some(v)
+    }
+
+    /// The source box a placed layer's corners frame for this warp, when it isn't the control-point
+    /// box: a Cylinder is framed by its surface (the rectangle grown by edges that bow out of it;
+    /// the rectangle alone puts a cylinder whose bottom bows down too low and too tall).
+    pub fn placed_frame(&self) -> Option<[f64; 4]> {
+        self.cylinder_values()?;
+        let m = self.mesh.as_ref()?;
+        // The rows are blends of the top and bottom edges, so the edges hold the extremes.
+        let n = 64;
+        let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+        for i in 0..=n {
+            let t = f64::from(i) / f64::from(n);
+            for p in [m.eval(t, 0.0), m.eval(t, 1.0), m.eval(0.0, t), m.eval(1.0, t)] {
+                b = [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])];
+            }
+        }
+        b.iter().all(|v| v.is_finite()).then_some(b)
     }
 
     /// A preset style.
@@ -1041,6 +1105,36 @@ impl Warp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Photoshop's Cylinder: a 2 × 1-patch mesh whose corners are the rectangle's, whose edges bow
+    /// by `depth × width / 2` in the middle, framed by its rectangle while unedited.
+    #[test]
+    fn cylinder_warp_is_photoshops_mesh() {
+        let bounds = [0.0, 0.0, 505.0, 761.0];
+        let w = Warp::cylinder([0.0, 761.0, 505.0, 0.0, 0.2, 0.5, 0.9], bounds).expect("cylinder");
+        assert_eq!(w.style, WarpStyle::Custom);
+        let m = w.mesh.as_ref().expect("mesh");
+        assert_eq!((m.us.as_slice(), m.vs.as_slice(), m.nx(), m.ny()), (&[0.0, 0.5, 1.0][..], &[0.0, 1.0][..], 7, 4));
+        assert_eq!((m.point(0, 0), m.point(6, 0), m.point(0, 3), m.point(6, 3)), ([0.0, 0.0], [505.0, 0.0], [0.0, 761.0], [505.0, 761.0]));
+        let bow = |a: f64| a * 505.0 / 2.0;
+        assert!((m.eval(0.5, 0.0)[1] - bow(0.2)).abs() < 1e-9 && (m.eval(0.5, 1.0)[1] - 761.0 - bow(0.5)).abs() < 1e-9);
+        // The middle column is the rectangle's middle; the halves mirror each other.
+        assert!((m.eval(0.5, 0.5)[0] - 252.5).abs() < 1e-9);
+        assert!((m.eval(0.2, 0.3)[0] + m.eval(0.8, 0.3)[0] - 505.0).abs() < 1e-9);
+        // Framed by the surface: the bottom edge bows 0.5 × 252.5 px below the rectangle.
+        let f = w.placed_frame().expect("frame");
+        assert!(f[0].abs() < 0.5 && f[1].abs() < 1e-9 && (f[2] - 505.0).abs() < 0.5 && (f[3] - 761.0 - bow(0.5)).abs() < 1e-9, "{f:?}");
+        // An edited mesh is an ordinary custom warp: no longer a cylinder, framed by its points.
+        let mut edited = w.clone();
+        if let Some(m) = edited.mesh.as_mut() {
+            m.points[10][0] += 3.0;
+        }
+        assert_eq!((edited.cylinder_values(), edited.placed_frame()), (None, None));
+        // Unsupported or malformed handles.
+        assert!(Warp::cylinder([0.0, 761.0, 505.0, 0.0, 0.2, 0.5, 0.5], bounds).is_none(), "k other than 0.9");
+        assert!(Warp::cylinder([0.0, 761.0, 0.0, 0.0, 0.2, 0.5, 0.9], bounds).is_none(), "empty");
+        assert!(Warp::cylinder([f64::NAN, 761.0, 505.0, 0.0, 0.2, 0.5, 0.9], bounds).is_none(), "not finite");
+    }
 
     const B: [f64; 4] = [10.0, 20.0, 110.0, 70.0];
 
