@@ -3200,3 +3200,28 @@ curves	Smooth	Haluskan
 	This document's layers: {needed} of {budget} for layers	Layer dokumen ini: {needed} dari {budget} untuk layer
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Layer dokumen ini membutuhkan {needed} tetapi boleh memakai {budget}: penggambaran ulang seluruh dokumen memakai CPU
 	GPU Memory (MB, 0 = Automatic)	Memori GPU (MB, 0 = Otomatis)
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	Tambah Tombol…
+	Add Divider	Tambah Pemisah
+	Add Heading	Tambah Judul
+	Click an item to change or move it.	Klik item untuk mengubah atau memindahkannya.
+	Custom Panel	Panel Kustom
+	Custom Panels	Panel Kustom
+	Delete Panel	Hapus Panel
+	Divider	Pemisah
+	Edit Panel	Edit Panel
+	Move Down	Pindah ke Bawah
+	Move Up	Pindah ke Atas
+	New Custom Panel	Panel Kustom Baru
+	No matches	Tidak ada yang cocok
+	Search commands, tools and actions…	Cari perintah, alat, dan action…
+	Section	Bagian
+	This panel is empty. Click the pencil to add buttons.	Panel ini kosong. Klik pensil untuk menambahkan tombol.
+	{name} isn't available right now	{name} tidak tersedia saat ini
+	Label	Label
+	Import Panel…	Impor Panel…
+	Export Panel…	Ekspor Panel…
+	Add Text	Tambah Teks
+	Show as Icon	Tampilkan sebagai Ikon
+	One section open at a time	Buka satu bagian sekaligus

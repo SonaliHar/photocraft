@@ -4329,3 +4329,27 @@ shape	Appearance	Aspetto
 	This document's layers: {needed} of {budget} for layers	Livelli di questo documento: {needed} su {budget} per i livelli
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	I livelli di questo documento richiedono {needed} ma possono occupare {budget}: i ridisegni dell'intero documento usano la CPU
 	GPU Memory (MB, 0 = Automatic)	Memoria GPU (MB, 0 = Automatico)
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	Aggiungi pulsante…
+	Add Divider	Aggiungi divisore
+	Add Heading	Aggiungi intestazione
+	Click an item to change or move it.	Fai clic su un elemento per modificarlo o spostarlo.
+	Custom Panel	Pannello personalizzato
+	Custom Panels	Pannelli personalizzati
+	Delete Panel	Elimina pannello
+	Divider	Divisore
+	Edit Panel	Modifica pannello
+	Move Down	Sposta giù
+	Move Up	Sposta su
+	New Custom Panel	Nuovo pannello personalizzato
+	No matches	Nessuna corrispondenza
+	Search commands, tools and actions…	Cerca comandi, strumenti e azioni…
+	Section	Sezione
+	This panel is empty. Click the pencil to add buttons.	Questo pannello è vuoto. Fai clic sulla matita per aggiungere pulsanti.
+	{name} isn't available right now	{name} non è disponibile al momento
+	Import Panel…	Importa pannello…
+	Export Panel…	Esporta pannello…
+	Add Text	Aggiungi testo
+	Show as Icon	Mostra come icona
+	One section open at a time	Una sezione aperta alla volta

@@ -3178,3 +3178,27 @@ curves	Smooth	Сгладить
 	This document's layers: {needed} of {budget} for layers	Слои этого документа: {needed} из {budget} для слоёв
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Слоям этого документа нужно {needed}, но занимать они могут {budget}: весь документ перерисовывается на CPU
 	GPU Memory (MB, 0 = Automatic)	Память GPU (МБ, 0 = автоматически)
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	Добавить кнопку…
+	Add Divider	Добавить разделитель
+	Add Heading	Добавить заголовок
+	Click an item to change or move it.	Нажмите на элемент, чтобы изменить или переместить его.
+	Custom Panel	Пользовательская панель
+	Custom Panels	Пользовательские панели
+	Delete Panel	Удалить панель
+	Divider	Разделитель
+	Edit Panel	Изменить панель
+	Move Down	Переместить вниз
+	Move Up	Переместить вверх
+	New Custom Panel	Новая пользовательская панель
+	No matches	Совпадений нет
+	Search commands, tools and actions…	Поиск команд, инструментов и операций…
+	Section	Раздел
+	This panel is empty. Click the pencil to add buttons.	Эта панель пуста. Нажмите на карандаш, чтобы добавить кнопки.
+	{name} isn't available right now	{name} сейчас недоступно
+	Import Panel…	Импортировать панель…
+	Export Panel…	Экспортировать панель…
+	Add Text	Добавить текст
+	Show as Icon	Показывать значком
+	One section open at a time	Открывать только один раздел

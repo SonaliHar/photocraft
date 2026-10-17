@@ -3884,3 +3884,27 @@ curves	Smooth	スムーズ
 	This document's layers: {needed} of {budget} for layers	このドキュメントのレイヤー: レイヤー用 {budget} のうち {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	このドキュメントのレイヤーには {needed} が必要ですが、使えるのは {budget} です: ドキュメント全体の再描画は CPU で行われます
 	GPU Memory (MB, 0 = Automatic)	GPU メモリ（MB、0 = 自動）
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	ボタンを追加…
+	Add Divider	区切り線を追加
+	Add Heading	見出しを追加
+	Click an item to change or move it.	項目をクリックすると変更や移動ができます。
+	Custom Panel	カスタムパネル
+	Custom Panels	カスタムパネル
+	Delete Panel	パネルを削除
+	Divider	区切り線
+	Edit Panel	パネルを編集
+	Move Down	下へ移動
+	Move Up	上へ移動
+	New Custom Panel	新規カスタムパネル
+	No matches	一致する項目はありません
+	Search commands, tools and actions…	コマンド、ツール、アクションを検索…
+	Section	セクション
+	This panel is empty. Click the pencil to add buttons.	このパネルは空です。鉛筆アイコンをクリックしてボタンを追加します。
+	{name} isn't available right now	{name} は現在使用できません
+	Import Panel…	パネルを読み込み…
+	Export Panel…	パネルを書き出し…
+	Add Text	テキストを追加
+	Show as Icon	アイコンで表示
+	One section open at a time	一度に 1 つのセクションだけ開く

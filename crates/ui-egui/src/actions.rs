@@ -240,7 +240,7 @@ fn step_count(steps: usize, disabled: usize) -> String {
     }
 }
 
-fn button_fill(color: &str, t: &Tokens) -> Color32 {
+pub(crate) fn button_fill(color: &str, t: &Tokens) -> Color32 {
     // Photoshop's Actions button colours. Empty uses the panel card so an uncoloured action stays readable.
     match color {
         "red" => Color32::from_rgb(196, 64, 64),
@@ -254,7 +254,7 @@ fn button_fill(color: &str, t: &Tokens) -> Color32 {
     }
 }
 
-fn button_label_color(color: &str, t: &Tokens) -> Color32 {
+pub(crate) fn button_label_color(color: &str, t: &Tokens) -> Color32 {
     if color.is_empty() { t.text } else { Color32::from_rgb(20, 20, 20) }
 }
 

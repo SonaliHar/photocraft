@@ -4127,3 +4127,27 @@ cameraRaw	Yellow	Sárga
 	This document's layers: {needed} of {budget} for layers	A dokumentum rétegei: {needed} / {budget} a rétegeknek
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	A dokumentum rétegeinek {needed} kell, de {budget} foglalhatnak: a teljes dokumentum újrarajzolása a CPU-n fut
 	GPU Memory (MB, 0 = Automatic)	GPU-memória (MB, 0 = Automatikus)
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	Gomb hozzáadása…
+	Add Divider	Elválasztó hozzáadása
+	Add Heading	Címsor hozzáadása
+	Click an item to change or move it.	Kattintson egy elemre a módosításához vagy áthelyezéséhez.
+	Custom Panel	Egyéni panel
+	Custom Panels	Egyéni panelek
+	Delete Panel	Panel törlése
+	Divider	Elválasztó
+	Edit Panel	Panel szerkesztése
+	Move Down	Mozgatás le
+	Move Up	Mozgatás fel
+	New Custom Panel	Új egyéni panel
+	No matches	Nincs találat
+	Search commands, tools and actions…	Parancsok, eszközök és műveletsorok keresése…
+	Section	Szakasz
+	This panel is empty. Click the pencil to add buttons.	Ez a panel üres. Gombok hozzáadásához kattintson a ceruzára.
+	{name} isn't available right now	{name} jelenleg nem érhető el
+	Import Panel…	Panel importálása…
+	Export Panel…	Panel exportálása…
+	Add Text	Szöveg hozzáadása
+	Show as Icon	Megjelenítés ikonként
+	One section open at a time	Egyszerre csak egy szakasz legyen nyitva

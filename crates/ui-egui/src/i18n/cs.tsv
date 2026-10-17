@@ -3816,3 +3816,28 @@ navigator	Zoom	Zvětšení
 	This document's layers: {needed} of {budget} for layers	Vrstvy tohoto dokumentu: {needed} z {budget} pro vrstvy
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Vrstvy tohoto dokumentu potřebují {needed}, ale mohou zabrat {budget}: překreslení celého dokumentu probíhá na CPU
 	GPU Memory (MB, 0 = Automatic)	Paměť GPU (MB, 0 = Automaticky)
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	Přidat tlačítko…
+	Add Divider	Přidat oddělovač
+	Add Heading	Přidat nadpis
+	Click an item to change or move it.	Kliknutím na položku ji změníte nebo přesunete.
+	Custom Panel	Vlastní panel
+	Custom Panels	Vlastní panely
+	Delete Panel	Odstranit panel
+	Divider	Oddělovač
+	Edit Panel	Upravit panel
+	Move Down	Posunout dolů
+	Move Up	Posunout nahoru
+	New Custom Panel	Nový vlastní panel
+	No matches	Žádné shody
+	Search commands, tools and actions…	Hledat příkazy, nástroje a akce…
+	Section	Oddíl
+	This panel is empty. Click the pencil to add buttons.	Tento panel je prázdný. Tlačítka přidáte kliknutím na tužku.
+	{name} isn't available right now	{name} teď není k dispozici
+	Tool	Nástroj
+	Import Panel…	Importovat panel…
+	Export Panel…	Exportovat panel…
+	Add Text	Přidat text
+	Show as Icon	Zobrazit jako ikonu
+	One section open at a time	Otevřít vždy jen jeden oddíl

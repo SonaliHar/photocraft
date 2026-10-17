@@ -127,6 +127,10 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     if let Some(r) = crate::workspace_ui::menu(app, id, &params) {
         return r;
     }
+    // Window › Custom Panels: build, show and press the user's button panels.
+    if let Some(r) = crate::custom_panels::menu(app, ctx, id, &params) {
+        return r;
+    }
     // Window › Gradients, Patterns, Styles, Shapes, Tool Presets, Clone Source.
     if let Some(r) = crate::preset_panels::menu(app, id, &params) {
         return r;
@@ -672,6 +676,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if let Some(e) = crate::workspace_ui::is_enabled(app, id) {
         return e;
     }
+    if let Some(e) = crate::custom_panels::is_enabled(app, id) {
+        return e;
+    }
     if crate::analysis_ui::handles(id) {
         return true;
     }
@@ -762,7 +769,11 @@ fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     if let Some(c) = crate::view_cmds::checked(app, id) {
         return Some(c);
     }
-    if let Some(c) = crate::analysis_ui::checked(app, id).or_else(|| crate::workspace_ui::checked(app, id)).or_else(|| crate::file_ui::checked(app, id)) {
+    if let Some(c) = crate::analysis_ui::checked(app, id)
+        .or_else(|| crate::workspace_ui::checked(app, id))
+        .or_else(|| crate::custom_panels::checked(app, id))
+        .or_else(|| crate::file_ui::checked(app, id))
+    {
         return Some(c);
     }
     if let Some(c) = crate::preset_panels::checked(app, id) {
@@ -892,6 +903,7 @@ pub fn is_live(id: &str) -> bool {
         || crate::view_cmds::handles(id)
         || crate::analysis_ui::handles(id)
         || crate::workspace_ui::handles(id)
+        || crate::custom_panels::handles(id)
         || crate::preset_panels::handles(id)
         || crate::type_panels_ui::handles(id)
         || crate::timeline_ui::handles(id)
@@ -963,6 +975,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         }
     }
     crate::plugin_ui::insert_menu_items(app, &mut items);
+    crate::custom_panels::insert_menu_items(app, &mut items);
     if let Some(mask) = app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id))).and_then(|l| l.mask.as_ref())
         && let Some(item) = items.iter_mut().find(|i| i.id == "layer.layerMask.enabled")
     {

@@ -3210,3 +3210,27 @@ curves	Smooth	Glätten
 	This document's layers: {needed} of {budget} for layers	Ebenen dieses Dokuments: {needed} von {budget} für Ebenen
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Die Ebenen dieses Dokuments brauchen {needed}, dürfen aber {budget} belegen: Das ganze Dokument wird auf der CPU neu gezeichnet
 	GPU Memory (MB, 0 = Automatic)	GPU-Speicher (MB, 0 = Automatisch)
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	Schaltfläche hinzufügen…
+	Add Divider	Trennlinie hinzufügen
+	Add Heading	Überschrift hinzufügen
+	Click an item to change or move it.	Klicken Sie auf ein Element, um es zu ändern oder zu verschieben.
+	Custom Panel	Eigenes Bedienfeld
+	Custom Panels	Eigene Bedienfelder
+	Delete Panel	Bedienfeld löschen
+	Divider	Trennlinie
+	Edit Panel	Bedienfeld bearbeiten
+	Move Down	Nach unten
+	Move Up	Nach oben
+	New Custom Panel	Neues eigenes Bedienfeld
+	No matches	Keine Treffer
+	Search commands, tools and actions…	Befehle, Werkzeuge und Aktionen suchen…
+	Section	Abschnitt
+	This panel is empty. Click the pencil to add buttons.	Dieses Bedienfeld ist leer. Klicken Sie auf den Stift, um Schaltflächen hinzuzufügen.
+	{name} isn't available right now	{name} ist gerade nicht verfügbar
+	Import Panel…	Bedienfeld importieren…
+	Export Panel…	Bedienfeld exportieren…
+	Add Text	Text hinzufügen
+	Show as Icon	Als Symbol anzeigen
+	One section open at a time	Immer nur einen Abschnitt öffnen

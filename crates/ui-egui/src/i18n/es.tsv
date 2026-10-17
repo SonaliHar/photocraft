@@ -4170,3 +4170,27 @@ navigator	Zoom	Zoom
 	This document's layers: {needed} of {budget} for layers	Capas de este documento: {needed} de {budget} para capas
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Las capas de este documento necesitan {needed} pero pueden ocupar {budget}: los redibujados de todo el documento usan la CPU
 	GPU Memory (MB, 0 = Automatic)	Memoria de GPU (MB, 0 = Automático)
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	Añadir botón…
+	Add Divider	Añadir separador
+	Add Heading	Añadir encabezado
+	Click an item to change or move it.	Haga clic en un elemento para cambiarlo o moverlo.
+	Custom Panel	Panel personalizado
+	Custom Panels	Paneles personalizados
+	Delete Panel	Eliminar panel
+	Divider	Separador
+	Edit Panel	Editar panel
+	Move Down	Bajar
+	Move Up	Subir
+	New Custom Panel	Nuevo panel personalizado
+	No matches	Sin coincidencias
+	Search commands, tools and actions…	Buscar comandos, herramientas y acciones…
+	Section	Sección
+	This panel is empty. Click the pencil to add buttons.	Este panel está vacío. Haga clic en el lápiz para añadir botones.
+	{name} isn't available right now	{name} no está disponible en este momento
+	Import Panel…	Importar panel…
+	Export Panel…	Exportar panel…
+	Add Text	Añadir texto
+	Show as Icon	Mostrar como icono
+	One section open at a time	Abrir solo una sección a la vez

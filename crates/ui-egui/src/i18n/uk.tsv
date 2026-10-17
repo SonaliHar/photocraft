@@ -3907,3 +3907,27 @@ curves	Smooth	Згладити
 	This document's layers: {needed} of {budget} for layers	Шари цього документа: {needed} з {budget} для шарів
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Шарам цього документа потрібно {needed}, але займати вони можуть {budget}: увесь документ перемальовується на CPU
 	GPU Memory (MB, 0 = Automatic)	Пам'ять GPU (МБ, 0 = автоматично)
+
+# Window › Custom Panels (custom_panels.rs)
+	Add Button…	Додати кнопку…
+	Add Divider	Додати роздільник
+	Add Heading	Додати заголовок
+	Click an item to change or move it.	Клацніть елемент, щоб змінити або перемістити його.
+	Custom Panel	Власна панель
+	Custom Panels	Власні панелі
+	Delete Panel	Видалити панель
+	Divider	Роздільник
+	Edit Panel	Редагувати панель
+	Move Down	Перемістити вниз
+	Move Up	Перемістити вгору
+	New Custom Panel	Нова власна панель
+	No matches	Немає збігів
+	Search commands, tools and actions…	Пошук команд, інструментів і дій…
+	Section	Розділ
+	This panel is empty. Click the pencil to add buttons.	Ця панель порожня. Клацніть олівець, щоб додати кнопки.
+	{name} isn't available right now	{name} зараз недоступно
+	Import Panel…	Імпортувати панель…
+	Export Panel…	Експортувати панель…
+	Add Text	Додати текст
+	Show as Icon	Показувати значком
+	One section open at a time	Відкривати лише один розділ

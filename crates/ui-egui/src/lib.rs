@@ -21,6 +21,7 @@ pub mod adjust_preview;
 pub mod adjust_ui;
 mod alt_grab;
 pub mod analysis_ui;
+pub mod custom_panels;
 pub mod anchor_tools;
 pub mod artboard_tool;
 pub mod artboard_ui;
@@ -1996,6 +1997,7 @@ impl eframe::App for PhotocraftApp {
         analysis_ui::windows(self, &ctx);
         timeline_ui::windows(self, &ctx);
         workspace_ui::windows(self, &ctx);
+        custom_panels::windows(self, &ctx);
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
         rasterize_prompt::run_pending(self, &ctx);
