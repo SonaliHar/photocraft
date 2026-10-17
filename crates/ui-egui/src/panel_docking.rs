@@ -425,7 +425,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
         if let Some(panel) = &reveal {
             area = area.raise_panel(panel.clone());
         }
-        area.show_customized(
+        let output = area.show_customized(
             ui,
             &layout,
             &style,
@@ -442,7 +442,116 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> bool {
                 }
             },
             &mut PanelContent { app, collapsed: &collapsed, commands: &mut commands, targets: &mut targets },
-        )
+        );
+        for target in &targets {
+            let Some(strip) = target.tab_strip else { continue };
+            let members = group_members(&layout, &target.anchor);
+            if members.len() <= 1 {
+                continue;
+            }
+            let pointer = ui.ctx().pointer_interact_pos().or_else(|| ui.ctx().pointer_latest_pos());
+            if let Some(pos) = pointer
+                && strip.contains(pos)
+            {
+                let scroll = ui.input(|i| i.smooth_scroll_delta.x + i.smooth_scroll_delta.y);
+                if scroll.abs() > 2.0 {
+                    let active_idx = members.iter().position(|id| panel_active(&layout, id)).unwrap_or(0);
+                    let next_idx = if scroll < -2.0 {
+                        (active_idx + 1).min(members.len() - 1)
+                    } else {
+                        active_idx.saturating_sub(1)
+                    };
+                    if next_idx != active_idx
+                        && let Some(next_panel) = members.get(next_idx)
+                    {
+                        commands.push(("window.panel.activate", json!({"panel": next_panel})));
+                    }
+                }
+            }
+            let header_reserved = 28.0;
+            let track_right = (strip.right() - header_reserved).max(strip.left() + 20.0);
+            let track = egui::Rect::from_min_max(egui::pos2(strip.left(), strip.bottom() - 2.0), egui::pos2(track_right, strip.bottom()));
+            if track.width() > 20.0 {
+                let count = members.len() as f32;
+                let active_idx = members.iter().position(|id| panel_active(&layout, id)).unwrap_or(0);
+                let thumb_w = (track.width() / count).clamp(16.0, track.width());
+                let thumb_x = track.left() + (active_idx as f32 / (count - 1.0).max(1.0)) * (track.width() - thumb_w);
+                let thumb = egui::Rect::from_min_size(egui::pos2(thumb_x, track.top()), egui::vec2(thumb_w, track.height()));
+
+                ui.painter().rect_filled(track, 0.0, t.card_border.gamma_multiply(0.4));
+                ui.painter().rect_filled(thumb, 1.0, t.accent);
+
+                let scroll_id = egui::Id::new("photocraft-panel-tab-scrollbar").with(&target.anchor);
+                let scroll_resp = ui.interact(track.expand2(egui::vec2(0.0, 4.0)), scroll_id, egui::Sense::click_and_drag());
+                if (scroll_resp.clicked() || scroll_resp.dragged())
+                    && let Some(pos) = ui.ctx().pointer_interact_pos()
+                {
+                    let fraction = ((pos.x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0);
+                    let picked = ((fraction * count) as usize).min(members.len() - 1);
+                    if let Some(panel) = members.get(picked) {
+                        commands.push(("window.panel.activate", json!({"panel": panel})));
+                    }
+                }
+                scroll_resp.on_hover_text(tl!("Scroll panels"));
+            }
+        }
+        for floating in &layout.floating {
+            if floating.panels.len() <= 1 {
+                continue;
+            }
+            let floating_rect = egui::Rect::from_min_size(egui::pos2(floating.rect[0], floating.rect[1]), egui::vec2(floating.rect[2], floating.rect[3]));
+            let tab_h = if t.pro { 28.0 } else { 40.0 };
+            let strip = egui::Rect::from_min_size(floating_rect.min, egui::vec2(floating_rect.width(), tab_h));
+            let pointer = ui.ctx().pointer_interact_pos().or_else(|| ui.ctx().pointer_latest_pos());
+            if let Some(pos) = pointer
+                && strip.contains(pos)
+            {
+                let scroll = ui.input(|i| i.smooth_scroll_delta.x + i.smooth_scroll_delta.y);
+                if scroll.abs() > 2.0 {
+                    let active_idx = floating.active;
+                    let next_idx = if scroll < -2.0 {
+                        (active_idx + 1).min(floating.panels.len() - 1)
+                    } else {
+                        active_idx.saturating_sub(1)
+                    };
+                    if next_idx != active_idx
+                        && let Some(next_panel) = floating.panels.get(next_idx)
+                    {
+                        commands.push(("window.panel.activate", json!({"panel": next_panel})));
+                    }
+                }
+            }
+            let header_reserved = 28.0;
+            let track_left = strip.left() + 12.0;
+            let track_right = (strip.right() - header_reserved).max(track_left + 20.0);
+            let track = egui::Rect::from_min_max(egui::pos2(track_left, strip.bottom() - 2.0), egui::pos2(track_right, strip.bottom()));
+            if track.width() > 20.0 {
+                let count = floating.panels.len() as f32;
+                let active_idx = floating.active;
+                let thumb_w = (track.width() / count).clamp(16.0, track.width());
+                let thumb_x = track.left() + (active_idx as f32 / (count - 1.0).max(1.0)) * (track.width() - thumb_w);
+                let thumb = egui::Rect::from_min_size(egui::pos2(thumb_x, track.top()), egui::vec2(thumb_w, track.height()));
+
+                ui.painter().rect_filled(track, 0.0, t.card_border.gamma_multiply(0.4));
+                ui.painter().rect_filled(thumb, 1.0, t.accent);
+
+                if let Some(anchor) = floating.panels.first() {
+                    let scroll_id = egui::Id::new("photocraft-floating-panel-tab-scrollbar").with(anchor);
+                    let scroll_resp = ui.interact(track.expand2(egui::vec2(0.0, 4.0)), scroll_id, egui::Sense::click_and_drag());
+                    if (scroll_resp.clicked() || scroll_resp.dragged())
+                        && let Some(pos) = ui.ctx().pointer_interact_pos()
+                    {
+                        let fraction = ((pos.x - track.left()) / track.width().max(1.0)).clamp(0.0, 1.0);
+                        let picked = ((fraction * count) as usize).min(floating.panels.len() - 1);
+                        if let Some(panel) = floating.panels.get(picked) {
+                            commands.push(("window.panel.activate", json!({"panel": panel})));
+                        }
+                    }
+                    scroll_resp.on_hover_text(tl!("Scroll panels"));
+                }
+            }
+        }
+        output
     };
     let output = if layout.root.is_some() {
         let mut panel = egui::Panel::right("shared-panel-dock")
@@ -544,11 +653,18 @@ fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: &str) {
     let pro = crate::theme::Tokens::get(ui.ctx()).pro;
     let Some(tab) = group.tabs(pro).iter().position(|name| name == label) else { return };
     *group.tab_mut(&mut app.ui.dock_tabs) = tab;
+    let inner = ui.available_height().max(0.0);
     if group.scrolls_itself(tab) {
+        ui.set_min_height(inner);
         crate::panels::dock_body(app, ui, *group, tab);
     } else {
+        if pro && *group == Group::Color && tab == 0 {
+            ui.data_mut(|d| d.insert_temp(crate::panels::color_field_fill_id(), inner));
+        }
+        ui.spacing_mut().scroll.fade.strength = 0.0;
         egui::ScrollArea::vertical()
             .id_salt(("shared-panel-body", id))
+            .max_height(inner)
             .auto_shrink([false, false])
             .show(ui, |ui| crate::panels::dock_body(app, ui, *group, tab));
     }
@@ -867,6 +983,23 @@ fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
 }
 
 impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
+    fn label(&mut self, ui: &egui::Ui, panel: &String, logical: &str, font: &egui::FontId, color: egui::Color32) -> egui::WidgetText {
+        let Some(layout) = self.app.ui.docking.as_ref() else {
+            return logical.into();
+        };
+        let members = group_members(layout, panel);
+        if members.len() <= 1 {
+            return logical.into();
+        }
+        let floating_w = layout.floating.iter().find(|g| g.panels.iter().any(|id| id == panel)).map(|g| g.rect[2]);
+        let strip_w = (floating_w.unwrap_or_else(|| ui.available_width().max(250.0)) - 28.0).max(40.0);
+        let count = members.len() as f32;
+        let tab_w = (strip_w / count).max(40.0);
+        let max_text_w = (tab_w - 10.0).max(1.0);
+        let galley = crate::tab_strip::elided(ui, logical, font.clone(), color, max_text_w);
+        egui::WidgetText::from(galley)
+    }
+
     fn body(&mut self, ui: &mut egui::Ui, id: &String) {
         if let Some(target) = self.targets.iter_mut().find(|target| target.anchor == *id) {
             target.rect = target.rect.union(ui.max_rect());
