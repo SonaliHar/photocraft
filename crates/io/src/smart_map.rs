@@ -1475,6 +1475,50 @@ mod tests {
         }
     }
 
+    /// Over an imported descriptor, a split warp goes in `quiltWarp` just before a `warpNone` `warp`
+    /// (Photoshop's order), replaces a `quiltWarp` already there, and is removed again when the
+    /// warp stops being split.
+    #[test]
+    fn split_warp_keys_over_a_template() {
+        use photocraft_geom::warp::BezierMesh;
+        let bounds = [0.0, 0.0, 60.0, 30.0];
+        let mut grid = BezierMesh::identity(bounds, 1, 1);
+        assert!(grid.split_u(0.5));
+        grid.points[3] = [31.0, -6.0];
+        let split = Warp::custom(grid, bounds);
+        let mut one = BezierMesh::identity(bounds, 1, 1);
+        one.points[15] = [67.0, 30.0];
+        let single = Warp::custom(one, bounds);
+        let spec =
+            |warp| PlacedSpec { idnt: "i", placed: "p", transform: Affine::IDENTITY, perspective: None, size: (60.0, 30.0), dpi: 72.0, warp, filter_fx: None };
+        let keys = |d: &Descriptor| d.items.iter().map(|(k, _)| String::from_utf8_lossy(k.as_bytes()).into_owned()).collect::<Vec<_>>();
+        let style = |d: &Descriptor, key: &str| match get_desc(d, key).and_then(|w| w.get("warpStyle")) {
+            Some(Value::Enumerated { value, .. }) => String::from_utf8_lossy(value.as_bytes()).into_owned(),
+            _ => String::new(),
+        };
+        // A template without a split warp (as imported from a plain layer).
+        let plain = parse_sold(&sold_bytes(None, &spec(Some(&single)), &mut Vec::new())).expect("parses").descriptor;
+        assert!(!keys(&plain).contains(&"quiltWarp".to_string()));
+        let mut warnings = Vec::new();
+        let data = sold_bytes(Some(&plain), &spec(Some(&split)), &mut warnings);
+        assert!(warnings.is_empty());
+        let d = parse_sold(&data).expect("parses").descriptor;
+        let k = keys(&d);
+        let (q, w) = (k.iter().position(|k| k == "quiltWarp").expect("quiltWarp"), k.iter().position(|k| k == "warp").expect("warp"));
+        assert_eq!(q + 1, w);
+        assert_eq!((style(&d, "quiltWarp"), style(&d, "warp")), ("warpCustom".to_string(), "warpNone".to_string()));
+        assert_eq!(crate::blocks::parse_placed_warp(b"SoLd", &data), Some(split.clone()));
+        // Written again over itself: one `quiltWarp`, same place.
+        let again = parse_sold(&sold_bytes(Some(&d), &spec(Some(&split)), &mut Vec::new())).expect("parses").descriptor;
+        assert_eq!(keys(&again), k);
+        // Back to a single patch: `quiltWarp` goes, `warp` holds the mesh.
+        let data = sold_bytes(Some(&d), &spec(Some(&single)), &mut Vec::new());
+        let d = parse_sold(&data).expect("parses").descriptor;
+        assert!(!keys(&d).contains(&"quiltWarp".to_string()));
+        assert_eq!(style(&d, "warp"), "warpCustom");
+        assert_eq!(crate::blocks::parse_placed_warp(b"SoLd", &data), Some(single));
+    }
+
     /// Export writes `Trnf` as the image of the custom warp's control-point box, the inverse of
     /// import: a spilled mesh comes back with the same transform and the quad Photoshop expects.
     #[test]

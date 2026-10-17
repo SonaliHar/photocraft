@@ -1255,9 +1255,18 @@ mod more_tests {
         mesh.points[15] = [67.0, 30.0];
         let custom = Warp::custom(mesh, bounds);
         let flat = Warp::preset(WarpStyle::Flag, 0.0, bounds);
-        for (w, back) in
-            [(Some(&arc), PlldWarp::Warp(arc.clone())), (Some(&custom), PlldWarp::Warp(custom.clone())), (Some(&flat), PlldWarp::None), (None, PlldWarp::None)]
-        {
+        // A split warp: the record's descriptor is a `quiltWarp`, as Photoshop writes it.
+        let mut grid = BezierMesh::identity(bounds, 1, 1);
+        assert!(grid.split_u(0.5) && grid.split_v(0.25));
+        grid.points[8] = [33.0, 9.0];
+        let split = Warp::custom(grid, bounds);
+        for (w, back) in [
+            (Some(&arc), PlldWarp::Warp(arc.clone())),
+            (Some(&custom), PlldWarp::Warp(custom.clone())),
+            (Some(&split), PlldWarp::Warp(split.clone())),
+            (Some(&flat), PlldWarp::None),
+            (None, PlldWarp::None),
+        ] {
             let t = Affine { m: [0.5, 0.0, 0.0, 0.5, 3.0, 4.0] };
             let spec = PlacedSpec { idnt: "w", placed: "", transform: t, perspective: None, size: (60.0, 30.0), dpi: 72.0, warp: w, filter_fx: None };
             let data = plld_bytes(&spec, &mut Vec::new());
