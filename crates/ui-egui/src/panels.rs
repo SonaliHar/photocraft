@@ -3666,29 +3666,14 @@ fn field_hsva(mut hsva: egui::ecolor::Hsva, remembered: (f32, f32)) -> egui::eco
 fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let bg_active = app.ui.color_panel.background;
-    let mode = ui.ctx().data_mut(|d| {
-        d.get_persisted::<String>(egui::Id::new("color_wheel_mode"))
-            .unwrap_or_else(|| "hue_cube".to_owned())
-    });
-    if mode == "color_wheel" {
+    if app.ui.color_panel.color_wheel {
         color_wheel(app, ui, bg_active);
         return;
     }
     let key = egui::Id::new(("color-field-hue", bg_active));
-    let mut hsva = srgb_hsva(if bg_active { 
-        app.session.tools.background 
-    } else { 
-        app.session.tools.foreground
-    });
+    let mut hsva = srgb_hsva(if bg_active { app.session.tools.background } else { app.session.tools.foreground });
     // A grey or black has no hue; keep the last meaningful hue/saturation for the wheel.
-    let wheel_key = egui::Id::new(("color-wheel-hue", bg_active));
-    let remembered: (f32, f32) = ui
-        .data(|d| d.get_temp(wheel_key))
-        .unwrap_or((hsva.h, hsva.s));
-    if hsva.s < 0.001 || hsva.v < 0.001 {
-        hsva.h = remembered.0;
-        hsva.s = remembered.1;
-    }
+    // What the field showed last: a grey carries no hue, black neither hue nor saturation (#3228).
     // What the field showed last: a grey carries no hue, black neither hue nor saturation (#3228).
     let remembered: (f32, f32) = ui.data(|d| d.get_temp(key)).unwrap_or((hsva.h, hsva.s));
     hsva = field_hsva(hsva, remembered);
@@ -3789,23 +3774,29 @@ fn color_field(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
 }
+/// HSV values displayed by the Color Wheel.
+///
+/// Grey colours have no meaningful hue, so the wheel keeps the last hue and
+/// saturation selected while its brightness remains at zero.
+fn wheel_display_hsv(current: egui::ecolor::Hsva, remembered: (f32, f32)) -> egui::ecolor::Hsva {
+    if current.s < 0.001 || current.v < 0.001 { egui::ecolor::Hsva::new(remembered.0, remembered.1, current.v, current.a) } else { current }
+}
+fn set_tool_color(app: &mut PhotocraftApp, bg_active: bool, color: [f32; 4]) {
+    if bg_active {
+        app.session.tools.background = color;
+    } else {
+        app.session.tools.foreground = color;
+        crate::type_tool::foreground_changed(app);
+    }
+}
 /// Circular hue/saturation wheel with a brightness slider; an alternative to the SV field.
 fn color_wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui, bg_active: bool) {
-    let mut hsva = srgb_hsva(if bg_active {
-        app.session.tools.background
-    } else {
-        app.session.tools.foreground
-    });
+    let mut hsva = srgb_hsva(if bg_active { app.session.tools.background } else { app.session.tools.foreground });
 
     // A grey or black has no hue; keep the last meaningful hue/saturation for the wheel.
     let wheel_key = egui::Id::new(("color-wheel-hue", bg_active));
-    let remembered: (f32, f32) = ui
-        .data(|d| d.get_temp(wheel_key))
-        .unwrap_or((hsva.h, hsva.s));
-    if hsva.s < 0.001 || hsva.v < 0.001 {
-        hsva.h = remembered.0;
-        hsva.s = remembered.1;
-    }
+    let remembered: (f32, f32) = ui.data(|d| d.get_temp(wheel_key)).unwrap_or((hsva.h, hsva.s));
+    hsva = wheel_display_hsv(hsva, remembered);
 
     let mut changed = false;
     ui.horizontal(|ui| {
@@ -3820,10 +3811,7 @@ fn color_wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui, bg_active: bool) {
 
             ui.horizontal(|ui| {
                 ui.label("H");
-                ui.add(
-                    egui::Slider::new(&mut hue, 0.0..=360.0)
-                        .show_value(false),
-                );
+                ui.add(egui::Slider::new(&mut hue, 0.0..=360.0).show_value(false));
                 if widgets::value_field(ui, &mut hue, 0.0..=360.0, "", 48.0).changed() {
                     changed = true;
                 }
@@ -3831,10 +3819,7 @@ fn color_wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui, bg_active: bool) {
 
             ui.horizontal(|ui| {
                 ui.label("S");
-                ui.add(
-                    egui::Slider::new(&mut saturation, 0.0..=100.0)
-                        .show_value(false),
-                );
+                ui.add(egui::Slider::new(&mut saturation, 0.0..=100.0).show_value(false));
                 if widgets::value_field(ui, &mut saturation, 0.0..=100.0, "", 48.0).changed() {
                     changed = true;
                 }
@@ -3842,19 +3827,13 @@ fn color_wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui, bg_active: bool) {
 
             ui.horizontal(|ui| {
                 ui.label("B");
-                ui.add(
-                    egui::Slider::new(&mut brightness, 0.0..=100.0)
-                        .show_value(false),
-                );
+                ui.add(egui::Slider::new(&mut brightness, 0.0..=100.0).show_value(false));
                 if widgets::value_field(ui, &mut brightness, 0.0..=100.0, "", 48.0).changed() {
                     changed = true;
                 }
             });
 
-            if hue != hsva.h * 360.0
-                || saturation != hsva.s * 100.0
-                || brightness != hsva.v * 100.0
-            {
+            if hue != hsva.h * 360.0 || saturation != hsva.s * 100.0 || brightness != hsva.v * 100.0 {
                 changed = true;
             }
 
@@ -3864,14 +3843,9 @@ fn color_wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui, bg_active: bool) {
         });
     });
 
-        if changed {
+    if changed {
         let color = hsva_srgb(hsva);
-        if bg_active {
-            app.session.tools.background = color;
-        } else {
-            app.session.tools.foreground = color;
-            crate::type_tool::foreground_changed(app);
-        }
+        set_tool_color(app, bg_active, color);
         ui.data_mut(|d| d.insert_temp(wheel_key, (hsva.h, hsva.s)));
     }
 
@@ -3929,18 +3903,13 @@ fn color_wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui, bg_active: bool) {
     let hue_offset = hue_vertex - center;
     let white_offset = white_vertex - center;
     let black_offset = black_vertex - center;
-    let marker = center
-        + hue_offset * (s * v)
-        + white_offset * ((1.0 - s) * v)
-        + black_offset * (1.0 - v);
+    let marker = center + hue_offset * (s * v) + white_offset * ((1.0 - s) * v) + black_offset * (1.0 - v);
     ui.painter().circle_filled(marker, 5.0, Color32::WHITE);
     ui.painter().circle_stroke(marker, 5.0, Stroke::new(1.5, Color32::from_black_alpha(160)));
 
     // One interaction area: ring changes hue, triangle changes saturation/brightness.
     let active = area_resp.dragged() || area_resp.clicked();
-    if active
-        && let Some(p) = area_resp.interact_pointer_pos()
-    {
+    if active && let Some(p) = area_resp.interact_pointer_pos() {
         let offset = p - center;
         let distance = offset.length();
         let angle = (offset.y.atan2(offset.x) / std::f32::consts::TAU + 1.0) % 1.0;
@@ -3958,10 +3927,8 @@ fn color_wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui, bg_active: bool) {
 
             let denominator = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
             if denominator.abs() > f32::EPSILON {
-                let mut weight_hue =
-                    ((by - cy) * (p.x - cx) + (cx - bx) * (p.y - cy)) / denominator;
-                let mut weight_white =
-                    ((cy - ay) * (p.x - cx) + (ax - cx) * (p.y - cy)) / denominator;
+                let mut weight_hue = ((by - cy) * (p.x - cx) + (cx - bx) * (p.y - cy)) / denominator;
+                let mut weight_white = ((cy - ay) * (p.x - cx) + (ax - cx) * (p.y - cy)) / denominator;
                 let mut weight_black = 1.0 - weight_hue - weight_white;
 
                 // Clamp the point into the triangle.
@@ -3977,22 +3944,13 @@ fn color_wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui, bg_active: bool) {
                 weight_black /= total;
 
                 hsva.v = 1.0 - weight_black;
-                hsva.s = if weight_hue + weight_white > f32::EPSILON {
-                    weight_hue / (weight_hue + weight_white)
-                } else {
-                    0.0
-                };
+                hsva.s = if weight_hue + weight_white > f32::EPSILON { weight_hue / (weight_hue + weight_white) } else { 0.0 };
             }
         }
 
         let color = hsva_srgb(hsva);
-        if bg_active {
-            app.session.tools.background = color;
-        } else {
-            app.session.tools.foreground = color;
-            crate::type_tool::foreground_changed(app);
-        }
-    ui.data_mut(|d| d.insert_temp(wheel_key, (hsva.h, hsva.s)));
+        set_tool_color(app, bg_active, color);
+        ui.data_mut(|d| d.insert_temp(wheel_key, (hsva.h, hsva.s)));
     }
 
     // Hue marker, drawn last.
@@ -6753,5 +6711,45 @@ mod sampler_readout_tests {
         assert_eq!(b[0]["rgb"], json!([255, 0, 0]), "an edit shows");
         app.run("view.colorSamplers.add", json!({"x": 8, "y": 8})).unwrap();
         assert_eq!(sampler_readouts(&mut app).len(), 2, "so does a new sampler");
+    }
+}
+#[cfg(test)]
+mod color_wheel_tests {
+    use super::*;
+
+    #[test]
+    fn wheel_preserves_hue_when_saturation_is_zero() {
+        let current = egui::ecolor::Hsva::new(240.0 / 360.0, 0.0, 0.5, 1.0);
+        let remembered = (120.0 / 360.0, 0.8);
+
+        let displayed = wheel_display_hsv(current, remembered);
+
+        assert!((displayed.h - 120.0 / 360.0).abs() < 1e-6);
+        assert!((displayed.s - 0.8).abs() < 1e-6);
+        assert!((displayed.v - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn wheel_preserves_hue_when_brightness_is_zero() {
+        let current = egui::ecolor::Hsva::new(240.0 / 360.0, 0.7, 0.0, 1.0);
+        let remembered = (30.0 / 360.0, 0.6);
+
+        let displayed = wheel_display_hsv(current, remembered);
+
+        assert!((displayed.h - 30.0 / 360.0).abs() < 1e-6);
+        assert!((displayed.s - 0.6).abs() < 1e-6);
+        assert!((displayed.v - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn wheel_uses_current_hsv_when_colour_is_not_grey() {
+        let current = egui::ecolor::Hsva::new(240.0 / 360.0, 0.7, 0.5, 1.0);
+        let remembered = (30.0 / 360.0, 0.6);
+
+        let displayed = wheel_display_hsv(current, remembered);
+
+        assert!((displayed.h - 240.0 / 360.0).abs() < 1e-6);
+        assert!((displayed.s - 0.7).abs() < 1e-6);
+        assert!((displayed.v - 0.5).abs() < 1e-6);
     }
 }

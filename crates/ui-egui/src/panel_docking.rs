@@ -912,28 +912,11 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
             if PANELS.iter().any(|&(id, _, group)| id == active && group == Group::Color) {
                 ui.separator();
 
-                let mode_id = egui::Id::new("color_wheel_mode");
-                let mode = ui
-                    .ctx()
-                    .data_mut(|d| d.get_persisted::<String>(mode_id).unwrap_or_else(|| "hue_cube".to_owned()));
-                let mut next_mode = mode.clone();
-
-                if ui
-                    .selectable_label(mode == "hue_cube", "Hue Cube")
-                    .clicked()
-                {
-                    next_mode = "hue_cube".to_owned();
+                if ui.selectable_label(!self.app.ui.color_panel.color_wheel, tl!("Hue Cube")).clicked() {
+                    self.app.ui.color_panel.color_wheel = false;
                 }
-                if ui
-                    .selectable_label(mode == "color_wheel", "Color Wheel")
-                    .clicked()
-                {
-                    next_mode = "color_wheel".to_owned();
-                }
-
-                if next_mode != mode {
-                    ui.ctx()
-                        .data_mut(|d| d.insert_persisted(mode_id, next_mode));
+                if ui.selectable_label(self.app.ui.color_panel.color_wheel, tl!("Color Wheel")).clicked() {
+                    self.app.ui.color_panel.color_wheel = true;
                 }
 
                 ui.separator();
