@@ -406,18 +406,26 @@ pub fn transparency_locked(doc: &Document, id: LayerId) -> Result<bool> {
 /// must first resolve to this typed ID; names never identify the target. A live
 /// newly-created ordinary channel without imported metadata remains editable.
 pub fn require_channel_content(doc: &Document, target: photocraft_doc::item_identity::ChannelId) -> Result<()> {
-    if target.0 == 0 || doc.channels.len() > MAX_ITEMS { return Err(bad("invalid channel identity or item limit")); }
+    if target.0 == 0 || doc.channels.len() > MAX_ITEMS {
+        return Err(bad("invalid channel identity or item limit"));
+    }
     let mut identities = std::collections::HashSet::new();
     identities.try_reserve(doc.channels.len()).map_err(|_| bad("allocation"))?;
     let mut found = false;
     for channel in &doc.channels {
-        if channel.id.0 == 0 || !identities.insert(channel.id) { return Err(bad("duplicate or zero channel identity")); }
+        if channel.id.0 == 0 || !identities.insert(channel.id) {
+            return Err(bad("duplicate or zero channel identity"));
+        }
         found |= channel.id == target;
     }
-    if !found { return Err(bad("missing canonical channel")); }
+    if !found {
+        return Err(bad("missing canonical channel"));
+    }
     let items = imported_items(doc)?;
     let reference = ItemRef::Channel(target);
-    if items.contains_key(&reference) { effective_item_locks(doc, reference)?.require(EditKind::Content)?; }
+    if items.contains_key(&reference) {
+        effective_item_locks(doc, reference)?.require(EditKind::Content)?;
+    }
     Ok(())
 }
 
@@ -434,9 +442,17 @@ mod channel_lock_tests {
         document.xcf_state = Some(XcfState::default());
         require_channel_content(&document, id).unwrap();
         document.xcf_state.as_mut().unwrap().items.push(ItemState {
-            item: ItemRef::Channel(id), name: "Retained source name".into(), custom_name: false,
-            visible: true, locks: ItemLocks { content: true, ..Default::default() }, parent: None,
-            source_tattoo: None, source_flags: 0, raster_bounds: None, mask: None, composition: None,
+            item: ItemRef::Channel(id),
+            name: "Retained source name".into(),
+            custom_name: false,
+            visible: true,
+            locks: ItemLocks { content: true, ..Default::default() },
+            parent: None,
+            source_tattoo: None,
+            source_flags: 0,
+            raster_bounds: None,
+            mask: None,
+            composition: None,
         });
         let before = document.clone();
         assert!(require_channel_content(&document, id).is_err());

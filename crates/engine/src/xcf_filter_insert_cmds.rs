@@ -524,17 +524,32 @@ mod tests {
     }
     #[test]
     fn later_template_metadata_is_reachable_without_relaxing_candidate_or_stack_limits() {
-        let mut document=fixture();let owner=document.layers[0].id;
-        let original=document.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].clone();
-        let stack=&mut document.xcf_state.as_mut().unwrap().filter_stacks[0];stack.nodes.clear();
-        for index in 0..65 {let mut node=original.clone();node.id=FilterId(1000+index);if index<64 {node.operation.name="own:unsupported-template".into();}stack.nodes.push(node);}
-        let shown=current_templates(&document,owner).unwrap();assert_eq!(shown.nodes.len(),65);
-        assert!(!shown.nodes.iter().take(64).any(template_candidate));assert!(template_candidate(&shown.nodes[64]));
-        document.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[64].operation.name="own:unsupported-template".into();
-        assert!(current_templates(&document,owner).is_none());
-        let stack=&mut document.xcf_state.as_mut().unwrap().filter_stacks[0];stack.nodes.clear();
-        for index in 0..1024 {let mut node=original.clone();node.id=FilterId(1000+index);stack.nodes.push(node);}
-        assert!(current_templates(&document,owner).is_none());
+        let mut document = fixture();
+        let owner = document.layers[0].id;
+        let original = document.xcf_state.as_ref().unwrap().filter_stacks[0].nodes[0].clone();
+        let stack = &mut document.xcf_state.as_mut().unwrap().filter_stacks[0];
+        stack.nodes.clear();
+        for index in 0..65 {
+            let mut node = original.clone();
+            node.id = FilterId(1000 + index);
+            if index < 64 {
+                node.operation.name = "own:unsupported-template".into();
+            }
+            stack.nodes.push(node);
+        }
+        let shown = current_templates(&document, owner).unwrap();
+        assert_eq!(shown.nodes.len(), 65);
+        assert!(!shown.nodes.iter().take(64).any(template_candidate));
+        assert!(template_candidate(&shown.nodes[64]));
+        document.xcf_state.as_mut().unwrap().filter_stacks[0].nodes[64].operation.name = "own:unsupported-template".into();
+        assert!(current_templates(&document, owner).is_none());
+        let stack = &mut document.xcf_state.as_mut().unwrap().filter_stacks[0];
+        stack.nodes.clear();
+        for index in 0..1024 {
+            let mut node = original.clone();
+            node.id = FilterId(1000 + index);
+            stack.nodes.push(node);
+        }
+        assert!(current_templates(&document, owner).is_none());
     }
-
 }

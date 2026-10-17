@@ -135,7 +135,11 @@ fn point_metadata(node: &FilterNode, control: &ReadControl<'_>) -> Result<usize>
             FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Float32Bits(_)) | FilterValue::Bool(_) => {}
             FilterValue::Number(photocraft_doc::xcf_filters::ExactNumber::Signed { width: 32, value }) if i32::try_from(*value).is_ok() => {}
             FilterValue::Enum { domain, .. } => text(&mut total, domain, 256, control)?,
-            FilterValue::Color {components,encoding,profile:None} if components.len()==4 && (*encoding==photocraft_doc::SampleEncoding::NonlinearProfile || *encoding==photocraft_doc::SampleEncoding::Linear && crate::xcf_filter_cmds::semi_flatten_literal_node(node)) => {
+            FilterValue::Color { components, encoding, profile: None }
+                if components.len() == 4
+                    && (*encoding == photocraft_doc::SampleEncoding::NonlinearProfile
+                        || *encoding == photocraft_doc::SampleEncoding::Linear && crate::xcf_filter_cmds::semi_flatten_literal_node(node)) =>
+            {
                 // Exact bounded storage metadata only. Preserve raw words,
                 // including nonfinite values; this grants no evaluation/edit.
                 control.check(4)?;
@@ -277,27 +281,61 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
     let id = crate::xcf_filter_cmds::id(COMMAND, params)?;
     let active = session.active().ok_or(EngineError::NoDocument)?;
     let owner = active.doc.accounted().ok_or(BackingError::Unsupported)?;
-    if owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage(){
-        if owner.is_readonly_normal_hierarchy_storage(){owner.validate_readonly_normal_hierarchy_current_storage(control)?;}else if owner.is_readonly_masked_filtered_flat_point_storage(){owner.validate_readonly_masked_filtered_flat_point_storage(control)?;}else{owner.validate_readonly_filtered_flat_point_storage(control)?;}
-        let state=owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
-        if state.filter_stacks.len()>4096{return Err(BackingError::Length.into())}
-        let mut found=None;
-        let mut nodes=0usize;
-        for stack in &state.filter_stacks{control.check(1)?;
-            nodes=nodes.checked_add(stack.nodes.len()).filter(|n|*n<=4096).ok_or(BackingError::Length)?;
-            if stack.nodes.len()>1024{return Err(BackingError::Length.into())}
-            for node in &stack.nodes {control.check(1)?;if node.id==id{if found.is_some(){return Err(BackingError::Integrity.into())}found=Some((stack,node));}}
+    if owner.is_readonly_filtered_flat_point_storage() || owner.is_readonly_masked_filtered_flat_point_storage() || owner.is_readonly_normal_hierarchy_storage()
+    {
+        if owner.is_readonly_normal_hierarchy_storage() {
+            owner.validate_readonly_normal_hierarchy_current_storage(control)?;
+        } else if owner.is_readonly_masked_filtered_flat_point_storage() {
+            owner.validate_readonly_masked_filtered_flat_point_storage(control)?;
+        } else {
+            owner.validate_readonly_filtered_flat_point_storage(control)?;
         }
-        let (stack,node)=found.ok_or_else(||bad("unknown filterId"))?;
-        control.check(owner.document().layers.len().checked_add(state.filter_stacks.len()).and_then(|n|n.checked_add(nodes)).ok_or(BackingError::Length)? as u64)?;
-        let text=point_metadata(node,control)?;let planned=point_envelope(text)?;
-        return paid_reply(owner.quota(),ReplyKind::Filter,POINT_FILTER_BOUNDS,planned,text,control,||{
-            let mut reply=crate::xcf_filter_cmds::build_point_storage_inspect_reply(id,stack,node)?;
-            *reply.get_mut("scalarEditCandidate").ok_or(BackingError::Integrity)?=Value::Bool(match stack.owner {photocraft_doc::item_identity::ItemRef::Layer(layer)=>if owner.is_readonly_normal_hierarchy_storage(){crate::normal_hierarchy_filter_edit_candidate(owner,layer,node)}else if owner.is_readonly_masked_filtered_flat_point_storage(){crate::masked_filtered_flat_filter_edit_candidate(owner,layer,node)}else{crate::filtered_flat_filter_edit_candidate(owner,layer,node)},_=>false});
+        let state = owner.document().xcf_state.as_ref().ok_or(BackingError::Integrity)?;
+        if state.filter_stacks.len() > 4096 {
+            return Err(BackingError::Length.into());
+        }
+        let mut found = None;
+        let mut nodes = 0usize;
+        for stack in &state.filter_stacks {
+            control.check(1)?;
+            nodes = nodes.checked_add(stack.nodes.len()).filter(|n| *n <= 4096).ok_or(BackingError::Length)?;
+            if stack.nodes.len() > 1024 {
+                return Err(BackingError::Length.into());
+            }
+            for node in &stack.nodes {
+                control.check(1)?;
+                if node.id == id {
+                    if found.is_some() {
+                        return Err(BackingError::Integrity.into());
+                    }
+                    found = Some((stack, node));
+                }
+            }
+        }
+        let (stack, node) = found.ok_or_else(|| bad("unknown filterId"))?;
+        control.check(
+            owner.document().layers.len().checked_add(state.filter_stacks.len()).and_then(|n| n.checked_add(nodes)).ok_or(BackingError::Length)? as u64
+        )?;
+        let text = point_metadata(node, control)?;
+        let planned = point_envelope(text)?;
+        return paid_reply(owner.quota(), ReplyKind::Filter, POINT_FILTER_BOUNDS, planned, text, control, || {
+            let mut reply = crate::xcf_filter_cmds::build_point_storage_inspect_reply(id, stack, node)?;
+            *reply.get_mut("scalarEditCandidate").ok_or(BackingError::Integrity)? = Value::Bool(match stack.owner {
+                photocraft_doc::item_identity::ItemRef::Layer(layer) => {
+                    if owner.is_readonly_normal_hierarchy_storage() {
+                        crate::normal_hierarchy_filter_edit_candidate(owner, layer, node)
+                    } else if owner.is_readonly_masked_filtered_flat_point_storage() {
+                        crate::masked_filtered_flat_filter_edit_candidate(owner, layer, node)
+                    } else {
+                        crate::filtered_flat_filter_edit_candidate(owner, layer, node)
+                    }
+                }
+                _ => false,
+            });
             Ok(reply)
         });
     }
-    let gaussian_group=owner.is_readonly_gaussian_group_storage();
+    let gaussian_group = owner.is_readonly_gaussian_group_storage();
     let point = if owner.is_readonly_threshold_alpha_storage() {
         owner.validate_readonly_threshold_alpha_storage(control)?;
         false
@@ -348,11 +386,13 @@ pub fn prepare(session: &Session, params: &Value, control: &ReadControl<'_>) -> 
         // The separate actual class fixes five flat F32/Enum/Bool arguments.
         // Use the already bounded complete flat reply envelope; old class
         // selection, thresholds and formulas remain unchanged.
-        if node.arguments.len()!=5 {return Err(BackingError::Integrity.into())}
-        let text=point_metadata(node,control)?;
-        let planned=point_envelope(text)?;
-        return paid_reply(owner.quota(),ReplyKind::Filter,POINT_FILTER_BOUNDS,planned,text,control,||{
-            crate::xcf_filter_cmds::build_point_storage_inspect_reply(id,stack,node)
+        if node.arguments.len() != 5 {
+            return Err(BackingError::Integrity.into());
+        }
+        let text = point_metadata(node, control)?;
+        let planned = point_envelope(text)?;
+        return paid_reply(owner.quota(), ReplyKind::Filter, POINT_FILTER_BOUNDS, planned, text, control, || {
+            crate::xcf_filter_cmds::build_point_storage_inspect_reply(id, stack, node)
         });
     }
     if point {

@@ -331,9 +331,8 @@ mod tests {
             ExactNumber::Float64Bits(0x7ff8_0000_0000_0042),
             ExactNumber::Float32Bits(0x8000_0000),
         ];
-        let configuration = values.into_iter().enumerate().map(|(i, value)| FilterArgument {
-            name: format!("field{i}"), value: FilterValue::Number(value),
-        }).collect();
+        let configuration =
+            values.into_iter().enumerate().map(|(i, value)| FilterArgument { name: format!("field{i}"), value: FilterValue::Number(value) }).collect();
         let (doc, owner) = fixture(configuration);
         let before = doc.clone();
         let result = source_with_interrupt(&doc, owner, 0, 64, &Interrupt::NONE).unwrap();
@@ -352,7 +351,9 @@ mod tests {
             json!({"owner":{"kind":"layer","id":"01"}}),
             json!({"owner":{"kind":"layer","id":"1"},"limit":0}),
             json!({"owner":{"kind":"layer","id":"1"},"locator":"ambient"}),
-        ] { assert!(selector(&params).is_err()); }
+        ] {
+            assert!(selector(&params).is_err());
+        }
         let nested = vec![FilterArgument { name: "member".into(), value: FilterValue::Bool(true) }; 65];
         let (doc, owner) = fixture(vec![FilterArgument { name: "nested".into(), value: FilterValue::Config(nested) }]);
         assert!(source_with_interrupt(&doc, owner, 0, 1, &Interrupt::NONE).is_err());

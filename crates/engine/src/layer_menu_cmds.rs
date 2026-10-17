@@ -847,8 +847,22 @@ macro_rules! spec {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        spec!("layer.layerMask.apply", "Apply", ["Layer", "Layer Mask"], r##"{"layer":id?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_raster_with_mask, apply_mask),
-        spec!("layer.layerMask.fromTransparency", "From Transparency", ["Layer", "Layer Mask"], r##"{"layer":id?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_raster, mask_from_transparency),
+        spec!(
+            "layer.layerMask.apply",
+            "Apply",
+            ["Layer", "Layer Mask"],
+            r##"{"layer":id?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            has_raster_with_mask,
+            apply_mask
+        ),
+        spec!(
+            "layer.layerMask.fromTransparency",
+            "From Transparency",
+            ["Layer", "Layer Mask"],
+            r##"{"layer":id?,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            has_raster,
+            mask_from_transparency
+        ),
         spec!(
             "layer.layerMask.hideSelection",
             "Hide Selection",

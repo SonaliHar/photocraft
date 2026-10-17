@@ -57,10 +57,10 @@ fn checked_bounds(bounds: Rect) -> Result<()> {
     Ok(())
 }
 #[cfg(test)]
-fn prepare(doc:&Document,ctl:&Interrupt<'_>)->Result<AnchorPlan> {
-    prepare_with_profile_limits(doc,photocraft_cms::control::Limits::default(),ctl)
+fn prepare(doc: &Document, ctl: &Interrupt<'_>) -> Result<AnchorPlan> {
+    prepare_with_profile_limits(doc, photocraft_cms::control::Limits::default(), ctl)
 }
-fn prepare_with_profile_limits(doc: &Document, profile_limits:photocraft_cms::control::Limits, ctl: &Interrupt<'_>) -> Result<AnchorPlan> {
+fn prepare_with_profile_limits(doc: &Document, profile_limits: photocraft_cms::control::Limits, ctl: &Interrupt<'_>) -> Result<AnchorPlan> {
     if ctl.cancelled() {
         return Err(EngineError::Cancelled);
     }
@@ -139,21 +139,29 @@ fn prepare_with_profile_limits(doc: &Document, profile_limits:photocraft_cms::co
     }
     // Reserve the strict current profile while both native owners and the
     // prospective replacement remain resident, before private output/plane clones.
-    let maximum=photocraft_cms::control::Limits::default();
-    if profile_limits.resident_bytes>maximum.resident_bytes||profile_limits.work_units>maximum.work_units{return Err(error("profile limits may only be lowered"));}
-    let remaining=(512u64<<20).checked_sub(resident).ok_or_else(||error("anchor profile resident limit"))?;
-    let limits=photocraft_cms::control::Limits{
-        resident_bytes:usize::try_from(remaining.min(profile_limits.resident_bytes as u64)).map_err(error)?,
-        work_units:profile_limits.work_units,
+    let maximum = photocraft_cms::control::Limits::default();
+    if profile_limits.resident_bytes > maximum.resident_bytes || profile_limits.work_units > maximum.work_units {
+        return Err(error("profile limits may only be lowered"));
+    }
+    let remaining = (512u64 << 20).checked_sub(resident).ok_or_else(|| error("anchor profile resident limit"))?;
+    let limits = photocraft_cms::control::Limits {
+        resident_bytes: usize::try_from(remaining.min(profile_limits.resident_bytes as u64)).map_err(error)?,
+        work_units: profile_limits.work_units,
     };
-    let required=crate::color_cmds::document_profile_requirements_with_limits(doc,limits,ctl)?;
+    let required = crate::color_cmds::document_profile_requirements_with_limits(doc, limits, ctl)?;
     // WorkingSpace's unchanged validation is still an outer-polled CMS boundary;
     // reserve its repeated validation work rather than claiming deep cancellation.
-    if required.work_units.checked_mul(2).is_none_or(|work|work>limits.work_units){return Err(error("anchor profile/working-space work limit"));}
-    resident.checked_add(required.peak_resident_bytes as u64).filter(|bytes|*bytes<=512<<20).ok_or_else(||error("anchor aggregate profile/native headroom limit"))?;
-    let profile = crate::color_cmds::try_document_profile_with_limits(doc,limits,ctl)?;
-    let working = WorkingSpace::new_with_interrupt(&profile, stored, resolved.composite_space,ctl).map_err(|error|if ctl.cancelled(){EngineError::Cancelled}else{self::error(error)})?;
-    ctl.check().map_err(|_|EngineError::Cancelled)?;
+    if required.work_units.checked_mul(2).is_none_or(|work| work > limits.work_units) {
+        return Err(error("anchor profile/working-space work limit"));
+    }
+    resident
+        .checked_add(required.peak_resident_bytes as u64)
+        .filter(|bytes| *bytes <= 512 << 20)
+        .ok_or_else(|| error("anchor aggregate profile/native headroom limit"))?;
+    let profile = crate::color_cmds::try_document_profile_with_limits(doc, limits, ctl)?;
+    let working = WorkingSpace::new_with_interrupt(&profile, stored, resolved.composite_space, ctl)
+        .map_err(|error| if ctl.cancelled() { EngineError::Cancelled } else { self::error(error) })?;
+    ctl.check().map_err(|_| EngineError::Cancelled)?;
     let mut output = dst.clone();
     let channels = format.channels();
     let mut source_bytes = [0u8; 32];
@@ -224,57 +232,57 @@ fn release_attachment(s: &mut Session, params: &serde_json::Value, delete: bool)
     controlled::release(s, params, delete)
 }
 fn release_on_document(doc: &mut Document, active: &mut Option<LayerId>, delete: bool, ctl: &Interrupt<'_>) -> Result<LayerId> {
-        doc.validate_xcf_state_with(ctl).map_err(error)?;
-        let state = doc.xcf_state.as_ref().ok_or_else(|| error("missing imported state"))?;
-        let attachment = state.floating.as_ref().ok_or_else(|| error("no saved floating attachment"))?;
-        let source = attachment.layer;
-        let ItemRef::Layer(target) = attachment.target else {
-            return Err(error("unsupported non-layer floating target"));
-        };
-        if doc.layers.len() != 2 || doc.layers.first().is_none_or(|layer| layer.id != target) || doc.layers.last().is_none_or(|layer| layer.id != source) {
-            return Err(error("unsupported floating hierarchy"));
+    doc.validate_xcf_state_with(ctl).map_err(error)?;
+    let state = doc.xcf_state.as_ref().ok_or_else(|| error("missing imported state"))?;
+    let attachment = state.floating.as_ref().ok_or_else(|| error("no saved floating attachment"))?;
+    let source = attachment.layer;
+    let ItemRef::Layer(target) = attachment.target else {
+        return Err(error("unsupported non-layer floating target"));
+    };
+    if doc.layers.len() != 2 || doc.layers.first().is_none_or(|layer| layer.id != target) || doc.layers.last().is_none_or(|layer| layer.id != source) {
+        return Err(error("unsupported floating hierarchy"));
+    }
+    for id in [source, target] {
+        plain(doc.layer(id).ok_or_else(|| error("missing raster layer"))?)?;
+        let item = state.items.iter().find(|item| item.item == ItemRef::Layer(id)).ok_or_else(|| error("missing raster metadata"))?;
+        let composition = item.composition.as_ref().ok_or_else(|| error("missing raster composition"))?;
+        if composition.source_mode != 28
+            || composition.legacy
+            || composition.pass_through
+            || composition.resolved.as_ref().is_none_or(|resolved| resolved.operator != GimpOperator::Union)
+        {
+            return Err(error("unsupported floating composition"));
         }
-        for id in [source, target] {
-            plain(doc.layer(id).ok_or_else(|| error("missing raster layer"))?)?;
-            let item = state.items.iter().find(|item| item.item == ItemRef::Layer(id)).ok_or_else(|| error("missing raster metadata"))?;
-            let composition = item.composition.as_ref().ok_or_else(|| error("missing raster composition"))?;
-            if composition.source_mode != 28
-                || composition.legacy
-                || composition.pass_through
-                || composition.resolved.as_ref().is_none_or(|resolved| resolved.operator != GimpOperator::Union)
-            {
-                return Err(error("unsupported floating composition"));
-            }
-            if state.filter_stacks.iter().any(|stack| stack.owner == ItemRef::Layer(id)) {
-                return Err(error("unsupported floating filters"));
-            }
+        if state.filter_stacks.iter().any(|stack| stack.owner == ItemRef::Layer(id)) {
+            return Err(error("unsupported floating filters"));
         }
-        if delete {
-            let effective = crate::xcf_item_locks::effective_layer_locks(doc, source).map_err(error)?;
-            let locks = effective.native;
-            let imported = effective.imported;
-            if locks.all || locks.pixels || locks.position || imported.content || imported.position || imported.visibility {
-                return Err(error("floating layer is locked"));
-            }
+    }
+    if delete {
+        let effective = crate::xcf_item_locks::effective_layer_locks(doc, source).map_err(error)?;
+        let locks = effective.native;
+        let imported = effective.imported;
+        if locks.all || locks.pixels || locks.position || imported.content || imported.position || imported.visibility {
+            return Err(error("floating layer is locked"));
         }
-        let selected = if delete { target } else { source };
-        let state = doc.xcf_state.as_mut().ok_or_else(|| error("missing imported state"))?;
-        state.floating = None;
-        state.selection.selected.clear();
-        state.selection.selected.try_reserve(1).map_err(|_| error("selection allocation"))?;
-        state.selection.selected.push(ItemRef::Layer(selected));
-        state.selection.active = Some(ItemRef::Layer(selected));
-        if delete {
-            doc.remove(source).ok_or_else(|| error("missing floating layer"))?;
-        }
-        // Reconcile on this private transaction before asking the renderer to validate it.
-        let mut state = doc.xcf_state.take().ok_or_else(|| error("missing imported state"))?;
-        state.reconcile_layers_with_interrupt(doc, ctl).map_err(error)?;
-        doc.xcf_state = Some(state);
-        photocraft_compose::gimp_render::PreparedRenderer::new_with_interrupt(doc, ctl).map_err(error)?;
-        *active = Some(selected);
-        ctl.check().map_err(|_| EngineError::Cancelled)?;
-        Ok(selected)
+    }
+    let selected = if delete { target } else { source };
+    let state = doc.xcf_state.as_mut().ok_or_else(|| error("missing imported state"))?;
+    state.floating = None;
+    state.selection.selected.clear();
+    state.selection.selected.try_reserve(1).map_err(|_| error("selection allocation"))?;
+    state.selection.selected.push(ItemRef::Layer(selected));
+    state.selection.active = Some(ItemRef::Layer(selected));
+    if delete {
+        doc.remove(source).ok_or_else(|| error("missing floating layer"))?;
+    }
+    // Reconcile on this private transaction before asking the renderer to validate it.
+    let mut state = doc.xcf_state.take().ok_or_else(|| error("missing imported state"))?;
+    state.reconcile_layers_with_interrupt(doc, ctl).map_err(error)?;
+    doc.xcf_state = Some(state);
+    photocraft_compose::gimp_render::PreparedRenderer::new_with_interrupt(doc, ctl).map_err(error)?;
+    *active = Some(selected);
+    ctl.check().map_err(|_| EngineError::Cancelled)?;
+    Ok(selected)
 }
 fn to_layer(s: &mut Session, params: &serde_json::Value) -> Result<serde_json::Value> {
     release_attachment(s, params, false)
@@ -363,14 +371,31 @@ mod tests {
     }
     #[test]
     fn controlled_profile_anchor_preserves_old_normal_words_and_source_identity() {
-        let mut doc=fixture();doc.size=Size::new(2,2);let bounds=doc.bounds();for item in &mut doc.xcf_state.as_mut().unwrap().items{item.raster_bounds=Some(bounds);}
-        let original=doc.clone();let old=crate::color_cmds::try_document_profile(&doc).unwrap();let old_working=WorkingSpace::new(&old,SampleEncoding::Linear,GimpSpace::LinearRgb).unwrap();
-        let expected=old_working.normal([0.;4],[0.2,0.3,0.4,0.5],1.0,GimpOperator::Union).unwrap();let actual=prepare(&doc,&Interrupt::NONE).unwrap();let words=actual.surface.try_read_region_f64(Rect::new(0,0,1,1)).unwrap();assert_eq!(words.iter().map(|v|v.to_bits()).collect::<Vec<_>>(),expected.map(f64::to_bits));assert_eq!(doc,original);
-        assert!(prepare_with_profile_limits(&doc,photocraft_cms::control::Limits{resident_bytes:1,work_units:1},&Interrupt::NONE).is_err());assert_eq!(doc,original);
+        let mut doc = fixture();
+        doc.size = Size::new(2, 2);
+        let bounds = doc.bounds();
+        for item in &mut doc.xcf_state.as_mut().unwrap().items {
+            item.raster_bounds = Some(bounds);
+        }
+        let original = doc.clone();
+        let old = crate::color_cmds::try_document_profile(&doc).unwrap();
+        let old_working = WorkingSpace::new(&old, SampleEncoding::Linear, GimpSpace::LinearRgb).unwrap();
+        let expected = old_working.normal([0.; 4], [0.2, 0.3, 0.4, 0.5], 1.0, GimpOperator::Union).unwrap();
+        let actual = prepare(&doc, &Interrupt::NONE).unwrap();
+        let words = actual.surface.try_read_region_f64(Rect::new(0, 0, 1, 1)).unwrap();
+        assert_eq!(words.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), expected.map(f64::to_bits));
+        assert_eq!(doc, original);
+        assert!(prepare_with_profile_limits(&doc, photocraft_cms::control::Limits { resident_bytes: 1, work_units: 1 }, &Interrupt::NONE).is_err());
+        assert_eq!(doc, original);
     }
     #[test]
     fn assigned_model_mismatch_keeps_floating_relation_and_raw_samples() {
-        let mut doc=fixture();doc.icc_profile=Some(photocraft_cms::Builtin::SGray.profile().to_bytes());let original=doc.clone();assert!(prepare(&doc,&Interrupt::NONE).is_err());assert_eq!(doc,original);assert!(doc.xcf_state.as_ref().unwrap().floating.is_some());
+        let mut doc = fixture();
+        doc.icc_profile = Some(photocraft_cms::Builtin::SGray.profile().to_bytes());
+        let original = doc.clone();
+        assert!(prepare(&doc, &Interrupt::NONE).is_err());
+        assert_eq!(doc, original);
+        assert!(doc.xcf_state.as_ref().unwrap().floating.is_some());
     }
 }
 #[cfg(test)]

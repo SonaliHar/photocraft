@@ -124,12 +124,13 @@ fn layer_color_invalid_params_never_change_the_document_or_history() {
 
 #[test]
 fn brown_command_is_a_current_metadata_edit_with_native_roundtrip_and_undo() {
-    let (mut s,[outer,_,_,_])=fixture(16);
-    let before=s.active().unwrap().doc.clone();
-    s.execute("layer.setLabelColor",json!({"color":"brown","layer":outer.0})).unwrap();
-    let changed=s.active().unwrap().doc.clone();
-    assert_eq!(changed.layer(outer).unwrap().label,LabelColor::Brown);
-    let bytes=photocraft_format::save_to_bytes(&changed,&Default::default()).unwrap();
-    assert_eq!(photocraft_format::load_from_bytes(&bytes).unwrap(),*changed);
-    s.execute("edit.undo",Value::Null).unwrap();assert_eq!(s.active().unwrap().doc,before);
+    let (mut s, [outer, _, _, _]) = fixture(16);
+    let before = s.active().unwrap().doc.clone();
+    s.execute("layer.setLabelColor", json!({"color":"brown","layer":outer.0})).unwrap();
+    let changed = s.active().unwrap().doc.clone();
+    assert_eq!(changed.layer(outer).unwrap().label, LabelColor::Brown);
+    let bytes = photocraft_format::save_to_bytes(&changed, &Default::default()).unwrap();
+    assert_eq!(photocraft_format::load_from_bytes(&bytes).unwrap(), *changed);
+    s.execute("edit.undo", Value::Null).unwrap();
+    assert_eq!(s.active().unwrap().doc, before);
 }

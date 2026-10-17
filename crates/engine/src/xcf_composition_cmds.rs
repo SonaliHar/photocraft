@@ -139,15 +139,16 @@ pub(crate) fn dispatch_preflight(s: &Session, command: &str, value: &Value) -> R
 }
 /// Borrowed parser seam for the paid readonly-flat adapter. The caller holds
 /// its real prospective temporary fee before invoking these existing helpers.
-pub(crate) fn paid_flat_composition_patch(s:&Session,value:&Value)->Result<photocraft_doc::accounted_document::FlatCompositeCompositionPatch>{
-    dispatch_preflight(s,SET,value)?;
-    let layer=id(SET,value)?;
-    let source_mode=value.get("sourceMode").and_then(Value::as_i64).and_then(|v|i32::try_from(v).ok()).ok_or_else(||bad(SET,"sourceMode must be an integer"))?;
+pub(crate) fn paid_flat_composition_patch(s: &Session, value: &Value) -> Result<photocraft_doc::accounted_document::FlatCompositeCompositionPatch> {
+    dispatch_preflight(s, SET, value)?;
+    let layer = id(SET, value)?;
+    let source_mode =
+        value.get("sourceMode").and_then(Value::as_i64).and_then(|v| i32::try_from(v).ok()).ok_or_else(|| bad(SET, "sourceMode must be an integer"))?;
     blend(source_mode)?;
-    let (blend_space,_,_)=space(value,"blendSpace")?;
-    let (composite_space,_,_)=space(value,"compositeSpace")?;
-    let (operator,_)=operator(value)?;
-    Ok(photocraft_doc::accounted_document::FlatCompositeCompositionPatch{layer,source_mode,blend_space,composite_space,operator})
+    let (blend_space, _, _) = space(value, "blendSpace")?;
+    let (composite_space, _, _) = space(value, "compositeSpace")?;
+    let (operator, _) = operator(value)?;
+    Ok(photocraft_doc::accounted_document::FlatCompositeCompositionPatch { layer, source_mode, blend_space, composite_space, operator })
 }
 
 pub fn set_with_interrupt(s: &mut Session, value: &Value, control: &photocraft_raster::Interrupt<'_>) -> Result<Value> {

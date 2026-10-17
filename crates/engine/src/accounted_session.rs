@@ -121,7 +121,14 @@ fn initial_view(document: &AccountedDocument, control: &ReadControl<'_>) -> Resu
 fn edit_locks(document: &AccountedDocument, edit: AccountedEdit<'_>, alpha: Option<&VerifiedNativeAlpha<'_>>, control: &ReadControl<'_>) -> Result<()> {
     let id = edit.layer_id();
     let doc = document.document();
-    let access = if document.is_readonly_filtered_flat_point_storage() || (document.is_readonly_masked_filtered_flat_point_storage() || document.is_readonly_normal_hierarchy_storage()) {document.accounted_layer_access(id,control)?} else {accounted_layer_access(doc, id, control)?}.ok_or(BackingError::Bounds)?;
+    let access = if document.is_readonly_filtered_flat_point_storage()
+        || (document.is_readonly_masked_filtered_flat_point_storage() || document.is_readonly_normal_hierarchy_storage())
+    {
+        document.accounted_layer_access(id, control)?
+    } else {
+        accounted_layer_access(doc, id, control)?
+    }
+    .ok_or(BackingError::Bounds)?;
     let layer = access.layer;
     let imported = access.imported_locks;
     match edit {
@@ -197,10 +204,16 @@ impl Session {
         control.check(1)?;
         // A structural Point owner is not a current semantic/render receipt.
         // Only the typed source/native handoffs validate its operative recipe.
-        if document.is_readonly_filtered_flat_point_storage() || (document.is_readonly_masked_filtered_flat_point_storage() || document.is_readonly_normal_hierarchy_storage()) || document.is_readonly_assigned_point_storage() || document.is_readonly_flat_composite_storage() || document.is_readonly_point_storage() || document.is_readonly_gaussian_group_storage()
-            || crate::accounted_native_open::is_current_separable_blend_candidate(document.document(),control)?
-            || crate::accounted_native_open::is_current_isolated_gaussian_group_candidate(document.document(),control)?
-            || crate::accounted_native_open::is_current_isolated_normal_group_candidate(document.document(), control)? {
+        if document.is_readonly_filtered_flat_point_storage()
+            || (document.is_readonly_masked_filtered_flat_point_storage() || document.is_readonly_normal_hierarchy_storage())
+            || document.is_readonly_assigned_point_storage()
+            || document.is_readonly_flat_composite_storage()
+            || document.is_readonly_point_storage()
+            || document.is_readonly_gaussian_group_storage()
+            || crate::accounted_native_open::is_current_separable_blend_candidate(document.document(), control)?
+            || crate::accounted_native_open::is_current_isolated_gaussian_group_candidate(document.document(), control)?
+            || crate::accounted_native_open::is_current_isolated_normal_group_candidate(document.document(), control)?
+        {
             return Err(BackingError::Unsupported.into());
         }
         if self.docs.iter().any(|st| st.doc.id == document.document().id) {
@@ -240,7 +253,10 @@ impl Session {
             return self.edit_accounted_assigned_mask_enabled(label, layer, enabled, control).map(|_| ());
         }
         if matches!(edit, AccountedEdit::LayerMetadata { .. })
-            && self.active().and_then(|state| state.doc.accounted()).is_some_and(|owner| metadata_gesture::point_metadata_class(owner) || metadata_gesture::owned_layer_metadata_candidate(owner))
+            && self
+                .active()
+                .and_then(|state| state.doc.accounted())
+                .is_some_and(|owner| metadata_gesture::point_metadata_class(owner) || metadata_gesture::owned_layer_metadata_candidate(owner))
         {
             return self.edit_accounted_metadata_with_coalesce(label, edit, None, control);
         }
@@ -293,17 +309,40 @@ enum NativeAlphaCheck {
 
 /// Shared internal raw-alpha verification for the closed native Round brush
 /// transaction. It grants no public NativePixels bypass or caller-asserted flag.
-pub(crate) fn verify_native_stroke_alpha(owner:&AccountedDocument,layer:photocraft_doc::LayerId,rect:photocraft_geom::Rect,bytes:&[u8],control:&ReadControl<'_>)->Result<()>{
-    let _proof=VerifiedNativeAlpha::verify(owner,AccountedEdit::NativePixels{layer,rect,bytes},control)?;
-    control.check(1)?;Ok(())
+pub(crate) fn verify_native_stroke_alpha(
+    owner: &AccountedDocument,
+    layer: photocraft_doc::LayerId,
+    rect: photocraft_geom::Rect,
+    bytes: &[u8],
+    control: &ReadControl<'_>,
+) -> Result<()> {
+    let _proof = VerifiedNativeAlpha::verify(owner, AccountedEdit::NativePixels { layer, rect, bytes }, control)?;
+    control.check(1)?;
+    Ok(())
 }
 
 /// Private exact-byte hierarchy proof after named actual-owner prevalidation.
-pub(crate) fn verify_hierarchy_native_stroke_alpha(owner:&AccountedDocument,layer:photocraft_doc::LayerId,rect:photocraft_geom::Rect,bytes:&[u8],control:&ReadControl<'_>)->Result<()>{
- let _proof=VerifiedNativeAlpha::verify_normal_hierarchy(owner,AccountedEdit::NativePixels{layer,rect,bytes},control)?;control.check(1)?;Ok(())
+pub(crate) fn verify_hierarchy_native_stroke_alpha(
+    owner: &AccountedDocument,
+    layer: photocraft_doc::LayerId,
+    rect: photocraft_geom::Rect,
+    bytes: &[u8],
+    control: &ReadControl<'_>,
+) -> Result<()> {
+    let _proof = VerifiedNativeAlpha::verify_normal_hierarchy(owner, AccountedEdit::NativePixels { layer, rect, bytes }, control)?;
+    control.check(1)?;
+    Ok(())
 }
 
 /// Exact raw-alpha proof after named programme-native actual-owner validation.
-pub(crate) fn verify_programme_native_stroke_alpha(owner:&AccountedDocument,layer:photocraft_doc::LayerId,rect:photocraft_geom::Rect,bytes:&[u8],control:&ReadControl<'_>)->Result<()>{
- let _proof=VerifiedNativeAlpha::verify_stored_programme(owner,AccountedEdit::NativePixels{layer,rect,bytes},control)?;control.check(1)?;Ok(())
+pub(crate) fn verify_programme_native_stroke_alpha(
+    owner: &AccountedDocument,
+    layer: photocraft_doc::LayerId,
+    rect: photocraft_geom::Rect,
+    bytes: &[u8],
+    control: &ReadControl<'_>,
+) -> Result<()> {
+    let _proof = VerifiedNativeAlpha::verify_stored_programme(owner, AccountedEdit::NativePixels { layer, rect, bytes }, control)?;
+    control.check(1)?;
+    Ok(())
 }

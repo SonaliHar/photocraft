@@ -11,9 +11,7 @@ use photocraft_geom::Rect;
 use photocraft_paint::mixer::{MixerSettings, apply_mixer_stroke};
 use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement, color_replacement_effect};
 use photocraft_paint::tile::PREVIEW_SIDE;
-use photocraft_paint::{
-    BrushPreset, BrushSettings, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape,
-};
+use photocraft_paint::{BrushPreset, BrushSettings, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -318,8 +316,29 @@ impl WideStrokeBudget {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn wide_stroke_context(doc:&photocraft_doc::Document,layer:Option<photocraft_doc::LayerId>,p:&Value,brush:&BrushSettings,format:photocraft_color::PixelFormat,lock:bool,restricted_color:bool,auto_erase:bool)->Result<Option<WideStroke>>{
-    wide_stroke_context_with_limits(doc,layer,p,brush,format,lock,restricted_color,auto_erase,photocraft_paint::stroke_controlled::StrokeLimits::default(),&photocraft_raster::Interrupt::NONE).map(|(wide,_)|wide)
+fn wide_stroke_context(
+    doc: &photocraft_doc::Document,
+    layer: Option<photocraft_doc::LayerId>,
+    p: &Value,
+    brush: &BrushSettings,
+    format: photocraft_color::PixelFormat,
+    lock: bool,
+    restricted_color: bool,
+    auto_erase: bool,
+) -> Result<Option<WideStroke>> {
+    wide_stroke_context_with_limits(
+        doc,
+        layer,
+        p,
+        brush,
+        format,
+        lock,
+        restricted_color,
+        auto_erase,
+        photocraft_paint::stroke_controlled::StrokeLimits::default(),
+        &photocraft_raster::Interrupt::NONE,
+    )
+    .map(|(wide, _)| wide)
 }
 #[allow(clippy::too_many_arguments)]
 fn wide_stroke_context_with_limits(
@@ -333,12 +352,12 @@ fn wide_stroke_context_with_limits(
     auto_erase: bool,
     limits: photocraft_paint::stroke_controlled::StrokeLimits,
     control: &photocraft_raster::Interrupt<'_>,
-) -> Result<(Option<WideStroke>,u64)> {
+) -> Result<(Option<WideStroke>, u64)> {
     use photocraft_color::{ColorMode, PixelFormat, SampleType};
     if !matches!(format.sample, SampleType::U32 | SampleType::F64) {
-        return Ok((None,0));
+        return Ok((None, 0));
     }
-    control.check().map_err(|_|EngineError::Cancelled)?;
+    control.check().map_err(|_| EngineError::Cancelled)?;
     let blend = match brush.mode {
         photocraft_color::BlendMode::Normal => None,
         photocraft_color::BlendMode::Multiply => Some(photocraft_paint::wide_blend_controlled::NativeUnitBlend::Multiply),
@@ -347,18 +366,26 @@ fn wide_stroke_context_with_limits(
     };
     if blend.is_some() {
         if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels
-            || doc.xcf_state.is_some() || doc.source_color_context.is_some() || doc.color_table.is_some() {
+            || doc.xcf_state.is_some()
+            || doc.source_color_context.is_some()
+            || doc.color_table.is_some()
+        {
             return Err(bad("paint.stroke", "native Multiply/Screen requires a plain pixel target with explicit Linear working context"));
         }
         let current = layer.and_then(|id| doc.layer(id)).ok_or_else(|| bad("paint.stroke", "native blend pixel owner is missing"))?;
-        if !matches!(current.content, LayerContent::Raster(_)) || current.indexed_source.is_some() || current.video.is_some() || current.import_compositing.is_some() {
+        if !matches!(current.content, LayerContent::Raster(_))
+            || current.indexed_source.is_some()
+            || current.video.is_some()
+            || current.import_compositing.is_some()
+        {
             return Err(bad("paint.stroke", "native blend source carrier is unsupported"));
         }
         // Eligible controlled preparation performs the same strict encoded
         // gate before private parsing below; incompatible contexts retain the
         // existing strict refusal rather than being reinterpreted by a provider.
-        if !native_wide_color_controlled::eligible(doc,p){
-            crate::native_linear_context::validate(doc, control).map_err(|message|if control.cancelled(){EngineError::Cancelled}else{bad("paint.stroke",message)})?;
+        if !native_wide_color_controlled::eligible(doc, p) {
+            crate::native_linear_context::validate(doc, control)
+                .map_err(|message| if control.cancelled() { EngineError::Cancelled } else { bad("paint.stroke", message) })?;
         }
     }
     if restricted_color
@@ -373,18 +400,23 @@ fn wide_stroke_context_with_limits(
         ));
     }
     let clip = wide_paint_extent(doc, layer, p);
-    let (values,profile_work) = if brush.erase { ([0.0;4],0) } else {
-        let rgba=crate::paint_cmds::wide_color(p.get("color"),brush.color)?;
-        if native_wide_color_controlled::eligible(doc,p){
-            let (values,requirements)=native_wide_color_controlled::prepare(doc,format,p,rgba,limits,control)?;
-            if requirements.peak_resident_bytes>limits.resident_bytes||requirements.work_units>limits.work_units{return Err(bad("paint.stroke","native color aggregate limit"));}
-            (values,requirements.work_units)
-        }else{
+    let (values, profile_work) = if brush.erase {
+        ([0.0; 4], 0)
+    } else {
+        let rgba = crate::paint_cmds::wide_color(p.get("color"), brush.color)?;
+        if native_wide_color_controlled::eligible(doc, p) {
+            let (values, requirements) = native_wide_color_controlled::prepare(doc, format, p, rgba, limits, control)?;
+            if requirements.peak_resident_bytes > limits.resident_bytes || requirements.work_units > limits.work_units {
+                return Err(bad("paint.stroke", "native color aggregate limit"));
+            }
+            (values, requirements.work_units)
+        } else {
             // Existing Normal/numeric-target encoding compatibility. The old
             // provider/Transform internals remain explicit boundary-only work.
-            control.check().map_err(|_|EngineError::Cancelled)?;
-            let values=native_wide_color(doc,format,p,rgba)?;
-            control.check().map_err(|_|EngineError::Cancelled)?;(values,0)
+            control.check().map_err(|_| EngineError::Cancelled)?;
+            let values = native_wide_color(doc, format, p, rgba)?;
+            control.check().map_err(|_| EngineError::Cancelled)?;
+            (values, 0)
         }
     };
     let float_format = PixelFormat::new(format.mode, SampleType::F64, format.alpha);
@@ -397,8 +429,8 @@ fn wide_stroke_context_with_limits(
         encoded.get(..float_format.bytes_per_pixel()).ok_or_else(|| bad("paint.stroke", "invalid native pixel size"))?,
     )
     .map_err(|e| bad("paint.stroke", e.to_string()))?;
-    control.check().map_err(|_|EngineError::Cancelled)?;
-    Ok((Some(WideStroke { blend, color, clip, budget: WideStrokeBudget::default() }),profile_work))
+    control.check().map_err(|_| EngineError::Cancelled)?;
+    Ok((Some(WideStroke { blend, color, clip, budget: WideStrokeBudget::default() }), profile_work))
 }
 
 /// Canonical finite extent for a layer, mask or channel; temporary targets have no imported extent.
@@ -470,16 +502,16 @@ pub(crate) fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_co
     photocraft_color::convert::CmykSpace::for_profile(s.active().and_then(|d| d.doc.icc_profile.as_ref()))
 }
 
-mod stroke_controlled;
 mod live_begin_controlled;
+mod stroke_controlled;
 mod wide_one_shot_controlled;
-pub use wide_one_shot_controlled::live_begin_recipe_controlled::{CapturedLiveBegin,PreparedLiveBegin,LiveBeginFence};
-mod native_wide_color_controlled;
+pub use wide_one_shot_controlled::live_begin_recipe_controlled::{CapturedLiveBegin, LiveBeginFence, PreparedLiveBegin};
 mod brush_recipe_controlled;
-pub(crate) use brush_recipe_controlled::{AccountedRoundRecipe,accounted_round_recipe,accounted_wide_round_recipe};
+mod native_wide_color_controlled;
+pub(crate) use brush_recipe_controlled::{AccountedRoundRecipe, accounted_round_recipe, accounted_wide_round_recipe};
 mod advanced_native_admission;
-mod native_replace_controlled;
 mod native_mixer_controlled;
+mod native_replace_controlled;
 pub use native_replace_controlled::{NativeLuminosityCommit, NativeLuminosityPreview, try_native_color_replacement_preview};
 pub(crate) fn advanced_dispatch_preflight(session: &Session, command: &str, params: &Value) -> Result<()> {
     advanced_native_admission::dispatch_preflight(session, command, params, &photocraft_raster::Interrupt::NONE)
@@ -508,7 +540,10 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
     let cmyk = doc_cmyk_space(s);
     let reflected = match &symmetry {
         Some(axis) => stroke_controlled::prepare_reflected_passes(
-            axis, &pts, photocraft_paint::stroke_controlled::StrokeLimits::default(), &photocraft_raster::Interrupt::NONE,
+            axis,
+            &pts,
+            photocraft_paint::stroke_controlled::StrokeLimits::default(),
+            &photocraft_raster::Interrupt::NONE,
         )?,
         None => Vec::new(),
     };
@@ -545,7 +580,9 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                 let mut mirrors = Vec::new();
                 mirrors.try_reserve_exact(reflected.len()).map_err(|_| bad(cmd, "mirror renderer allocation"))?;
                 for pass in &reflected {
-                    if !crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, pass) { continue; }
+                    if !crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, pass) {
+                        continue;
+                    }
                     let mut mirror = StrokeRenderer::try_new_with_interrupt(&brush, Some(format), zoom, limits, &photocraft_raster::Interrupt::NONE)
                         .map_err(|error| bad(cmd, error.to_string()))?;
                     mirror.push_with_interrupt(pass, limits, &photocraft_raster::Interrupt::NONE).map_err(|error| bad(cmd, error.to_string()))?;
@@ -556,8 +593,16 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                 references.try_reserve_exact(mirrors.len()).map_err(|_| bad(cmd, "mirror references allocation"))?;
                 references.extend(mirrors.iter());
                 let damage = renderer.try_composite_union_many_wide_with_blend(
-                    &references, &pre, surf, &wide.color, sel.as_ref(), lock, wide.clip, wide.blend,
-                    photocraft_paint::stroke_controlled::StrokeLimits::default(), &photocraft_raster::Interrupt::NONE,
+                    &references,
+                    &pre,
+                    surf,
+                    &wide.color,
+                    sel.as_ref(),
+                    lock,
+                    wide.clip,
+                    wide.blend,
+                    photocraft_paint::stroke_controlled::StrokeLimits::default(),
+                    &photocraft_raster::Interrupt::NONE,
                 );
                 return damage.map_err(|e| bad("paint.stroke", e.to_string()));
             }
@@ -572,19 +617,20 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
             let paint_error = |error: photocraft_paint::stroke_controlled::StrokeError| bad(cmd, error.to_string());
             let mut copies = Vec::new();
             copies.try_reserve_exact(reflected.len()).map_err(|_| bad(cmd, "mirror renderer allocation"))?;
-            let construction = photocraft_paint::stroke_controlled::StrokeLimits {
-                resident_bytes: limits.resident_bytes / 5,
-                work_units: limits.work_units / 4,
-            };
+            let construction =
+                photocraft_paint::stroke_controlled::StrokeLimits { resident_bytes: limits.resident_bytes / 5, work_units: limits.work_units / 4 };
             for pass in &reflected {
-                if !crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, pass) { continue; }
+                if !crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, pass) {
+                    continue;
+                }
                 let mut renderer = StrokeRenderer::try_new_with_interrupt(&brush, Some(surf.format()), zoom, construction, control).map_err(paint_error)?;
                 renderer.push_with_interrupt(pass, construction, control).map_err(paint_error)?;
                 renderer.finish_with_interrupt(construction, control).map_err(paint_error)?;
                 copies.push(renderer);
             }
             let damage = if copies.is_empty() {
-                photocraft_paint::stroke_controlled::render_stroke_with_interrupt(surf, &brush, &pts, sel.as_ref(), lock, zoom, limits, control).map_err(paint_error)?
+                photocraft_paint::stroke_controlled::render_stroke_with_interrupt(surf, &brush, &pts, sel.as_ref(), lock, zoom, limits, control)
+                    .map_err(paint_error)?
             } else {
                 let pre = surf.clone();
                 let mut original = StrokeRenderer::try_new_with_interrupt(&brush, Some(surf.format()), zoom, construction, control).map_err(paint_error)?;
@@ -694,7 +740,9 @@ fn with_blend_mode(mut b: BrushSettings, p: &Value) -> BrushSettings {
 
 /// `paint.stroke`: the Brush (and Eraser) tool.
 pub fn paint_stroke(s: &mut Session, p: &Value) -> Result<Value> {
-    if let Some(value) = wide_one_shot_controlled::try_run_recipe(s, "paint.stroke", p)? { return Ok(value); }
+    if let Some(value) = wide_one_shot_controlled::try_run_recipe(s, "paint.stroke", p)? {
+        return Ok(value);
+    }
     let pts = parse_points(p, "paint.stroke")?;
     let brush = with_blend_mode(resolve_brush(s, p, "paint.stroke")?, p);
     let label = if brush.erase && !clear_mode(p) { "Eraser" } else { "Brush Tool" };
@@ -761,8 +809,15 @@ impl LiveCommit {
         p
     }
 
-    fn matches_captured_with_interrupt(&self, base:(photocraft_doc::DocId,u64),cmd:&str,p:&Value,pts:&[StrokePoint],control:&photocraft_raster::Interrupt<'_>)->Result<bool>{
-        wide_one_shot_controlled::match_offer(self,base,cmd,p,pts,control)
+    fn matches_captured_with_interrupt(
+        &self,
+        base: (photocraft_doc::DocId, u64),
+        cmd: &str,
+        p: &Value,
+        pts: &[StrokePoint],
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<bool> {
+        wide_one_shot_controlled::match_offer(self, base, cmd, p, pts, control)
     }
 
     pub(crate) fn matches(&self, s: &Session, cmd: &str, p: &Value, pts: &[StrokePoint]) -> bool {
@@ -791,7 +846,7 @@ impl LiveStroke {
     /// Parameter/model copies remain bounded legacy preparation boundaries;
     /// renderer construction and incremental rendering carry this token.
     pub fn begin_with_interrupt(s: &Session, cmd: &str, p: &Value, control: &photocraft_raster::Interrupt<'_>) -> Result<Self> {
-        CapturedLiveBegin::capture_with_interrupt(s,cmd,p,control)?.prepare(control)?.install_with_interrupt(s,control)
+        CapturedLiveBegin::capture_with_interrupt(s, cmd, p, control)?.prepare(control)?.install_with_interrupt(s, control)
     }
 
     /// The stroke as its commit would take it over (see [`LiveCommit`]).
@@ -832,50 +887,74 @@ impl LiveStroke {
     /// Legacy generator and compositor calls are polled at their boundaries.
     pub fn push_with_interrupt(&mut self, pts: &[StrokePoint], control: &photocraft_raster::Interrupt<'_>) -> Result<Rect> {
         let (candidate, damage) = stroke_controlled::live_transaction_controlled::push_transaction(
-            self, pts, photocraft_paint::stroke_controlled::StrokeLimits::default(), control, |candidate, pts| candidate.push_staged(pts, control),
+            self,
+            pts,
+            photocraft_paint::stroke_controlled::StrokeLimits::default(),
+            control,
+            |candidate, pts| candidate.push_staged(pts, control),
         )?;
         *self = candidate;
         Ok(damage)
     }
 
     fn push_staged(&mut self, pts: &[StrokePoint], control: &photocraft_raster::Interrupt<'_>) -> Result<Rect> {
-        self.push_staged_with_limits(pts,photocraft_paint::stroke_controlled::StrokeLimits::default(),control)
+        self.push_staged_with_limits(pts, photocraft_paint::stroke_controlled::StrokeLimits::default(), control)
     }
 
-    fn push_staged_with_limits(&mut self, pts: &[StrokePoint], limits:photocraft_paint::stroke_controlled::StrokeLimits, control: &photocraft_raster::Interrupt<'_>) -> Result<Rect> {
+    fn push_staged_with_limits(
+        &mut self,
+        pts: &[StrokePoint],
+        limits: photocraft_paint::stroke_controlled::StrokeLimits,
+        control: &photocraft_raster::Interrupt<'_>,
+    ) -> Result<Rect> {
         check_coords(pts, &self.cmd)?;
-        let prepared = stroke_controlled::live_batch_controlled::PreparedLiveBatch::prepare(
-            self, pts, &self.point_ledger, limits, control,
-        )?;
+        let prepared = stroke_controlled::live_batch_controlled::PreparedLiveBatch::prepare(self, pts, &self.point_ledger, limits, control)?;
         let used_work = self.point_ledger.work_units();
         let (reflected, ledger) = prepared.install(self, used_work, control)?;
         self.point_ledger = ledger;
         let cmyk = self.cmyk.clone();
         photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
-            self.renderer.push_with_interrupt(pts, limits, control)
+            self.renderer
+                .push_with_interrupt(pts, limits, control)
                 .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
             for (mirror, reflected) in self.mirrors.iter_mut().zip(&reflected) {
-                mirror.push_with_interrupt(reflected, limits, control)
+                mirror
+                    .push_with_interrupt(reflected, limits, control)
                     .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
             }
             let (surf, _) = crate::channel_cmds::target_surface(self.doc.try_resident_mut()?, self.layer, &self.params)?;
             if let Some(wide) = &self.wide {
                 let mut preview = photocraft_paint::render::clone_incremental_state_with_interrupt(&self.renderer, &self.mirrors, None, limits, control)
                     .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
-                preview.renderer.finish_with_interrupt(limits, control)
+                preview
+                    .renderer
+                    .finish_with_interrupt(limits, control)
                     .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
                 for mirror in &mut preview.mirrors {
                     control.check().map_err(|_| EngineError::Cancelled)?;
-                    mirror.finish_with_interrupt(limits, control)
+                    mirror
+                        .finish_with_interrupt(limits, control)
                         .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
                 }
                 control.check().map_err(|_| EngineError::Cancelled)?;
                 let mut mirrors = Vec::new();
                 mirrors.try_reserve_exact(preview.mirrors.len()).map_err(|_| bad(&self.cmd, "mirror references allocation"))?;
                 mirrors.extend(preview.mirrors.iter().zip(&self.mirror_distinct).filter(|(_, distinct)| **distinct).map(|(mirror, _)| mirror));
-                let damage = preview.renderer.try_composite_union_many_wide_with_blend(
-                    &mirrors, &self.pre, surf, &wide.color, self.sel.as_ref(), self.lock, wide.clip, wide.blend, limits, control,
-                ).map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
+                let damage = preview
+                    .renderer
+                    .try_composite_union_many_wide_with_blend(
+                        &mirrors,
+                        &self.pre,
+                        surf,
+                        &wide.color,
+                        self.sel.as_ref(),
+                        self.lock,
+                        wide.clip,
+                        wide.blend,
+                        limits,
+                        control,
+                    )
+                    .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
                 let old = std::mem::replace(&mut self.tail, damage);
                 return Ok(old.union(&damage));
             }
@@ -899,8 +978,20 @@ impl LiveStroke {
                 renderers.try_reserve_exact(passes).map_err(|_| bad(&self.cmd, "mirror references allocation"))?;
                 renderers.push(&mut self.renderer);
                 renderers.extend(self.mirrors.iter_mut().zip(&self.mirror_distinct).filter(|(_, distinct)| **distinct).map(|(renderer, _)| renderer));
-                dmg = dmg.union(&StrokeRenderer::try_composite_union_live_with_interrupt(&mut renderers, &mut live, full, &self.pre, surf, self.sel.as_ref(), self.lock, limits, control)
-                    .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?);
+                dmg = dmg.union(
+                    &StrokeRenderer::try_composite_union_live_with_interrupt(
+                        &mut renderers,
+                        &mut live,
+                        full,
+                        &self.pre,
+                        surf,
+                        self.sel.as_ref(),
+                        self.lock,
+                        limits,
+                        control,
+                    )
+                    .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?,
+                );
                 self.tail = old.union(&live.bounds());
                 self.union_live = Some((live, passes));
                 return Ok(dmg);
@@ -910,17 +1001,25 @@ impl LiveStroke {
             if !old.is_empty() {
                 // Back to the stroke without the previous tail.
                 StrokeRenderer::try_restore_preview_with_interrupt(&self.pre, surf, old, limits, control)
-                                .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
+                    .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
                 self.renderer.mark_dirty(old);
                 dmg = old;
             }
-            dmg = dmg.union(&self.renderer.try_composite_with_interrupt(&self.pre, surf, self.sel.as_ref(), self.lock, false, limits, control)
-                .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?);
+            dmg = dmg.union(
+                &self
+                    .renderer
+                    .try_composite_with_interrupt(&self.pre, surf, self.sel.as_ref(), self.lock, false, limits, control)
+                    .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?,
+            );
             control.check().map_err(|_| EngineError::Cancelled)?;
-            if let Some(mut tail) = self.renderer.try_tail_preview_with_interrupt(limits, control)
-                .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })? {
+            if let Some(mut tail) = self
+                .renderer
+                .try_tail_preview_with_interrupt(limits, control)
+                .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?
+            {
                 control.check().map_err(|_| EngineError::Cancelled)?;
-                self.tail = tail.try_composite_with_interrupt(&self.pre, surf, self.sel.as_ref(), self.lock, false, limits, control)
+                self.tail = tail
+                    .try_composite_with_interrupt(&self.pre, surf, self.sel.as_ref(), self.lock, false, limits, control)
                     .map_err(|error| if control.cancelled() { EngineError::Cancelled } else { bad(&self.cmd, error.to_string()) })?;
                 dmg = dmg.union(&self.tail);
             }
@@ -930,7 +1029,9 @@ impl LiveStroke {
 }
 
 fn pencil(s: &mut Session, p: &Value) -> Result<Value> {
-    if let Some(value) = wide_one_shot_controlled::try_run_recipe(s, "paint.pencil", p)? { return Ok(value); }
+    if let Some(value) = wide_one_shot_controlled::try_run_recipe(s, "paint.pencil", p)? {
+        return Ok(value);
+    }
     let pts = parse_points(p, "paint.pencil")?;
     let brush = pencil_brush(s, p)?;
     let label = if brush.erase && !clear_mode(p) { "Eraser" } else { "Pencil" };
@@ -942,7 +1043,9 @@ fn pct(p: &Value, k: &str, d: f32) -> f32 {
 }
 
 fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
-    if let Some(value) = native_mixer_controlled::try_run_job(s, p)? { return Ok(value); }
+    if let Some(value) = native_mixer_controlled::try_run_job(s, p)? {
+        return Ok(value);
+    }
     let cmd = "paint.mixerBrush";
     advanced_native_admission::target_preflight(s, cmd, p, &photocraft_raster::Interrupt::NONE)?;
     let pts = parse_points(p, cmd)?;
@@ -1019,7 +1122,9 @@ fn color_replacement_setup(s: &Session, p: &Value) -> Result<(Stroke, ReplaceSet
 }
 
 fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
-    if let Some(result) = native_replace_controlled::try_run_job(s, p)? { return Ok(result); }
+    if let Some(result) = native_replace_controlled::try_run_job(s, p)? {
+        return Ok(result);
+    }
     let (stroke, rs, id) = color_replacement_setup(s, p)?;
     let dmg = s.edit("Color Replacement", |doc, _| {
         let sel = doc.selection.clone();

@@ -58,7 +58,7 @@ fn editable_candidate(doc: &Document, source: &SourceItem) -> bool {
     let Some(bounds) = state.items.iter().find(|item| item.item == source.owner).and_then(|item| item.raster_bounds) else { return false };
     let Some(material) = state.resources.iter().find(|entry| entry.id == *resource) else { return false };
     let Some(resolution) = &material.resolution else { return false };
-    let Some(bytes) = material.owned_bytes.as_ref().map(|bytes|bytes.as_slice()) else { return false };
+    let Some(bytes) = material.owned_bytes.as_ref().map(|bytes| bytes.as_slice()) else { return false };
     if material.kind != photocraft_doc::xcf_resources::ResourceKind::LinkedImage
         || resolution.payload_hash.len() != 64
         || !resolution.payload_hash.bytes().all(|value| value.is_ascii_hexdigit())
@@ -169,7 +169,7 @@ fn dimensions(doc: &Document, source: &SourceItem, ctl: &Interrupt<'_>) -> Resul
         .xcf_state
         .as_ref()
         .and_then(|state| state.resources.iter().find(|entry| entry.id == *resource))
-        .and_then(|entry| entry.owned_bytes.as_ref().map(|bytes|bytes.as_slice()))
+        .and_then(|entry| entry.owned_bytes.as_ref().map(|bytes| bytes.as_slice()))
         .ok_or_else(|| bad("linked geometry requires owned material"))?;
     if bytes.len() > 8 << 20 || photocraft_codecs::detect(bytes) != Some(photocraft_codecs::Format::Png) {
         return Err(bad("linked geometry requires a qualified bounded PNG"));
@@ -242,7 +242,9 @@ fn natural_size(size: (u32, u32), state: &TransformState) -> Result<(u32, u32)> 
 /// Admission runs before dispatch may drop a transient pixel-move preview.
 /// It borrows the parameter envelope and never decodes, clones or reads material.
 pub(crate) fn dispatch_preflight(s: &Session, id: &str, params: &Value) -> Result<bool> {
-    if !matches!(id, "xcf.link.setPlacement" | "xcf.link.setTransform") { return Ok(false); }
+    if !matches!(id, "xcf.link.setPlacement" | "xcf.link.setTransform") {
+        return Ok(false);
+    }
     let active = s.active().ok_or(EngineError::NoDocument)?;
     if id == "xcf.link.setPlacement" {
         owner(params, &["layerId", "originPx"])?;
@@ -250,24 +252,40 @@ pub(crate) fn dispatch_preflight(s: &Session, id: &str, params: &Value) -> Resul
     } else {
         owner(params, &["layerId", "matrixF64Bits", "interpolation", "originPx"])?;
         transform_params(params)?;
-        if let Some(value) = params.get("originPx") { origin(value)?; }
+        if let Some(value) = params.get("originPx") {
+            origin(value)?;
+        }
     }
-    if active.floating.is_some() { return Err(bad("complete or cancel the pixel-move preview before editing linked geometry")); }
+    if active.floating.is_some() {
+        return Err(bad("complete or cancel the pixel-move preview before editing linked geometry"));
+    }
     Ok(true)
 }
 // Raster storage allocates complete tiles even at off-canvas/unaligned edges.
 fn output_envelope(bounds: Rect, bpp: usize) -> Result<u64> {
-    if bounds.is_empty() { return Err(bad("empty linked raster bounds")); }
+    if bounds.is_empty() {
+        return Err(bad("empty linked raster bounds"));
+    }
     let tile = i64::from(photocraft_geom::TILE_SIZE);
     let axis = |lo: i32, hi: i32| -> Result<u64> {
-        let count = (i64::from(hi) - 1).div_euclid(tile).checked_sub(i64::from(lo).div_euclid(tile))
-            .and_then(|n| n.checked_add(1)).ok_or_else(|| bad("linked tile count overflow"))?;
+        let count = (i64::from(hi) - 1)
+            .div_euclid(tile)
+            .checked_sub(i64::from(lo).div_euclid(tile))
+            .and_then(|n| n.checked_add(1))
+            .ok_or_else(|| bad("linked tile count overflow"))?;
         u64::try_from(count).map_err(|_| bad("linked tile count overflow"))
     };
-    let tile_bytes = u64::try_from(tile).ok().and_then(|n| n.checked_mul(n))
-        .and_then(|n| n.checked_mul(bpp as u64)).and_then(|n| n.checked_add(256)).ok_or_else(|| bad("linked tile size overflow"))?;
-    axis(bounds.x0, bounds.x1)?.checked_mul(axis(bounds.y0, bounds.y1)?)
-        .and_then(|n| n.checked_mul(tile_bytes)).and_then(|n| n.checked_add(bpp as u64)).ok_or_else(|| bad("linked raster envelope overflow"))
+    let tile_bytes = u64::try_from(tile)
+        .ok()
+        .and_then(|n| n.checked_mul(n))
+        .and_then(|n| n.checked_mul(bpp as u64))
+        .and_then(|n| n.checked_add(256))
+        .ok_or_else(|| bad("linked tile size overflow"))?;
+    axis(bounds.x0, bounds.x1)?
+        .checked_mul(axis(bounds.y0, bounds.y1)?)
+        .and_then(|n| n.checked_mul(tile_bytes))
+        .and_then(|n| n.checked_add(bpp as u64))
+        .ok_or_else(|| bad("linked raster envelope overflow"))
 }
 fn require_geometry_locks(doc: &Document, owner: LayerId) -> Result<()> {
     let locks = crate::xcf_item_locks::effective_layer_locks(doc, owner)?;
@@ -289,7 +307,11 @@ fn install_pixels(doc: &mut Document, owner: LayerId, pixels: photocraft_raster:
         return Err(bad("linked geometry requires a resident raster"));
     }
     layer.content = LayerContent::Raster(pixels);
-    let source = doc.xcf_state.as_mut().and_then(|state| state.source_items.iter_mut().find(|source| source.owner == ItemRef::Layer(owner))).ok_or_else(|| bad("missing linked source"))?;
+    let source = doc
+        .xcf_state
+        .as_mut()
+        .and_then(|state| state.source_items.iter_mut().find(|source| source.owner == ItemRef::Layer(owner)))
+        .ok_or_else(|| bad("missing linked source"))?;
     let EditableSource::Linked { last_verified_hash, .. } = &mut source.source else { return Err(bad("owner is not a linked image")) };
     *last_verified_hash = Some(digest);
     Ok(())
@@ -311,12 +333,19 @@ fn apply(s: &mut Session, owner: LayerId, current: LinkedCurrentState, digest: S
     // Bound both sparse-map COW clones and the staged output before detaching any
     // model. This raster guard does not claim to meter all document metadata/RSS.
     let footprint = baseline.resident_raster_footprint_with(ctl)?;
-    let output_bytes = u64::from(current.bounds.width()).checked_mul(u64::from(current.bounds.height()))
-        .and_then(|n| n.checked_mul(baseline.pixel_format().bytes_per_pixel() as u64)).ok_or_else(|| bad("linked raster size overflow"))?;
+    let output_bytes = u64::from(current.bounds.width())
+        .checked_mul(u64::from(current.bounds.height()))
+        .and_then(|n| n.checked_mul(baseline.pixel_format().bytes_per_pixel() as u64))
+        .ok_or_else(|| bad("linked raster size overflow"))?;
     let tiled_output = output_envelope(current.bounds, baseline.pixel_format().bytes_per_pixel())?;
-    if output_bytes > 64 << 20 || footprint.clone_metadata_bytes.checked_mul(2)
-        .and_then(|n| n.checked_add(footprint.retained_bytes)).and_then(|n| n.checked_add(tiled_output))
-        .is_none_or(|n| n > photocraft_raster::MAX_CHECKED_RASTER_BYTES) {
+    if output_bytes > 64 << 20
+        || footprint
+            .clone_metadata_bytes
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(footprint.retained_bytes))
+            .and_then(|n| n.checked_add(tiled_output))
+            .is_none_or(|n| n > photocraft_raster::MAX_CHECKED_RASTER_BYTES)
+    {
         return Err(bad("linked geometry raster staging exceeds bounds"));
     }
     if bounds == current.bounds && effective_transform(source)? == current.transform.as_ref() && last_verified_hash.as_deref() == Some(digest.as_str()) {
@@ -329,16 +358,23 @@ fn apply(s: &mut Session, owner: LayerId, current: LinkedCurrentState, digest: S
     let mut staged = baseline.clone();
     let doc = staged.try_resident_mut_with_raster_limit(photocraft_raster::MAX_CHECKED_RASTER_BYTES, ctl)?;
     install_geometry(doc, owner, current.clone())?;
-    let source = doc.xcf_state.as_ref().and_then(|state| state.source_items.iter().find(|source| source.owner == ItemRef::Layer(owner))).ok_or_else(|| bad("missing linked source"))?;
+    let source = doc
+        .xcf_state
+        .as_ref()
+        .and_then(|state| state.source_items.iter().find(|source| source.owner == ItemRef::Layer(owner)))
+        .ok_or_else(|| bad("missing linked source"))?;
     let (_, pixels) = photocraft_compose::gimp_link_items::prepare_current_source(doc, source, ctl)
         .map_err(|e| if ctl.cancelled() { EngineError::Cancelled } else { bad(e.to_string()) })?;
     install_pixels(doc, owner, pixels.clone(), digest.clone())?;
     photocraft_compose::gimp_render::PreparedRenderer::new_with_interrupt(doc, ctl)
         .map_err(|e| if ctl.cancelled() { EngineError::Cancelled } else { bad(e.to_string()) })?;
     let staged_footprint = staged.resident_raster_footprint_with(ctl)?;
-    if staged_footprint.retained_bytes.checked_add(staged_footprint.clone_metadata_bytes)
+    if staged_footprint
+        .retained_bytes
+        .checked_add(staged_footprint.clone_metadata_bytes)
         .and_then(|n| n.checked_add(footprint.clone_metadata_bytes))
-        .is_none_or(|n| n > photocraft_raster::MAX_CHECKED_RASTER_BYTES) {
+        .is_none_or(|n| n > photocraft_raster::MAX_CHECKED_RASTER_BYTES)
+    {
         return Err(bad("linked geometry commit COW exceeds bounds"));
     }
     ctl.check().map_err(|_| EngineError::Cancelled)?;

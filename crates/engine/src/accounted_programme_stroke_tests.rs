@@ -108,8 +108,23 @@ fn programme_stroke_requires_current_proof_and_exact_borrowed_alpha() {
     let old = invalid.active().unwrap().doc.accounted().unwrap().clone();
     // The genuine first version22 packet has only one filtered leaf. Target
     // a distinct actual plain raster so that its sole Exposure remains OTHER.
-    let tree=old.checked_readonly_normal_hierarchy_current_index(&f::ctl()).unwrap();
-    let target=tree.rows().iter().find(|row|matches!(row.layer.content,LayerContent::BackedRaster(_))&&!old.document().xcf_state.as_ref().unwrap().filter_stacks.iter().any(|st|st.owner==photocraft_doc::item_identity::ItemRef::Layer(row.id)&&!st.nodes.is_empty())).unwrap().id;
+    let tree = old.checked_readonly_normal_hierarchy_current_index(&f::ctl()).unwrap();
+    let target = tree
+        .rows()
+        .iter()
+        .find(|row| {
+            matches!(row.layer.content, LayerContent::BackedRaster(_))
+                && !old
+                    .document()
+                    .xcf_state
+                    .as_ref()
+                    .unwrap()
+                    .filter_stacks
+                    .iter()
+                    .any(|st| st.owner == photocraft_doc::item_identity::ItemRef::Layer(row.id) && !st.nodes.is_empty())
+        })
+        .unwrap()
+        .id;
     drop(tree);
     let q = old.quota().clone();
     let index = q.reserve(QuotaKind::Index, 8 << 20).unwrap();

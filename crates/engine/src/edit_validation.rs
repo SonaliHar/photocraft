@@ -35,7 +35,8 @@ fn validate_font_input(
     if doc.icc_profile != before.icc_profile || doc.mode != before.mode || doc.sample_encoding != before.sample_encoding {
         doc.working_profile_interpretation = photocraft_doc::WorkingProfileInterpretation::Icc;
     }
-    doc.working_profile_interpretation.validate_with_interrupt(doc.icc_profile.as_deref().map(Vec::as_slice), doc.mode, control)
+    doc.working_profile_interpretation
+        .validate_with_interrupt(doc.icc_profile.as_deref().map(Vec::as_slice), doc.mode, control)
         .map_err(|e| if control.cancelled() { EngineError::Cancelled } else { EngineError::Other(e.to_string()) })?;
     if let (Some(k), Some(id)) = (restrict, active) {
         channel_cmds::restrict_to_color(before, doc, id, k);

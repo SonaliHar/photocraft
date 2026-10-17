@@ -397,8 +397,8 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, source: Option<&crate:
     let page = PrintPage { paper: (pw, ph), image: img, rect: (x, y, w, h), marks, description, label, emulsion_down };
     let output = p.get("output").and_then(Value::as_str).filter(|v| !v.is_empty()).map(str::to_string);
     let send = p.get("send").and_then(Value::as_bool).unwrap_or(output.is_none());
-    let copies = u32::try_from(crate::commands::int(p, "copies").unwrap_or(1).clamp(1, 999))
-        .map_err(|_| bad(cmd, "print copy count is outside the supported range"))?;
+    let copies =
+        u32::try_from(crate::commands::int(p, "copies").unwrap_or(1).clamp(1, 999)).map_err(|_| bad(cmd, "print copy count is outside the supported range"))?;
     let dry = p.get("dryRun").and_then(Value::as_bool).unwrap_or(false);
     // Shared RGB transport handles compatible Windows pages; PDF-only content retains its route.
     // Sending follows the shared command contract; fuzz tests explicitly request dryRun.

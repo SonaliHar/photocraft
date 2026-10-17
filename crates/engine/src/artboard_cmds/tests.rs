@@ -183,8 +183,11 @@ fn raster_pdf_xref_offsets_point_at_objects() {
 }
 
 fn resolution_pdf_path() -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("photocraft-artboard-resolution-{}-{}.pdf", std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()))
+    std::env::temp_dir().join(format!(
+        "photocraft-artboard-resolution-{}-{}.pdf",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ))
 }
 
 #[test]
@@ -192,9 +195,14 @@ fn pdf_export_sizes_each_axis_from_exact_custom_resolution() {
     let mut s = session(8);
     s.execute("layer.new.artboard", json!({"rect": [0, 0, 24, 36]})).unwrap();
     let resolution = photocraft_doc::PhysicalResolution {
-        x_dpi: 144.25, y_dpi: 287.5,
+        x_dpi: 144.25,
+        y_dpi: 287.5,
         unit: photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {
-            name: "Own page unit".into(), factor: 2.5, digits: 3, symbol: "u".into(), abbreviation: "ou".into(),
+            name: "Own page unit".into(),
+            factor: 2.5,
+            digits: 3,
+            symbol: "u".into(),
+            abbreviation: "ou".into(),
         }),
     };
     s.active_mut().unwrap().doc.try_resident_mut().unwrap().set_physical_resolution(resolution.clone()).unwrap();
@@ -224,13 +232,22 @@ fn pdf_export_invalid_resolution_preserves_existing_file_and_session() {
         photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 0.0, unit: photocraft_doc::PhysicalUnit::Inch },
         photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: f64::MIN_POSITIVE / 1024.0, unit: photocraft_doc::PhysicalUnit::Inch },
         photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: f64::MAX, unit: photocraft_doc::PhysicalUnit::Inch },
-        photocraft_doc::PhysicalResolution { x_dpi: 144.0, y_dpi: 144.0, unit: photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {
-            name: "Invalid unit".into(), factor: f64::NAN, digits: 1, symbol: "u".into(), abbreviation: "u".into(),
-        }) },
+        photocraft_doc::PhysicalResolution {
+            x_dpi: 144.0,
+            y_dpi: 144.0,
+            unit: photocraft_doc::PhysicalUnit::Custom(photocraft_doc::CustomUnit {
+                name: "Invalid unit".into(),
+                factor: f64::NAN,
+                digits: 1,
+                symbol: "u".into(),
+                abbreviation: "u".into(),
+            }),
+        },
     ] {
         s.active_mut().unwrap().doc.try_resident_mut().unwrap().physical_resolution = Some(resolution);
         let state = s.active().unwrap();
-        let (before, revision, past, future, active) = (state.doc.clone(), state.revision, state.history.past_len(), state.history.can_redo(), state.active_layer);
+        let (before, revision, past, future, active) =
+            (state.doc.clone(), state.revision, state.history.past_len(), state.history.can_redo(), state.active_layer);
         std::fs::write(&path, b"existing export stays intact").unwrap();
         assert!(s.execute("file.export.artboardsToPdf", json!({"path":path.to_string_lossy()})).is_err());
         let state = s.active().unwrap();
@@ -243,8 +260,7 @@ fn pdf_export_invalid_resolution_preserves_existing_file_and_session() {
 
 #[test]
 fn raster_pdf_refuses_invalid_axes_and_preserves_subunit_resolution() {
-    for axes in [(0.0, 72.0), (-1.0, 72.0), (72.0, f64::NAN), (f64::INFINITY, 72.0),
-        (72.0, f64::MIN_POSITIVE / 1024.0), (72.0, f64::MAX)] {
+    for axes in [(0.0, 72.0), (-1.0, 72.0), (72.0, f64::NAN), (f64::INFINITY, 72.0), (72.0, f64::MIN_POSITIVE / 1024.0), (72.0, f64::MAX)] {
         assert!(raster_pdf(&[(2, 3, axes, vec![])]).is_err());
     }
     assert!(raster_pdf(&[]).is_err());
@@ -259,8 +275,10 @@ fn raster_pdf_square_sizes_preserve_legacy_bytes() {
     // Actual before-change helper outputs, generated from the hash-bound source snapshot.
     for (pages, expected) in [
         (vec![(2, 3, (72.0, 72.0), vec![255, 216, 255, 217])], "75fc31cd41238fd5971674ebc57471c4760d9d4081ebdbda7648122848d12345"),
-        (vec![(24, 36, (300.0, 300.0), vec![255, 216, 1, 2, 255, 217]), (12, 8, (144.25, 144.25), vec![255, 216, 3, 4, 255, 217])],
-            "eb5776a9ad46eb8d1fd3a4ba63d49726ccb1f988fa04bb13941513a42b3a116f"),
+        (
+            vec![(24, 36, (300.0, 300.0), vec![255, 216, 1, 2, 255, 217]), (12, 8, (144.25, 144.25), vec![255, 216, 3, 4, 255, 217])],
+            "eb5776a9ad46eb8d1fd3a4ba63d49726ccb1f988fa04bb13941513a42b3a116f",
+        ),
     ] {
         let hash: String = Sha256::digest(raster_pdf(&pages).unwrap()).iter().map(|byte| format!("{byte:02x}")).collect();
         assert_eq!(hash, expected);

@@ -6,7 +6,13 @@ pub(super) fn prepare(
     limit: usize,
     control: &ReadControl<'_>,
 ) -> Result<OwnedFilterInspectReply> {
-    if owner.is_readonly_normal_hierarchy_storage(){owner.validate_readonly_normal_hierarchy_current_storage(control)?;}else if owner.is_readonly_masked_filtered_flat_point_storage(){owner.validate_readonly_masked_filtered_flat_point_storage(control)?;}else{owner.validate_readonly_filtered_flat_point_storage(control)?;}
+    if owner.is_readonly_normal_hierarchy_storage() {
+        owner.validate_readonly_normal_hierarchy_current_storage(control)?;
+    } else if owner.is_readonly_masked_filtered_flat_point_storage() {
+        owner.validate_readonly_masked_filtered_flat_point_storage(control)?;
+    } else {
+        owner.validate_readonly_filtered_flat_point_storage(control)?;
+    }
     let doc = owner.document();
     let state = doc.xcf_state.as_ref().ok_or(BackingError::Integrity)?;
     if !(1..=4096).contains(&doc.layers.len())
@@ -25,8 +31,10 @@ pub(super) fn prepare(
     let mut filters_in_owner = 0usize;
     for stack in &state.filter_stacks {
         control.check(1)?;
-        if stack.nodes.len()>1024 {return Err(BackingError::Length.into())}
-        filters_in_owner = filters_in_owner.checked_add(stack.nodes.len()).filter(|n|*n<=4096).ok_or(BackingError::Length)?;
+        if stack.nodes.len() > 1024 {
+            return Err(BackingError::Length.into());
+        }
+        filters_in_owner = filters_in_owner.checked_add(stack.nodes.len()).filter(|n| *n <= 4096).ok_or(BackingError::Length)?;
     }
     if filters_in_owner != state.filter_masks.len() {
         return Err(BackingError::Integrity.into());

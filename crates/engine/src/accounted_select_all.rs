@@ -108,26 +108,34 @@ fn is_all(prior: Option<&Surface>, area: Rect, format: PixelFormat, one: &[u8], 
 pub(crate) fn run(session: &mut Session, params: &Value, control: &ReadControl<'_>) -> Result<Value> {
     control.check(1)?;
     validate_request(session, params)?;
-    let target=if session.active().and_then(|s|s.doc.accounted()).is_some_and(|o|crate::accounted_programme_current::kind(o).is_some()){
-        AccountedSelectionTarget::capture_with_control(session,control)?
-    }else{AccountedSelectionTarget::capture(session)?};
-    let guarded=crate::accounted_programme_current::kind(session.active().and_then(|s|s.doc.accounted()).ok_or(BackingError::Unsupported)?).is_some();
-    run_target(session,params,target,guarded,control)
+    let target = if session.active().and_then(|s| s.doc.accounted()).is_some_and(|o| crate::accounted_programme_current::kind(o).is_some()) {
+        AccountedSelectionTarget::capture_with_control(session, control)?
+    } else {
+        AccountedSelectionTarget::capture(session)?
+    };
+    let guarded = crate::accounted_programme_current::kind(session.active().and_then(|s| s.doc.accounted()).ok_or(BackingError::Unsupported)?).is_some();
+    run_target(session, params, target, guarded, control)
 }
-pub(crate) fn run_captured(session:&mut Session,params:&Value,target:AccountedSelectionTarget,control:&ReadControl<'_>)->Result<Value>{
-    run_target(session,params,target,true,control)
+pub(crate) fn run_captured(session: &mut Session, params: &Value, target: AccountedSelectionTarget, control: &ReadControl<'_>) -> Result<Value> {
+    run_target(session, params, target, true, control)
 }
-fn run_target(session:&mut Session,params:&Value,target:AccountedSelectionTarget,guarded:bool,control:&ReadControl<'_>)->Result<Value>{
-    if guarded{control.check(1)?;validate_request(session,params)?;target.validate_with_control(session,control)?;}
+fn run_target(session: &mut Session, params: &Value, target: AccountedSelectionTarget, guarded: bool, control: &ReadControl<'_>) -> Result<Value> {
+    if guarded {
+        control.check(1)?;
+        validate_request(session, params)?;
+        target.validate_with_control(session, control)?;
+    }
     let state = session.active().ok_or(EngineError::NoDocument)?;
     let baseline = state.doc.clone();
     let owner = baseline.accounted().ok_or(BackingError::Unsupported)?;
     // The paid document gate alone admits plain imported metadata/storage.
     // This dispatch check never clears source state or supplies an ownership proof.
-    if let Some(kind)=crate::accounted_programme_current::kind(owner){
+    if let Some(kind) = crate::accounted_programme_current::kind(owner) {
         owner.validate_programme_selection_replacement(control)?;
-        crate::accounted_programme_current::validate(owner,kind,control)?;
-    }else{owner.validate_selection_replacement(control)?;}
+        crate::accounted_programme_current::validate(owner, kind, control)?;
+    } else {
+        owner.validate_selection_replacement(control)?;
+    }
     if !state.history.current()?.shares_state(&baseline) {
         return Err(BackingError::Integrity.into());
     }
@@ -136,7 +144,9 @@ fn run_target(session:&mut Session,params:&Value,target:AccountedSelectionTarget
     let (word, bpp) = unit(format)?;
     let one = word.get(..bpp).ok_or(BackingError::Length)?;
     if is_all(baseline.selection.as_ref(), area, format, one, control)? {
-        if guarded{target.validate_with_control(session,control)?;}
+        if guarded {
+            target.validate_with_control(session, control)?;
+        }
         validate_request(session, params)?;
         let state = session.active().ok_or(EngineError::NoDocument)?;
         if state.revision != target.revision

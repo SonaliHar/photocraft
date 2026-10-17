@@ -17,15 +17,15 @@
 //! PSD blocks stay byte-identical while they still decode to the model (see `photocraft-io`).
 
 use photocraft_algo::selection as sel;
-use photocraft_color::Color;
 #[cfg(test)]
 use photocraft_color::BlendMode;
-use photocraft_doc::{
-    Document, Fill, FillRule, GradientStyle, Layer, LayerContent, LayerId, LineCap, LineJoin, LiveShape, Path, PathOp,
-    ShapeLayer, ShapeStroke, StrokeAlign, VectorMask,
-};
+use photocraft_color::Color;
 #[cfg(test)]
 use photocraft_doc::NamedPath;
+use photocraft_doc::{
+    Document, Fill, FillRule, GradientStyle, Layer, LayerContent, LayerId, LineCap, LineJoin, LiveShape, Path, PathOp, ShapeLayer, ShapeStroke, StrokeAlign,
+    VectorMask,
+};
 use photocraft_geom::{Affine, Point, Rect};
 use photocraft_vector as vector;
 use serde_json::{Value, json};
@@ -118,16 +118,12 @@ pub(crate) fn layer_id(s: &Session, p: &Value) -> Result<LayerId> {
         Some(value) => {
             let id = match value {
                 Value::Number(number) => number.as_u64(),
-                Value::String(text)
-                    if !text.is_empty() && text.len() <= 20 && !text.starts_with('0') && text.bytes().all(|byte| byte.is_ascii_digit()) =>
-                {
+                Value::String(text) if !text.is_empty() && text.len() <= 20 && !text.starts_with('0') && text.bytes().all(|byte| byte.is_ascii_digit()) => {
                     text.parse::<u64>().ok()
                 }
                 _ => None,
             };
-            id.filter(|id| *id != 0)
-                .map(LayerId)
-                .ok_or_else(|| bad("vector", "layer must be a nonzero canonical decimal string or unsigned integer"))
+            id.filter(|id| *id != 0).map(LayerId).ok_or_else(|| bad("vector", "layer must be a nonzero canonical decimal string or unsigned integer"))
         }
         None => s.active().and_then(|d| d.active_layer).ok_or(EngineError::Other("no active layer".into())),
     }
@@ -799,7 +795,9 @@ pub(crate) fn saved_path_id(params: &Value) -> Result<Option<photocraft_doc::ite
         .get("pathId")
         .map(|value| {
             let id = match value {
-                Value::String(text) if !text.is_empty() && text.len() <= 20 && !text.starts_with('0') && text.bytes().all(|byte| byte.is_ascii_digit()) => text.parse::<u64>().ok(),
+                Value::String(text) if !text.is_empty() && text.len() <= 20 && !text.starts_with('0') && text.bytes().all(|byte| byte.is_ascii_digit()) => {
+                    text.parse::<u64>().ok()
+                }
                 Value::Number(number) => number.as_u64(),
                 _ => None,
             };
@@ -887,7 +885,11 @@ mod path_transform_controlled;
 mod upstream_routes;
 
 pub(crate) fn path_transform_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
-    if upstream_routes::mapping(p){upstream_routes::preflight(s,p,"path.transform",true)}else{path_transform_controlled::dispatch_preflight(s, p, background)}
+    if upstream_routes::mapping(p) {
+        upstream_routes::preflight(s, p, "path.transform", true)
+    } else {
+        path_transform_controlled::dispatch_preflight(s, p, background)
+    }
 }
 
 /// The path `path.transform` edits: `layer`'s shape path or vector mask, else the work path or a
@@ -928,7 +930,12 @@ enum PathMap {
 }
 
 fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
-    if upstream_routes::mapping(p){upstream_routes::preflight(s,p,"path.transform",false)?;path_transform_upstream(s,p)}else{path_transform_controlled::run(s, p)}
+    if upstream_routes::mapping(p) {
+        upstream_routes::preflight(s, p, "path.transform", false)?;
+        path_transform_upstream(s, p)
+    } else {
+        path_transform_controlled::run(s, p)
+    }
 }
 
 mod path_name_controlled;
@@ -939,8 +946,12 @@ pub(crate) fn path_name_dispatch_preflight(s: &Session, p: &Value, background: b
 
 fn path_transform_upstream(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.transform";
-    let saved=saved_path_id(p)?;
-    let name = if let Some(id)=saved{s.active().ok_or(EngineError::NoDocument)?.doc.paths.iter().find(|v|v.id==id).ok_or_else(||bad(CMD,"missing saved pathId"))?.name.clone()}else{p.get("name").and_then(Value::as_str).unwrap_or("work").to_owned()};
+    let saved = saved_path_id(p)?;
+    let name = if let Some(id) = saved {
+        s.active().ok_or(EngineError::NoDocument)?.doc.paths.iter().find(|v| v.id == id).ok_or_else(|| bad(CMD, "missing saved pathId"))?.name.clone()
+    } else {
+        p.get("name").and_then(Value::as_str).unwrap_or("work").to_owned()
+    };
     let layer_id = if name == "layer" { Some(layer_id(s, p)?) } else { None };
     // The box Distort, Perspective and Warp frame: `rect`, else the path's control bounds.
     let frame = |s: &Session| -> Result<[f64; 4]> {
@@ -1041,7 +1052,6 @@ fn path_transform_upstream(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(out)
-
 }
 
 fn path_rename(s: &mut Session, p: &Value) -> Result<Value> {
@@ -1076,7 +1086,6 @@ pub(crate) fn path_fill_dispatch_preflight(s: &Session, p: &Value, background: b
 
 fn path_fill(s: &mut Session, p: &Value) -> Result<Value> {
     path_fill_controlled::run(s, p)
-
 }
 
 /// Composites `src` × coverage onto a surface over `area` (any pixel format).
@@ -1104,7 +1113,11 @@ mod path_stroke_controlled;
 pub use path_stroke_controlled::brush_snapshot as path_stroke_brush_snapshot;
 
 pub(crate) fn path_stroke_dispatch_preflight(s: &Session, p: &Value, background: bool) -> Result<()> {
-    if upstream_routes::stroke(p){upstream_routes::preflight(s,p,"path.stroke",true)}else{path_stroke_controlled::dispatch_preflight(s, p, background)}
+    if upstream_routes::stroke(p) {
+        upstream_routes::preflight(s, p, "path.stroke", true)
+    } else {
+        path_stroke_controlled::dispatch_preflight(s, p, background)
+    }
 }
 
 /// Stroke Path's brush-based tools besides the Brush, Pencil and Eraser it renders itself: each
@@ -1275,11 +1288,15 @@ fn path_stroke_upstream(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(dmg)
     })?;
     Ok(json!({ "damage": [dmg.x0, dmg.y0, dmg.width(), dmg.height()] }))
-
 }
 
 fn path_stroke(s: &mut Session, p: &Value) -> Result<Value> {
-    if upstream_routes::stroke(p){upstream_routes::preflight(s,p,"path.stroke",false)?;path_stroke_upstream(s,p)}else{path_stroke_controlled::run(s, p)}
+    if upstream_routes::stroke(p) {
+        upstream_routes::preflight(s, p, "path.stroke", false)?;
+        path_stroke_upstream(s, p)
+    } else {
+        path_stroke_controlled::run(s, p)
+    }
 }
 // ---------------------------------------------------------------------------
 // Vector masks
@@ -1670,13 +1687,19 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             path_set
         ),
-        spec!("path.delete", "Delete Path", [], r##"{"pathId":id? (saved path ID takes precedence),"name":str|"work"="work","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_doc, path_delete),
+        spec!(
+            "path.delete",
+            "Delete Path",
+            [],
+            r##"{"pathId":id? (saved path ID takes precedence),"name":str|"work"="work","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            has_doc,
+            path_delete
+        ),
         spec!(
             "path.transform",
             "Free Transform Path",
             [],
             r##"{"name":str|"work"|"layer"="work","layer":id? (with layer target),"matrix":[a,b,c,d,e,f] | "quad":[[x,y]×4] (Distort/Perspective: where the frame's corners go, clockwise from top-left) | "style"|"mesh"|"warp":… (Warp, as edit.transform.warp) | "translateX":px?,"translateY":px?,"scaleX":factor?,"scaleY":factor?,"angle":degrees?,"rect":[x0,y0,x1,y1]? (the quad's or warp's frame; default = path control bounds)} (numeric transforms pivot on path bounds center)"##,
-
             has_doc,
             path_transform
         ),
@@ -1688,7 +1711,14 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             clipping_path_set
         ),
-        spec!("path.clippingPath.clear", "Clear Clipping Path", [], r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_doc, clipping_path_clear),
+        spec!(
+            "path.clippingPath.clear",
+            "Clear Clipping Path",
+            [],
+            r##"{"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            has_doc,
+            clipping_path_clear
+        ),
         spec!("path.style.copyFill", "Copy Fill", [], r##"{} (copies active shape layer fill)"##, has_shape_fill, copy_shape_fill),
         spec!("path.style.copyStroke", "Copy Complete Stroke", [], r##"{} (copies active shape layer stroke)"##, has_shape_stroke, copy_shape_stroke),
         spec!(
@@ -1726,7 +1756,14 @@ pub fn specs() -> Vec<CommandSpec> {
             run: path_to_selection,
             journal: true,
         },
-        spec!("select.toWorkPath", "Make Work Path", [], r##"{"tolerance":0.5..10 px=2,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} → {subpaths,knots}"##, has_selection, select_to_work_path),
+        spec!(
+            "select.toWorkPath",
+            "Make Work Path",
+            [],
+            r##"{"tolerance":0.5..10 px=2,"documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?} → {subpaths,knots}"##,
+            has_selection,
+            select_to_work_path
+        ),
         spec!(
             "path.fill",
             "Fill Path",
@@ -1740,7 +1777,6 @@ pub fn specs() -> Vec<CommandSpec> {
             "Stroke Path",
             [],
             r##"{"name":str|"work"|"layer"="work","layer":id? (pixel layer),"tool":"brush|pencil|eraser|backgroundEraser|cloneStamp|patternStamp|healingBrush|spotHealingBrush|historyBrush|blur|sharpen|smudge|dodge|burn|sponge|colorReplacement|mixerBrush"="brush","simulatePressure":bool=false (taper both ends when the brush follows pen pressure),"size":0.5..5000 px?,"hardness":0..1?,"opacity":0..100?,"color":"#rrggbb"=foreground} (current brush settings otherwise; tools past the Eraser run their paint.* command along the path and take its params)"##,
-
             has_layer,
             path_stroke
         ),
@@ -1790,9 +1826,14 @@ pub fn specs() -> Vec<CommandSpec> {
             &with(p, "hide", json!(true)),
             false
         )),
-        spec!("layer.vectorMask.currentPath", "Vector Mask: Current Path", [], r##"{"layer":id?,"name":str|"work"="work","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##, has_layer, |s, p| {
-            vector_mask_add(s, p, true)
-        }),
+        spec!(
+            "layer.vectorMask.currentPath",
+            "Vector Mask: Current Path",
+            [],
+            r##"{"layer":id?,"name":str|"work"="work","documentId":canonical-decimal-str?,"expectedRevision":canonical-decimal-str?}"##,
+            has_layer,
+            |s, p| { vector_mask_add(s, p, true) }
+        ),
         spec!("layer.vectorMask.enabled", "Enable Vector Mask", [], r##"{"layer":id?,"enabled":bool? (default: toggle)}"##, has_layer, |s, p| {
             toggle_vector_mask(s, p, "enabled")
         }),

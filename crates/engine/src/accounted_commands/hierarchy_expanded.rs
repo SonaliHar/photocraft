@@ -1,37 +1,69 @@
 //! Actual hierarchy disclosure with upstream no-history/no-journal semantics.
 use super::*;
-use crate::{DocumentSnapshot,accounted_view::AccountedView,channel_cmds::ChannelView,document_history::DocumentHistory,source_policy::SourceIdentity};
+use crate::{DocumentSnapshot, accounted_view::AccountedView, channel_cmds::ChannelView, document_history::DocumentHistory, source_policy::SourceIdentity};
 use photocraft_doc::accounted_document::AccountedDocument;
-pub(super) const REPLY_ENVELOPE:u64=8192;
-pub(super) struct Request<'a>{_params:&'a Value,layer:Option<LayerId>,expanded:bool,all:bool,groups:usize}
-fn recipe(owner:&AccountedDocument,c:&ReadControl<'_>)->Result<()>{crate::accounted_xcf_open::normal_hierarchy::validate_current_normal_hierarchy_storage(owner,c)}
-impl<'a> Request<'a>{
- pub(super) fn parse(session:&Session,params:&'a Value,c:&ReadControl<'_>)->Result<Self>{
-  c.check(64)?;idle(session)?;
-  let state=session.active().ok_or(EngineError::NoDocument)?;
-  let owner=state.doc.accounted().filter(|o|o.is_readonly_normal_hierarchy_storage()).ok_or(BackingError::Unsupported)?;
-  let boolean=|key:&str|match params.get(key){None|Some(Value::Null)=>Ok(None),Some(v)=>v.as_bool().map(Some).ok_or_else(||bad("layer.setExpanded","boolean required"))};
-  let want=boolean("expanded")?;let all=boolean("all")?.unwrap_or(false);
-  let layer=match params.get("layer"){
-   None|Some(Value::Null) if all=>None,
-   None|Some(Value::Null)=>Some(state.active_layer.ok_or_else(||bad("layer.setExpanded","no active layer"))?),
-   Some(v)=>Some(LayerId(v.as_u64().ok_or_else(||bad("layer.setExpanded","layer must be an integer identity"))?)),
-  };
-  let index=owner.checked_readonly_normal_hierarchy_current_index(c)?;
-  let mut any=false;let mut selected=None;let mut found_layer=false;let mut groups=0usize;
-  for row in index.rows(){c.check(1)?;found_layer|=Some(row.layer.id)==layer;if let photocraft_doc::LayerContent::Group(g)=&row.layer.content{
-    groups=groups.checked_add(1).ok_or(BackingError::Length)?;any|=g.expanded;
-    if Some(row.layer.id)==layer{selected=Some(g.expanded)}
-  }}
-  let current=if let Some(id)=layer{selected.ok_or_else(||if found_layer{bad("layer.setExpanded",&format!("layer {} is not a group",id.0))}else{EngineError::NoLayer(id)})?}else{any};
-  Ok(Self{_params:params,layer,expanded:want.unwrap_or(!current),all,groups:if all{groups}else{1}})
- }
- pub(super) fn prepare(self,session:&Session,ctl:&ReadControl<'_>)->Result<Prepared<'a>>{
-  idle(session)?;let state=session.active().ok_or(EngineError::NoDocument)?;
-  if state.coalesce.is_some()||state.floating.is_some()||state.doc.xcf_state.as_ref().is_some_and(|s|s.floating.is_some()){return Err(BackingError::Unsupported.into())}
-  let owner=state.doc.accounted().ok_or(BackingError::Unsupported)?;
-  if !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
-  recipe(owner,ctl)?;
+pub(super) const REPLY_ENVELOPE: u64 = 8192;
+pub(super) struct Request<'a> {
+    _params: &'a Value,
+    layer: Option<LayerId>,
+    expanded: bool,
+    all: bool,
+    groups: usize,
+}
+fn recipe(owner: &AccountedDocument, c: &ReadControl<'_>) -> Result<()> {
+    crate::accounted_xcf_open::normal_hierarchy::validate_current_normal_hierarchy_storage(owner, c)
+}
+impl<'a> Request<'a> {
+    pub(super) fn parse(session: &Session, params: &'a Value, c: &ReadControl<'_>) -> Result<Self> {
+        c.check(64)?;
+        idle(session)?;
+        let state = session.active().ok_or(EngineError::NoDocument)?;
+        let owner = state.doc.accounted().filter(|o| o.is_readonly_normal_hierarchy_storage()).ok_or(BackingError::Unsupported)?;
+        let boolean = |key: &str| match params.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => v.as_bool().map(Some).ok_or_else(|| bad("layer.setExpanded", "boolean required")),
+        };
+        let want = boolean("expanded")?;
+        let all = boolean("all")?.unwrap_or(false);
+        let layer = match params.get("layer") {
+            None | Some(Value::Null) if all => None,
+            None | Some(Value::Null) => Some(state.active_layer.ok_or_else(|| bad("layer.setExpanded", "no active layer"))?),
+            Some(v) => Some(LayerId(v.as_u64().ok_or_else(|| bad("layer.setExpanded", "layer must be an integer identity"))?)),
+        };
+        let index = owner.checked_readonly_normal_hierarchy_current_index(c)?;
+        let mut any = false;
+        let mut selected = None;
+        let mut found_layer = false;
+        let mut groups = 0usize;
+        for row in index.rows() {
+            c.check(1)?;
+            found_layer |= Some(row.layer.id) == layer;
+            if let photocraft_doc::LayerContent::Group(g) = &row.layer.content {
+                groups = groups.checked_add(1).ok_or(BackingError::Length)?;
+                any |= g.expanded;
+                if Some(row.layer.id) == layer {
+                    selected = Some(g.expanded)
+                }
+            }
+        }
+        let current = if let Some(id) = layer {
+            selected.ok_or_else(|| if found_layer { bad("layer.setExpanded", &format!("layer {} is not a group", id.0)) } else { EngineError::NoLayer(id) })?
+        } else {
+            any
+        };
+        Ok(Self { _params: params, layer, expanded: want.unwrap_or(!current), all, groups: if all { groups } else { 1 } })
+    }
+    pub(super) fn prepare(self, session: &Session, ctl: &ReadControl<'_>) -> Result<Prepared<'a>> {
+        idle(session)?;
+        let state = session.active().ok_or(EngineError::NoDocument)?;
+        if state.coalesce.is_some() || state.floating.is_some() || state.doc.xcf_state.as_ref().is_some_and(|s| s.floating.is_some()) {
+            return Err(BackingError::Unsupported.into());
+        }
+        let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
+        if !state.history.current()?.shares_state(&state.doc) {
+            return Err(BackingError::Integrity.into());
+        }
+        recipe(owner, ctl)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
         if state.active_layer != view.target().active || state.layer_anchor != view.anchor() || !state.selected_layers.is_empty() {
             return Err(BackingError::Integrity.into());
@@ -82,17 +114,39 @@ impl<'a> Request<'a>{
             .ok_or(BackingError::Length)?;
         lease.reconcile_capacity(actual as u64).map_err(|_| BackingError::Allocation)?;
 
-  let staged=owner.try_with_readonly_normal_hierarchy_group_expanded(self.layer,self.expanded,self.all,ctl)?;
-  recipe(&staged,ctl)?;
-  let updated=!staged.shares_model(owner);
-  let mut history=state.history.clone();
-  let snapshot=history.try_replace_accounted_current(owner,staged,ctl)?;
-  let next_view=view.try_replace(snapshot.accounted().ok_or(BackingError::Integrity)?,state.active_layer,view.selected(),state.layer_anchor,ctl)?;
-  let reply_lease=owner.quota().reserve(QuotaKind::Index,REPLY_ENVELOPE).map_err(|_|BackingError::Quota)?;
-  ctl.check(REPLY_ENVELOPE)?;
-  let reply=serde_json::json!({"expanded":self.expanded,"groups":self.groups});
-  Ok(Prepared{_request:self,captured:state.doc.clone(),snapshot,history,old_history:state.history.clone(),view:view.clone(),next_view,revision:state.revision,view_revision:state.view_revision,active:state.active_layer,anchor:state.layer_anchor,channel,path,source,read_only:state.source_read_only,history_states:session.prefs().performance.history_states,history_bytes:session.prefs().performance.history_budget_bytes(),updated,reply,_reply_lease:reply_lease,_lease:lease})
- }
+        let staged = owner.try_with_readonly_normal_hierarchy_group_expanded(self.layer, self.expanded, self.all, ctl)?;
+        recipe(&staged, ctl)?;
+        let updated = !staged.shares_model(owner);
+        let mut history = state.history.clone();
+        let snapshot = history.try_replace_accounted_current(owner, staged, ctl)?;
+        let next_view = view.try_replace(snapshot.accounted().ok_or(BackingError::Integrity)?, state.active_layer, view.selected(), state.layer_anchor, ctl)?;
+        let reply_lease = owner.quota().reserve(QuotaKind::Index, REPLY_ENVELOPE).map_err(|_| BackingError::Quota)?;
+        ctl.check(REPLY_ENVELOPE)?;
+        let reply = serde_json::json!({"expanded":self.expanded,"groups":self.groups});
+        Ok(Prepared {
+            _request: self,
+            captured: state.doc.clone(),
+            snapshot,
+            history,
+            old_history: state.history.clone(),
+            view: view.clone(),
+            next_view,
+            revision: state.revision,
+            view_revision: state.view_revision,
+            active: state.active_layer,
+            anchor: state.layer_anchor,
+            channel,
+            path,
+            source,
+            read_only: state.source_read_only,
+            history_states: session.prefs().performance.history_states,
+            history_bytes: session.prefs().performance.history_budget_bytes(),
+            updated,
+            reply,
+            _reply_lease: reply_lease,
+            _lease: lease,
+        })
+    }
 }
 fn copy(v: &str) -> Result<String> {
     let mut s = String::new();
@@ -128,7 +182,7 @@ fn channel_shape(v: &ChannelView) -> Result<()> {
     Ok(())
 }
 fn idle(session: &Session) -> Result<()> {
-    if session.active().is_some_and(|s|s.coalesce.is_some()||s.floating.is_some()||s.doc.xcf_state.as_ref().is_some_and(|x|x.floating.is_some()))
+    if session.active().is_some_and(|s| s.coalesce.is_some() || s.floating.is_some() || s.doc.xcf_state.as_ref().is_some_and(|x| x.floating.is_some()))
         || session.coalesce_request.is_some()
         || session.color_restrict.is_some()
         || session.command_is_background()
@@ -192,9 +246,11 @@ impl Prepared<'_> {
         {
             return Err(EngineError::Other("the prepared hierarchy disclosure target older Session state".into()));
         }
-        let owner=state.doc.accounted().ok_or(BackingError::Integrity)?;
-        if !owner.is_readonly_normal_hierarchy_storage(){return Err(BackingError::Unsupported.into())}
-        owner.validate_readonly_normal_hierarchy_group_expanded(self._request.layer,self._request.expanded,self._request.all,ctl)?;
+        let owner = state.doc.accounted().ok_or(BackingError::Integrity)?;
+        if !owner.is_readonly_normal_hierarchy_storage() {
+            return Err(BackingError::Unsupported.into());
+        }
+        owner.validate_readonly_normal_hierarchy_group_expanded(self._request.layer, self._request.expanded, self._request.all, ctl)?;
         ctl.check(1)?;
         if self.updated {
             let state = session.active_mut().ok_or(EngineError::NoDocument)?;
@@ -211,19 +267,32 @@ impl Prepared<'_> {
 
 /// Paid captured-context fence for the newly admitted hierarchy focus route.
 /// Publication still calls the unchanged upstream selection implementation.
-pub(super) struct SelectionWitness{
- captured:DocumentSnapshot,old_history:DocumentHistory,view:AccountedView,
- revision:u64,view_revision:u64,active:Option<LayerId>,anchor:Option<LayerId>,
- channel:ChannelView,path:Option<String>,source:Option<SourceIdentity>,read_only:bool,
- history_states:u32,history_bytes:usize,_lease:QuotaLease,
+pub(super) struct SelectionWitness {
+    captured: DocumentSnapshot,
+    old_history: DocumentHistory,
+    view: AccountedView,
+    revision: u64,
+    view_revision: u64,
+    active: Option<LayerId>,
+    anchor: Option<LayerId>,
+    channel: ChannelView,
+    path: Option<String>,
+    source: Option<SourceIdentity>,
+    read_only: bool,
+    history_states: u32,
+    history_bytes: usize,
+    _lease: QuotaLease,
 }
-impl SelectionWitness{
- pub(super) fn prepare(session:&Session,layer:LayerId,ctl:&ReadControl<'_>)->Result<Self>{
-  idle(session)?;let state=session.active().ok_or(EngineError::NoDocument)?;
-  let owner=state.doc.accounted().filter(|o|o.is_readonly_normal_hierarchy_storage()).ok_or(BackingError::Unsupported)?;
-  if !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
-  recipe(owner,ctl)?;
-  owner.accounted_layer_access(layer,ctl)?.ok_or(EngineError::NoLayer(layer))?;
+impl SelectionWitness {
+    pub(super) fn prepare(session: &Session, layer: LayerId, ctl: &ReadControl<'_>) -> Result<Self> {
+        idle(session)?;
+        let state = session.active().ok_or(EngineError::NoDocument)?;
+        let owner = state.doc.accounted().filter(|o| o.is_readonly_normal_hierarchy_storage()).ok_or(BackingError::Unsupported)?;
+        if !state.history.current()?.shares_state(&state.doc) {
+            return Err(BackingError::Integrity.into());
+        }
+        recipe(owner, ctl)?;
+        owner.accounted_layer_access(layer, ctl)?.ok_or(EngineError::NoLayer(layer))?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
         if state.active_layer != view.target().active || state.layer_anchor != view.anchor() || !state.selected_layers.is_empty() {
             return Err(BackingError::Integrity.into());
@@ -274,9 +343,24 @@ impl SelectionWitness{
             .ok_or(BackingError::Length)?;
         lease.reconcile_capacity(actual as u64).map_err(|_| BackingError::Allocation)?;
 
-  Ok(Self{captured:state.doc.clone(),old_history:state.history.clone(),view:view.clone(),revision:state.revision,view_revision:state.view_revision,active:state.active_layer,anchor:state.layer_anchor,channel,path,source,read_only:state.source_read_only,history_states:session.prefs().performance.history_states,history_bytes:session.prefs().performance.history_budget_bytes(),_lease:lease})
- }
- pub(super) fn validate(&self,session:&Session,ctl:&ReadControl<'_>)->Result<()>{
+        Ok(Self {
+            captured: state.doc.clone(),
+            old_history: state.history.clone(),
+            view: view.clone(),
+            revision: state.revision,
+            view_revision: state.view_revision,
+            active: state.active_layer,
+            anchor: state.layer_anchor,
+            channel,
+            path,
+            source,
+            read_only: state.source_read_only,
+            history_states: session.prefs().performance.history_states,
+            history_bytes: session.prefs().performance.history_budget_bytes(),
+            _lease: lease,
+        })
+    }
+    pub(super) fn validate(&self, session: &Session, ctl: &ReadControl<'_>) -> Result<()> {
         ctl.check(1)?;
         idle(session)?;
         let state = session.active().ok_or(EngineError::NoDocument)?;
@@ -306,6 +390,7 @@ impl SelectionWitness{
             return Err(EngineError::Other("the prepared hierarchy disclosure target older Session state".into()));
         }
 
-  ctl.check(1)?;Ok(())
- }
+        ctl.check(1)?;
+        Ok(())
+    }
 }

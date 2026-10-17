@@ -1,9 +1,6 @@
 //! Immutable, independently charged layer selection for accounted Session state.
 //! Clones share the physical selection and its lease. No detached Vec is exposed.
-use photocraft_doc::{
-    LayerId,
-    accounted_document::AccountedDocument,
-};
+use photocraft_doc::{LayerId, accounted_document::AccountedDocument};
 use photocraft_ops::LayerTarget;
 use photocraft_raster::backing::{
     BackingError, ReadControl,

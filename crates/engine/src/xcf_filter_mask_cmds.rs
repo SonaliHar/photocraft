@@ -145,40 +145,59 @@ fn relation(doc: &Document, id: MaskId, control: &Interrupt<'_>) -> Result<(Laye
 /// Conservative metadata hint for three already closed mask lanes. It performs
 /// no sample/profile/render qualification and never reads tiles. A tile-free,
 /// declared zero-default mask is required; other candidates remain inspection-only.
-pub fn zero_selection_candidate(doc:&Document,owner:LayerId,id:MaskId)->Option<bool> {
-    let state=doc.xcf_state.as_ref()?;
-    if owner.0==0 || id.0==0 || state.items.len()>MAX_ITEMS || state.filter_masks.len()>MAX_ITEMS || state.filter_stacks.len()>MAX_ITEMS {return None;}
-    let mut masks=state.filter_masks.iter().filter(|mask|mask.id==id);
-    let mask=masks.next()?;
-    if masks.next().is_some() || mask.surface.tile_count()!=0 {return None;}
-    let mut count=0usize;
-    let mut found=None;
+pub fn zero_selection_candidate(doc: &Document, owner: LayerId, id: MaskId) -> Option<bool> {
+    let state = doc.xcf_state.as_ref()?;
+    if owner.0 == 0 || id.0 == 0 || state.items.len() > MAX_ITEMS || state.filter_masks.len() > MAX_ITEMS || state.filter_stacks.len() > MAX_ITEMS {
+        return None;
+    }
+    let mut masks = state.filter_masks.iter().filter(|mask| mask.id == id);
+    let mask = masks.next()?;
+    if masks.next().is_some() || mask.surface.tile_count() != 0 {
+        return None;
+    }
+    let mut count = 0usize;
+    let mut found = None;
     for stack in &state.filter_stacks {
-        count=count.checked_add(stack.nodes.len()).filter(|count|*count<=MAX_ITEMS)?;
+        count = count.checked_add(stack.nodes.len()).filter(|count| *count <= MAX_ITEMS)?;
         for node in &stack.nodes {
-            if node.mask==Some(ItemRef::Mask(id)) {
-                if found.is_some() || stack.owner!=ItemRef::Layer(owner) || node.id!=mask.owner {return None;}
-                found=Some(node);
+            if node.mask == Some(ItemRef::Mask(id)) {
+                if found.is_some() || stack.owner != ItemRef::Layer(owner) || node.id != mask.owner {
+                    return None;
+                }
+                found = Some(node);
             }
         }
     }
-    let node=found?;
-    if node.operation.stored_version!="0:0" {return None;}
-    let format=mask.surface.format();
-    let extent=photocraft_doc::Rect::from_xywh(0,0,8,6);
-    let closed=match node.operation.name.as_str() {
-        "gegl:rgb-clip"=>node.operation.schema_epoch==photocraft_compose::gimp_filter_mask_state::RGB_CLIP_HDR_EPOCH
-            && format==photocraft_doc::PixelFormat::new(photocraft_doc::ColorMode::Grayscale,photocraft_doc::SampleType::F32,false),
-        "gegl:value-invert"=>node.operation.schema_epoch==photocraft_compose::gimp_filter_mask_state::VALUE_INVERT_PRECISION_EPOCH
-            && matches!(format.sample,photocraft_doc::SampleType::U16|photocraft_doc::SampleType::F32|photocraft_doc::SampleType::F64),
-        "gegl:brightness-contrast"=>node.operation.schema_epoch==photocraft_compose::gimp_filter_mask_state::BRIGHTNESS_CONTRAST_PRECISION_EPOCH
-            && matches!(format.sample,photocraft_doc::SampleType::U16|photocraft_doc::SampleType::F32|photocraft_doc::SampleType::F64),
-        _=>false,
+    let node = found?;
+    if node.operation.stored_version != "0:0" {
+        return None;
+    }
+    let format = mask.surface.format();
+    let extent = photocraft_doc::Rect::from_xywh(0, 0, 8, 6);
+    let closed = match node.operation.name.as_str() {
+        "gegl:rgb-clip" => {
+            node.operation.schema_epoch == photocraft_compose::gimp_filter_mask_state::RGB_CLIP_HDR_EPOCH
+                && format == photocraft_doc::PixelFormat::new(photocraft_doc::ColorMode::Grayscale, photocraft_doc::SampleType::F32, false)
+        }
+        "gegl:value-invert" => {
+            node.operation.schema_epoch == photocraft_compose::gimp_filter_mask_state::VALUE_INVERT_PRECISION_EPOCH
+                && matches!(format.sample, photocraft_doc::SampleType::U16 | photocraft_doc::SampleType::F32 | photocraft_doc::SampleType::F64)
+        }
+        "gegl:brightness-contrast" => {
+            node.operation.schema_epoch == photocraft_compose::gimp_filter_mask_state::BRIGHTNESS_CONTRAST_PRECISION_EPOCH
+                && matches!(format.sample, photocraft_doc::SampleType::U16 | photocraft_doc::SampleType::F32 | photocraft_doc::SampleType::F64)
+        }
+        _ => false,
     };
-    if !closed || mask.bounds!=extent || doc.bounds()!=extent
-        || !photocraft_compose::gimp_filter_mask_state::declared_empty_selection_candidate(state,node,owner) {return None;}
-    let mut items=state.items.iter().filter(|item|item.item==ItemRef::Mask(id));
-    let enabled=items.next()?.mask.as_ref()?.enabled;
+    if !closed
+        || mask.bounds != extent
+        || doc.bounds() != extent
+        || !photocraft_compose::gimp_filter_mask_state::declared_empty_selection_candidate(state, node, owner)
+    {
+        return None;
+    }
+    let mut items = state.items.iter().filter(|item| item.item == ItemRef::Mask(id));
+    let enabled = items.next()?.mask.as_ref()?.enabled;
     items.next().is_none().then_some(enabled)
 }
 fn install(doc: &mut Document, id: MaskId, enabled: bool, control: &Interrupt<'_>) -> Result<()> {

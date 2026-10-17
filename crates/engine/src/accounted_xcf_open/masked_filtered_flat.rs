@@ -17,8 +17,9 @@ fn render_error(error: BackedNormalError, control: &ReadControl<'_>) -> EngineEr
 }
 pub(crate) fn validate_current_masked_filtered_flat_storage(owner: &AccountedDocument, control: &ReadControl<'_>) -> Result<()> {
     owner.validate_readonly_masked_filtered_flat_point_storage(control)?;
-    let prepared = photocraft_compose::backed_masked_filtered_flat_point_document::PreparedBackedMaskedFilteredFlatPointDocument::new(owner, Default::default(), control)
-        .map_err(|e| render_error(e, control))?;
+    let prepared =
+        photocraft_compose::backed_masked_filtered_flat_point_document::PreparedBackedMaskedFilteredFlatPointDocument::new(owner, Default::default(), control)
+            .map_err(|e| render_error(e, control))?;
     prepared.validate_operative(control).map_err(|e| render_error(e, control))?;
     drop(prepared);
     control.check(1)?;

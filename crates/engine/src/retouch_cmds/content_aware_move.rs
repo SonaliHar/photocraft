@@ -562,5 +562,9 @@ pub fn preview(s: &Session, p: &Value) -> Result<ContentAwarePreview> {
         return Err(bad(CMD, format!("the selection is too large to preview ({pixels} pixels, at most {PREVIEW_MAX_PIXELS})")));
     }
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    Ok(ContentAwarePreview { doc: d.doc.resident_arc().cloned().ok_or_else(||bad(CMD,"Content-Aware Move preview requires a resident document"))?, plan, params: p.clone() })
+    Ok(ContentAwarePreview {
+        doc: d.doc.resident_arc().cloned().ok_or_else(|| bad(CMD, "Content-Aware Move preview requires a resident document"))?,
+        plan,
+        params: p.clone(),
+    })
 }

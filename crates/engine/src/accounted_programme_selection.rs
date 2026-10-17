@@ -1,21 +1,39 @@
 //! Paid captured context for guarded programme pixel-selection replacement.
 //! The immutable owner and complete Current recipe remain authoritative.
-use crate::{EngineError,Result,Session};
-use photocraft_raster::backing::{BackingError,ReadControl,quota::{QuotaKind,QuotaLease}};
-use crate::{DocumentSnapshot,accounted_view::AccountedView,channel_cmds::ChannelView,document_history::DocumentHistory,source_policy::SourceIdentity,accounted_programme_current::{self,ProgrammeKind}};
+use crate::{
+    DocumentSnapshot,
+    accounted_programme_current::{self, ProgrammeKind},
+    accounted_view::AccountedView,
+    channel_cmds::ChannelView,
+    document_history::DocumentHistory,
+    source_policy::SourceIdentity,
+};
+use crate::{EngineError, Result, Session};
 use photocraft_doc::accounted_document::AccountedDocument;
-fn kind(owner:&AccountedDocument)->Option<ProgrammeKind>{accounted_programme_current::kind(owner)}
-fn recipe(owner:&AccountedDocument,expected:Option<ProgrammeKind>,c:&ReadControl<'_>)->Result<()>{
- if kind(owner)!=expected{return Err(BackingError::Unsupported.into())}
- if let Some(expected)=expected{
-  owner.validate_programme_selection_replacement(c)?;
-  let guard=owner.checked_programme_selection(c)?;
-  if !guard.matches_owner(owner)||guard.storage_kind()!=expected{return Err(BackingError::Integrity.into())}
-  accounted_programme_current::validate(owner,expected,c)
- }else{
-  if !owner.is_legacy_storage(){return Err(BackingError::Unsupported.into())}
-  owner.validate_selection_replacement(c).map_err(Into::into)
- }
+use photocraft_raster::backing::{
+    BackingError, ReadControl,
+    quota::{QuotaKind, QuotaLease},
+};
+fn kind(owner: &AccountedDocument) -> Option<ProgrammeKind> {
+    accounted_programme_current::kind(owner)
+}
+fn recipe(owner: &AccountedDocument, expected: Option<ProgrammeKind>, c: &ReadControl<'_>) -> Result<()> {
+    if kind(owner) != expected {
+        return Err(BackingError::Unsupported.into());
+    }
+    if let Some(expected) = expected {
+        owner.validate_programme_selection_replacement(c)?;
+        let guard = owner.checked_programme_selection(c)?;
+        if !guard.matches_owner(owner) || guard.storage_kind() != expected {
+            return Err(BackingError::Integrity.into());
+        }
+        accounted_programme_current::validate(owner, expected, c)
+    } else {
+        if !owner.is_legacy_storage() {
+            return Err(BackingError::Unsupported.into());
+        }
+        owner.validate_selection_replacement(c).map_err(Into::into)
+    }
 }
 fn copy(v: &str) -> Result<String> {
     let mut s = String::new();
@@ -51,7 +69,7 @@ fn channel_shape(v: &ChannelView) -> Result<()> {
     Ok(())
 }
 fn idle(session: &Session) -> Result<()> {
-    if session.active().is_some_and(|s|s.coalesce.is_some()||s.floating.is_some()||s.doc.xcf_state.as_ref().is_some_and(|x|x.floating.is_some()))
+    if session.active().is_some_and(|s| s.coalesce.is_some() || s.floating.is_some() || s.doc.xcf_state.as_ref().is_some_and(|x| x.floating.is_some()))
         || session.coalesce_request.is_some()
         || session.color_restrict.is_some()
         || session.command_is_background()
@@ -62,19 +80,36 @@ fn idle(session: &Session) -> Result<()> {
     }
     Ok(())
 }
-pub(super) struct ProgrammeSelectionCapture{
- kind:Option<ProgrammeKind>,captured:DocumentSnapshot,old_history:DocumentHistory,view:AccountedView,
- revision:u64,view_revision:u64,active:Option<photocraft_doc::LayerId>,anchor:Option<photocraft_doc::LayerId>,
- channel:ChannelView,path:Option<String>,source:Option<SourceIdentity>,read_only:bool,
- history_states:u32,history_bytes:usize,_lease:QuotaLease,
+pub(super) struct ProgrammeSelectionCapture {
+    kind: Option<ProgrammeKind>,
+    captured: DocumentSnapshot,
+    old_history: DocumentHistory,
+    view: AccountedView,
+    revision: u64,
+    view_revision: u64,
+    active: Option<photocraft_doc::LayerId>,
+    anchor: Option<photocraft_doc::LayerId>,
+    channel: ChannelView,
+    path: Option<String>,
+    source: Option<SourceIdentity>,
+    read_only: bool,
+    history_states: u32,
+    history_bytes: usize,
+    _lease: QuotaLease,
 }
-impl ProgrammeSelectionCapture{
- pub(super) fn is_programme(&self)->bool{self.kind.is_some()}
- pub(super) fn prepare(session:&Session,ctl:&ReadControl<'_>)->Result<Self>{
-  idle(session)?;let state=session.active().ok_or(EngineError::NoDocument)?;
-  let owner=state.doc.accounted().ok_or(BackingError::Unsupported)?;let kind=kind(owner);
-  if !state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
-  recipe(owner,kind,ctl)?;
+impl ProgrammeSelectionCapture {
+    pub(super) fn is_programme(&self) -> bool {
+        self.kind.is_some()
+    }
+    pub(super) fn prepare(session: &Session, ctl: &ReadControl<'_>) -> Result<Self> {
+        idle(session)?;
+        let state = session.active().ok_or(EngineError::NoDocument)?;
+        let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
+        let kind = kind(owner);
+        if !state.history.current()?.shares_state(&state.doc) {
+            return Err(BackingError::Integrity.into());
+        }
+        recipe(owner, kind, ctl)?;
         let view = state.accounted_view.as_ref().ok_or(BackingError::Integrity)?;
         if state.active_layer != view.target().active || state.layer_anchor != view.anchor() || !state.selected_layers.is_empty() {
             return Err(BackingError::Integrity.into());
@@ -125,9 +160,25 @@ impl ProgrammeSelectionCapture{
             .ok_or(BackingError::Length)?;
         lease.reconcile_capacity(actual as u64).map_err(|_| BackingError::Allocation)?;
 
-  Ok(Self{kind,captured:state.doc.clone(),old_history:state.history.clone(),view:view.clone(),revision:state.revision,view_revision:state.view_revision,active:state.active_layer,anchor:state.layer_anchor,channel,path,source,read_only:state.source_read_only,history_states:session.prefs().performance.history_states,history_bytes:session.prefs().performance.history_budget_bytes(),_lease:lease})
- }
- pub(super) fn validate(&self,session:&Session,ctl:&ReadControl<'_>)->Result<()>{
+        Ok(Self {
+            kind,
+            captured: state.doc.clone(),
+            old_history: state.history.clone(),
+            view: view.clone(),
+            revision: state.revision,
+            view_revision: state.view_revision,
+            active: state.active_layer,
+            anchor: state.layer_anchor,
+            channel,
+            path,
+            source,
+            read_only: state.source_read_only,
+            history_states: session.prefs().performance.history_states,
+            history_bytes: session.prefs().performance.history_budget_bytes(),
+            _lease: lease,
+        })
+    }
+    pub(super) fn validate(&self, session: &Session, ctl: &ReadControl<'_>) -> Result<()> {
         ctl.check(1)?;
         idle(session)?;
         let state = session.active().ok_or(EngineError::NoDocument)?;
@@ -157,9 +208,12 @@ impl ProgrammeSelectionCapture{
             return Err(EngineError::Other("the prepared accounted selection targets older Session state".into()));
         }
 
-  let owner=state.doc.accounted().ok_or(BackingError::Unsupported)?;
-  if kind(owner)!=self.kind||!state.history.current()?.shares_state(&state.doc){return Err(BackingError::Integrity.into())}
-  recipe(owner,self.kind,ctl)?;
-  ctl.check(1)?;Ok(())
- }
+        let owner = state.doc.accounted().ok_or(BackingError::Unsupported)?;
+        if kind(owner) != self.kind || !state.history.current()?.shares_state(&state.doc) {
+            return Err(BackingError::Integrity.into());
+        }
+        recipe(owner, self.kind, ctl)?;
+        ctl.check(1)?;
+        Ok(())
+    }
 }

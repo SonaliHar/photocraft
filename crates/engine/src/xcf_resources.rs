@@ -276,7 +276,9 @@ pub(crate) fn check_recovery_total(document: &photocraft_doc::Document, resource
         .resources
         .iter()
         .filter(|entry| entry.id != resource)
-        .try_fold(0usize, |total, entry| total.checked_add(entry.owned_bytes.as_ref().map_or(0, |bytes|bytes.len())).ok_or_else(|| bad(RecoveryError::Limit)))?;
+        .try_fold(0usize, |total, entry| {
+            total.checked_add(entry.owned_bytes.as_ref().map_or(0, |bytes| bytes.len())).ok_or_else(|| bad(RecoveryError::Limit))
+        })?;
     if current_total.checked_add(input_len).is_none_or(|total| total > 128 << 20) {
         return Err(bad(RecoveryError::Limit));
     }
@@ -308,7 +310,7 @@ pub fn recover_authorized_bytes(
         .as_ref()
         .and_then(|state| state.resources.iter().find(|entry| entry.id == resource))
         .ok_or_else(|| bad(RecoveryError::UnknownResource))?;
-    if target.owned_bytes.as_ref().map(|bytes|bytes.as_slice()) == Some(input.bytes.as_slice())
+    if target.owned_bytes.as_ref().map(|bytes| bytes.as_slice()) == Some(input.bytes.as_slice())
         && target.resolution.as_ref().is_some_and(|resolution| resolution.fidelity == fidelity && resolution.payload_hash == digest)
     {
         poll(ctl).map_err(bad)?;
