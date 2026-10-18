@@ -311,51 +311,55 @@ pub const LIST_ROW_HEIGHT: f32 = 34.0;
 /// Render the header for Recent files with title and Grid/List toggle buttons.
 pub(crate) fn recent_header(ui: &mut Ui, is_grid: &mut bool, total_width: f32) {
     let t = Tokens::get(ui.ctx());
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!("Recent")).font(crate::theme::semibold(17.0)).color(t.text));
-        let toggle_w = 64.0;
-        let space = (total_width - 90.0 - toggle_w).max(0.0);
-        ui.add_space(space);
+    let (header_rect, _) = ui.allocate_exact_size(vec2(total_width, 28.0), Sense::hover());
 
-        // Container box for the toggles
-        let (box_rect, _) = ui.allocate_exact_size(vec2(60.0, 28.0), Sense::hover());
-        ui.painter().rect_filled(box_rect, 4.0, Color32::from_black_alpha(70));
-        ui.painter().rect_stroke(box_rect, 4.0, Stroke::new(1.0, Color32::from_white_alpha(25)), egui::StrokeKind::Inside);
+    // Left label: "Recent"
+    let label_galley = ui.painter().layout_no_wrap(tl!("Recent").to_string(), crate::theme::semibold(17.0), t.text);
+    let label_pos = pos2(header_rect.left(), header_rect.center().y - label_galley.size().y / 2.0);
+    ui.painter().galley(label_pos, label_galley, t.text);
+    let label_rect = Rect::from_min_size(label_pos, vec2(100.0, 24.0));
+    let label_resp = ui.interact(label_rect, ui.id().with("recent_title"), Sense::hover());
+    label_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, true, tl!("Recent")));
 
-        let grid_rect = Rect::from_min_size(box_rect.min + vec2(2.0, 2.0), vec2(28.0, 24.0));
-        let list_rect = Rect::from_min_size(pos2(box_rect.min.x + 30.0, box_rect.min.y + 2.0), vec2(28.0, 24.0));
+    // Container box for the toggles, aligned flush to the right edge of header_rect
+    let box_size = vec2(60.0, 28.0);
+    let box_rect = Rect::from_min_size(pos2(header_rect.right() - box_size.x, header_rect.top()), box_size);
+    ui.painter().rect_filled(box_rect, 4.0, Color32::from_black_alpha(70));
+    ui.painter().rect_stroke(box_rect, 4.0, Stroke::new(1.0, Color32::from_white_alpha(25)), egui::StrokeKind::Inside);
 
-        let grid_resp = ui.interact(grid_rect, ui.id().with("toggle_grid"), Sense::click());
-        let list_resp = ui.interact(list_rect, ui.id().with("toggle_list"), Sense::click());
+    let grid_rect = Rect::from_min_size(box_rect.min + vec2(2.0, 2.0), vec2(28.0, 24.0));
+    let list_rect = Rect::from_min_size(pos2(box_rect.min.x + 30.0, box_rect.min.y + 2.0), vec2(28.0, 24.0));
 
-        grid_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Grid view")));
-        list_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("List view")));
+    let grid_resp = ui.interact(grid_rect, ui.id().with("toggle_grid"), Sense::click());
+    let list_resp = ui.interact(list_rect, ui.id().with("toggle_list"), Sense::click());
 
-        let grid_resp = grid_resp.on_hover_text(tl!("Grid view")).on_hover_cursor(egui::CursorIcon::PointingHand);
-        let list_resp = list_resp.on_hover_text(tl!("List view")).on_hover_cursor(egui::CursorIcon::PointingHand);
+    grid_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Grid view")));
+    list_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("List view")));
 
-        if *is_grid {
-            ui.painter().rect_filled(grid_rect, 3.0, t.hover);
-            ui.painter().rect_stroke(grid_rect, 3.0, Stroke::new(1.0, Color32::from_rgb(26, 115, 232)), egui::StrokeKind::Inside);
-        }
-        if !*is_grid {
-            ui.painter().rect_filled(list_rect, 3.0, t.hover);
-            ui.painter().rect_stroke(list_rect, 3.0, Stroke::new(1.0, Color32::from_rgb(26, 115, 232)), egui::StrokeKind::Inside);
-        }
+    let grid_resp = grid_resp.on_hover_text(tl!("Grid view")).on_hover_cursor(egui::CursorIcon::PointingHand);
+    let list_resp = list_resp.on_hover_text(tl!("List view")).on_hover_cursor(egui::CursorIcon::PointingHand);
 
-        let grid_tint = if *is_grid { Color32::WHITE } else { t.text_dim };
-        let list_tint = if !*is_grid { Color32::WHITE } else { t.text_dim };
+    if *is_grid {
+        ui.painter().rect_filled(grid_rect, 3.0, t.hover);
+        ui.painter().rect_stroke(grid_rect, 3.0, Stroke::new(1.0, Color32::from_rgb(26, 115, 232)), egui::StrokeKind::Inside);
+    }
+    if !*is_grid {
+        ui.painter().rect_filled(list_rect, 3.0, t.hover);
+        ui.painter().rect_stroke(list_rect, 3.0, Stroke::new(1.0, Color32::from_rgb(26, 115, 232)), egui::StrokeKind::Inside);
+    }
 
-        icons::paint(ui, grid_rect, "grid-2x2", 15.0, grid_tint);
-        icons::paint(ui, list_rect, "marquee-row", 15.0, list_tint);
+    let grid_tint = if *is_grid { Color32::WHITE } else { t.text_dim };
+    let list_tint = if !*is_grid { Color32::WHITE } else { t.text_dim };
 
-        if grid_resp.clicked() {
-            *is_grid = true;
-        }
-        if list_resp.clicked() {
-            *is_grid = false;
-        }
-    });
+    icons::paint(ui, grid_rect, "grid-2x2", 15.0, grid_tint);
+    icons::paint(ui, list_rect, "marquee-row", 15.0, list_tint);
+
+    if grid_resp.clicked() {
+        *is_grid = true;
+    }
+    if list_resp.clicked() {
+        *is_grid = false;
+    }
 }
 
 /// Render a single visual thumbnail card in grid view.
@@ -727,6 +731,33 @@ mod tests {
         h.run_steps(2);
 
         assert!(h.query_by_label("document.psd").is_some());
+    }
+
+    #[test]
+    fn recent_header_view_switch_buttons_align_to_right_edge() {
+        let content_w = 640.0;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.push_recent("/tmp/photocraft-work/document.psd");
+
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 760.0)).build_ui_state(
+            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+                if *ready {
+                    let recent: Vec<String> = app.ui.recent_files.clone();
+                    show_home_recent(app, ui, &recent, content_w);
+                }
+            },
+            (app, false),
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+        h.state_mut().1 = true;
+        h.run_steps(2);
+
+        let list_node = h.get_by_label("List view");
+        let list_rect = list_node.rect();
+        let box_right = list_rect.max.x + 2.0;
+
+        let start_x = h.get_by_label("Recent").rect().min.x;
+        assert_eq!(box_right, start_x + content_w, "toggle buttons must align flush to content right edge");
     }
 
     #[test]
