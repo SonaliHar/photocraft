@@ -577,7 +577,9 @@ fn warp_of(w: &Descriptor) -> Option<Option<photocraft_geom::warp::Warp>> {
             _ => None,
         };
         let (nx, ny) = (count("deformNumCols")?, count("deformNumRows")?);
-        if nx < 4 || ny < 4 || (nx - 1) % 3 != 0 || (ny - 1) % 3 != 0 || xs.len() != nx * ny || ys.len() != nx * ny {
+        // The sizes come from the file: the product can overflow a 32-bit usize (wasm32).
+        let n = nx.checked_mul(ny);
+        if nx < 4 || ny < 4 || (nx - 1) % 3 != 0 || (ny - 1) % 3 != 0 || n != Some(xs.len()) || n != Some(ys.len()) {
             return None;
         }
         let us = quilt_knots(floats(env.get("quiltSliceX"), "quiltSliceX"), (nx - 1) / 3)?;
@@ -1008,7 +1010,7 @@ mod tests {
         let arr = |key: &str, v: Vec<f64>| {
             Value::ObjectArray(ObjectArray { prefix: v.len() as u32, body: Descriptor::new("UntF").with(key, Value::UnitFloats { unit: *b"#Pxl", values: v }) })
         };
-        let warp = |cols: i32, slice_x: Vec<f64>| {
+        let warp = |cols: i32, rows: i32, slice_x: Vec<f64>| {
             let pts = Descriptor::new("rationalPoint")
                 .with("Hrzn", Value::UnitFloats { unit: *b"#Pxl", values: xs.clone() })
                 .with("Vrtc", Value::UnitFloats { unit: *b"#Pxl", values: ys.clone() });
@@ -1019,7 +1021,7 @@ mod tests {
             let w = Descriptor::new("quiltWarp")
                 .with("warpStyle", e("warpStyle", "warpCustom"))
                 .with("bounds", Value::Descriptor(bounds.clone()))
-                .with("deformNumRows", Value::Integer(ny as i32))
+                .with("deformNumRows", Value::Integer(rows))
                 .with("deformNumCols", Value::Integer(cols))
                 .with("customEnvelopeWarp", Value::Descriptor(env));
             let none = Descriptor::new("warp").with("warpStyle", e("warpStyle", "warpNone")).with("bounds", Value::Descriptor(bounds.clone()));
@@ -1029,7 +1031,7 @@ mod tests {
             v.extend(VersionedDescriptor::new(d).to_bytes());
             v
         };
-        let w = parse_placed_warp(b"SoLd", &warp(7, vec![-0.6, 30.0, 60.6])).expect("split warp reads");
+        let w = parse_placed_warp(b"SoLd", &warp(7, ny as i32, vec![-0.6, 30.0, 60.6])).expect("split warp reads");
         assert_eq!(w.style, WarpStyle::Custom);
         let m = w.mesh.expect("mesh");
         assert_eq!((m.nx(), m.ny()), (7, 10));
@@ -1039,10 +1041,14 @@ mod tests {
         assert_eq!(m.point(3, 4), [35.0, 40.0 / 3.0]);
         // Malformed: grid size that isn't 3 per patch + 1, or doesn't match the points; slices that
         // don't match the patch count or don't increase.
-        assert!(parse_placed_warp(b"SoLd", &warp(6, vec![-0.6, 30.0, 60.6])).is_none());
-        assert!(parse_placed_warp(b"SoLd", &warp(4, vec![-0.6, 60.6])).is_none());
-        assert!(parse_placed_warp(b"SoLd", &warp(7, vec![-0.6, 60.6])).is_none());
-        assert!(parse_placed_warp(b"SoLd", &warp(7, vec![-0.6, 70.0, 60.6])).is_none());
+        assert!(parse_placed_warp(b"SoLd", &warp(6, ny as i32, vec![-0.6, 30.0, 60.6])).is_none());
+        assert!(parse_placed_warp(b"SoLd", &warp(4, ny as i32, vec![-0.6, 60.6])).is_none());
+        assert!(parse_placed_warp(b"SoLd", &warp(7, ny as i32, vec![-0.6, 60.6])).is_none());
+        assert!(parse_placed_warp(b"SoLd", &warp(7, ny as i32, vec![-0.6, 70.0, 60.6])).is_none());
+        // A huge grid size is unreadable, not an overflow: i32::MAX rows is 3 per patch + 1, and
+        // 7 × i32::MAX doesn't fit a 32-bit usize.
+        assert!(parse_placed_warp(b"SoLd", &warp(7, i32::MAX, vec![-0.6, 30.0, 60.6])).is_none());
+        assert!(parse_placed_warp(b"SoLd", &warp(i32::MAX, i32::MAX, vec![-0.6, 30.0, 60.6])).is_none());
     }
 
     /// Distort/Perspective corners frame the warp's control-point box, as the affine ones do: the
