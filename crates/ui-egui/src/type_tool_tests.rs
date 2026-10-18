@@ -1509,6 +1509,15 @@ mod multi_layer_formatting {
     }
 
     #[test]
+    #[test]
+    fn hyphenate_is_not_shown_while_layout_does_not_hyphenate() {
+        // #6710: layout never hyphenates; the control must stay hidden until it does.
+        let (app, _) = fixture();
+        let mut h = controls(app, true);
+        assert!(h.query_by_label("Hyphenate").is_none());
+    }
+
+    #[test]
     fn properties_edit_shown_metrics_and_paragraphs_with_a_non_type_primary() {
         let (mut app, ids) = fixture();
         let untouched = style(&app, ids[2], 0);
