@@ -3046,13 +3046,6 @@ fn start_screen_drop_hint(app: &PhotocraftApp) -> std::borrow::Cow<'static, str>
 /// Recent files listed on the Home screen.
 const HOME_RECENT: usize = 6;
 
-/// The Home screen's "Recent" files view (delegated to [`crate::home_recent_ui`]).
-#[allow(dead_code)]
-fn home_recent(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[String]) {
-    let width = ui.available_width().clamp(380.0, 840.0);
-    crate::home_recent_ui::show_home_recent(app, ui, recent, width);
-}
-
 /// Lattice size of the canvas display LUT (colour management, Proof Colors, Gamut Warning).
 const DISPLAY_LUT: usize = 33;
 
