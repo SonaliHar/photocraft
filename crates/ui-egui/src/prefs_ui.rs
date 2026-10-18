@@ -3537,7 +3537,7 @@ mod tests {
         let opened = crate::menus::invoke(&mut app, &ctx, "edit.presets.exportImportPresets", json!({})).unwrap();
         let fields = app.ui.dialog_mut(opened["dialog"].as_u64().unwrap()).unwrap().fields.clone();
         assert_eq!(fields["tools"], true);
-        let mut h = Harness::builder().with_size(vec2(420.0, 260.0)).build_ui_state(|ui, fields| presets_io_body(ui, fields), fields);
+        let mut h = Harness::builder().with_size(vec2(420.0, 260.0)).build_ui_state(presets_io_body, fields);
         h.run_steps(2);
         h.get_by_label("Tool Presets").click();
         h.run_steps(2);
