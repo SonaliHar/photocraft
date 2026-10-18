@@ -1,6 +1,6 @@
 # UI parity: tools, handles, modifiers and feel
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (Pen Auto Add/Delete on the path being drawn, #6140; Show Transform Controls frames every selected layer; guide keys and clicks; menu bar from the keyboard, #4988; Crop tool Content-Aware Fill; on-canvas corner radius widgets, TOOL-214-12; Curvature Pen edits the active path; Clip Thumbnails to Layer Bounds; Pen ⇧ 45°; last selected tool restored at launch; Layers panel filter-type dropdown with Kind, Name and Mode, #5048; Free Transform box and marching ants follow the selection, #5297; History: the trash deletes the selected snapshot, rows drag onto the trash, #5324; smart filter reordering by drag; smart object perspective row corrected to done, #426; Free Transform H/V skew fields; toolbar tool shortcuts can be reassigned; ⇧-dragged guides land on ruler ticks; layer and selection keys; tool keys; spring-loaded tool letters; type formatting keys; Pen Auto Add/Delete, #4144; smart filter rows; stale missing-tool rows corrected: Color Replacement, Red Eye and the Add/Delete Anchor Point pair are live toolbar tools, Frame landed; no percentage changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (multi-layer Free Transform shares one frame and undo step; Pen Auto Add/Delete on the path being drawn, #6140; Show Transform Controls frames every selected layer; guide keys and clicks; menu bar from the keyboard, #4988; Crop tool Content-Aware Fill; on-canvas corner radius widgets, TOOL-214-12; Curvature Pen edits the active path; Clip Thumbnails to Layer Bounds; Pen ⇧ 45°; last selected tool restored at launch; Layers panel filter-type dropdown with Kind, Name and Mode, #5048; Free Transform box and marching ants follow the selection, #5297; History: the trash deletes the selected snapshot, rows drag onto the trash, #5324; smart filter reordering by drag; smart object perspective row corrected to done, #426; Free Transform H/V skew fields; toolbar tool shortcuts can be reassigned; ⇧-dragged guides land on ruler ticks; layer and selection keys; tool keys; spring-loaded tool letters; type formatting keys; Pen Auto Add/Delete, #4144; smart filter rows; stale missing-tool rows corrected: Color Replacement, Red Eye and the Add/Delete Anchor Point pair are live toolbar tools, Frame landed; no percentage changed) · **Target:** Adobe Photoshop 2026
 
 How PhotoCraft's direct manipulation compares with Photoshop 2026 (27.11.0): the toolbox, the
 handles and modifier keys of each gesture, nudging, snapping, numeric precision, navigation,
@@ -62,6 +62,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Behaviour | Status | Evidence |
 |---|---|---|
 | Eight handles, drag inside moves, outside rotates with rotation cursor and live angle | done | #1948 |
+| Several selected layers share one Free Transform box, pivot and undo step | done | `transform_multi.rs`: frozen targets, cached stack fragments, rendered preview checked against the CPU compositor; `engine/tests/multi_transform.rs`: shared scale at 8/16/32-bit, group/child deduplication, locked-target atomic failure; Warp remains single-layer |
 | Corners and edges proportional by default; ⇧ frees them (edge stretches one axis) | done | #1873 |
 | ⌥ scales about the reference point; ⌥-click places it; draggable reference point | done | |
 | ⌘-corner distort, ⌘-edge skew, ⌘⌥⇧ perspective, ⇧ rotate in 15° steps | done | |
@@ -73,7 +74,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Commit/cancel buttons in the options bar | missing | #2442 |
 | Right-click menu during transform (Scale, Rotate, Skew, Distort, Perspective, Warp, flips, rotates) | missing | TOOL-214-5 |
 | Arrow keys nudge the box 1 px, ⇧ 10 px | done | `move_mods.rs` |
-| Preview keeps layer order, blend mode and mask | partial | mask yes (BUG-205-2); order/blend not (#2439) |
+| Preview keeps layer order, blend mode and mask | partial | masks and stack order preserved, including an unselected layer between shared targets (`transform_multi.rs` rendered oracle test); blend modes and adjustments across separately composited fragments remain partial |
 | Preview clipped to the canvas, follows edits while open | done | #2201, #2099 |
 | Hand (space) mid-transform doesn't interrupt it | partial | #2302 |
 | Blend mode / opacity edits while transforming | missing | #1384 |
@@ -96,7 +97,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | ⌥-drag duplicates, ⇧ constrains to 45° | done | `move_mods.rs` |
 | Auto-Select with hover outline, box-select layers, double-click fit | missing | TOOL-214-4 |
 | Auto-Select bounding box and snapping follow the picked layer | partial | follow the previous layer (#2666) |
-| Several layers selected (⇧-click adds, box-select): Show Transform Controls frames them all, with every selected shape's outline | partial: the shared frame has no handles, since Free Transform works on one layer (`canvas.rs` `transform_controls_layers`, `several_selected_layers_share_one_frame_without_handles`; `move_auto_select_tests.rs`) | |
+| Several layers selected (⇧-click adds, box-select): Show Transform Controls frames them all, with every selected shape's outline | done | `canvas.rs`: `transform_controls_layers`, `several_selected_layers_share_one_frame_with_transform_handles`; the handles start a shared Free Transform session |
 | ⌘-drag temporary Move shows the box and snaps | partial | #2681 |
 | ⌘-right-click layer list under the pointer | done | `layer_pick_ui.rs` |
 | Double-click type to edit it (caret at the pointer, Type tool) | done | #1132, `type_tool::edit_at` |
@@ -227,6 +228,7 @@ Paragraph; the rest open as in-app floating windows.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | minor | Multi-layer Free Transform shares one frame, pivot and history step; Move Show Transform Controls enables its shared handles; Warp remains single-layer; percentages unchanged |
 | 2026-10-13 | minor | Menu bar from the keyboard: Alt / F10 focus, Alt+letter, underlined mnemonics (#4988) |
 | 2026-10-13 | minor | Layers panel filter row: Kind is a real dropdown with Kind, Name and Mode filters, drivable by `ui.set {layerFilter}` (#5048); row added as partial |
 | 2026-10-13 | minor | Stale "missing tool" rows corrected against main: Color Replacement (`paint.colorReplacement`), Red Eye (`paint.redEye`) and Add/Delete Anchor Point (the P flyout cycle) are live toolbar tools, so only Art History Brush is missing; no percentage or estimate changed |

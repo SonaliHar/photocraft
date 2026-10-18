@@ -901,6 +901,9 @@ impl TransformMode {
 pub struct TransformSession {
     pub session: u64,
     pub layer: u64,
+    /// Frozen layer targets sharing the frame; empty for lone masks, channels or paths.
+    #[serde(default)]
+    pub layers: Vec<u64>,
     pub rect: [f64; 4],
     /// Corners clockwise from top-left (document px).
     pub quad: [[f64; 2]; 4],

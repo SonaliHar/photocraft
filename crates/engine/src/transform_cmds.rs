@@ -273,7 +273,20 @@ const BUDGET: u64 = 1 << 20;
 /// Refuse a warp of the content inside `src` by `h` whose result would exceed the pixel budget,
 /// before anything is built. `what` names the surface in the message.
 pub(crate) fn check_budget(src: Rect, h: &Homography, what: &str) -> Result<()> {
-    let Some(b) = warp_output_bounds(src, h) else { return Ok(()) };
+    if src.is_empty() {
+        return Ok(());
+    }
+    let outside = || crate::allocation::error("transforming pixels", &format!("the transformed {what} extends beyond the supported coordinate range"));
+    let b = warp_output_bounds(src, h).ok_or_else(outside)?;
+    // The raster warp caps its output coordinates. Refuse a clipped result instead of
+    // accepting it as a small/empty allocation and silently discarding source pixels.
+    let corners = [(src.x0, src.y0), (src.x1, src.y0), (src.x1, src.y1), (src.x0, src.y1)];
+    if corners.iter().any(|(x, y)| {
+        let (x, y) = h.apply(f64::from(*x), f64::from(*y));
+        !x.is_finite() || !y.is_finite() || x < f64::from(b.x0) || x > f64::from(b.x1) || y < f64::from(b.y0) || y > f64::from(b.y1)
+    }) {
+        return Err(outside());
+    }
     let (w, ht) = (u64::from(b.width()), u64::from(b.height()));
     if w.saturating_mul(ht) > BUDGET {
         let detail = format!("the transformed {what} would be {w} x {ht} px, more than the {BUDGET} px limit");
@@ -573,6 +586,7 @@ fn with_panel_target(s: &Session, p: &Value) -> Value {
     let mut p = if p.is_object() { p.clone() } else { json!({}) };
     if p.get("target").is_none()
         && p.get("layer").is_none()
+        && p.get("layers").is_none()
         && let (Some(m), Some(Value::Object(t))) = (p.as_object_mut(), crate::channel_cmds::targeted_channel(s))
     {
         m.extend(t);
@@ -580,15 +594,46 @@ fn with_panel_target(s: &Session, p: &Value) -> Value {
     p
 }
 
+/// Layers sharing one transform, excluding descendants carried by selected groups.
+/// An explicit `layer` overrides the layer selection; `layers` freezes an explicit set.
+pub fn transform_targets(s: &Session, p: &Value) -> Result<Vec<LayerId>> {
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    if p.get("layers").is_some() && p.get("layer").is_some_and(|v| !v.is_null()) {
+        return Err(bad("pass either layer or layers"));
+    }
+    let ids = if let Some(layers) = p.get("layers") {
+        let layers = layers.as_array().filter(|a| !a.is_empty()).ok_or_else(|| bad("layers must be a nonempty array of layer ids"))?;
+        if layers.len() > st.doc.walk().len() {
+            return Err(bad("too many layer ids"));
+        }
+        layers.iter().map(|v| v.as_u64().map(LayerId).ok_or_else(|| bad("layers must contain layer ids"))).collect::<Result<Vec<_>>>()?
+    } else if let Some(id) = crate::commands::explicit_layer(s, p)? {
+        vec![id]
+    } else {
+        st.selected_layers()
+    };
+    for id in &ids {
+        if st.doc.layer(*id).is_none() {
+            return Err(EngineError::NoLayer(*id));
+        }
+    }
+    let ids = crate::layer_multi_cmds::top_level(&st.doc, &ids);
+    if ids.is_empty() {
+        return Err(EngineError::Other("no active layer".into()));
+    }
+    Ok(ids)
+}
+
 fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     let p = &with_panel_target(s, p);
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let id = crate::commands::explicit_layer(s, p)?.or(st.active_layer);
     let lone = lone_target(&st.doc, id, p)?;
+    let ids = if lone.is_some() { Vec::new() } else { transform_targets(s, p)? };
     let id = match (id, lone.is_some() && crate::channel_cmds::is_channel_target(p)) {
         (_, true) => None,
         (Some(id), false) => Some(id),
-        (None, false) => return Err(EngineError::Other("no active layer".into())),
+        (None, false) => ids.first().copied().ok_or_else(|| EngineError::Other("no active layer".into())).map(Some)?,
     };
     let rect = match p.get("rect").and_then(Value::as_array) {
         Some(r) if r.len() == 4 => {
@@ -598,7 +643,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
         _ => {
             let b = match (lone, id) {
                 (Some(surf), _) => target_bounds(&st.doc, surf),
-                (None, Some(id)) => transform_bounds(&st.doc, st.doc.layer(id).ok_or(EngineError::NoLayer(id))?),
+                (None, Some(_)) => ids.iter().filter_map(|id| st.doc.layer(*id)).map(|l| transform_bounds(&st.doc, l)).fold(Rect::EMPTY, |a, b| a.union(&b)),
                 (None, None) => Rect::EMPTY,
             };
             if b.is_empty() {
@@ -635,7 +680,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     crate::jobs::edit_job(
         s,
         "Free Transform",
-        move |doc, _, ctx| ctx.stage(0.0, 1.0, "Transforming", |ctl| transform_doc(doc, id, &p, lone, &h, affine, interp, ctl)),
+        move |doc, _, ctx| ctx.stage(0.0, 1.0, "Transforming", |ctl| transform_doc(doc, id, &ids, &p, lone, &h, affine, interp, ctl)),
         move |()| json!({"rect": rect}),
     )
 }
@@ -645,6 +690,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
 fn transform_doc(
     doc: &mut Document,
     id: Option<LayerId>,
+    ids: &[LayerId],
     p: &Value,
     lone: bool,
     h: &Homography,
@@ -673,18 +719,28 @@ fn transform_doc(
         }
         return Ok(());
     }
-    let id = id.ok_or_else(|| EngineError::Other("no active layer".into()))?;
-    let is_group = doc.layer(id).is_some_and(Layer::is_group);
-    let group = group_locks(doc, id);
-    // Photoshop turns the Background into a normal layer before transforming it.
-    crate::extra_cmds::background_to_layer(doc, id);
-    let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
-    transform_layer_with(if is_group { None } else { sel.as_ref() }, group, l, h, affine, interp, ctl)?;
+    // Validate every target before building any transformed surface.
+    for &id in ids {
+        let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+        if locked_for_transform(doc, id) {
+            return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
+        }
+        check_layer_budget(if l.is_group() { None } else { sel.as_ref() }, l, h)?;
+    }
+    for &id in ids {
+        let is_group = doc.layer(id).is_some_and(Layer::is_group);
+        let group = group_locks(doc, id);
+        crate::extra_cmds::background_to_layer(doc, id);
+        let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
+        transform_layer_with(if is_group { None } else { sel.as_ref() }, group, l, h, affine, interp, ctl)?;
+    }
     if !h.is_identity() {
         // Type layers re-render from their new transform.
         let snapshot = doc.clone();
-        if let Some(l) = doc.layer_mut(id) {
-            refresh_text(&snapshot, l);
+        for &id in ids {
+            if let Some(l) = doc.layer_mut(id) {
+                refresh_text(&snapshot, l);
+            }
         }
         // The selection outline moves with the pixels.
         if let Some(sel) = &doc.selection {
@@ -700,7 +756,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Free Transform",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (source frame; default = layer content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px? (relative alternative: scale and rotate about the frame's centre, then move, as a Photoshop action records a Free Transform),"interpolation":"bicubic|bilinear|nearest"="bicubic","target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask transforms alone; a linked mask moves with its layer)}"##,
+        params: r##"{"layer":id?,"layers":[id,…]? (explicit targets; otherwise all selected layers, excluding descendants carried by selected groups),"rect":[x0,y0,x1,y1]? (shared source frame; default = union of target content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px? (relative alternative: scale and rotate about the shared frame's centre, then move),"interpolation":"bicubic|bilinear|nearest"="bicubic","target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask transforms alone; a linked mask moves with its layer)}"##,
         enabled: has_layer,
         journal: true,
         run: transform,
