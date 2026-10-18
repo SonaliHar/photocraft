@@ -297,18 +297,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     };
     let mut answer = ctx.input_mut(|i| buttons.iter().find(|b| b.2.is_some_and(|k| i.consume_key(egui::Modifiers::NONE, k))).map(|b| b.4));
     let labels = button_labels(mac, &buttons.iter().map(|b| (b.1, b.2)).collect::<Vec<_>>());
-    let row: Vec<DialogButton> = buttons
-        .iter()
-        .zip(&labels)
-        .map(|(b, (label, m))| {
-            DialogButton::new(b.0, label, b.3)
-                .mnemonic(*m)
-                .focus(focus && b.0 == ButtonRole::Default)
-        })
-        .collect();
-    let modal = egui::Modal::new(egui::Id::new("discard-prompt")).show(ctx, |ui| {
-        ui.set_min_width(400.0);
-        ui.set_max_width(450.0);
+    let row: Vec<DialogButton> =
+        buttons.iter().zip(&labels).map(|(b, (label, m))| DialogButton::new(b.0, label, b.3).mnemonic(*m).focus(focus && b.0 == ButtonRole::Default)).collect();
+    let modal = egui::Modal::new(egui::Id::new("discard-prompt")).frame(egui::Frame::popup(&ctx.global_style()).inner_margin(12)).show(ctx, |ui| {
+        ui.set_max_width(420.0);
         let title_label = egui::Label::new(egui::RichText::new(tl!(&title)).font(crate::theme::semibold(15.0))).selectable(false);
         let title_rect = ui.add(title_label).rect;
         if !mac && crate::dialogs::CLOSE_BOX {
@@ -317,18 +309,17 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 answer = Some(Answer::Cancel);
             }
         }
-        ui.add_space(6.0);
+        ui.add_space(4.0);
         crate::widgets::hairline(ui);
-        ui.add_space(14.0);
-        ui.label(egui::RichText::new(message).line_height(Some(19.0)));
-        ui.add_space(20.0);
+        ui.add_space(8.0);
+        ui.label(message);
+        ui.add_space(12.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
             if let Some(role) = crate::widgets::dialog_buttons(ui, &row) {
                 answer = buttons.iter().find(|b| b.0 == role).map(|b| b.4);
             }
         });
-        ui.add_space(4.0);
     });
     if modal.should_close() {
         answer = Some(Answer::Cancel);
@@ -431,11 +422,7 @@ fn button_labels(mac: bool, buttons: &[(&str, Option<Key>)]) -> Vec<(String, Opt
             }
             let key_char = k.name().chars().next();
             let contains_key = key_char.is_some_and(|ch| text.chars().any(|c| c.eq_ignore_ascii_case(&ch)));
-            if contains_key {
-                (text.to_string(), key_char)
-            } else {
-                (format!("{text} ({})", k.name()), None)
-            }
+            if contains_key { (text.to_string(), key_char) } else { (format!("{text} ({})", k.name()), None) }
         })
         .collect()
 }
@@ -800,20 +787,11 @@ mod tests {
     #[test]
     fn one_dialog_shows_every_key_in_the_same_style() {
         let buttons = [("Yes", Some(Key::Y)), ("No", Some(Key::N)), ("Cancel", Some(Key::C))];
-        assert_eq!(
-            button_labels(false, &buttons),
-            [("Yes".into(), Some('Y')), ("No".into(), Some('N')), ("Cancel".into(), Some('C'))]
-        );
+        assert_eq!(button_labels(false, &buttons), [("Yes".into(), Some('Y')), ("No".into(), Some('N')), ("Cancel".into(), Some('C'))]);
         let german = crate::i18n::Lang::from_code("de").unwrap();
         crate::i18n::with_language(german, || {
-            assert_eq!(
-                button_labels(false, &buttons),
-                [("Ja (Y)".into(), None), ("Nein".into(), Some('N')), ("Abbrechen".into(), Some('C'))]
-            );
-            assert_eq!(
-                button_labels(true, &buttons),
-                [("Ja".into(), None), ("Nein".into(), None), ("Abbrechen".into(), None)]
-            );
+            assert_eq!(button_labels(false, &buttons), [("Ja (Y)".into(), None), ("Nein".into(), Some('N')), ("Abbrechen".into(), Some('C'))]);
+            assert_eq!(button_labels(true, &buttons), [("Ja".into(), None), ("Nein".into(), None), ("Abbrechen".into(), None)]);
         });
     }
 
