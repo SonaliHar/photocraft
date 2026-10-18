@@ -46,6 +46,16 @@ fn open(h: &mut Harness<'static, State>) {
     h.run();
 }
 
+/// A native click can leave the opening button held across several rendered frames.
+fn hold_open<S>(h: &mut Harness<'_, S>, button: egui::Pos2) {
+    h.hover_at(button);
+    h.run();
+    h.event(egui::Event::PointerButton { pos: button, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(4);
+    h.event(egui::Event::PointerButton { pos: button, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+}
+
 #[test]
 fn hovering_a_font_row_sets_preview_and_leaving_clears_it() {
     let mut h = harness();
@@ -93,15 +103,18 @@ fn clearing_the_query_restores_the_menu_height() {
 #[test]
 fn reopening_focuses_the_search_field_and_clicking_it_keeps_the_menu_open() {
     let mut h = harness();
-    open(&mut h);
+    let button = h.query_all_by_role(Role::ComboBox).next().unwrap().rect().center();
+    hold_open(&mut h, button);
     assert!(h.get_by_role(Role::TextInput).is_focused(), "search is focused on first open");
-    h.get_by_role(Role::TextInput).type_text("zeta");
+    h.event(egui::Event::Text("zeta".into()));
     h.run();
-    // Close without choosing, then reopen: the query stays and the field is focused again.
-    h.key_press(Key::Escape);
-    h.run();
+    assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("zeta"), "typing goes straight to the search field");
+    // Close and reopen on consecutive passes: the query stays and the field is focused again.
+    h.input_mut().events.push(egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.step();
     assert!(popup_rect(&h).is_none(), "Escape closes the menu");
-    open(&mut h);
+    h.query_all_by_role(Role::ComboBox).next().unwrap().click_accesskit();
+    h.run();
     let search = h.get_by_role(Role::TextInput);
     assert_eq!(search.value().as_deref(), Some("zeta"));
     assert!(search.is_focused(), "search is focused on reopen with a query");
@@ -519,8 +532,8 @@ fn options_bar_hover_previews_with_the_character_picker_also_shown() {
     };
     let pickers: Vec<_> = h.query_all_by_role(Role::ComboBox).filter(|n| n.value().as_deref() == Some("Inter")).collect();
     assert_eq!(pickers.len(), 2, "options bar and Character section both show the font picker");
-    pickers[0].click();
-    h.run();
+    let button = pickers[0].rect().center();
+    hold_open(&mut h, button);
     h.query_all_by_role(Role::TextInput).find(|n| n.is_focused()).expect("search field focused").type_text("JetBrains Mono");
     h.run();
     h.get_by_label("JetBrains Mono").hover();
