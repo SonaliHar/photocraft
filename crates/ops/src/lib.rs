@@ -206,8 +206,7 @@ impl History {
         self.undo.clear();
         self.redo.clear();
         self.tiles = None;
-        self.current_id = 0;
-        self.next_id = 1;
+        // Keep `current_id` / `next_id` so a later undo cannot collide with a saved id (#6867).
     }
 
     /// Approximate unique pixel bytes held by history (tiles not shared with `current`).
