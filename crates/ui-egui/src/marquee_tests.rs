@@ -299,6 +299,31 @@ fn the_live_outline_matches_the_committed_selection_in_a_rotated_view() {
     }
 }
 
+/// #7063: the Type tools' text box and the Move tool's layer marquee preview the document-axis box
+/// the release creates, not an upright screen box through two of its corners (at 45° that box
+/// flattens a dragged square into a sliver).
+#[test]
+fn the_type_box_and_layer_marquee_previews_follow_a_rotated_view() {
+    for rotation in [30.0, 45.0] {
+        let xf = ViewXform {
+            rect: egui::Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)),
+            zoom: 1.5,
+            center: [200.0, 150.0],
+            flip: false,
+            rotation,
+            aspect: 1.0,
+        };
+        for (a, b) in [([100.0, 100.0], [300.0, 200.0]), ([300.0, 300.0], [100.0, 100.0])] {
+            let pts = crate::canvas::doc_box_corners(&xf, a, b);
+            let (x0, x1, y0, y1) = (a[0].min(b[0]), a[0].max(b[0]), a[1].min(b[1]), a[1].max(b[1]));
+            let want = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|[x, y]| xf.to_screen(x as f32, y as f32));
+            for (i, (p, w)) in pts.iter().zip(want).enumerate() {
+                assert!((p.x - w.x).abs() < 0.01 && (p.y - w.y).abs() < 0.01, "{rotation}°: corner {i} at {p:?}, the document box's corner is at {w:?}");
+            }
+        }
+    }
+}
+
 /// 800 %, snapping off, the view centred on (30, 30): the pointer lands between pixel edges.
 fn zoomed(tool: Tool) -> Harness<'static, PhotocraftApp> {
     let mut h = harness(tool);
