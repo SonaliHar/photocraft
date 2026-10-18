@@ -3213,3 +3213,9 @@ curves	Smooth	Lisser
 	This document's layers: {needed} of {budget} for layers	Calques de ce document : {needed} sur {budget} pour les calques
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Les calques de ce document ont besoin de {needed} mais peuvent occuper {budget} : le document entier se redessine sur le CPU
 	GPU Memory (MB, 0 = Automatic)	Mémoire GPU (Mo, 0 = Automatique)
+	Memory Usage	Utilisation de la mémoire
+	Per-document RAM limit (MB)	Limite RAM par document (Mo)
+	Installed RAM: {ram} MB; this limit: {percent}%	RAM installée : {ram} Mo ; cette limite : {percent}%
+	Limits each open document's pixels plus History. Oldest undo states are discarded when the limit is exceeded.	Limite les pixels plus l’Historique de chaque document ouvert. Les plus anciens états d’annulation sont supprimés au-delà de la limite.
+	Applies immediately when saved. Memory is not reserved in advance.	S’applique dès l’enregistrement. La mémoire n’est pas réservée à l’avance.
+	With GPU Memory set to Automatic, this also limits the GPU layer budget. That budget is capped at one quarter of installed RAM and, when known, three eighths of the graphics card's memory, with a 512 MB minimum. Raising this limit beyond those caps does not increase the GPU budget.	Si Mémoire GPU est Automatique, cela limite aussi le budget GPU. Il est plafonné à un quart de la RAM et, si connu, aux trois huitièmes de la mémoire de la carte, minimum 512 Mo. Dépasser ces plafonds n’augmente pas le budget GPU.

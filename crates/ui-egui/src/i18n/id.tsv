@@ -3200,3 +3200,9 @@ curves	Smooth	Haluskan
 	This document's layers: {needed} of {budget} for layers	Layer dokumen ini: {needed} dari {budget} untuk layer
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Layer dokumen ini membutuhkan {needed} tetapi boleh memakai {budget}: penggambaran ulang seluruh dokumen memakai CPU
 	GPU Memory (MB, 0 = Automatic)	Memori GPU (MB, 0 = Otomatis)
+	Memory Usage	Penggunaan memori
+	Per-document RAM limit (MB)	Batas RAM per dokumen (MB)
+	Installed RAM: {ram} MB; this limit: {percent}%	RAM terpasang: {ram} MB; batas ini: {percent}%
+	Limits each open document's pixels plus History. Oldest undo states are discarded when the limit is exceeded.	Membatasi piksel plus Riwayat setiap dokumen terbuka. Status urungkan tertua dibuang jika batas terlampaui.
+	Applies immediately when saved. Memory is not reserved in advance.	Berlaku segera setelah disimpan. Memori tidak dipesan di muka.
+	With GPU Memory set to Automatic, this also limits the GPU layer budget. That budget is capped at one quarter of installed RAM and, when known, three eighths of the graphics card's memory, with a 512 MB minimum. Raising this limit beyond those caps does not increase the GPU budget.	Jika Memori GPU Otomatis, ini juga membatasi anggaran GPU. Plafon seperempat RAM dan, jika diketahui, tiga per delapan memori kartu, minimum 512 MB. Menaikkan batas tidak menambah anggaran GPU.

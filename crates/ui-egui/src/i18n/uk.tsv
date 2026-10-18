@@ -3907,3 +3907,9 @@ curves	Smooth	Згладити
 	This document's layers: {needed} of {budget} for layers	Шари цього документа: {needed} з {budget} для шарів
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Шарам цього документа потрібно {needed}, але займати вони можуть {budget}: увесь документ перемальовується на CPU
 	GPU Memory (MB, 0 = Automatic)	Пам'ять GPU (МБ, 0 = автоматично)
+	Memory Usage	Використання пам’яті
+	Per-document RAM limit (MB)	Ліміт RAM на документ (МБ)
+	Installed RAM: {ram} MB; this limit: {percent}%	Встановлено RAM: {ram} МБ; цей ліміт: {percent}%
+	Limits each open document's pixels plus History. Oldest undo states are discarded when the limit is exceeded.	Обмежує пікселі плюс Історію кожного відкритого документа. Найстаріші стани скасування відкидаються після перевищення ліміту.
+	Applies immediately when saved. Memory is not reserved in advance.	Застосовується одразу після збереження. Пам’ять заздалегідь не резервується.
+	With GPU Memory set to Automatic, this also limits the GPU layer budget. That budget is capped at one quarter of installed RAM and, when known, three eighths of the graphics card's memory, with a 512 MB minimum. Raising this limit beyond those caps does not increase the GPU budget.	Якщо пам’ять GPU — Авто, це також обмежує бюджет GPU. Стеля — чверть RAM і, якщо відомо, три восьмих пам’яті карти, мінімум 512 МБ. Більший ліміт бюджет GPU не збільшує.

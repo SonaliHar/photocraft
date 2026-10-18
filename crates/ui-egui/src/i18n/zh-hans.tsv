@@ -2824,3 +2824,9 @@ curves	Smooth	平滑
 	This document's layers: {needed} of {budget} for layers	此文档的图层：图层可用 {budget} 中的 {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	此文档的图层需要 {needed}，但只能占用 {budget}：整个文档的重绘使用 CPU
 	GPU Memory (MB, 0 = Automatic)	GPU 内存（MB，0 = 自动）
+	Memory Usage	内存使用
+	Per-document RAM limit (MB)	每个文档的 RAM 上限 (MB)
+	Installed RAM: {ram} MB; this limit: {percent}%	已安装 RAM：{ram} MB；此上限：{percent}%
+	Limits each open document's pixels plus History. Oldest undo states are discarded when the limit is exceeded.	限制每个打开文档的像素加历史记录。超出上限时会丢弃最旧的撤销状态。
+	Applies immediately when saved. Memory is not reserved in advance.	保存后立即生效。不会预先占用内存。
+	With GPU Memory set to Automatic, this also limits the GPU layer budget. That budget is capped at one quarter of installed RAM and, when known, three eighths of the graphics card's memory, with a 512 MB minimum. Raising this limit beyond those caps does not increase the GPU budget.	当 GPU 内存为自动时，这也会限制 GPU 图层预算。上限为安装 RAM 的四分之一，以及（若已知）显存的八分之三，最低 512 MB。超过这些上限不会增加 GPU 预算。
