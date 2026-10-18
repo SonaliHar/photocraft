@@ -290,9 +290,22 @@ fn psd_bytes() -> Vec<u8> {
 
 #[test]
 fn files_open_in_the_background_with_a_tab_and_cancel_closes_it() {
-    let mut h = app_harness();
+    let dir = std::env::temp_dir().join(format!(
+        "photocraft-jobs-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir(&dir).unwrap();
+    let path = dir.join("bg.psd");
+    let path2 = dir.join("bg2.psd");
     let bytes = psd_bytes();
-    h.state_mut().open_file("/tmp/photocraft-test/bg.psd", &bytes).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    std::fs::write(&path2, &bytes).unwrap();
+    let path_s = path.to_str().unwrap().to_owned();
+    let path2_s = path2.to_str().unwrap().to_owned();
+
+    let mut h = app_harness();
+    h.state_mut().open_file(&path_s, &bytes).unwrap();
     // The tab is there before the document.
     assert_eq!(h.state().jobs.opens.len(), 1);
     assert_eq!(h.state().session.documents().len(), 1);
@@ -303,17 +316,20 @@ fn files_open_in_the_background_with_a_tab_and_cancel_closes_it() {
     h.run_steps(2);
     let st = h.state().session.active().unwrap();
     assert_eq!(st.doc.size.width, 64);
-    assert_eq!(st.path.as_deref(), Some("/tmp/photocraft-test/bg.psd"));
-    assert_eq!(h.state().ui.recent_files.first().map(String::as_str), Some("/tmp/photocraft-test/bg.psd"));
+    assert_eq!(st.path.as_deref(), Some(path_s.as_str()));
+    assert_eq!(h.state().ui.recent_files.first().map(String::as_str), Some(path_s.as_str()));
 
     // Cancel: the half-open tab closes, no document is added.
-    h.state_mut().open_file("/tmp/photocraft-test/bg2.psd", &bytes).unwrap();
+    h.state_mut().open_file(&path2_s, &bytes).unwrap();
     let job = h.state().jobs.opens[0].job;
     crate::jobs_ui::cancel(h.state_mut(), job);
     h.run_steps(3);
     assert!(h.state().jobs.opens.is_empty());
     assert_eq!(h.state().session.documents().len(), 2);
     assert!(h.state().jobs.focus.is_none());
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&path2);
+    let _ = std::fs::remove_dir(&dir);
 }
 
 /// #2423: a long file name used to wrap the card's title and push the percentage and Cancel
