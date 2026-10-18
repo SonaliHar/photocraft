@@ -2776,6 +2776,8 @@ mod blur_pins_tests;
 
 #[cfg(test)]
 mod move_outline_tests;
+#[cfg(test)]
+mod release_frame_tests;
 
 #[cfg(test)]
 mod layer_thumb_bounds_tests;
