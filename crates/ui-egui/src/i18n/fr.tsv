@@ -3204,6 +3204,25 @@ curves	Smooth	Lisser
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	La transformation manuelle est encore en cours d'application ; réessayez quand elle sera terminée.
 	The transform couldn't be applied.	Impossible d'appliquer la transformation.
+
+# Software Updates (#2316)
+	Open Release Page on GitHub	Ouvrir la page de la version sur GitHub
+	View Downloads	Voir les téléchargements
+	Web builds are always running the latest version.	Les versions web exécutent toujours la dernière version.
+	What's new in this release:	Nouveautés de cette version :
+	You're up to date	Vous êtes à jour
+	Check for Updates	Rechercher des mises à jour
+	Check for Updates…	Rechercher des mises à jour…
+	Checking for updates…	Recherche de mises à jour…
+	Download Update	Télécharger la mise à jour
+	Software Updates	Mises à jour du logiciel
+	Automatically Check for Updates at Startup	Rechercher automatiquement les mises à jour au démarrage
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Les vérifications automatiques ont lieu au maximum une fois par jour. Les mises à jour disponibles apparaissent après la fermeture des autres boîtes de dialogue.
+	Download the update and save your work before installing the new version.	Téléchargez la mise à jour et enregistrez votre travail avant d’installer la nouvelle version.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Pour les installations gérées par paquets, mettez à jour PhotoCraft avec votre gestionnaire de paquets. Les autres téléchargements figurent sur la page de la version.
+	Install Update	Installer la mise à jour
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft télécharge la mise à jour en arrière-plan et l’installe à la fermeture, sans interrompre votre session. Enregistrez d’abord votre travail.
+	PhotoCraft will install the update when you quit.	PhotoCraft installera la mise à jour à la fermeture.
 # Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	Ses calques ont besoin de {needed} de mémoire GPU ; le budget leur laisse {budget}.
 	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	Réglez Mémoire GPU dans Préférences › Performances sur ce que votre carte graphique peut contenir, au plus 3/8 de sa mémoire. Automatique suit Utilisation de la mémoire, dans la limite du quart de la mémoire de cet ordinateur et des 3/8 de celle de la carte, et ne compte pas le document sur une carte dont la mémoire est connue. Tant qu'ils ne tiennent pas, la barre d'état affiche Mémoire GPU pleine.

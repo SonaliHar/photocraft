@@ -3807,6 +3807,25 @@ navigator	Zoom	Zvětšení
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Volná transformace se stále použije; zkuste to znovu, až skončí.
 	The transform couldn't be applied.	Transformaci nelze použít.
+
+# Software Updates (#2316)
+	Open Release Page on GitHub	Otevřít stránku vydání na GitHubu
+	View Downloads	Zobrazit stahování
+	Web builds are always running the latest version.	Webové sestavy vždy běží v nejnovější verzi.
+	What's new in this release:	Co je v tomto vydání nového:
+	You're up to date	Máte nejnovější verzi
+	Check for Updates	Zkontrolovat aktualizace
+	Check for Updates…	Zkontrolovat aktualizace…
+	Checking for updates…	Kontrola aktualizací…
+	Download Update	Stáhnout aktualizaci
+	Software Updates	Aktualizace softwaru
+	Automatically Check for Updates at Startup	Automaticky kontrolovat aktualizace při spuštění
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Automatické kontroly probíhají nejvýše jednou denně. Dostupné aktualizace se zobrazí po zavření ostatních dialogů.
+	Download the update and save your work before installing the new version.	Stáhněte aktualizaci a před instalací nové verze uložte práci.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	U instalací spravovaných správci balíčků aktualizujte PhotoCraft pomocí správce balíčků. Další soubory jsou na stránce vydání.
+	Install Update	Instalovat aktualizaci
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft stáhne aktualizaci na pozadí a nainstaluje ji při ukončení, aby se práce nepřerušila. Nejdříve uložte práci.
+	PhotoCraft will install the update when you quit.	PhotoCraft nainstaluje aktualizaci při ukončení.
 # Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	Vrstvy potřebují {needed} paměti GPU; rozpočet jim ponechává {budget}.
 	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	V Předvolbách › Výkon nastavte Paměť GPU na tolik, kolik vaše grafická karta pojme, nejvýše 3/8 její paměti. Automaticky se řídí Využitím paměti, v rámci čtvrtiny paměti tohoto počítače a 3/8 paměti karty, a u karty se známou pamětí do ní dokument nezapočítává. Dokud se nevejdou, stavový řádek ukazuje Paměť GPU je plná.

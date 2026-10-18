@@ -3899,6 +3899,24 @@ curves	Smooth	Εξομάλυνση
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Ο Ελεύθερος μετασχηματισμός εφαρμόζεται ακόμη· δοκιμάστε ξανά όταν ολοκληρωθεί.
 	The transform couldn't be applied.	Δεν ήταν δυνατή η εφαρμογή του μετασχηματισμού.
+
+# Software Updates (#2316)
+	Open Release Page on GitHub	Άνοιγμα σελίδας έκδοσης στο GitHub
+	View Downloads	Προβολή λήψεων
+	Web builds are always running the latest version.	Οι εκδόσεις web εκτελούν πάντα την πιο πρόσφατη έκδοση.
+	What's new in this release:	Νέα σε αυτή την έκδοση:
+	You're up to date	Είστε ενημερωμένοι
+	Check for Updates…	Έλεγχος για ενημερώσεις…
+	Checking for updates…	Έλεγχος για ενημερώσεις σε εξέλιξη…
+	Download Update	Λήψη ενημέρωσης
+	Software Updates	Ενημερώσεις λογισμικού
+	Automatically Check for Updates at Startup	Αυτόματος έλεγχος ενημερώσεων κατά την εκκίνηση
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Οι αυτόματοι έλεγχοι γίνονται το πολύ μία φορά την ημέρα. Οι διαθέσιμες ενημερώσεις εμφανίζονται αφού κλείσετε τα άλλα παράθυρα διαλόγου.
+	Download the update and save your work before installing the new version.	Κατεβάστε την ενημέρωση και αποθηκεύστε την εργασία σας πριν εγκαταστήσετε τη νέα έκδοση.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Για εγκαταστάσεις μέσω διαχειριστή πακέτων, ενημερώστε το PhotoCraft μέσω αυτού. Άλλες λήψεις βρίσκονται στη σελίδα της έκδοσης.
+	Install Update	Εγκατάσταση ενημέρωσης
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	Το PhotoCraft κατεβάζει την ενημέρωση στο παρασκήνιο και την εγκαθιστά κατά την έξοδο, ώστε η εργασία σας να μη διακοπεί. Αποθηκεύστε πρώτα την εργασία σας.
+	PhotoCraft will install the update when you quit.	Το PhotoCraft θα εγκαταστήσει την ενημέρωση κατά την έξοδο.
 # Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	Τα επίπεδά του χρειάζονται {needed} μνήμης GPU· το όριο τους αφήνει {budget}.
 	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	Ορίστε τη Μνήμη GPU στις Προτιμήσεις › Επιδόσεις σε όσο χωράει η κάρτα γραφικών σας, το πολύ στα 3/8 της μνήμης της. Το Αυτόματο ακολουθεί τη Χρήση μνήμης, εντός του ενός τετάρτου της μνήμης αυτού του υπολογιστή και των 3/8 της κάρτας, και δεν χρεώνει το έγγραφο σε κάρτα με γνωστή μνήμη. Όσο δεν χωρούν, η γραμμή κατάστασης δείχνει Η μνήμη GPU είναι πλήρης.

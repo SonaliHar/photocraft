@@ -3191,6 +3191,25 @@ curves	Smooth	Haluskan
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Transformasi Bebas masih diterapkan; coba lagi setelah selesai.
 	The transform couldn't be applied.	Transformasi tidak dapat diterapkan.
+
+# Software Updates (#2316)
+	Open Release Page on GitHub	Buka Halaman Rilis di GitHub
+	View Downloads	Lihat Unduhan
+	Web builds are always running the latest version.	Build web selalu menjalankan versi terbaru.
+	What's new in this release:	Yang baru dalam rilis ini:
+	You're up to date	Anda sudah terbaru
+	Check for Updates	Periksa Pembaruan
+	Check for Updates…	Periksa Pembaruan…
+	Checking for updates…	Memeriksa pembaruan…
+	Download Update	Unduh Pembaruan
+	Software Updates	Pembaruan Perangkat Lunak
+	Automatically Check for Updates at Startup	Periksa Pembaruan Secara Otomatis Saat Memulai
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Pemeriksaan otomatis dilakukan paling banyak sekali sehari. Pembaruan yang tersedia muncul setelah Anda menutup dialog lain.
+	Download the update and save your work before installing the new version.	Unduh pembaruan dan simpan pekerjaan Anda sebelum menginstal versi baru.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Untuk instalasi yang dikelola paket, perbarui PhotoCraft melalui pengelola paket. Unduhan lain tersedia di halaman rilis.
+	Install Update	Instal Pembaruan
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft mengunduh pembaruan di latar belakang dan memasangnya saat keluar sehingga sesi Anda tidak terganggu. Simpan pekerjaan Anda terlebih dahulu.
+	PhotoCraft will install the update when you quit.	PhotoCraft akan memasang pembaruan saat keluar.
 # Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	Layer-nya membutuhkan {needed} memori GPU; anggaran menyisakan {budget}.
 	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	Atur Memori GPU di Preferensi › Performa sesuai kapasitas kartu grafis Anda, paling banyak 3/8 memorinya. Otomatis mengikuti Pemakaian memori, dalam seperempat memori komputer ini dan 3/8 memori kartu, dan tidak membebankan dokumen pada kartu yang memorinya diketahui. Selama belum muat, bilah status menampilkan Memori GPU Penuh.

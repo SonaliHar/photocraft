@@ -3898,6 +3898,25 @@ curves	Smooth	Згладити
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Вільне трансформування ще застосовується; спробуйте знову, коли воно завершиться.
 	The transform couldn't be applied.	Не вдалося застосувати трансформування.
+
+# Software Updates (#2316)
+	Open Release Page on GitHub	Відкрити сторінку випуску на GitHub
+	View Downloads	Переглянути завантаження
+	Web builds are always running the latest version.	Веберсії завжди запускають найновішу версію.
+	What's new in this release:	Що нового в цьому випуску:
+	You're up to date	У вас найновіша версія
+	Check for Updates	Перевірити оновлення
+	Check for Updates…	Перевірити оновлення…
+	Checking for updates…	Перевірка оновлень…
+	Download Update	Завантажити оновлення
+	Software Updates	Оновлення програми
+	Automatically Check for Updates at Startup	Автоматично перевіряти оновлення під час запуску
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Автоматична перевірка виконується не частіше одного разу на день. Доступні оновлення з’являться після закриття інших діалогів.
+	Download the update and save your work before installing the new version.	Завантажте оновлення та збережіть роботу перед встановленням нової версії.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Якщо програму встановлено через менеджер пакунків, оновіть PhotoCraft за його допомогою. Інші завантаження доступні на сторінці випуску.
+	Install Update	Установити оновлення
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft завантажує оновлення у фоновому режимі й встановлює його під час виходу, не перериваючи роботу. Спочатку збережіть роботу.
+	PhotoCraft will install the update when you quit.	PhotoCraft встановить оновлення під час виходу.
 # Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	Його шарам потрібно {needed} пам'яті GPU; бюджет залишає їм {budget}.
 	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	Задайте «Пам'ять GPU» в Налаштування › Продуктивність відповідно до того, скільки вміщує ваша відеокарта, не більше 3/8 її пам'яті. «Автоматично» стежить за використанням пам'яті, у межах чверті пам'яті цього комп'ютера й 3/8 пам'яті відеокарти, і не враховує документ на відеокарті з відомим обсягом пам'яті. Поки шари не вміщуються, рядок стану показує «Пам'ять GPU заповнена».

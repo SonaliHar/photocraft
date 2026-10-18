@@ -2515,6 +2515,11 @@ cameraRaw	Color	Renk
 	Reset Preferences	Tercihleri Sıfırla
 	Documentation	Dokümantasyon
 	Check for Updates	Güncellemeleri Kontrol Et
+	Open Release Page on GitHub	Yayın sayfasını GitHub'da aç
+	View Downloads	İndirmeleri görüntüle
+	Web builds are always running the latest version.	Web derlemeleri her zaman en son sürümü çalıştırır.
+	What's new in this release:	Bu sürümdeki yenilikler:
+	You're up to date	Güncelsiniz
 	Loading…	Yükleniyor…
 	Processing…	İşleniyor…
 	Saving…	Kaydediliyor…
@@ -3929,6 +3934,18 @@ cameraData	Lens	Lens
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Serbest Dönüştürme hâlâ uygulanıyor; bittiğinde yeniden deneyin.
 	The transform couldn't be applied.	Dönüştürme uygulanamadı.
+# Software Updates (#2316)
+	Check for Updates…	Güncelleştirmeleri Denetle…
+	Checking for updates…	Güncelleştirmeler denetleniyor…
+	Download Update	Güncelleştirmeyi İndir
+	Software Updates	Yazılım Güncelleştirmeleri
+	Automatically Check for Updates at Startup	Başlangıçta Güncelleştirmeleri Otomatik Denetle
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Otomatik denetimler günde en fazla bir kez çalışır. Kullanılabilir güncelleştirmeler diğer iletişim kutularını kapattıktan sonra görünür.
+	Download the update and save your work before installing the new version.	Güncelleştirmeyi indirin ve yeni sürümü kurmadan önce çalışmanızı kaydedin.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Paket yöneticisiyle kurulan sürümlerde PhotoCraft’ı paket yöneticinizle güncelleyin. Diğer indirmeler yayın sayfasındadır.
+	Install Update	Güncelleştirmeyi Kur
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft güncelleştirmeyi arka planda indirir ve oturum bölünmesin diye kapatırken kurar. Önce çalışmanızı kaydedin.
+	PhotoCraft will install the update when you quit.	PhotoCraft güncelleştirmeyi çıkışta kuracak.
 # Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	Katmanlarının {needed} GPU belleğine ihtiyacı var; bütçe onlara {budget} bırakıyor.
 	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	Tercihler › Performans içindeki GPU Belleği'ni ekran kartınızın kaldırabileceği miktara, en fazla belleğinin 3/8'ine ayarlayın. Otomatik, Bellek kullanımını izler; bu bilgisayarın belleğinin dörtte biri ve kartın belleğinin 3/8'i içinde kalır, belleği bilinen bir kartta belgeyi hesaba katmaz. Sığmadıkları sürece durum çubuğu GPU Belleği Dolu gösterir.

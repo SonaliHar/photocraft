@@ -3711,6 +3711,11 @@ cameraRaw	Yellow	Sárga
 	Changes have not been saved.	A módosítások nincsenek mentve.
 	Changes Saved	Módosítások mentve
 	Check for Updates	Frissítések keresése
+	Open Release Page on GitHub	Kiadási oldal megnyitása a GitHubon
+	View Downloads	Letöltések megtekintése
+	Web builds are always running the latest version.	A webes buildek mindig a legújabb verziót futtatják.
+	What's new in this release:	Újdonságok ebben a kiadásban:
+	You're up to date	Naprakész
 	Choose Folder	Mappa kiválasztása
 	Choose…	Kiválasztás…
 	CIE RGB	CIE RGB
@@ -4118,6 +4123,18 @@ cameraRaw	Yellow	Sárga
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	A szabad alakítás alkalmazása még folyamatban van; próbáld újra, ha befejeződött.
 	The transform couldn't be applied.	Az átalakítás nem alkalmazható.
+# Software Updates (#2316)
+	Check for Updates…	Frissítések keresése…
+	Checking for updates…	Frissítések ellenőrzése…
+	Download Update	Frissítés letöltése
+	Software Updates	Szoftverfrissítések
+	Automatically Check for Updates at Startup	Indításkor automatikusan ellenőrizze a frissítéseket
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Az automatikus ellenőrzés naponta legfeljebb egyszer fut. Az elérhető frissítések a többi párbeszédpanel bezárása után jelennek meg.
+	Download the update and save your work before installing the new version.	Töltse le a frissítést, és mentse a munkáját az új verzió telepítése előtt.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Csomagkezelővel telepített változatnál a PhotoCraftot a csomagkezelővel frissítse. További letöltések a kiadási oldalon találhatók.
+	Install Update	Frissítés telepítése
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	A PhotoCraft a háttérben tölti le a frissítést, és kilépéskor telepíti, hogy a munkamenet ne szakadjon meg. Először mentse a munkáját.
+	PhotoCraft will install the update when you quit.	A PhotoCraft kilépéskor telepíti a frissítést.
 # Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	A rétegeknek {needed} GPU-memória kell; a keret {budget} hagy nekik.
 	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	A Beállítások › Teljesítmény alatt állítsd a GPU-memóriát arra, amennyit a videokártyád elbír, legfeljebb a memóriája 3/8-ára. Az Automatikus a memóriahasználatot követi, a számítógép memóriájának negyedén és a kártya 3/8-án belül, és ismert memóriájú kártyánál nem számítja bele a dokumentumot. Amíg nem férnek el, az állapotsor a GPU-memória megtelt üzenetet mutatja.

@@ -3190,6 +3190,13 @@ layerLabel	No Color	Bez boje
 	Reset Preferences	Resetuj podešavanja
 	Documentation	Dokumentacija
 	Check for Updates	Proveri ažuriranja
+	Open Release Page on GitHub	Otvori stranicu izdanja na GitHub-u
+	View Downloads	Pogledaj preuzimanja
+	Web builds are always running the latest version.	Veb izdanja uvek koriste najnoviju verziju.
+	What's new in this release:	Šta je novo u ovom izdanju:
+	You're up to date	Ažurni ste
+	Check for Updates…	Proverite ažuriranja…
+	Automatically Check for Updates at Startup	Automatski proveravaj ažuriranja pri pokretanju
 	Loading…	Učitavanje…
 	Processing…	Obrađivanje…
 	Saving…	Čuvanje…
@@ -4272,6 +4279,16 @@ shape	Appearance	Izgled
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Slobodna transformacija se još primenjuje; pokušajte ponovo kad se završi.
 	The transform couldn't be applied.	Transformacija nije mogla da se primeni.
+# Software Updates (#2316)
+	Checking for updates…	Proveravanje ažuriranja…
+	Download Update	Preuzmi ažuriranje
+	Software Updates	Ažuriranja softvera
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Automatske provere se pokreću najviše jednom dnevno. Dostupna ažuriranja se prikazuju kada zatvorite druge dijaloge.
+	Download the update and save your work before installing the new version.	Preuzmite ažuriranje i sačuvajte rad pre instalacije nove verzije.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Za instalacije upravljane paket-menadžerom ažurirajte PhotoCraft kroz paket-menadžer. Ostala preuzimanja su na stranici izdanja.
+	Install Update	Instaliraj ažuriranje
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft preuzima ažuriranje u pozadini i instalira ga pri izlazu, pa vaša sesija ne prekida. Prvo sačuvajte rad.
+	PhotoCraft will install the update when you quit.	PhotoCraft će instalirati ažuriranje kada izađete.
 # Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	Njegovim slojevima treba {needed} GPU memorije; budžet im ostavlja {budget}.
 	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	Podesite GPU memoriju u Podešavanja › Performanse na onoliko koliko vaša grafička kartica može da primi, najviše 3/8 njene memorije. Automatski prati Korišćenje memorije, u okviru četvrtine memorije ovog računara i 3/8 memorije kartice, i ne računa dokument kod kartice čija je memorija poznata. Dok ne staju, statusna traka prikazuje GPU memorija je puna.

@@ -25,6 +25,11 @@ pub struct Prompt {
     focused: Option<DocId>,
 }
 
+#[cfg(test)]
+pub(crate) fn parked_for_tests() -> Prompt {
+    Prompt { id: "file.close".into(), params: Value::Null, target: None, docs: vec![] }
+}
+
 fn index_of(app: &PhotocraftApp, id: DocId) -> Option<usize> {
     app.session.documents().iter().position(|d| d.doc.id == id)
 }

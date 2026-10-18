@@ -3959,6 +3959,24 @@ curves	Smooth	Vloeiend maken
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	Vrije transformatie wordt nog toegepast; probeer het opnieuw als die klaar is.
 	The transform couldn't be applied.	De transformatie kon niet worden toegepast.
+
+# Software Updates (#2316)
+	Open Release Page on GitHub	Pagina van de release op GitHub openen
+	View Downloads	Downloads weergeven
+	Web builds are always running the latest version.	Webbuilds gebruiken altijd de nieuwste versie.
+	What's new in this release:	Wat is er nieuw in deze release:
+	You're up to date	U heeft de nieuwste versie
+	Check for Updates…	Controleren op updates…
+	Checking for updates…	Controleren op updates…
+	Download Update	Update downloaden
+	Software Updates	Software-updates
+	Automatically Check for Updates at Startup	Bij het opstarten automatisch op updates controleren
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	Automatische controles vinden maximaal eenmaal per dag plaats. Beschikbare updates verschijnen nadat u andere dialoogvensters sluit.
+	Download the update and save your work before installing the new version.	Download de update en sla uw werk op voordat u de nieuwe versie installeert.
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	Werk PhotoCraft bij via uw pakketbeheerder als u het daarmee hebt geïnstalleerd. Andere downloads staan op de releasepagina.
+	Install Update	Update installeren
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft download de update op de achtergrond en installeert hem bij het afsluiten, zodat uw werk niet wordt onderbroken. Sla uw werk eerst op.
+	PhotoCraft will install the update when you quit.	PhotoCraft installeert de update bij het afsluiten.
 # Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	De lagen hebben {needed} GPU-geheugen nodig; het budget laat ze {budget}.
 	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	Stel GPU-geheugen in bij Voorkeuren › Prestaties op wat uw videokaart aankan, hooguit 3/8 van haar geheugen. Automatisch volgt Geheugengebruik, binnen een kwart van het geheugen van deze computer en 3/8 van dat van de kaart, en rekent het document niet af van een kaart waarvan het geheugen bekend is. Zolang ze niet passen, toont de statusbalk GPU-geheugen vol.

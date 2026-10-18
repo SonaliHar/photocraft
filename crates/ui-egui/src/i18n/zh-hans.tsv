@@ -2815,6 +2815,25 @@ curves	Smooth	平滑
 # Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	自由变换仍在应用中；请在完成后重试。
 	The transform couldn't be applied.	无法应用变换。
+
+# Software Updates (#2316)
+	Open Release Page on GitHub	在 GitHub 上打开发布页面
+	View Downloads	查看下载
+	Web builds are always running the latest version.	Web 版始终运行为最新版本。
+	What's new in this release:	此版本的新功能：
+	You're up to date	已是最新版本
+	Check for Updates	检查更新
+	Check for Updates…	检查更新…
+	Checking for updates…	正在检查更新…
+	Download Update	下载更新
+	Software Updates	软件更新
+	Automatically Check for Updates at Startup	启动时自动检查更新
+	Automatic checks run at most once a day. Available updates appear after you close other dialogs.	自动检查每天最多执行一次。关闭其他对话框后，将显示可用更新。
+	Download the update and save your work before installing the new version.	下载更新，并在安装新版本之前保存工作。
+	For package-managed installations, update PhotoCraft through your package manager. Other downloads are on the release page.	对于通过软件包管理器安装的版本，请使用软件包管理器更新PhotoCraft。其他下载位于发布页面。
+	Install Update	安装更新
+	PhotoCraft downloads the update in the background and installs it when you quit, so your session is not interrupted. Save your work first.	PhotoCraft 会在后台下载更新，并在退出时安装，不会打断您的工作。请先保存工作。
+	PhotoCraft will install the update when you quit.	PhotoCraft 将在退出时安装更新。
 # Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	其图层需要 {needed} GPU 内存；预算只留给它们 {budget}。
 	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	在 首选项 › 性能 中将 GPU 内存设置为显卡能容纳的大小，最多为其显存的 3/8。自动跟随内存使用量，不超过本机内存的四分之一和显卡显存的 3/8，且在显存已知的显卡上不把文档计入。在图层放不下期间，状态栏显示“GPU 内存已满”。
