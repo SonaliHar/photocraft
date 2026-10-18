@@ -4652,6 +4652,7 @@ dependencies = [
  "ron",
  "serde_json",
  "tempfile",
+ "windows",
  "winit",
  "winresource",
  "winsafe",
