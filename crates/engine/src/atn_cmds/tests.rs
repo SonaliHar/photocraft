@@ -956,3 +956,35 @@ fn remove_white_clears_the_targeted_layer_not_the_converted_background() {
     assert!(!st.doc.is_background(bottom.id), "the Background became a normal layer");
     assert!(bottom.surface().unwrap().sample_channel(2, 2, 1) > 0.99, "and kept its pixels");
 }
+
+#[test]
+fn radial_blur_off_center_strict_export_refuses_silent_recentering() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+
+    // Default center (omitted) exports successfully
+    s.actions.list.push(Action::new("DefaultCenter", vec![("filter.blur.radialBlur".into(), json!({"amount": 50, "method": "spin", "quality": "good"}))]));
+    let saved = s.execute("actions.save", json!({"action": "DefaultCenter"})).unwrap();
+    assert_eq!(saved["steps"], 1);
+
+    // Explicit (0.5, 0.5) center also exports successfully
+    s.actions.list.push(Action::new(
+        "ExplicitDefaultCenter",
+        vec![("filter.blur.radialBlur".into(), json!({"amount": 50, "method": "spin", "quality": "good", "centerX": 0.5, "centerY": 0.5}))],
+    ));
+    let saved_exp = s.execute("actions.save", json!({"action": "ExplicitDefaultCenter"})).unwrap();
+    assert_eq!(saved_exp["steps"], 1);
+
+    // Off-center radial blur cannot be silently recentered in strict export
+    s.actions.list.push(Action::new(
+        "OffCenter",
+        vec![("filter.blur.radialBlur".into(), json!({"amount": 50, "method": "spin", "quality": "good", "centerX": 0.1, "centerY": 0.2}))],
+    ));
+    let err = s.execute("actions.save", json!({"action": "OffCenter"}));
+    assert!(err.is_err(), "strict export must reject off-center radial blur rather than silently recentering it");
+
+    // With skipUnsupported: true, off-center radial blur is skipped
+    let skipped = s.execute("actions.save", json!({"action": "OffCenter", "skipUnsupported": true})).unwrap();
+    assert_eq!(skipped["steps"], 0);
+    assert_eq!(skipped["skipped"][0]["id"], "filter.blur.radialBlur");
+}
