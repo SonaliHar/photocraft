@@ -3044,7 +3044,7 @@ fn start_screen_drop_hint(app: &PhotocraftApp) -> std::borrow::Cow<'static, str>
 }
 
 /// Recent files listed on the Home screen.
-const HOME_RECENT: usize = 6;
+const HOME_RECENT: usize = 11;
 
 /// Lattice size of the canvas display LUT (colour management, Proof Colors, Gamut Warning).
 const DISPLAY_LUT: usize = 33;
@@ -7356,6 +7356,34 @@ mod tests {
         h.run_steps(2);
         assert!(listed(&h).is_empty());
         assert!(h.state().0.session.documents().is_empty());
+    }
+
+    #[test]
+    fn home_recent_capped_at_eleven_items() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        for i in 0..15 {
+            app.push_recent(&format!("/tmp/photocraft-cap/item_{i:02}.png"));
+        }
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+                if *ready {
+                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
+                }
+            },
+            (app, false),
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+        h.state_mut().1 = true;
+        h.run_steps(3);
+        // Newest files are at the beginning: item_14 down to item_04 (11 items) should be present
+        for i in 4..=14 {
+            assert!(h.query_by_label(&format!("item_{i:02}.png")).is_some(), "item_{i:02}.png should be shown");
+        }
+        // Older files beyond 11 should not be listed on the Home screen
+        for i in 0..4 {
+            assert!(h.query_by_label(&format!("item_{i:02}.png")).is_none(), "item_{i:02}.png exceeds HOME_RECENT cap");
+        }
     }
 
     #[test]
