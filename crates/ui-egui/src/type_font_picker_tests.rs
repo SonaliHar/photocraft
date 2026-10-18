@@ -10,6 +10,7 @@ use photocraft_engine::prefs::FontPreview;
 struct State {
     current: String,
     families: Vec<String>,
+    button: egui::Id,
     popup: egui::Id,
     preview: FontPreview,
 }
@@ -22,10 +23,11 @@ fn harness_with(preview: FontPreview) -> Harness<'static, State> {
     // Enough families that the unfiltered menu hits its maximum height and scrolls.
     let mut families: Vec<String> = (0..60).map(|i| format!("Family {i:02}")).collect();
     families.push("Zeta Sans".into());
-    let state = State { current: "Family 00".into(), families, popup: egui::Id::NULL, preview };
+    let state = State { current: "Family 00".into(), families, button: egui::Id::NULL, popup: egui::Id::NULL, preview };
     let mut h = Harness::builder().with_size(vec2(600.0, 900.0)).build_ui_state(
         |ui, s: &mut State| {
-            s.popup = ui.make_persistent_id(egui::IdSalt::new("type-font")).with("popup");
+            s.button = ui.make_persistent_id(egui::IdSalt::new("type-font"));
+            s.popup = s.button.with("popup");
             let fams = s.families.clone();
             font_picker_in(ui, &mut s.current, 170.0, &fams, s.preview);
         },
@@ -131,6 +133,64 @@ fn reopening_focuses_the_search_field_and_clicking_it_keeps_the_menu_open() {
     h.run();
     assert_eq!(h.state().current, "Zeta Sans");
     assert!(popup_rect(&h).is_none(), "choosing a font closes the menu");
+}
+
+#[test]
+fn opening_click_release_returns_focus_to_search_before_typing() {
+    let mut h = harness();
+    let button = h.query_all_by_role(Role::ComboBox).next().unwrap().rect().center();
+    h.hover_at(button);
+    h.run();
+    h.event(egui::Event::PointerButton { pos: button, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(4);
+    assert!(h.get_by_role(Role::TextInput).is_focused());
+    // A native opening click can hand focus back to its button when it ends, after the
+    // search has already been focused for several passes. Model that platform handoff.
+    let id = h.state().button;
+    h.ctx.memory_mut(|m| m.request_focus(id));
+    h.event(egui::Event::PointerButton { pos: button, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+    assert!(h.get_by_role(Role::TextInput).is_focused(), "the opening release leaves the search focused");
+    h.event(egui::Event::Text("zeta".into()));
+    h.run();
+    assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("zeta"));
+    assert!(h.query_by_label("Family 01").is_none());
+}
+
+#[test]
+fn first_options_bar_open_searches_without_changing_the_tool_or_edited_text() {
+    use crate::{PhotocraftApp, Services};
+    use photocraft_doc::LayerContent;
+    use serde_json::json;
+
+    for editing in [false, true] {
+        let mut h = Harness::builder().with_size(vec2(1600.0, 1000.0)).with_max_steps(64).build_eframe(move |cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+            app.run("type.create", json!({"text": "Sample", "font": "Inter", "size": 18})).unwrap();
+            app.ui.tool = crate::state::Tool::Type;
+            if editing {
+                super::edit_active(&mut app).unwrap();
+            }
+            app.sync_views();
+            app
+        });
+        h.run_steps(8);
+        let button = h.query_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Inter")).unwrap().rect().center();
+        hold_open(&mut h, button);
+        // Native typing carries key events as well as text; an unfocused search would let
+        // the first key switch tools, or replace the selected inline text instead.
+        h.event(egui::Event::Key { key: Key::J, physical_key: Some(Key::J), pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        h.event(egui::Event::Text("JetBrains".into()));
+        h.run();
+        let search = h.query_all_by_role(Role::TextInput).find(|n| n.is_focused()).expect("font search focused on first open");
+        assert_eq!(search.value().as_deref(), Some("JetBrains"));
+        assert_eq!(h.state().ui.tool, crate::state::Tool::Type);
+        let st = h.state().session.active().unwrap();
+        let LayerContent::Text(text) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("type layer") };
+        assert_eq!(text.text, "Sample");
+    }
 }
 
 #[test]
@@ -424,6 +484,7 @@ fn localized_font_names_label_the_menu_but_pick_the_family() {
     let state = State {
         current: "Arial".into(),
         families: vec!["Arial".into(), "MS Gothic".into(), "Zeta Sans".into()],
+        button: egui::Id::NULL,
         popup: egui::Id::NULL,
         preview: FontPreview::Medium,
     };

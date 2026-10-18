@@ -1472,11 +1472,14 @@ pub(crate) fn family_picker_in(
         let down = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown));
         let up = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp));
         let enter = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
-        let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text(tl!("Search fonts")).desired_width(200.0));
-        if r.has_focus() {
-            focus = false;
-        } else if focus {
-            r.request_focus();
+        if focus {
+            ui.memory_mut(|m| m.request_focus(search_id.with("input")));
+        }
+        let r = ui.add(egui::TextEdit::singleline(&mut q).id(search_id.with("input")).hint_text(tl!("Search fonts")).desired_width(200.0));
+        if focus {
+            // The opening click can release after several focused frames. Keep the request
+            // pending through that release, which can hand focus back to the combo button.
+            focus = !r.has_focus() || ui.input(|i| i.pointer.primary_down() || i.pointer.primary_released());
         }
         ui.data_mut(|d| {
             d.insert_temp(focus_id, focus);
