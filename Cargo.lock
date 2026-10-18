@@ -4696,7 +4696,6 @@ dependencies = [
  "photocraft-doc",
  "photocraft-engine",
  "photocraft-format",
- "photocraft-geom",
  "photocraft-io",
  "rmcp",
  "schemars",
@@ -4991,9 +4990,6 @@ name = "photocraft-testkit"
 version = "0.10.0"
 dependencies = [
  "memory-stats",
- "photocraft-color",
- "photocraft-geom",
- "photocraft-raster",
  "serde_json",
 ]
 
