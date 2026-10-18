@@ -2807,6 +2807,9 @@ mod dropdown_press_tests;
 mod marquee_tests;
 
 #[cfg(test)]
+mod guide_cursor_tests;
+
+#[cfg(test)]
 mod canvas_menu_tests;
 
 #[cfg(test)]
