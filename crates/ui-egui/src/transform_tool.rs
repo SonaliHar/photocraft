@@ -22,6 +22,9 @@ use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, ViewXform};
 use crate::state::{MadeLayer, Tool, TransformMode, TransformSession};
 
+#[path = "transform_multi.rs"]
+mod multi;
+
 /// Which Split button is armed. The guide follows the pointer and the split is added on release.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SplitTool {
@@ -63,6 +66,7 @@ pub struct TransformPreview {
     pub doc: Arc<Document>,
     pub texture: crate::transform_tex::PreviewTextures,
     pub opacity: f32,
+    multi: Option<multi::Preview>,
     /// The layers stacked over the moving one, drawn over its pixels ([`Above`]).
     above: Option<Above>,
     /// A layer with a style: its pixels composited with the style as the box has them now,
@@ -108,6 +112,8 @@ pub const LOCKED: &str = "Could not complete the Free Transform command because 
 
 /// Why Edit › Transform's modes and Warp refuse while Content-Aware Scale's box is open.
 pub const CAS_ONLY_SCALES: &str = "Content-Aware Scale only scales: commit or cancel it first";
+
+const MULTI_WARP: &str = "Warp requires a single selected layer.";
 
 /// Grab radius of the box's handles, in screen points. Generous, so a corner is easy to catch;
 /// just beyond it, outside the box, a drag rotates.
@@ -187,7 +193,7 @@ fn corners(r: [f64; 4]) -> [[f64; 2]; 4] {
     [[r[0], r[1]], [r[2], r[1]], [r[2], r[3]], [r[0], r[3]]]
 }
 
-/// Start Free Transform on the active layer (or its selected pixels), or on the targeted unlinked
+/// Start Free Transform on the selected layers (or their selected pixels), or on the targeted unlinked
 /// layer mask, alpha channel or Quick Mask.
 pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
     if let Some((params, path)) = crate::vector_ui::free_transform_path(app) {
@@ -203,10 +209,11 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     if let Some(surf) = lone {
         return begin_lone(app, ctx, doc, surf, target);
     }
-    let id = st.active_layer.ok_or("no active layer")?;
+    let ids = photocraft_engine::transform_cmds::transform_targets(&app.session, &json!({})).map_err(|e| e.to_string())?;
+    let id = ids.first().copied().filter(|_| ids.len() == 1).or(st.active_layer).ok_or("no active layer")?;
     let layer = doc.layer(id).ok_or("no layer")?;
-    if photocraft_engine::transform_cmds::locked_for_transform(&doc, id) {
-        // Photoshop refuses before the box opens rather than when it is committed (#2585).
+    if ids.iter().any(|id| photocraft_engine::transform_cmds::locked_for_transform(&doc, *id)) {
+        // Refuse the whole selection before the box opens, rather than at commit.
         app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": tl!(LOCKED)}).as_object().cloned().unwrap_or_default());
         return Err(LOCKED.into());
     }
@@ -214,9 +221,16 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         return Err("Adjustment layers have nothing to transform".into());
     }
     // With a selection the box is the selection's (#5297).
-    let b = photocraft_engine::transform_cmds::transform_frame(&doc, layer);
+    let b = ids
+        .iter()
+        .filter_map(|id| doc.layer(*id))
+        .map(|l| photocraft_engine::transform_cmds::transform_frame(&doc, l))
+        .fold(photocraft_geom::Rect::EMPTY, |a, b| a.union(&b));
     if b.is_empty() {
         return Err("Could not transform: the layer is empty".into());
+    }
+    if ids.len() > 1 {
+        return multi::begin(app, ctx, doc, ids, id, b, revision);
     }
     crate::type_tool::commit(app);
     let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
@@ -249,6 +263,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         doc: Arc::new(pd),
         texture,
         opacity: layer.opacity * layer.fill_opacity,
+        multi: None,
         above: Some(above),
         styled: styled.then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
         follow: Some(Follow { revision, hidden: lifted.is_none() }),
@@ -267,6 +282,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     app.ui.transform = Some(TransformSession {
         session,
         layer: id.0,
+        layers: ids.iter().map(|id| id.0).collect(),
         rect,
         quad: corners(rect),
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
@@ -351,6 +367,7 @@ pub(crate) fn begin_content_aware(
         texture,
         opacity: layer.opacity * layer.fill_opacity,
         above: Some(above),
+        multi: None,
         follow: Some(Follow { revision, hidden: false }),
         committing: None,
         gesture: None,
@@ -368,6 +385,7 @@ pub(crate) fn begin_content_aware(
     app.ui.transform = Some(TransformSession {
         session,
         layer: id.0,
+        layers: Vec::new(),
         rect,
         quad: corners(rect),
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
@@ -471,6 +489,7 @@ fn begin_lone(
         doc: Arc::new(pd),
         texture,
         opacity: 0.6,
+        multi: None,
         above: None,
         styled: None,
         follow: None,
@@ -489,6 +508,7 @@ fn begin_lone(
     app.ui.transform = Some(TransformSession {
         session,
         layer,
+        layers: Vec::new(),
         rect,
         quad: corners(rect),
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
@@ -525,6 +545,7 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
         texture,
         opacity: 1.0,
         styled: None,
+        multi: None,
         gesture: None,
         warp_drag: None,
         split_tool: None,
@@ -542,6 +563,7 @@ fn begin_path(app: &mut PhotocraftApp, ctx: &egui::Context, params: serde_json::
     app.ui.transform = Some(TransformSession {
         session,
         layer: layer.0,
+        layers: Vec::new(),
         rect,
         quad: corners(rect),
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
@@ -610,6 +632,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
         texture,
         opacity: 1.0,
         above: None,
+        multi: None,
         styled: None,
         follow: None,
         committing: None,
@@ -627,6 +650,7 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
     app.ui.transform = Some(TransformSession {
         session,
         layer: layer.0,
+        layers: Vec::new(),
         rect,
         quad: corners(rect),
         pivot: [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0],
@@ -646,6 +670,14 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
 
 /// Start (or switch an active Free Transform into) Warp mode.
 pub fn begin_warp(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    let multiple = app
+        .ui
+        .transform
+        .as_ref()
+        .map_or_else(|| photocraft_engine::transform_cmds::transform_targets(&app.session, &json!({})).is_ok_and(|ids| ids.len() > 1), |t| t.layers.len() > 1);
+    if multiple {
+        return Err(tl!(MULTI_WARP).into());
+    }
     if app.ui.transform.as_ref().is_some_and(|t| t.content_aware.is_some()) {
         return Err(CAS_ONLY_SCALES.into());
     }
@@ -665,6 +697,9 @@ pub fn begin_warp(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
 /// custom mesh following the current box (so a transform made first carries over). Editable type
 /// gets its own Warp Text style instead ([`enter_type_warp`]).
 pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if app.ui.transform.as_ref().is_some_and(|t| t.layers.len() > 1) {
+        return;
+    }
     if app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none()) && warps_type(app) {
         return enter_type_warp(app, ctx);
     }
@@ -1007,6 +1042,10 @@ pub fn commit(app: &mut PhotocraftApp) {
     let type_layer = warps_type(app);
     let Some(t) = app.ui.transform.take() else { return };
     let mut preview = app.transform_preview.take();
+    if t.layers.len() > 1 && t.warp.is_some() {
+        keep_open(app, t, preview, tl!(MULTI_WARP).into());
+        return;
+    }
     if let Some(options) = &t.content_aware {
         crate::cas_transform::commit(app, &t, options);
         return;
@@ -1055,7 +1094,12 @@ pub fn commit(app: &mut PhotocraftApp) {
         if t.quad == corners(t.rect) {
             return; // untouched: nothing to do and no history step; a ⌥⌘T copy or a place stays
         }
-        let mut p = json!({"layer": t.layer, "rect": t.rect, "quad": t.quad, "interpolation": t.interpolation});
+        let mut p = json!({"rect": t.rect, "quad": t.quad, "interpolation": t.interpolation});
+        if t.layers.is_empty() {
+            p["layer"] = json!(t.layer);
+        } else {
+            p["layers"] = json!(t.layers);
+        }
         if let Some(target) = &t.target {
             p["target"] = target.clone();
         }
@@ -1163,6 +1207,9 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
 /// rebuilt from the current one. The moving pixels keep the session's. Called before the canvas
 /// reads the preview, so it never caches a revision with the old preview.
 pub fn follow_edits(app: &mut PhotocraftApp) {
+    if multi::follow_edits(app) {
+        return;
+    }
     let (Some(t), Some(pv)) = (&app.ui.transform, app.transform_preview.as_mut()) else { return };
     let Some(follow) = pv.follow.as_mut() else { return };
     let Some(st) = app.session.active().filter(|st| st.doc.id == pv.doc.id && st.revision != follow.revision) else { return };
@@ -1232,6 +1279,14 @@ pub(crate) fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64) {
 /// While transforming, Undo and Redo apply to the box: `Some(enabled)` for those commands (and
 /// Toggle Last State, which would change the document under the box), `None` for the rest.
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
+    if id == "edit.transform.warp"
+        && app.ui.transform.as_ref().map_or_else(
+            || photocraft_engine::transform_cmds::transform_targets(&app.session, &json!({})).is_ok_and(|ids| ids.len() > 1),
+            |t| t.layers.len() > 1,
+        )
+    {
+        return Some(false);
+    }
     let t = app.ui.transform.as_ref()?;
     if committing(app).is_some() {
         return box_command(id).then_some(false);
@@ -2119,6 +2174,10 @@ fn front_vertices(h: &Homography, n: usize) -> Vec<bool> {
 /// Photoshop. The box, handles and reference point are [`draw_overlay`], drawn over the guides.
 pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return };
+    if let Some(multi) = &pv.multi {
+        multi.draw(painter, xf, t, canvas_size(pv));
+        return;
+    }
     if let Some(w) = &t.warp {
         draw_warp_content(painter, xf, t, w, pv);
         return;
@@ -3075,8 +3134,9 @@ fn transform_actions(app: &mut PhotocraftApp, ui: &mut egui::Ui, warping: bool, 
         return;
     }
     crate::widgets::vline(ui, 22.0);
-    let mode = crate::icons::button(ui, "grid-3x3", 26.0, warping, tl!("Switch between free transform and warp modes"));
-    mode.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Switch between free transform and warp modes"));
+    let enabled = app.ui.transform.as_ref().is_none_or(|t| t.layers.len() < 2);
+    let mode = ui.add_enabled_ui(enabled, |ui| crate::icons::button(ui, "grid-3x3", 26.0, warping, tl!("Switch between free transform and warp modes"))).inner;
+    mode.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, "Switch between free transform and warp modes"));
     if mode.clicked() {
         if warping {
             leave_warp(app);
@@ -3117,6 +3177,7 @@ mod tests {
         TransformSession {
             session: 1,
             layer: 1,
+            layers: Vec::new(),
             rect: [0.0, 0.0, 100.0, 50.0],
             quad: corners([0.0, 0.0, 100.0, 50.0]),
             pivot: [50.0, 25.0],

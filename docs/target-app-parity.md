@@ -1,6 +1,6 @@
 # PhotoCraft vs Adobe Photoshop: target-app parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-13 · **Change:** minor (on-canvas corner radius widgets, TOOL-214-12; `.atn` import maps 112 events; Free Transform H/V skew fields; stale rows corrected against `main` and the scorecard, estimates unchanged; Photoshop Actions `.atn` load and save; 2026-10-10: Tilt-Shift measurements added; earlier the same day: major, full re-measure against Photoshop 2026 27.11.0; merged `parity-estimate.md` and the roadmap's honest assessment; stale missing-tool rows corrected: Color Replacement and Red Eye are live toolbar tools, Frame landed; percentages unchanged) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-17 · **Change:** minor (multi-layer Free Transform shares one frame and undo step; on-canvas corner radius widgets, TOOL-214-12; `.atn` import maps 112 events; Free Transform H/V skew fields; stale rows corrected against `main` and the scorecard, estimates unchanged; Photoshop Actions `.atn` load and save; 2026-10-10: Tilt-Shift measurements added; earlier the same day: major, full re-measure against Photoshop 2026 27.11.0; merged `parity-estimate.md` and the roadmap's honest assessment; stale missing-tool rows corrected: Color Replacement and Red Eye are live toolbar tools, Frame landed; percentages unchanged) · **Target:** Adobe Photoshop 2026
 
 The authoritative answer to "how close is PhotoCraft to Photoshop, and how much work is left". The
 one-page summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work list is [`gaps.md`](gaps.md);
@@ -144,7 +144,7 @@ workflows, PSD exchange edge cases, and everything excluded above.
 | Layers (add, reorder, hide, opacity) | 12% | 80% | |
 | New / open a photo | 10% | 90% | |
 | Select (marquee, lasso, magic wand, object) | 10% | 75% | |
-| Move and Free Transform | 10% | 70% | commit and cancel buttons in the options bar (#2442, closed) |
+| Move and Free Transform | 10% | 70% | commit and cancel buttons in the options bar (#2442, closed); multi-layer Free Transform shares a frame and undo step, including Move's Show Transform Controls (2026-10-17); percentage not re-measured |
 | Brush and eraser | 10% | 70% | lag with big brushes (#2619) |
 | Undo, History | 8% | 90% | |
 | Basic adjustments (brightness, levels, curves, hue/saturation) | 8% | 80% | |
@@ -171,7 +171,7 @@ parity for the area and are already contained in the dimension rows above.
 | Selections, Select and Mask, channels | 55% | 120–200 | All selection tools, single row/column marquee included (#2837). Select and Mask is a dialog with Photoshop's view modes, a Refine Edge Brush and six outputs, not a workspace (TOOL-214-1), no Refine Hair (#2671); Select Subject/Sky classical, 559 ms p50 on 24 MP vs a 100 ms budget |
 | Painting and brush engine | 55% | 150–250 | Every Brush Settings section exists; feel is the gap: lag on big brushes, pressure jumps, smoothing and edge quality reports ([brush-parity.md](brush-parity.md)) |
 | Retouching (healing, clone, patch, remove, content-aware) | 50% | 100–180 | Remove tool non-generative; Content-Aware Fill has no workspace (TOOL-214-15); live stroke preview only for Brush/Eraser (TOOL-213-7) |
-| Transform, warp, puppet, perspective, liquify | 55% | 100–180 | Free Transform modifiers right, with a right-click transform menu (TOOL-214-5) and H/V skew fields; Puppet Warp mesh follows the object outline (TOOL-214-6); Liquify called "useless" by a user (#2606) |
+| Transform, warp, puppet, perspective, liquify | 55% | 100–180 | Free Transform modifiers right, with a right-click transform menu (TOOL-214-5), H/V skew fields and shared multi-layer frame (2026-10-17; Warp remains single-layer); Puppet Warp mesh follows the object outline (TOOL-214-6); Liquify called "useless" by a user (#2606) |
 | Adjustments and filters | 70% | 120–200 | All present; smart-filter re-render matches Photoshop on 5 of 30 files; Filter Gallery looks approximate; no Neural Filters |
 | Type | 40% | 120–200 | Engine works; no type on a path, manual kerning, RTL paragraphs, OpenType panel UI, live Warp Text preview; Type tool freeze on macOS (#2518) |
 | Vector shapes and paths | 55% | 80–140 | Pen, Direct/Path Selection, shapes, shape strokes. Freeform and Curvature Pen (#1054). Add/Delete Anchor Point and Convert Point tools exist (`Tool` enum); on-canvas corner radius widgets on live rectangles (TOOL-214-12, 2026-10-13); missing path-point nudge; shape parity tracking issue #2496 |
@@ -565,6 +565,7 @@ See [method, raw measurements and reproduction](five-algorithm-performance.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | minor | Shared multi-layer Free Transform and Move transform handles; targets frozen, locked targets refused and one undo step; Warp remains single-layer; percentages and hours unchanged |
 | 2026-10-13 | minor | Vector shapes: on-canvas corner radius widgets on live rectangles (TOOL-214-12); estimates unchanged |
 | 2026-10-13 | minor | Stale "missing tool" rows corrected against main: Color Replacement (`paint.colorReplacement`), Red Eye (`paint.redEye`) and Add/Delete Anchor Point (the Pen flyout) are live toolbar tools and Frame landed, so Art History Brush is the only tool still missing; percentages unchanged |
 | 2026-10-12 | minor | Free Transform options bar H/V skew fields; percentages unchanged |
