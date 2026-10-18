@@ -105,6 +105,7 @@ pub mod gradient_ui;
 pub mod guide_layout_ui;
 pub mod guide_select;
 pub mod hold_keys;
+pub mod home_recent_ui;
 pub mod i18n;
 mod icon_data;
 pub mod icons;
@@ -577,6 +578,7 @@ pub struct PhotocraftApp {
     info_samplers: Option<panels::SamplerReadouts>,
     /// Display profile readings (#569).
     monitors: monitor_status::State,
+    pub(crate) thumbnail_cache: std::sync::Arc<std::sync::Mutex<crate::home_recent_ui::ThumbnailCache>>,
     checker: Option<egui::TextureHandle>,
     drag: Option<canvas::Drag>,
     /// A Move-tool press landed on a locked layer: the first pointer move shows Photoshop's
@@ -853,6 +855,7 @@ impl PhotocraftApp {
             navigator_plain: std::collections::HashSet::new(),
             info_samplers: None,
             monitors: Default::default(),
+            thumbnail_cache: std::sync::Arc::new(std::sync::Mutex::new(crate::home_recent_ui::ThumbnailCache::default())),
             checker: None,
             drag: None,
             move_blocked: false,
@@ -1291,12 +1294,14 @@ impl PhotocraftApp {
         r.truncate(cap);
         self.ui.recent_files = r.clone();
         self.session.prefs.edit(|p| p.file_handling.recent_files = r);
+        self.thumbnail_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).invalidate(path);
     }
 
     /// File › Open Recent › Clear Recent File List.
     pub fn clear_recent(&mut self) {
         self.ui.recent_files.clear();
         self.session.prefs.edit(|p| p.file_handling.recent_files.clear());
+        self.thumbnail_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
     }
 
     /// Take one file off the recent list (the Home screen's × or Remove from Recent, #2691). The
@@ -1304,6 +1309,7 @@ impl PhotocraftApp {
     pub fn remove_recent(&mut self, path: &str) {
         self.ui.recent_files.retain(|p| p != path);
         self.session.prefs.edit(|p| p.file_handling.recent_files.retain(|r| r != path));
+        self.thumbnail_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).invalidate(path);
     }
 
     /// How many recent files to remember ("Recent File List Contains", 0–100).
@@ -1694,6 +1700,7 @@ impl PhotocraftApp {
             // A copy written over the document's own file is this app's change too.
             self.remember_stamp(doc, path);
         }
+        self.thumbnail_cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).invalidate(path);
         self.ui.status_error = false;
         let what = crate::i18n::fmt(tl!("Saved {name}"), &[("name", file_open::display_name(path).as_str())]);
         notices::io_warnings(self, &what, warnings);

@@ -17,6 +17,13 @@ pub struct ChromeState {
     /// Home screen shown over the open documents (Options bar › Home); holds the document count
     /// when it was opened, so opening or creating a document leaves it.
     pub home: Option<usize>,
+    /// View mode for recent files on the Home screen: true = visual thumbnail card grid, false = text list.
+    #[serde(default = "yes")]
+    pub home_recent_grid: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl ChromeState {
@@ -36,7 +43,7 @@ impl ChromeState {
 
 impl Default for ChromeState {
     fn default() -> Self {
-        Self { status_info: "dimensions".into(), home: None }
+        Self { status_info: "dimensions".into(), home: None, home_recent_grid: true }
     }
 }
 

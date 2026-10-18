@@ -70,6 +70,7 @@ People trust PhotoCraft with their work, and a crash loses it. A malformed file,
 8. **Performance is a feature.** Benchmark heavy operations on a 24–36 MP image in release. Work per tile in parallel (rayon), skip empty tiles, never scan a full surface per frame (cache per revision), and record before/after timings in the dev log.
 
 9. **Never panic on input** (see *Never crash* above). A command's `run` closure and anything it calls must return `Err`, never panic, for *any* params or document state: validate params, check bounds before indexing or dividing, and reject absurd sizes before allocating. The `panic_hunt` integration test fuzzes every command with adversarial params and must stay green.
+10. **Clarify mockups and designs before coding.** When the user provides a mockup, screenshot, sketch, or requests a visual redesign, treat it as a conversation starter or concept, never an immediate implementation spec. Stop and clarify first: ask what elements are intentional versus placeholder/mockup artifacts, understand the desired layout and functionality, and get explicit alignment before changing code.
 
 ## 4. Picking work
 
